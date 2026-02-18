@@ -195,6 +195,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 		formatter = &output.JSONFormatter{}
 	case "sarif":
 		formatter = &output.SARIFFormatter{}
+	case "markdown", "md":
+		formatter = &output.MarkdownFormatter{}
 	default:
 		formatter = &output.TerminalFormatter{NoColor: flagNoColor, Verbose: flagVerbose}
 	}
