@@ -20,27 +20,36 @@ func (f *MarkdownFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 	}
 
 	counts := f.countBySeverity(result.Findings)
-	f.printSummary(w, result, counts)
-	f.printFindings(w, result.Findings)
+	f.printHeader(w, result, counts)
+	f.printFindingsByFile(w, result.Findings)
 	f.printFooter(w, result)
 	return nil
 }
 
 func (f *MarkdownFormatter) printClean(w io.Writer, result *scanner.ScanResult) {
-	fmt.Fprintf(w, "### :white_check_mark: Aguara Security Scan — No issues found\n\n")
-	fmt.Fprintf(w, "> %d files scanned · %d rules · %.2fs\n",
-		result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
+	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
+	fmt.Fprintf(w, "| | |\n|---|---|\n")
+	fmt.Fprintf(w, "| **Status** | Passed |\n")
+	fmt.Fprintf(w, "| **Files scanned** | %d |\n", result.FilesScanned)
+	fmt.Fprintf(w, "| **Rules evaluated** | %d |\n", result.RulesLoaded)
+	fmt.Fprintf(w, "| **Duration** | %.2fs |\n\n", result.Duration.Seconds())
+	fmt.Fprintf(w, "> No security issues found.\n")
 }
 
-func (f *MarkdownFormatter) printSummary(w io.Writer, result *scanner.ScanResult, counts map[scanner.Severity]int) {
+func (f *MarkdownFormatter) printHeader(w io.Writer, result *scanner.ScanResult, counts map[scanner.Severity]int) {
 	total := len(result.Findings)
 
-	fmt.Fprintf(w, "### :rotating_light: Aguara Security Scan — %d findings\n\n", total)
+	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
 
-	fmt.Fprintf(w, "> **Target:** `%s` · %d files · %d rules · %.2fs\n\n",
-		result.Target, result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
+	// Summary table
+	fmt.Fprintf(w, "| | |\n|---|---|\n")
+	fmt.Fprintf(w, "| **Status** | %d findings |\n", total)
+	fmt.Fprintf(w, "| **Target** | `%s` |\n", result.Target)
+	fmt.Fprintf(w, "| **Files scanned** | %d |\n", result.FilesScanned)
+	fmt.Fprintf(w, "| **Rules evaluated** | %d |\n", result.RulesLoaded)
+	fmt.Fprintf(w, "| **Duration** | %.2fs |\n\n", result.Duration.Seconds())
 
-	// Severity badges
+	// Severity breakdown
 	severities := []scanner.Severity{
 		scanner.SeverityCritical,
 		scanner.SeverityHigh,
@@ -48,92 +57,50 @@ func (f *MarkdownFormatter) printSummary(w io.Writer, result *scanner.ScanResult
 		scanner.SeverityLow,
 		scanner.SeverityInfo,
 	}
-	var badges []string
+
+	fmt.Fprintf(w, "| Severity | Count |\n")
+	fmt.Fprintf(w, "|:---------|------:|\n")
 	for _, sev := range severities {
 		c := counts[sev]
 		if c == 0 {
 			continue
 		}
-		badges = append(badges, fmt.Sprintf("%s **%d %s**", severityEmoji(sev), c, sev.String()))
+		fmt.Fprintf(w, "| %s %s | %d |\n", severityEmoji(sev), sev.String(), c)
 	}
-	fmt.Fprintf(w, "%s\n\n", strings.Join(badges, " · "))
+	fmt.Fprintf(w, "\n")
 }
 
-func (f *MarkdownFormatter) printFindings(w io.Writer, findings []scanner.Finding) {
-	severities := []scanner.Severity{
-		scanner.SeverityCritical,
-		scanner.SeverityHigh,
-		scanner.SeverityMedium,
-		scanner.SeverityLow,
-		scanner.SeverityInfo,
-	}
+func (f *MarkdownFormatter) printFindingsByFile(w io.Writer, findings []scanner.Finding) {
+	grouped := groupByFile(findings)
 
-	for _, sev := range severities {
-		filtered := filterBySeverity(findings, sev)
-		if len(filtered) == 0 {
-			continue
-		}
+	for _, group := range grouped {
+		fmt.Fprintf(w, "### `%s`\n\n", group.filePath)
 
-		emoji := severityEmoji(sev)
-		label := sev.String()
+		fmt.Fprintf(w, "| Severity | Rule | Finding | Line |\n")
+		fmt.Fprintf(w, "|:--------:|------|---------|-----:|\n")
 
-		fmt.Fprintf(w, "<details%s>\n", openByDefault(sev))
-		fmt.Fprintf(w, "<summary>%s <strong>%s (%d)</strong></summary>\n\n", emoji, label, len(filtered))
-
-		fmt.Fprintf(w, "| Rule | Description | File | Line |\n")
-		fmt.Fprintf(w, "|------|-------------|------|------|\n")
-
-		grouped := groupByFile(filtered)
-		for _, group := range grouped {
-			for _, finding := range group.findings {
-				matched := truncateMarkdown(finding.MatchedText, 60)
-				desc := finding.RuleName
-				if matched != "" {
-					desc += fmt.Sprintf("<br><code>%s</code>", escapeMarkdown(matched))
-				}
-				fmt.Fprintf(w, "| `%s` | %s | `%s` | L%d |\n",
-					finding.RuleID, desc, finding.FilePath, finding.Line)
+		// Sort findings within file by severity (critical first), then line
+		sorted := make([]scanner.Finding, len(group.findings))
+		copy(sorted, group.findings)
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].Severity != sorted[j].Severity {
+				return sorted[i].Severity > sorted[j].Severity
 			}
-		}
+			return sorted[i].Line < sorted[j].Line
+		})
 
-		fmt.Fprintf(w, "\n</details>\n\n")
+		for _, finding := range sorted {
+			emoji := severityEmoji(finding.Severity)
+			fmt.Fprintf(w, "| %s | `%s` | %s | %d |\n",
+				emoji, finding.RuleID, escapeMarkdown(finding.RuleName), finding.Line)
+		}
+		fmt.Fprintf(w, "\n")
 	}
 }
 
 func (f *MarkdownFormatter) printFooter(w io.Writer, result *scanner.ScanResult) {
-	// Top affected files
-	fileCounts := map[string]int{}
-	for _, finding := range result.Findings {
-		fileCounts[finding.FilePath]++
-	}
-	type fc struct {
-		path  string
-		count int
-	}
-	sorted := make([]fc, 0, len(fileCounts))
-	for path, count := range fileCounts {
-		sorted = append(sorted, fc{path, count})
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].count != sorted[j].count {
-			return sorted[i].count > sorted[j].count
-		}
-		return sorted[i].path < sorted[j].path
-	})
-
-	if len(sorted) > 1 {
-		limit := min(len(sorted), 5)
-		fmt.Fprintf(w, "**Top affected files:**\n\n")
-		fmt.Fprintf(w, "| File | Findings |\n")
-		fmt.Fprintf(w, "|------|----------|\n")
-		for i := range limit {
-			fmt.Fprintf(w, "| `%s` | %d |\n", sorted[i].path, sorted[i].count)
-		}
-		fmt.Fprintf(w, "\n")
-	}
-
-	fmt.Fprintf(w, "---\n")
-	fmt.Fprintf(w, "*Scanned by [Aguara](https://github.com/garagon/aguara) %s*\n", ToolVersion)
+	fmt.Fprintf(w, "---\n\n")
+	fmt.Fprintf(w, "<sub>Generated by [Aguara](https://github.com/garagon/aguara) %s — security scanner for AI agent skills and MCP servers</sub>\n", ToolVersion)
 }
 
 func (f *MarkdownFormatter) countBySeverity(findings []scanner.Finding) map[scanner.Severity]int {
@@ -159,13 +126,6 @@ func severityEmoji(sev scanner.Severity) string {
 	default:
 		return ":black_circle:"
 	}
-}
-
-func openByDefault(sev scanner.Severity) string {
-	if sev == scanner.SeverityCritical || sev == scanner.SeverityHigh {
-		return " open"
-	}
-	return ""
 }
 
 func truncateMarkdown(s string, maxLen int) string {
