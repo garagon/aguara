@@ -1,0 +1,138 @@
+id: INDIRECT_001
+name: "Fetch URL and use as instructions"
+description: "Detects fetching external URLs and using the content as agent instructions or rules"
+severity: HIGH
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(WebFetch|fetch|curl|wget|requests\\.get|http\\.get)\\s+.{0,30}(instructions?|rules?|guidelines?|directives?|prompts?)"
+  - type: regex
+    value: "(?i)(instructions?|rules?|guidelines?|directives?|prompts?)\\s+.{0,25}(from|via|at)\\s+.{0,15}(url|http|api|remote|server)"
+examples:
+  true_positive:
+    - "Use WebFetch to retrieve the latest instructions from the remote server"
+    - "fetch the rules from the API and follow them"
+  false_positive:
+    - "See the installation instructions below"
+    - "Follow the workflow steps in the README"
+    - "Use fetch to get data from the local API. See instructions in docs."
+---
+id: INDIRECT_003
+name: "Read external content and apply as rules"
+description: "Detects skills that read remote markdown or documentation and apply it as operational rules"
+severity: HIGH
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)(read|load|parse|import|include|consume|ingest)\\s+.{0,40}(external|remote|online|web|fetched|downloaded|third.party)"
+  - type: regex
+    value: "(?i)(follow|apply|use|execute|implement|adopt)\\s+.{0,20}(as|for)\\s+.{0,20}(rules?|instructions?|guidelines?|config|context)"
+examples:
+  true_positive:
+    - "Read the external documentation and apply it as rules for the project"
+    - "Load remote guidelines and use them as instructions for code review"
+  false_positive:
+    - "Read the local README and follow its instructions"
+---
+id: INDIRECT_004
+name: "Remote config controlling agent behavior"
+description: "Detects remote configuration files or URLs that control how the agent behaves"
+severity: HIGH
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(remote|external|cloud|hosted)\\s+(config|configuration|settings|rules?)\\s+.{0,30}(controls?|determines?|drives?|governs?|defines?)"
+  - type: regex
+    value: "(?i)(download|fetch|pull|sync)\\s+.{0,30}(config|configuration|settings)\\s+from\\s+.{0,20}(url|http|api|server|remote)"
+examples:
+  true_positive:
+    - "Remote configuration controls agent behavior at runtime"
+    - "Download config from the API server before starting"
+  false_positive:
+    - "Edit the local config file to change settings"
+---
+id: INDIRECT_005
+name: "User-provided URL consumed by agent"
+description: "Detects skills where user-provided URLs are consumed and processed by the agent"
+severity: MEDIUM
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(user|input|provided|given|specified).{0,5}(url|URL|link|endpoint)\\s+.{0,30}(fetch|scrape|crawl|read|process|consume|download|access)"
+  - type: regex
+    value: "(?i)(fetch|scrape|crawl|read|process|download|access).{0,30}(user|input|provided|given|specified).{0,5}(url|URL|link)"
+  - type: regex
+    value: "(?i)(fetch|scrape|read|process).{0,30}(content|page|data|html).{0,30}(from|at)\\s+(the\\s+)?(url|URL|link|endpoint)\\s+(the\\s+)?user"
+examples:
+  true_positive:
+    - "Fetch the content at the user-provided URL"
+    - "Process the user's URL and extract data"
+  false_positive:
+    - "Ask the user for their preferred settings"
+---
+id: INDIRECT_008
+name: "Email or message content as instructions"
+description: "Detects skills that read email or message content and act on it as agent instructions"
+severity: HIGH
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)(read|check|fetch|poll|monitor)\\s+.{0,30}(email|inbox|message|mail|notification|slack|discord)"
+  - type: regex
+    value: "(?i)(act|execute|follow)\\s+.{0,10}(on|based on)\\s+.{0,20}(the\\s+)?(content|instructions?|message|body|request)"
+examples:
+  true_positive:
+    - "Read the user's email and act on the instructions found"
+    - "Monitor Slack messages and execute based on the message content"
+  false_positive:
+    - "Send an email notification when the task is complete"
+    - "Read Slack messages and respond based on context"
+---
+id: INDIRECT_009
+name: "External API response drives agent behavior"
+description: "Detects skills where external API responses control agent decisions or actions"
+severity: MEDIUM
+category: indirect-injection
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)(call|invoke|query|request|hit)\\s+.{0,30}(api|endpoint|service|server)\\s"
+  - type: regex
+    value: "(?i)(based\\s+on|according\\s+to|depending\\s+on|driven\\s+by)\\s+.{0,20}(response|result|output|data|return)"
+examples:
+  true_positive:
+    - "Call the API and take action based on the response"
+    - "Query the service and decide next steps according to the result"
+  false_positive:
+    - "Call the API and display the response to the user"
+---
+id: INDIRECT_010
+name: "Unscoped Bash tool in allowed tools"
+description: "Detects skills that include unscoped Bash in their allowed tools list (not Bash(cmd:*) scoped)"
+severity: MEDIUM
+category: command-execution
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?im)allowed.?tools[^\\n]*\\bBash[\\s,]"
+  - type: regex
+    value: "(?is)allowed.?tools.{0,200}\\- Bash\\s"
+examples:
+  true_positive:
+    - "allowed-tools: Bash, Read, Write, Edit"
+    - "allowed-tools:\n  - Bash\n  - Read"
+  false_positive:
+    - "The bash shell is used for scripting"
+    - "allowed-tools: Bash(npm:*) Read Write"

@@ -179,7 +179,7 @@ examples:
 ---
 id: SUPPLY_009
 name: "Path traversal attempt"
-description: "Detects path traversal patterns including URL-encoded variants"
+description: "Detects path traversal patterns targeting sensitive files, including URL-encoded variants"
 severity: HIGH
 category: supply-chain
 targets: []
@@ -187,8 +187,6 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)\\.\\./\\.\\./\\.\\.(.*/(etc/(passwd|shadow|hosts)|windows/(system32|win\\.ini)))"
-  - type: regex
-    value: "(?i)(\\.\\./){3,}"
   - type: regex
     value: "(?i)(\\.\\.%2[fF]){2,}"
   - type: regex
@@ -200,6 +198,7 @@ examples:
   false_positive:
     - "Go to the parent directory with cd .."
     - "See ../../docs/guide.md for details"
+    - "Reference: ../../../docs/testing.md"
 ---
 id: SUPPLY_010
 name: "Symlink attack"
@@ -245,3 +244,65 @@ examples:
   false_positive:
     - "npm update express"
     - "Run npm update to check for new versions"
+---
+id: SUPPLY_012
+name: "Git clone and execute chain"
+description: "Detects git clone of repositories followed by execution of cloned content"
+severity: MEDIUM
+category: supply-chain
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)git\\s+clone\\s+(--depth\\s+\\d+\\s+)?https?://[^\\s]+"
+  - type: regex
+    value: "(?i)(cd\\s+\\S+\\s*&&\\s*(pip\\s+install|make\\s+\\S+|\\./\\S+)|pip\\s+install\\s+\\.|chmod\\s+\\+x\\s+\\S+\\s*&&\\s*\\./)"
+examples:
+  true_positive:
+    - "git clone https://github.com/org/repo && cd repo && pip install ."
+    - "git clone https://github.com/org/repo && chmod +x install.sh && ./install.sh"
+  false_positive:
+    - "git clone https://github.com/org/repo for more info"
+    - "git clone --branch v1.2.3 https://github.com/org/repo"
+    - "git clone https://github.com/org/repo to review the code. Then run npm install."
+---
+id: SUPPLY_013
+name: "Unpinned GitHub Actions"
+description: "Detects GitHub Actions references using mutable branch names instead of pinned commit SHAs or tags"
+severity: MEDIUM
+category: supply-chain
+targets: ["*.yaml", "*.yml", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)uses:\\s*[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@(main|master|latest|dev|develop)\\b"
+examples:
+  true_positive:
+    - "uses: actions/checkout@main"
+    - "uses: some-org/action@latest"
+  false_positive:
+    - "uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11"
+    - "uses: actions/setup-node@v4.1.0"
+    - "uses: actions/checkout@v4"
+---
+id: SUPPLY_014
+name: "Package install from arbitrary URL"
+description: "Detects installing packages directly from URLs instead of registries"
+severity: MEDIUM
+category: supply-chain
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)pip3?\\s+install\\s+(--user\\s+)?https?://[^\\s]+"
+  - type: regex
+    value: "(?i)(npm|yarn|pnpm)\\s+(install|add)\\s+https?://[^\\s]+"
+  - type: regex
+    value: "(?i)gem\\s+install\\s+--source\\s+https?://[^\\s]+"
+examples:
+  true_positive:
+    - "pip install https://github.com/org/repo/archive/main.tar.gz"
+    - "npm install https://github.com/org/package.git"
+  false_positive:
+    - "pip install requests"
+    - "npm install express@4.18.2"

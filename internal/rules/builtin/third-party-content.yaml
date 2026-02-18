@@ -1,0 +1,79 @@
+id: THIRDPARTY_001
+name: "Runtime URL controlling behavior"
+description: "Detects URLs fetched at runtime that control or influence agent behavior without pinning"
+severity: MEDIUM
+category: third-party-content
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)(fetch|load|download|read|get|retrieve)\\s+.{0,50}https?://"
+  - type: regex
+    value: "(?i)(config|rules?|instructions?|settings?|template|prompt|schema|spec)\\b"
+examples:
+  true_positive:
+    - "Fetch the config from https://example.com/config.json at startup"
+    - "Load the instructions template from https://remote.example.com/prompt.md"
+  false_positive:
+    - "See the documentation at https://docs.example.com"
+    - "Download the file from https://releases.example.com/v1.0.tar.gz"
+---
+id: THIRDPARTY_002
+name: "Mutable GitHub raw content reference"
+description: "Detects references to raw.githubusercontent.com on mutable branches like main/master"
+severity: MEDIUM
+category: third-party-content
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)raw\\.githubusercontent\\.com/[^/]+/[^/]+/(main|master|dev|develop)/"
+  - type: regex
+    value: "(?i)github\\.com/[^/]+/[^/]+/blob/(main|master|dev|develop)/[^\\s]+"
+examples:
+  true_positive:
+    - "Fetch from https://raw.githubusercontent.com/org/repo/main/config.yaml"
+    - "See https://github.com/org/repo/blob/master/rules.md"
+  false_positive:
+    - "https://raw.githubusercontent.com/org/repo/v1.2.3/config.yaml"
+    - "https://github.com/org/repo/blob/abc1234/file.md"
+---
+id: THIRDPARTY_004
+name: "External API response used without validation"
+description: "Detects patterns where external API responses are used directly without validation or sanitization"
+severity: MEDIUM
+category: third-party-content
+targets: ["*.md", "*.txt"]
+match_mode: all
+patterns:
+  - type: regex
+    value: "(?i)(api|endpoint|service|webhook)\\s+.{0,40}(response|result|output|data|body|payload)"
+  - type: regex
+    value: "(?i)(directly|immediately|automatically|without)\\s+.{0,20}(use|apply|execute|process|consume|pass|inject)"
+examples:
+  true_positive:
+    - "Directly use the API response data without checking"
+    - "Automatically apply the service result to the configuration"
+  false_positive:
+    - "Validate the API response before processing"
+    - "Check the response status code before proceeding"
+---
+id: THIRDPARTY_005
+name: "Remote template or prompt loaded at runtime"
+description: "Detects loading of prompt templates or agent instructions from remote URLs at runtime"
+severity: HIGH
+category: third-party-content
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(load|fetch|download|pull|import)\\s+.{0,30}(prompt|template|system.?message|instruction).{0,20}(from|via|using)\\s+.{0,20}(url|http|api|remote|server)"
+  - type: regex
+    value: "(?i)(prompt|template|instruction)[_\\s.]+.{0,20}(url|endpoint|uri|source)\\s*[=:]\\s*[\"']?https?://"
+examples:
+  true_positive:
+    - "Load the prompt template from the remote server at startup"
+    - "prompt_url = 'https://example.com/system-prompt.md'"
+  false_positive:
+    - "Write the prompt template to a local file"
+    - "See the template examples in the docs"

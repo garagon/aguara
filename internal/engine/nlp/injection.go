@@ -23,7 +23,11 @@ var (
 		"toml": true, "ini": true, "csv": true, "txt": true,
 		"markdown": true, "md": true,
 	}
-	configHeadingRe = regexp.MustCompile(`(?i)\b(config|configuration|setup|options|settings|parameters|properties|environment|variables|env vars|reference|install|getting started|prerequisites|requirements|usage|api|authentication|integration|quickstart|features|overview)\b`)
+	configHeadingRe = regexp.MustCompile(`(?i)\b(config|configuration|setup|options|settings|parameters|properties|environment|variables|env vars|reference|install|getting started|prerequisites|requirements|usage|api|authentication|integration|quickstart|features|overview|examples|troubleshooting|development|deployment|testing|contributing|changelog|faq|tools|commands|workflow|permissions|security|license|credits|dependencies|compatibility|support|limitations|notes)\b`)
+	semanticTagRe   = regexp.MustCompile(`(?i)^<!--\s*(</?[a-z][-a-z0-9]*[^>]*>|@[a-z]|TODO|NOTE|FIXME|WARNING|HACK|XXX|DEPRECATED)`)
+	devCommentRe    = regexp.MustCompile(`(?i)^<!--\s*\n?\s*(PROGRESSIVE|SKILL|TEMPLATE|LAYOUT|FORMAT|STYLE|DESIGN|GUIDELINE|CONVENTION|PATTERN|STRUCTURE|VERSION|METADATA|MARKER|ANCHOR|REGION|SECTION|SLOT|PLACEHOLDER|BLOCK)`)
+
+
 )
 
 // InjectionAnalyzer implements the Analyzer interface for NL-based injection detection.
@@ -52,6 +56,10 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 
 		// 1. Hidden HTML comments with action verbs
 		if section.Type == SectionHTMLComment {
+			// Skip comments that are semantic XML tags or developer notes
+			if semanticTagRe.MatchString(section.Text) || devCommentRe.MatchString(section.Text) {
+				continue
+			}
 			if actionVerbRe.MatchString(section.Text) {
 				findings = append(findings, makeFinding(
 					"NLP_HIDDEN_INSTRUCTION",

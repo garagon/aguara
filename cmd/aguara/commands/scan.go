@@ -13,17 +13,22 @@ import (
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
+	"github.com/garagon/aguara/internal/engine/rugpull"
+	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/state"
 )
 
 var (
-	flagFailOn  string
-	flagCI      bool
-	flagVerbose bool
-	flagChanged bool
+	flagFailOn   string
+	flagCI       bool
+	flagVerbose  bool
+	flagChanged  bool
+	flagMonitor  bool
+	flagStatePath string
 )
 
 var scanCmd = &cobra.Command{
@@ -38,6 +43,8 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files (staged, unstaged, untracked)")
+	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
+	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
 	rootCmd.AddCommand(scanCmd)
 }
 
@@ -143,6 +150,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Register analyzers
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
+	s.RegisterAnalyzer(toxicflow.New())
+
+	// Register rug-pull analyzer if monitoring is enabled
+	var store *state.Store
+	if flagMonitor {
+		statePath := flagStatePath
+		if statePath == "" {
+			statePath = state.DefaultPath()
+		}
+		store = state.New(statePath)
+		if err := store.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: loading state: %v\n", err)
+		}
+		s.RegisterAnalyzer(rugpull.New(store))
+	}
 
 	// Create context with cancellation (Ctrl+C)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,6 +206,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	result.RulesLoaded = len(compiled)
 	result.Target = targetPath
+
+	// Save rug-pull state after scan
+	if store != nil {
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
+		}
+	}
 
 	// Set tool version for SARIF output
 	output.ToolVersion = Version
