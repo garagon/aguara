@@ -1,0 +1,23 @@
+# Build
+/aguara
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Test fixtures and tooling
+testdata/
+scripts/
+DOCS/
+__pycache__/
+*.pyc

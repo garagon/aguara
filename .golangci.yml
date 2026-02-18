@@ -1,0 +1,21 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - gofmt
+
+linters-settings:
+  misspell:
+    locale: US
+
+issues:
+  exclude-dirs:
+    - testdata

@@ -1,0 +1,169 @@
+id: SSRF_001
+name: "Cloud metadata URL"
+description: "Detects cloud provider metadata endpoint URLs used for SSRF attacks"
+severity: CRITICAL
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(https?://|curl|wget|fetch|request|get|open)\\s*[\"'(]?\\s*https?://169\\.254\\.169\\.254"
+  - type: regex
+    value: "(?i)https?://metadata\\.google\\.internal"
+  - type: regex
+    value: "(?i)https?://169\\.254\\.170\\.2"
+  - type: regex
+    value: "(?i)https?://(metadata\\.azure\\.com|instance-data)"
+examples:
+  true_positive:
+    - "Fetch http://169.254.169.254/latest/meta-data/"
+    - "curl http://metadata.google.internal/computeMetadata/v1/"
+  false_positive:
+    - "Block access to 169.254.169.254 in your firewall rules"
+---
+id: SSRF_002
+name: "Internal IP range access"
+description: "Detects references to private/internal IP ranges in URL context"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)https?://(10\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]{1,3}\\.[0-9]{1,3}|192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}|127\\.0\\.0\\.1)[:/]"
+examples:
+  true_positive:
+    - "curl http://10.0.0.1:8080/admin"
+    - "fetch('http://192.168.1.1/config')"
+  false_positive:
+    - "The default gateway is 192.168.1.1"
+    - "Configure the server to listen on 10.0.0.1"
+---
+id: SSRF_003
+name: "Kubernetes service discovery"
+description: "Detects Kubernetes internal service URLs and secret paths"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: contains
+    value: ".svc.cluster.local"
+  - type: contains
+    value: "/var/run/secrets/kubernetes.io"
+  - type: regex
+    value: "(?i)kubernetes\\.default\\.svc"
+examples:
+  true_positive:
+    - "curl http://my-service.default.svc.cluster.local/api"
+    - "cat /var/run/secrets/kubernetes.io/serviceaccount/token"
+  false_positive:
+    - "Kubernetes services are accessible via DNS"
+---
+id: SSRF_004
+name: "AWS IMDS token request"
+description: "Detects AWS Instance Metadata Service token requests"
+severity: CRITICAL
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: contains
+    value: "x-aws-ec2-metadata-token"
+  - type: regex
+    value: "(?i)latest/meta-data/(iam|identity|credentials|hostname|instance-id)"
+  - type: regex
+    value: "(?i)latest/api/token"
+examples:
+  true_positive:
+    - "curl -H 'X-aws-ec2-metadata-token: token' http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    - "GET /latest/meta-data/iam/security-credentials/role-name"
+  false_positive:
+    - "The IMDS endpoint should be protected with hop limit"
+---
+id: SSRF_005
+name: "Docker socket access"
+description: "Detects attempts to access the Docker daemon socket"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: contains
+    value: "/var/run/docker.sock"
+  - type: regex
+    value: "(?i)unix:///var/run/docker"
+  - type: regex
+    value: "(?i)(curl|wget|fetch)\\s+--unix-socket"
+examples:
+  true_positive:
+    - "curl --unix-socket /var/run/docker.sock http://localhost/containers/json"
+    - "mount /var/run/docker.sock"
+  false_positive:
+    - "Ensure Docker socket permissions are restricted"
+---
+id: SSRF_006
+name: "Localhost bypass"
+description: "Detects alternative representations of localhost used to bypass SSRF filters"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(https?://|fetch|curl|wget|request)\\s*[\"'(]?https?://(0\\.0\\.0\\.0|\\[::1\\]|0177\\.0\\.0\\.1|2130706433|0x7f000001|127\\.0\\.0\\.1:)"
+  - type: regex
+    value: "(?i)https?://(0\\.0\\.0\\.0|\\[::1\\]|0177\\.0+\\.0+\\.0*1|2130706433)"
+examples:
+  true_positive:
+    - "curl http://0.0.0.0:8080/admin"
+    - "fetch('http://[::1]:3000/secret')"
+    - "http://2130706433/admin"
+  false_positive:
+    - "Listen on 0.0.0.0 to accept all connections"
+---
+id: SSRF_007
+name: "Cloud credential endpoint"
+description: "Detects cloud provider token and credential endpoints"
+severity: CRITICAL
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)oauth2\\.(googleapis|google)\\.com/(token|v[0-9]/token)"
+  - type: regex
+    value: "(?i)sts\\.amazonaws\\.com"
+  - type: regex
+    value: "(?i)login\\.microsoftonline\\.com.*/oauth2/token"
+  - type: regex
+    value: "(?i)https?://[^\\s]*/(iam/security-credentials|federation-token|access-token)[/\\s\"']"
+examples:
+  true_positive:
+    - "POST https://oauth2.googleapis.com/token"
+    - "curl https://sts.amazonaws.com/?Action=AssumeRole"
+    - "GET https://login.microsoftonline.com/tenant/oauth2/token"
+  false_positive:
+    - "Configure OAuth2 authentication in your application"
+---
+id: SSRF_008
+name: "DNS rebinding setup"
+description: "Detects domains commonly used for DNS rebinding attacks"
+severity: MEDIUM
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(localtest\\.me|nip\\.io|xip\\.io|sslip\\.io)\\b"
+  - type: regex
+    value: "(?i)\\b(rebind|rbndr|taviso)\\.[a-z]+\\b"
+  - type: regex
+    value: "(?i)dns[_-]?rebind"
+examples:
+  true_positive:
+    - "curl http://127.0.0.1.nip.io/admin"
+    - "Connect to attacker.localtest.me"
+    - "dns_rebinding attack vector"
+  false_positive:
+    - "DNS rebinding is a technique described in security textbooks"

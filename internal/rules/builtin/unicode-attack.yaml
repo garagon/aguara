@@ -1,0 +1,127 @@
+id: UNI_001
+name: "Right-to-left override"
+description: "Detects Unicode right-to-left override characters used to disguise text"
+severity: HIGH
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{202E}\\x{202D}]"
+examples:
+  true_positive:
+    - "normal text\u202etxt.exe"
+    - "\u202dsome hidden direction"
+  false_positive: []
+---
+id: UNI_002
+name: "Bidi text manipulation"
+description: "Detects Unicode bidirectional control characters that can hide content"
+severity: HIGH
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{2066}\\x{2067}\\x{2068}\\x{2069}]"
+  - type: regex
+    value: "[\\x{200F}\\x{200E}]{2,}"
+examples:
+  true_positive:
+    - "text\u2066hidden content\u2069visible"
+    - "\u200f\u200fmanipulated text"
+  false_positive: []
+---
+id: UNI_003
+name: "Homoglyph domain spoofing"
+description: "Detects Cyrillic or Greek look-alike characters near URL patterns"
+severity: MEDIUM
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{0400}-\\x{04FF}][a-zA-Z].*?(://|\\.com|\\.org|\\.net|\\.io)"
+  - type: regex
+    value: "[a-zA-Z][\\x{0400}-\\x{04FF}].*?(://|\\.com|\\.org|\\.net|\\.io)"
+  - type: regex
+    value: "[\\x{0370}-\\x{03FF}][a-zA-Z].*?(://|\\.com|\\.org|\\.net|\\.io)"
+examples:
+  true_positive:
+    - "\u0430pple.com"
+    - "g\u043eogle.com"
+  false_positive:
+    - "example.com"
+    - "A legitimate ASCII-only domain.org"
+---
+id: UNI_004
+name: "Invisible separator injection"
+description: "Detects Unicode line/paragraph separators and soft hyphens used to hide content"
+severity: MEDIUM
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{2028}\\x{2029}]"
+  - type: regex
+    value: "[\\x{00AD}]{2,}"
+  - type: regex
+    value: "[\\x{180E}\\x{200A}\\x{205F}\\x{3000}]{3,}"
+examples:
+  true_positive:
+    - "visible\u2028hidden on new line"
+    - "soft\u00ad\u00adhyphen hiding"
+  false_positive: []
+---
+id: UNI_005
+name: "Combining character obfuscation"
+description: "Detects excessive combining diacritical marks used to obfuscate text"
+severity: MEDIUM
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{0300}-\\x{036F}]{3,}"
+  - type: regex
+    value: "[\\x{0300}-\\x{036F}\\x{20D0}-\\x{20FF}]{4,}"
+examples:
+  true_positive:
+    - "t\u0300\u0301\u0302\u0303est"
+  false_positive:
+    - "caf\u00e9"
+---
+id: UNI_006
+name: "Tag characters for hidden data"
+description: "Detects Unicode tag characters that can embed invisible data"
+severity: HIGH
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{E0001}-\\x{E007F}]"
+examples:
+  true_positive:
+    - "text\U000E0001\U000E0068\U000E0065\U000E006C\U000E006Chidden"
+  false_positive: []
+---
+id: UNI_007
+name: "Punycode domains"
+description: "Detects punycode-encoded domains in tool or skill definitions"
+severity: MEDIUM
+category: unicode-attack
+targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)\\bxn--[a-z0-9-]+\\.[a-z]{2,}"
+  - type: regex
+    value: "(?i)(url|domain|host|endpoint|server)\\s*[:=]\\s*[\"']?[^\"'\\s]*xn--"
+examples:
+  true_positive:
+    - "url: xn--80ak6aa92e.com"
+    - "Connect to xn--pple-43d.com"
+  false_positive:
+    - "Punycode is an encoding used for internationalized domain names"
