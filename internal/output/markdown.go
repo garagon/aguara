@@ -28,28 +28,15 @@ func (f *MarkdownFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 
 func (f *MarkdownFormatter) printClean(w io.Writer, result *scanner.ScanResult) {
 	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
-	fmt.Fprintf(w, "| | |\n|---|---|\n")
-	fmt.Fprintf(w, "| **Status** | Passed |\n")
-	fmt.Fprintf(w, "| **Files scanned** | %d |\n", result.FilesScanned)
-	fmt.Fprintf(w, "| **Rules evaluated** | %d |\n", result.RulesLoaded)
-	fmt.Fprintf(w, "| **Duration** | %.2fs |\n\n", result.Duration.Seconds())
-	fmt.Fprintf(w, "> No security issues found.\n")
+	fmt.Fprintf(w, "> **Passed** · %d files · %d rules · %.2fs\n\n",
+		result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
+	fmt.Fprintf(w, "No security issues found.\n")
 }
 
 func (f *MarkdownFormatter) printHeader(w io.Writer, result *scanner.ScanResult, counts map[scanner.Severity]int) {
-	total := len(result.Findings)
-
 	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
 
-	// Summary table
-	fmt.Fprintf(w, "| | |\n|---|---|\n")
-	fmt.Fprintf(w, "| **Status** | %d findings |\n", total)
-	fmt.Fprintf(w, "| **Target** | `%s` |\n", result.Target)
-	fmt.Fprintf(w, "| **Files scanned** | %d |\n", result.FilesScanned)
-	fmt.Fprintf(w, "| **Rules evaluated** | %d |\n", result.RulesLoaded)
-	fmt.Fprintf(w, "| **Duration** | %.2fs |\n\n", result.Duration.Seconds())
-
-	// Severity breakdown
+	// Severity badges inline
 	severities := []scanner.Severity{
 		scanner.SeverityCritical,
 		scanner.SeverityHigh,
@@ -57,17 +44,18 @@ func (f *MarkdownFormatter) printHeader(w io.Writer, result *scanner.ScanResult,
 		scanner.SeverityLow,
 		scanner.SeverityInfo,
 	}
-
-	fmt.Fprintf(w, "| Severity | Count |\n")
-	fmt.Fprintf(w, "|:---------|------:|\n")
+	var badges []string
 	for _, sev := range severities {
 		c := counts[sev]
 		if c == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "| %s %s | %d |\n", severityEmoji(sev), sev.String(), c)
+		badges = append(badges, fmt.Sprintf("%s **%d %s**", severityEmoji(sev), c, strings.ToLower(sev.String())))
 	}
-	fmt.Fprintf(w, "\n")
+
+	fmt.Fprintf(w, "> %s · `%s` · %d files · %d rules · %.2fs\n\n",
+		strings.Join(badges, " &nbsp; "),
+		result.Target, result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
 }
 
 func (f *MarkdownFormatter) printFindingsByFile(w io.Writer, findings []scanner.Finding) {
