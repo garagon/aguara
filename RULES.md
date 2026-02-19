@@ -99,7 +99,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 | Rule | Severity | Description |
 |------|----------|-------------|
-| MCPCFG_001 | MEDIUM | npx MCP server without version pin |
+| MCPCFG_001 | LOW | npx MCP server without version pin |
 | MCPCFG_002 | HIGH | Shell metacharacters in MCP config args |
 | MCPCFG_003 | MEDIUM | Hardcoded secrets in MCP env block |
 | MCPCFG_004 | LOW | Non-localhost remote MCP server URL |
@@ -133,7 +133,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 |------|----------|-------------|
 | EXTDL_001 | HIGH | Runtime URL controls agent behavior |
 | EXTDL_002 | MEDIUM | Remote SDK or script fetch as agent input |
-| EXTDL_003 | MEDIUM | npx auto-install without confirmation |
+| EXTDL_003 | LOW | npx auto-install without confirmation |
 | EXTDL_004 | LOW | Global package installation |
 | EXTDL_005 | HIGH | Shell profile modification for persistence |
 | EXTDL_006 | HIGH | MCP server auto-registration |

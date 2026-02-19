@@ -41,7 +41,7 @@ examples:
 id: EXTDL_003
 name: "npx auto-install without confirmation"
 description: "Detects npx with -y flag that bypasses user confirmation for package installation"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any

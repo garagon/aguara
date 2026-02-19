@@ -1,7 +1,7 @@
 id: MCPCFG_001
 name: "npx MCP server without version pin"
 description: "Detects MCP server configs using npx to run packages without version pinning"
-severity: MEDIUM
+severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
