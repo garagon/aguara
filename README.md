@@ -131,8 +131,8 @@ rule_overrides:
 | MCP Config | 8 | Unpinned npx servers, hardcoded secrets, shell metacharacters |
 | Supply Chain | 14 | Download-and-execute, reverse shells, obfuscated commands, privilege escalation |
 | External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
-| Command Execution | 14 | shell=True, eval, subprocess, child_process, PowerShell |
-| Indirect Injection | 6 | Fetch-and-follow, remote config, email-as-instructions |
+| Command Execution | 13 | shell=True, eval, subprocess, child_process, PowerShell |
+| Indirect Injection | 7 | Fetch-and-follow, remote config, email-as-instructions |
 | SSRF & Cloud | 8 | Cloud metadata, IMDS, Docker socket, internal IPs |
 | Unicode Attack | 7 | RTL override, bidi, homoglyphs, tag characters |
 | Third-Party Content | 4 | Mutable raw content, unvalidated API responses, remote templates |
@@ -176,7 +176,7 @@ aguara scan .claude/skills/ --rules ./my-rules/
 cmd/aguara/            CLI entry point (Cobra)
 internal/
   engine/
-    pattern/           Layer 1: regex/contains matcher + base64/hex decoder
+    pattern/           Layer 1: regex/contains matcher + base64/hex decoder + code block awareness
     nlp/               Layer 2: goldmark AST walker, keyword classifier, injection detector
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Taint tracking: source -> sink flow analysis
