@@ -41,7 +41,7 @@ examples:
 id: THIRDPARTY_004
 name: "External API response used without validation"
 description: "Detects patterns where external API responses are used directly without validation or sanitization"
-severity: MEDIUM
+severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: all

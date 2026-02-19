@@ -60,7 +60,7 @@ examples:
 id: INDIRECT_005
 name: "User-provided URL consumed by agent"
 description: "Detects skills where user-provided URLs are consumed and processed by the agent"
-severity: MEDIUM
+severity: LOW
 category: indirect-injection
 targets: ["*.md", "*.txt"]
 match_mode: any

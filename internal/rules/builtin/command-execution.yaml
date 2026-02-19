@@ -1,7 +1,7 @@
 id: CMDEXEC_001
 name: "Shell subprocess with shell=True"
 description: "Detects subprocess calls with shell=True which enables shell injection"
-severity: HIGH
+severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt", "*.py"]
 match_mode: any
@@ -45,7 +45,7 @@ examples:
 id: CMDEXEC_003
 name: "Python subprocess execution"
 description: "Detects Python subprocess and os.system calls for command execution in skill descriptions"
-severity: HIGH
+severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any

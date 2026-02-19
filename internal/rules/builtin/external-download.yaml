@@ -86,7 +86,7 @@ examples:
 id: EXTDL_005
 name: "Shell profile modification for persistence"
 description: "Detects instructions to modify shell config files for environment persistence"
-severity: HIGH
+severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any

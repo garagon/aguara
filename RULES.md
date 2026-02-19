@@ -77,7 +77,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CRED_014 | HIGH | SendGrid or Twilio API key |
 | CRED_015 | MEDIUM | CLI credential flags |
 | CRED_016 | MEDIUM | SSH private key in command |
-| CRED_017 | MEDIUM | Docker environment credentials |
+| CRED_017 | LOW | Docker environment credentials |
 
 ## MCP Attack (11 rules)
 
@@ -135,7 +135,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXTDL_002 | MEDIUM | Remote SDK or script fetch as agent input |
 | EXTDL_003 | LOW | npx auto-install without confirmation |
 | EXTDL_004 | LOW | Global package installation |
-| EXTDL_005 | HIGH | Shell profile modification for persistence |
+| EXTDL_005 | MEDIUM | Shell profile modification for persistence |
 | EXTDL_006 | HIGH | MCP server auto-registration |
 | EXTDL_007 | CRITICAL | Binary download and execute |
 | EXTDL_008 | LOW | Unverified npx package execution |
@@ -152,9 +152,9 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 | Rule | Severity | Description |
 |------|----------|-------------|
-| CMDEXEC_001 | HIGH | Shell subprocess with shell=True |
+| CMDEXEC_001 | MEDIUM | Shell subprocess with shell=True |
 | CMDEXEC_002 | MEDIUM | Dynamic code evaluation |
-| CMDEXEC_003 | HIGH | Python subprocess execution |
+| CMDEXEC_003 | MEDIUM | Python subprocess execution |
 | CMDEXEC_004 | HIGH | Node.js child process execution |
 | CMDEXEC_005 | HIGH | Shell command with dangerous payload |
 | CMDEXEC_006 | HIGH | Java/Go command execution API |
@@ -174,7 +174,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | INDIRECT_001 | HIGH | Fetch URL and use as instructions |
 | INDIRECT_003 | HIGH | Read external content and apply as rules |
 | INDIRECT_004 | HIGH | Remote config controlling agent behavior |
-| INDIRECT_005 | MEDIUM | User-provided URL consumed by agent |
+| INDIRECT_005 | LOW | User-provided URL consumed by agent |
 | INDIRECT_008 | HIGH | Email or message content as instructions |
 | INDIRECT_009 | MEDIUM | External API response drives agent behavior |
 
@@ -184,7 +184,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 |------|----------|-------------|
 | THIRDPARTY_001 | LOW | Runtime URL controlling behavior |
 | THIRDPARTY_002 | LOW | Mutable GitHub raw content reference |
-| THIRDPARTY_004 | MEDIUM | External API response used without validation |
+| THIRDPARTY_004 | LOW | External API response used without validation |
 | THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
 
 ## SSRF & Cloud (8 rules)
