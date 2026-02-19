@@ -1,7 +1,7 @@
 id: THIRDPARTY_001
 name: "Runtime URL controlling behavior"
 description: "Detects URLs fetched at runtime that control or influence agent behavior without pinning"
-severity: MEDIUM
+severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: all
@@ -21,7 +21,7 @@ examples:
 id: THIRDPARTY_002
 name: "Mutable GitHub raw content reference"
 description: "Detects references to raw.githubusercontent.com on mutable branches like main/master"
-severity: MEDIUM
+severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: any

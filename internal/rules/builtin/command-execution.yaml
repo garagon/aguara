@@ -267,7 +267,7 @@ examples:
 id: CMDEXEC_013
 name: "Shell script file execution"
 description: "Detects execution of shell script files via bash/sh command or direct invocation"
-severity: MEDIUM
+severity: LOW
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any

@@ -120,7 +120,7 @@ examples:
 id: INDIRECT_010
 name: "Unscoped Bash tool in allowed tools"
 description: "Detects skills that include unscoped Bash in their allowed tools list (not Bash(cmd:*) scoped)"
-severity: MEDIUM
+severity: LOW
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any

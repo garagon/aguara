@@ -29,7 +29,7 @@ aguara scan .claude/skills/
 
 Aguara statically analyzes skill files (`SKILL.md`, supporting scripts, configs) looking for patterns that indicate prompt injection, data exfiltration, credential leaks, supply-chain attacks, and more.
 
-- **85 built-in rules** across 8 categories, each with self-testing examples.
+- **138+ built-in rules** across 15 categories, each with self-testing examples.
 - **Deterministic** — same input, same output. No LLM, no cloud, no API keys.
 - **Multi-layer** — regex pattern matching + NLP-based markdown structure analysis.
 - **CI-ready** — JSON and SARIF output, `--fail-on` threshold, `--changed` for git diffs.
@@ -114,10 +114,10 @@ rule_overrides:
 
 ## Rules
 
-85 built-in rules across 8 categories.
+138+ built-in rules across 15 categories, plus NLP-based and toxic-flow analyzers. Use `aguara list-rules` to see all rules.
 
 <details>
-<summary><strong>Prompt Injection</strong> (17 rules)</summary>
+<summary><strong>Prompt Injection</strong> (17 rules + NLP)</summary>
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -138,11 +138,16 @@ rule_overrides:
 | PROMPT_INJECTION_015 | MEDIUM | Prompt leaking attempt |
 | PROMPT_INJECTION_016 | HIGH | Self-modifying agent instructions |
 | PROMPT_INJECTION_017 | HIGH | Autonomous agent spawning |
+| NLP_HEADING_MISMATCH | MEDIUM | Benign heading followed by dangerous content |
+| NLP_AUTHORITY_CLAIM | MEDIUM | Section claims authority with dangerous instructions |
+| NLP_HIDDEN_INSTRUCTION | HIGH | Hidden HTML comment contains action verbs |
+| NLP_CODE_MISMATCH | HIGH | Code block labeled as safe language contains executable content |
+| NLP_OVERRIDE_DANGEROUS | CRITICAL | Instruction override combined with dangerous operations |
 
 </details>
 
 <details>
-<summary><strong>Data Exfiltration</strong> (12 rules)</summary>
+<summary><strong>Data Exfiltration</strong> (16 rules + NLP)</summary>
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -158,11 +163,16 @@ rule_overrides:
 | EXFIL_010 | MEDIUM | Non-standard port communication |
 | EXFIL_011 | HIGH | External context or knowledge sync |
 | EXFIL_012 | HIGH | Unrestricted email or messaging access |
+| EXFIL_013 | HIGH | Read sensitive files and transmit externally |
+| EXFIL_014 | HIGH | Environment variable credential in POST data |
+| EXFIL_015 | MEDIUM | Screenshot or screen capture with transmission |
+| EXFIL_016 | MEDIUM | Git history or diff access with transmission |
+| NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
 
 </details>
 
 <details>
-<summary><strong>Credential Leak</strong> (11 rules)</summary>
+<summary><strong>Credential Leak</strong> (17 rules)</summary>
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -177,6 +187,12 @@ rule_overrides:
 | CRED_009 | CRITICAL | GCP service account key |
 | CRED_010 | MEDIUM | JWT token |
 | CRED_011 | HIGH | Credential in shell export |
+| CRED_012 | CRITICAL | Stripe API key |
+| CRED_013 | CRITICAL | Anthropic API key |
+| CRED_014 | HIGH | SendGrid or Twilio API key |
+| CRED_015 | MEDIUM | CLI credential flags |
+| CRED_016 | MEDIUM | SSH private key in command |
+| CRED_017 | MEDIUM | Docker environment credentials |
 
 </details>
 
@@ -200,7 +216,23 @@ rule_overrides:
 </details>
 
 <details>
-<summary><strong>Supply Chain</strong> (11 rules)</summary>
+<summary><strong>MCP Config</strong> (8 rules)</summary>
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| MCPCFG_001 | MEDIUM | npx MCP server without version pin |
+| MCPCFG_002 | HIGH | Shell metacharacters in MCP config args |
+| MCPCFG_003 | MEDIUM | Hardcoded secrets in MCP env block |
+| MCPCFG_004 | LOW | Non-localhost remote MCP server URL |
+| MCPCFG_005 | HIGH | sudo in MCP server command |
+| MCPCFG_006 | HIGH | Inline code execution in MCP command |
+| MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
+| MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
+
+</details>
+
+<details>
+<summary><strong>Supply Chain</strong> (13 rules)</summary>
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -215,22 +247,81 @@ rule_overrides:
 | SUPPLY_009 | HIGH | Path traversal attempt |
 | SUPPLY_010 | MEDIUM | Symlink attack |
 | SUPPLY_011 | HIGH | Unattended auto-update |
+| SUPPLY_012 | MEDIUM | Git clone and execute chain |
+| SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
+| SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
 
 </details>
 
 <details>
-<summary><strong>External Download</strong> (8 rules)</summary>
+<summary><strong>External Download</strong> (17 rules)</summary>
 
 | Rule | Severity | Description |
 |------|----------|-------------|
 | EXTDL_001 | HIGH | Runtime URL controls agent behavior |
 | EXTDL_002 | MEDIUM | Remote SDK or script fetch as agent input |
-| EXTDL_003 | HIGH | npx auto-install without confirmation |
-| EXTDL_004 | MEDIUM | Global package installation |
+| EXTDL_003 | MEDIUM | npx auto-install without confirmation |
+| EXTDL_004 | LOW | Global package installation |
 | EXTDL_005 | HIGH | Shell profile modification for persistence |
 | EXTDL_006 | HIGH | MCP server auto-registration |
 | EXTDL_007 | CRITICAL | Binary download and execute |
-| EXTDL_008 | MEDIUM | Unverified npx package execution |
+| EXTDL_008 | LOW | Unverified npx package execution |
+| EXTDL_009 | LOW | pip install arbitrary package |
+| EXTDL_010 | MEDIUM | go install from remote |
+| EXTDL_011 | LOW | System package manager install |
+| EXTDL_012 | MEDIUM | Cargo or gem install from remote |
+| EXTDL_013 | CRITICAL | Curl or wget piped to shell |
+| EXTDL_014 | MEDIUM | Conditional download and install |
+| EXTDL_015 | MEDIUM | Docker pull and run untrusted image |
+| EXTDL_016 | MEDIUM | Download binary or archive from URL |
+
+</details>
+
+<details>
+<summary><strong>Command Execution</strong> (14 rules)</summary>
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| CMDEXEC_001 | HIGH | Shell subprocess with shell=True |
+| CMDEXEC_002 | HIGH | Dynamic code evaluation |
+| CMDEXEC_003 | HIGH | Python subprocess execution |
+| CMDEXEC_004 | HIGH | Node.js child process execution |
+| CMDEXEC_005 | HIGH | Shell command with dangerous payload |
+| CMDEXEC_006 | HIGH | Java/Go command execution API |
+| CMDEXEC_007 | HIGH | PowerShell command execution |
+| CMDEXEC_008 | MEDIUM | Terminal multiplexer command injection |
+| CMDEXEC_009 | MEDIUM | Agent shell tool usage |
+| CMDEXEC_010 | MEDIUM | MCP code execution tool |
+| CMDEXEC_011 | MEDIUM | Cron or scheduled command execution |
+| CMDEXEC_012 | MEDIUM | Chained shell command execution |
+| CMDEXEC_013 | LOW | Shell script file execution |
+| INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
+
+</details>
+
+<details>
+<summary><strong>Indirect Injection</strong> (6 rules)</summary>
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| INDIRECT_001 | HIGH | Fetch URL and use as instructions |
+| INDIRECT_003 | HIGH | Read external content and apply as rules |
+| INDIRECT_004 | HIGH | Remote config controlling agent behavior |
+| INDIRECT_005 | MEDIUM | User-provided URL consumed by agent |
+| INDIRECT_008 | HIGH | Email or message content as instructions |
+| INDIRECT_009 | MEDIUM | External API response drives agent behavior |
+
+</details>
+
+<details>
+<summary><strong>Third-Party Content</strong> (4 rules)</summary>
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| THIRDPARTY_001 | LOW | Runtime URL controlling behavior |
+| THIRDPARTY_002 | LOW | Mutable GitHub raw content reference |
+| THIRDPARTY_004 | MEDIUM | External API response used without validation |
+| THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
 
 </details>
 
@@ -262,6 +353,19 @@ rule_overrides:
 | UNI_005 | MEDIUM | Combining character obfuscation |
 | UNI_006 | HIGH | Tag characters for hidden data |
 | UNI_007 | MEDIUM | Punycode domains |
+
+</details>
+
+<details>
+<summary><strong>Toxic Flow</strong> (3 rules)</summary>
+
+Detected by the toxic-flow analyzer (Go engine, not YAML rules).
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| TOXIC_001 | HIGH | User input flows to dangerous sink without sanitization |
+| TOXIC_002 | HIGH | Environment variable flows to shell execution |
+| TOXIC_003 | HIGH | API response flows to code execution |
 
 </details>
 

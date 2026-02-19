@@ -1,7 +1,7 @@
 id: MCPCFG_001
 name: "npx MCP server without version pin"
 description: "Detects MCP server configs using npx to run packages without version pinning"
-severity: HIGH
+severity: MEDIUM
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
@@ -60,7 +60,7 @@ examples:
 id: MCPCFG_004
 name: "Non-localhost remote MCP server URL"
 description: "Detects MCP server configurations connecting to non-localhost remote URLs"
-severity: MEDIUM
+severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any

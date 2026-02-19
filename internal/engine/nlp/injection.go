@@ -23,7 +23,7 @@ var (
 		"toml": true, "ini": true, "csv": true, "txt": true,
 		"markdown": true, "md": true,
 	}
-	configHeadingRe = regexp.MustCompile(`(?i)\b(config|configuration|setup|options|settings|parameters|properties|environment|variables|env vars|reference|install|getting started|prerequisites|requirements|usage|api|authentication|integration|quickstart|features|overview|examples|troubleshooting|development|deployment|testing|contributing|changelog|faq|tools|commands|workflow|permissions|security|license|credits|dependencies|compatibility|support|limitations|notes)\b`)
+	configHeadingRe = regexp.MustCompile(`(?i)\b(config|configuration|setup|options|settings|parameters|properties|environment|variables|env vars|reference|install|getting started|prerequisites|requirements|usage|api|authentication|integration|quickstart|features|overview|examples|troubleshooting|development|deployment|testing|contributing|changelog|faq|tools|commands|workflow|permissions|security|license|credits|dependencies|compatibility|support|limitations|notes|server|service|tool|plugin|client|provider|connector|adapter|bridge|wrapper|sdk|library|package|module|utility|helper|demo|tutorial|guide|readme|description|documentation|introduction|about|summary|comments|mirror|how to|what is|purpose|input|output|resources|methods|endpoints|responses|error|warning|common|advanced|basic)\b`)
 	semanticTagRe   = regexp.MustCompile(`(?i)^<!--\s*(</?[a-z][-a-z0-9]*[^>]*>|@[a-z]|TODO|NOTE|FIXME|WARNING|HACK|XXX|DEPRECATED)`)
 	devCommentRe    = regexp.MustCompile(`(?i)^<!--\s*\n?\s*(PROGRESSIVE|SKILL|TEMPLATE|LAYOUT|FORMAT|STYLE|DESIGN|GUIDELINE|CONVENTION|PATTERN|STRUCTURE|VERSION|METADATA|MARKER|ANCHOR|REGION|SECTION|SLOT|PLACEHOLDER|BLOCK)`)
 
@@ -99,7 +99,7 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 				}
 				headingClass := Classify(section.Text)
 				bodyClass := Classify(nextSection.Text)
-				if headingClass.Score < 0.5 && bodyClass.Score >= 2.0 {
+				if headingClass.Score < 0.5 && bodyClass.Score >= 3.5 {
 					findings = append(findings, makeFinding(
 						"NLP_HEADING_MISMATCH",
 						fmt.Sprintf("Benign heading %q followed by dangerous content (category: %s)",
@@ -119,8 +119,12 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 				continue
 			}
 			if authorityRe.MatchString(section.Text) && urgencyRe.MatchString(section.Text) {
+				// Skip sections that look like API/product documentation
+				if isLikelyAPIDoc(section.Text) || isLikelyProductDesc(section.Text) {
+					continue
+				}
 				bodyClass := Classify(section.Text)
-				if bodyClass.Score >= 1.5 {
+				if bodyClass.Score >= 2.0 {
 					findings = append(findings, makeFinding(
 						"NLP_AUTHORITY_CLAIM",
 						"Section claims authority and urgency with dangerous instructions",
@@ -237,15 +241,21 @@ func extractContext(lines []string, lineNum int) []scanner.ContextLine {
 
 func hasExecutableContent(text string) bool {
 	lower := strings.ToLower(text)
+	// Only flag when actual execution constructs appear, not just tool names
+	// mentioned in configs (e.g., "curl" as an API example in YAML is common).
 	execPatterns := []string{
-		"curl ", "wget ", "exec(", "system(", "eval(", "os.system",
-		"subprocess", "child_process", "#!/", "bash ", "sh -c",
-		"python -c", "ruby -e", "perl -e", "powershell",
+		"exec(", "system(", "eval(", "os.system",
+		"subprocess", "child_process", "#!/", "sh -c",
+		"python -c", "ruby -e", "perl -e",
 	}
 	for _, p := range execPatterns {
 		if strings.Contains(lower, p) {
 			return true
 		}
+	}
+	// Pipe-to-shell is always dangerous regardless of block language
+	if strings.Contains(lower, "| bash") || strings.Contains(lower, "| sh") {
+		return true
 	}
 	return dangerousLangs[strings.TrimSpace(lower)]
 }
@@ -264,6 +274,24 @@ func isLikelyAPIDoc(text string) bool {
 		"authentication", "rate limit",
 	}
 	for _, p := range apiPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLikelyProductDesc returns true when text looks like a product or MCP server
+// description rather than an actual authority-claiming injection.
+func isLikelyProductDesc(text string) bool {
+	lower := strings.ToLower(text)
+	descPatterns := []string{
+		"mcp server", "mcp tool", "model context protocol",
+		"overview", "what is", "features", "integrat",
+		"this server", "this tool", "this plugin",
+		"visit server", "toggle sidebar",
+	}
+	for _, p := range descPatterns {
 		if strings.Contains(lower, p) {
 			return true
 		}

@@ -41,7 +41,7 @@ examples:
 id: EXTDL_003
 name: "npx auto-install without confirmation"
 description: "Detects npx with -y flag that bypasses user confirmation for package installation"
-severity: HIGH
+severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -61,7 +61,7 @@ examples:
 id: EXTDL_004
 name: "Global package installation"
 description: "Detects global installation of packages which affects the host system"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -146,7 +146,7 @@ examples:
 id: EXTDL_008
 name: "Unverified npx package execution"
 description: "Detects npx executing packages from unverified sources without pinned versions"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -165,7 +165,7 @@ examples:
 id: EXTDL_009
 name: "pip install arbitrary package"
 description: "Detects pip install of arbitrary packages that modify the host environment"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -202,7 +202,7 @@ examples:
 id: EXTDL_011
 name: "System package manager install"
 description: "Detects system-level package installation via brew, apt, yum, or dnf"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
