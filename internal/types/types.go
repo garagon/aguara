@@ -74,6 +74,22 @@ type Finding struct {
 	Context     []ContextLine `json:"context,omitempty"`
 	Score       float64       `json:"score,omitempty"`
 	Analyzer    string        `json:"analyzer"`
+	InCodeBlock bool          `json:"in_code_block,omitempty"`
+}
+
+// DowngradeSeverity drops severity by one level, flooring at LOW.
+// INFO is left unchanged (it's a different class, not part of the severity ladder).
+func DowngradeSeverity(sev Severity) Severity {
+	switch sev {
+	case SeverityCritical:
+		return SeverityHigh
+	case SeverityHigh:
+		return SeverityMedium
+	case SeverityMedium:
+		return SeverityLow
+	default:
+		return sev
+	}
 }
 
 // ScanResult holds the complete results of a scan.

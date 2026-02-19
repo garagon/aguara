@@ -7,6 +7,7 @@ import (
 
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 const contextRadius = 3
@@ -28,6 +29,12 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	content := string(target.Content)
 	lines := target.Lines()
 
+	// Build code block map for markdown files
+	var cbMap []bool
+	if isMarkdown(target.RelPath) {
+		cbMap = BuildCodeBlockMap(lines)
+	}
+
 	for _, rule := range m.rules {
 		if ctx.Err() != nil {
 			return findings, ctx.Err()
@@ -38,27 +45,32 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAny(rule, content, lines, target)...)
+			findings = append(findings, m.matchAny(rule, content, lines, target, cbMap)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lines, target)...)
+			findings = append(findings, m.matchAll(rule, content, lines, target, cbMap)...)
 		}
 	}
 
 	// Phase 4: decode base64/hex blobs and re-scan
-	findings = append(findings, DecodeAndRescan(target, m.rules)...)
+	findings = append(findings, DecodeAndRescan(target, m.rules, cbMap)...)
 
 	return findings, nil
 }
 
-func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target) []scanner.Finding {
+func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	for _, pat := range rule.Patterns {
 		hits := matchPattern(pat, content, lines)
 		for _, hit := range hits {
+			sev := rule.Severity
+			inCB := isInCodeBlock(cbMap, hit.line)
+			if inCB {
+				sev = types.DowngradeSeverity(sev)
+			}
 			findings = append(findings, scanner.Finding{
 				RuleID:      rule.ID,
 				RuleName:    rule.Name,
-				Severity:    rule.Severity,
+				Severity:    sev,
 				Category:    rule.Category,
 				Description: rule.Description,
 				FilePath:    target.RelPath,
@@ -66,13 +78,14 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 				MatchedText: hit.text,
 				Context:     extractContext(lines, hit.line, contextRadius),
 				Analyzer:    "pattern",
+				InCodeBlock: inCB,
 			})
 		}
 	}
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target) []scanner.Finding {
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	// All patterns must have at least one hit
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
@@ -88,10 +101,15 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 	for _, hits := range allHits {
 		matchedParts = append(matchedParts, hits[0].text)
 	}
+	sev := rule.Severity
+	inCB := isInCodeBlock(cbMap, firstHit.line)
+	if inCB {
+		sev = types.DowngradeSeverity(sev)
+	}
 	return []scanner.Finding{{
 		RuleID:      rule.ID,
 		RuleName:    rule.Name,
-		Severity:    rule.Severity,
+		Severity:    sev,
 		Category:    rule.Category,
 		Description: rule.Description,
 		FilePath:    target.RelPath,
@@ -99,6 +117,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 		MatchedText: strings.Join(matchedParts, " + "),
 		Context:     extractContext(lines, firstHit.line, contextRadius),
 		Analyzer:    "pattern",
+		InCodeBlock: inCB,
 	}}
 }
 
@@ -180,4 +199,41 @@ func matchesTarget(targetGlobs []string, relPath string) bool {
 		}
 	}
 	return false
+}
+
+// isMarkdown returns true if the file path has a markdown extension.
+func isMarkdown(relPath string) bool {
+	ext := strings.ToLower(filepath.Ext(relPath))
+	return ext == ".md" || ext == ".markdown"
+}
+
+// BuildCodeBlockMap returns a bool slice where index i is true if lines[i]
+// is inside a fenced code block (``` delimited). O(n) single pass.
+func BuildCodeBlockMap(lines []string) []bool {
+	m := make([]bool, len(lines))
+	inBlock := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inBlock {
+				// closing fence — this line is still inside the block
+				m[i] = true
+				inBlock = false
+			} else {
+				// opening fence — this line is not inside content
+				inBlock = true
+			}
+			continue
+		}
+		m[i] = inBlock
+	}
+	return m
+}
+
+// isInCodeBlock checks whether a 1-based line number falls inside a code block.
+func isInCodeBlock(cbMap []bool, lineNum int) bool {
+	if cbMap == nil || lineNum < 1 || lineNum > len(cbMap) {
+		return false
+	}
+	return cbMap[lineNum-1]
 }

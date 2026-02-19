@@ -46,3 +46,20 @@ func TestParseSeverity(t *testing.T) {
 		}
 	}
 }
+
+func TestDowngradeSeverity(t *testing.T) {
+	tests := []struct {
+		input types.Severity
+		want  types.Severity
+	}{
+		{types.SeverityCritical, types.SeverityHigh},
+		{types.SeverityHigh, types.SeverityMedium},
+		{types.SeverityMedium, types.SeverityLow},
+		{types.SeverityLow, types.SeverityLow},
+		{types.SeverityInfo, types.SeverityInfo},
+	}
+	for _, tt := range tests {
+		got := types.DowngradeSeverity(tt.input)
+		require.Equal(t, tt.want, got, "DowngradeSeverity(%s)", tt.input)
+	}
+}

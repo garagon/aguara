@@ -57,11 +57,12 @@ type sarifMessage struct {
 }
 
 type sarifResult struct {
-	RuleID    string          `json:"ruleId"`
-	RuleIndex int             `json:"ruleIndex"`
-	Level     string          `json:"level"`
-	Message   sarifMessage    `json:"message"`
-	Locations []sarifLocation `json:"locations"`
+	RuleID     string          `json:"ruleId"`
+	RuleIndex  int             `json:"ruleIndex"`
+	Level      string          `json:"level"`
+	Message    sarifMessage    `json:"message"`
+	Locations  []sarifLocation `json:"locations"`
+	Properties map[string]any  `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
@@ -104,7 +105,7 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 	for _, finding := range result.Findings {
 		line := max(finding.Line, 1)
 		col := max(finding.Column, 1)
-		results = append(results, sarifResult{
+		r := sarifResult{
 			RuleID:    finding.RuleID,
 			RuleIndex: ruleIndex[finding.RuleID],
 			Level:     severityToLevel(finding.Severity),
@@ -117,7 +118,11 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 					},
 				},
 			},
-		})
+		}
+		if finding.InCodeBlock {
+			r.Properties = map[string]any{"in_code_block": true}
+		}
+		results = append(results, r)
 	}
 
 	log := sarifLog{

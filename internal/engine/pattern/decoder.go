@@ -9,6 +9,7 @@ import (
 
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 var (
@@ -17,7 +18,8 @@ var (
 )
 
 // DecodeAndRescan detects encoded blobs in content, decodes them, and re-scans with provided rules.
-func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule) []scanner.Finding {
+// cbMap is the code block map for the file (nil for non-markdown files).
+func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	content := string(target.Content)
 	lines := target.Lines()
@@ -37,7 +39,7 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule) []s
 			continue
 		}
 		line := lineNumberAtOffset(content, loc[0])
-		findings = append(findings, rescan(decoded, line, lines, target, compiled, "base64")...)
+		findings = append(findings, rescan(decoded, line, lines, target, compiled, "base64", cbMap)...)
 	}
 
 	// Scan for hex blobs
@@ -55,16 +57,19 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule) []s
 			continue
 		}
 		line := lineNumberAtOffset(content, loc[0])
-		findings = append(findings, rescan(decoded, line, lines, target, compiled, "hex")...)
+		findings = append(findings, rescan(decoded, line, lines, target, compiled, "hex", cbMap)...)
 	}
 
 	return findings
 }
 
-func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Target, compiled []*rules.CompiledRule, encoding string) []scanner.Finding {
+func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Target, compiled []*rules.CompiledRule, encoding string, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	decodedStr := string(decoded)
 	decodedLines := strings.Split(decodedStr, "\n")
+
+	// Decoded blob inherits code block status from the line where the blob was found
+	inCB := isInCodeBlock(cbMap, origLine)
 
 	for _, rule := range compiled {
 		if !matchesTarget(rule.Targets, target.RelPath) {
@@ -73,10 +78,14 @@ func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Ta
 		for _, pat := range rule.Patterns {
 			hits := matchPattern(pat, decodedStr, decodedLines)
 			for _, hit := range hits {
+				sev := rule.Severity
+				if inCB {
+					sev = types.DowngradeSeverity(sev)
+				}
 				findings = append(findings, scanner.Finding{
 					RuleID:      rule.ID,
 					RuleName:    rule.Name + " (decoded " + encoding + ")",
-					Severity:    rule.Severity,
+					Severity:    sev,
 					Category:    rule.Category,
 					Description: rule.Description,
 					FilePath:    target.RelPath,
@@ -84,6 +93,7 @@ func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Ta
 					MatchedText: hit.text,
 					Context:     extractContext(origLines, origLine, contextRadius),
 					Analyzer:    "pattern-decoder",
+					InCodeBlock: inCB,
 				})
 			}
 		}

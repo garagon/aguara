@@ -30,7 +30,7 @@ func TestDecodeAndRescanBase64(t *testing.T) {
 		Content: []byte("Normal content\n" + encoded + "\nMore content\n"),
 	}
 
-	findings := pattern.DecodeAndRescan(target, []*rules.CompiledRule{rule})
+	findings := pattern.DecodeAndRescan(target, []*rules.CompiledRule{rule}, nil)
 	require.GreaterOrEqual(t, len(findings), 1)
 	require.Contains(t, findings[0].Analyzer, "decoder")
 }
@@ -54,6 +54,6 @@ func TestDecodeAndRescanNoFalsePositive(t *testing.T) {
 		Content: []byte(encoded),
 	}
 
-	findings := pattern.DecodeAndRescan(target, []*rules.CompiledRule{rule})
+	findings := pattern.DecodeAndRescan(target, []*rules.CompiledRule{rule}, nil)
 	require.Empty(t, findings)
 }
