@@ -214,7 +214,7 @@ targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
   - type: regex
-    value: "(?i)\\b(DAN|do\\s+anything\\s+now|developer\\s+mode|god\\s+mode|unrestricted\\s+mode)\\b"
+    value: "(?i)\\b(DAN\\s+mode|do\\s+anything\\s+now|developer\\s+mode|god\\s+mode|unrestricted\\s+mode)\\b"
   - type: regex
     value: "(?i)(bypass|circumvent|evade|disable)\\s+(safety|security|filter|restriction|guardrail|content\\s+policy)"
   - type: regex
