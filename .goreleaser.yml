@@ -1,0 +1,31 @@
+version: 2
+
+builds:
+  - main: ./cmd/aguara
+    binary: aguara
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/garagon/aguara/cmd/aguara/commands.Version={{.Version}}
+      - -X github.com/garagon/aguara/cmd/aguara/commands.Commit={{.ShortCommit}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "aguara_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github-native

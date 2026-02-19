@@ -140,7 +140,7 @@ func TestInitDefaultDir(t *testing.T) {
 	// Save and restore working directory
 	orig, err := os.Getwd()
 	require.NoError(t, err)
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	dir := t.TempDir()
 	require.NoError(t, os.Chdir(dir))

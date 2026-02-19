@@ -1,21 +1,9 @@
-run:
-  timeout: 3m
+version: "2"
 
 linters:
-  enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - misspell
-    - gofmt
-
-linters-settings:
-  misspell:
-    locale: US
-
-issues:
-  exclude-dirs:
-    - testdata
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint

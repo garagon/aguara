@@ -52,11 +52,6 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	// Compile rules
 	compiled, _ := rules.CompileAll(rawRules)
 
-	// Apply config rule overrides (best-effort config load)
-	if len(args) > 0 {
-		// config from path not applicable for list-rules
-	}
-
 	// Apply --disable-rule flag
 	if len(flagDisableRules) > 0 {
 		disabled := make(map[string]bool)
@@ -105,7 +100,7 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	for _, r := range compiled {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Severity.String(), r.Category)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	fmt.Fprintf(w, "\n%d rules loaded\n", len(compiled))
 
 	return nil

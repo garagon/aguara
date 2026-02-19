@@ -8,32 +8,57 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/garagon/aguara/actions/workflows/ci.yml"><img src="https://github.com/garagon/aguara/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://goreportcard.com/report/github.com/garagon/aguara"><img src="https://goreportcard.com/badge/github.com/garagon/aguara" alt="Go Report Card"></a>
+  <a href="https://pkg.go.dev/github.com/garagon/aguara"><img src="https://pkg.go.dev/badge/github.com/garagon/aguara.svg" alt="Go Reference"></a>
+  <a href="https://github.com/garagon/aguara/releases"><img src="https://img.shields.io/github/v/release/garagon/aguara" alt="GitHub Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/garagon/aguara" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#usage">Usage</a> &bull;
   <a href="#rules">Rules</a> &bull;
-  <a href="#architecture">Architecture</a> &bull;
-  <a href="#building">Building</a>
+  <a href="#aguara-watch">Aguara Watch</a> &bull;
+  <a href="#contributing">Contributing</a>
 </p>
 
 https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
-## Quick Start
+## Why Aguara?
+
+AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
+
+- **138+ rules across 15 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
+- **Catches obfuscated attacks** that regex-only tools miss, using NLP-based markdown structure analysis and taint tracking.
+- **Deterministic** — same input, same output. Every scan is reproducible.
+- **CI-ready** — JSON, SARIF, and Markdown output. `--fail-on` threshold. `--changed` for incremental scans.
+- **Extensible** — write custom rules in YAML. No code required.
+
+## Installation
 
 ```bash
 go install github.com/garagon/aguara/cmd/aguara@latest
-
-aguara scan .claude/skills/
 ```
 
-## What it does
+Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/garagon/aguara/releases).
 
-Aguara statically analyzes skill files (`SKILL.md`, supporting scripts, configs) looking for patterns that indicate prompt injection, data exfiltration, credential leaks, supply-chain attacks, and more.
+## Quick Start
 
-- **138+ built-in rules** across 15 categories, each with self-testing examples.
-- **Deterministic** — same input, same output. No LLM, no cloud, no API keys.
-- **Multi-layer** — regex pattern matching + NLP-based markdown structure analysis.
-- **CI-ready** — JSON and SARIF output, `--fail-on` threshold, `--changed` for git diffs.
-- **Extensible** — custom rules in YAML.
+```bash
+# Scan a skills directory
+aguara scan .claude/skills/
+
+# Scan a single file
+aguara scan .claude/skills/deploy/SKILL.md
+
+# Only high and critical findings
+aguara scan . --severity high
+
+# CI mode (exit 1 on high+, no color)
+aguara scan .claude/skills/ --ci
+```
 
 ## Usage
 
@@ -42,7 +67,7 @@ aguara scan <path> [flags]
 
 Flags:
       --severity string       Minimum severity to report: critical, high, medium, low, info (default "info")
-      --format string         Output format: terminal, json, sarif (default "terminal")
+      --format string         Output format: terminal, json, sarif, markdown (default "terminal")
   -o, --output string         Output file path (default: stdout)
       --workers int           Number of worker goroutines (default: NumCPU)
       --rules string          Additional rules directory
@@ -53,25 +78,6 @@ Flags:
       --changed               Only scan git-changed files
   -v, --verbose               Show rule descriptions for critical and high findings
   -h, --help                  Help
-```
-
-### Examples
-
-```bash
-# Scan a skills directory
-aguara scan .claude/skills/
-
-# Scan a single skill
-aguara scan .claude/skills/deploy/SKILL.md
-
-# JSON output for scripting
-aguara scan ./skills/ --format json -o results.json
-
-# Only high and critical findings
-aguara scan . --severity high
-
-# CI mode (exit 1 on high+, no color)
-aguara scan .claude/skills/ --ci
 ```
 
 ### CI Integration
@@ -114,260 +120,25 @@ rule_overrides:
 
 ## Rules
 
-138+ built-in rules across 15 categories, plus NLP-based and toxic-flow analyzers. Use `aguara list-rules` to see all rules.
+138+ built-in rules across 15 categories:
 
-<details>
-<summary><strong>Prompt Injection</strong> (17 rules + NLP)</summary>
+| Category | Rules | What it detects |
+|----------|-------|-----------------|
+| Prompt Injection | 17 + NLP | Instruction overrides, role switching, delimiter injection, jailbreaks |
+| Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
+| Credential Leak | 17 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings |
+| MCP Attack | 11 | Tool injection, name shadowing, manifest tampering, capability escalation |
+| MCP Config | 8 | Unpinned npx servers, hardcoded secrets, shell metacharacters |
+| Supply Chain | 14 | Download-and-execute, reverse shells, obfuscated commands, privilege escalation |
+| External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
+| Command Execution | 14 | shell=True, eval, subprocess, child_process, PowerShell |
+| Indirect Injection | 6 | Fetch-and-follow, remote config, email-as-instructions |
+| SSRF & Cloud | 8 | Cloud metadata, IMDS, Docker socket, internal IPs |
+| Unicode Attack | 7 | RTL override, bidi, homoglyphs, tag characters |
+| Third-Party Content | 4 | Mutable raw content, unvalidated API responses, remote templates |
+| Toxic Flow | 3 | User input to dangerous sinks, env vars to shell, API to eval |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| PROMPT_INJECTION_001 | CRITICAL | Instruction override attempt |
-| PROMPT_INJECTION_002 | HIGH | Role switching attempt |
-| PROMPT_INJECTION_003 | HIGH | Hidden HTML comment with instructions |
-| PROMPT_INJECTION_004 | HIGH | Zero-width character obfuscation |
-| PROMPT_INJECTION_005 | MEDIUM | Urgency and authority manipulation |
-| PROMPT_INJECTION_006 | CRITICAL | Delimiter injection |
-| PROMPT_INJECTION_007 | HIGH | Conversation history poisoning |
-| PROMPT_INJECTION_008 | HIGH | Secrecy instruction |
-| PROMPT_INJECTION_009 | HIGH | Base64-encoded instructions |
-| PROMPT_INJECTION_010 | CRITICAL | Fake system prompt |
-| PROMPT_INJECTION_011 | CRITICAL | Jailbreak template |
-| PROMPT_INJECTION_012 | MEDIUM | Markdown link with deceptive action text |
-| PROMPT_INJECTION_013 | MEDIUM | Instruction in image alt text |
-| PROMPT_INJECTION_014 | MEDIUM | Multi-language injection |
-| PROMPT_INJECTION_015 | MEDIUM | Prompt leaking attempt |
-| PROMPT_INJECTION_016 | HIGH | Self-modifying agent instructions |
-| PROMPT_INJECTION_017 | HIGH | Autonomous agent spawning |
-| NLP_HEADING_MISMATCH | MEDIUM | Benign heading followed by dangerous content |
-| NLP_AUTHORITY_CLAIM | MEDIUM | Section claims authority with dangerous instructions |
-| NLP_HIDDEN_INSTRUCTION | HIGH | Hidden HTML comment contains action verbs |
-| NLP_CODE_MISMATCH | HIGH | Code block labeled as safe language contains executable content |
-| NLP_OVERRIDE_DANGEROUS | CRITICAL | Instruction override combined with dangerous operations |
-
-</details>
-
-<details>
-<summary><strong>Data Exfiltration</strong> (16 rules + NLP)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| EXFIL_001 | HIGH | Webhook URL for data exfiltration |
-| EXFIL_002 | HIGH | Sensitive file read pattern |
-| EXFIL_003 | HIGH | Data transmission pattern |
-| EXFIL_004 | HIGH | DNS exfiltration pattern |
-| EXFIL_005 | HIGH | curl/wget POST with sensitive data |
-| EXFIL_006 | MEDIUM | Clipboard access with network |
-| EXFIL_007 | HIGH | Environment variable exfiltration |
-| EXFIL_008 | HIGH | File read piped to HTTP transmission |
-| EXFIL_009 | MEDIUM | Base64 encode and send |
-| EXFIL_010 | MEDIUM | Non-standard port communication |
-| EXFIL_011 | HIGH | External context or knowledge sync |
-| EXFIL_012 | HIGH | Unrestricted email or messaging access |
-| EXFIL_013 | HIGH | Read sensitive files and transmit externally |
-| EXFIL_014 | HIGH | Environment variable credential in POST data |
-| EXFIL_015 | MEDIUM | Screenshot or screen capture with transmission |
-| EXFIL_016 | MEDIUM | Git history or diff access with transmission |
-| NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
-
-</details>
-
-<details>
-<summary><strong>Credential Leak</strong> (17 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| CRED_001 | CRITICAL | OpenAI API key |
-| CRED_002 | CRITICAL | AWS access key |
-| CRED_003 | CRITICAL | GitHub personal access token |
-| CRED_004 | MEDIUM | Generic API key pattern |
-| CRED_005 | CRITICAL | Private key block |
-| CRED_006 | HIGH | Database connection string |
-| CRED_007 | HIGH | Hardcoded password |
-| CRED_008 | HIGH | Slack or Discord webhook |
-| CRED_009 | CRITICAL | GCP service account key |
-| CRED_010 | MEDIUM | JWT token |
-| CRED_011 | HIGH | Credential in shell export |
-| CRED_012 | CRITICAL | Stripe API key |
-| CRED_013 | CRITICAL | Anthropic API key |
-| CRED_014 | HIGH | SendGrid or Twilio API key |
-| CRED_015 | MEDIUM | CLI credential flags |
-| CRED_016 | MEDIUM | SSH private key in command |
-| CRED_017 | MEDIUM | Docker environment credentials |
-
-</details>
-
-<details>
-<summary><strong>MCP Attack</strong> (11 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| MCP_001 | CRITICAL | Tool description injection |
-| MCP_002 | HIGH | Tool name shadowing |
-| MCP_003 | HIGH | Resource URI manipulation |
-| MCP_004 | HIGH | Parameter schema injection |
-| MCP_005 | CRITICAL | Hidden tool registration |
-| MCP_006 | HIGH | Tool output interception |
-| MCP_007 | HIGH | Cross-tool data leakage |
-| MCP_008 | CRITICAL | Server manifest tampering |
-| MCP_009 | HIGH | Capability escalation |
-| MCP_010 | HIGH | Prompt cache poisoning |
-| MCP_011 | HIGH | Arbitrary MCP server execution |
-
-</details>
-
-<details>
-<summary><strong>MCP Config</strong> (8 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| MCPCFG_001 | MEDIUM | npx MCP server without version pin |
-| MCPCFG_002 | HIGH | Shell metacharacters in MCP config args |
-| MCPCFG_003 | MEDIUM | Hardcoded secrets in MCP env block |
-| MCPCFG_004 | LOW | Non-localhost remote MCP server URL |
-| MCPCFG_005 | HIGH | sudo in MCP server command |
-| MCPCFG_006 | HIGH | Inline code execution in MCP command |
-| MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
-| MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
-
-</details>
-
-<details>
-<summary><strong>Supply Chain</strong> (13 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| SUPPLY_001 | HIGH | Suspicious npm install script |
-| SUPPLY_002 | HIGH | Python setup.py execution |
-| SUPPLY_003 | CRITICAL | Download-and-execute |
-| SUPPLY_004 | HIGH | Makefile hidden commands |
-| SUPPLY_005 | HIGH | Conditional CI execution |
-| SUPPLY_006 | HIGH | Obfuscated shell command |
-| SUPPLY_007 | HIGH | Privilege escalation |
-| SUPPLY_008 | CRITICAL | Reverse shell pattern |
-| SUPPLY_009 | HIGH | Path traversal attempt |
-| SUPPLY_010 | MEDIUM | Symlink attack |
-| SUPPLY_011 | HIGH | Unattended auto-update |
-| SUPPLY_012 | MEDIUM | Git clone and execute chain |
-| SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
-| SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
-
-</details>
-
-<details>
-<summary><strong>External Download</strong> (17 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| EXTDL_001 | HIGH | Runtime URL controls agent behavior |
-| EXTDL_002 | MEDIUM | Remote SDK or script fetch as agent input |
-| EXTDL_003 | MEDIUM | npx auto-install without confirmation |
-| EXTDL_004 | LOW | Global package installation |
-| EXTDL_005 | HIGH | Shell profile modification for persistence |
-| EXTDL_006 | HIGH | MCP server auto-registration |
-| EXTDL_007 | CRITICAL | Binary download and execute |
-| EXTDL_008 | LOW | Unverified npx package execution |
-| EXTDL_009 | LOW | pip install arbitrary package |
-| EXTDL_010 | MEDIUM | go install from remote |
-| EXTDL_011 | LOW | System package manager install |
-| EXTDL_012 | MEDIUM | Cargo or gem install from remote |
-| EXTDL_013 | CRITICAL | Curl or wget piped to shell |
-| EXTDL_014 | MEDIUM | Conditional download and install |
-| EXTDL_015 | MEDIUM | Docker pull and run untrusted image |
-| EXTDL_016 | MEDIUM | Download binary or archive from URL |
-
-</details>
-
-<details>
-<summary><strong>Command Execution</strong> (14 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| CMDEXEC_001 | HIGH | Shell subprocess with shell=True |
-| CMDEXEC_002 | HIGH | Dynamic code evaluation |
-| CMDEXEC_003 | HIGH | Python subprocess execution |
-| CMDEXEC_004 | HIGH | Node.js child process execution |
-| CMDEXEC_005 | HIGH | Shell command with dangerous payload |
-| CMDEXEC_006 | HIGH | Java/Go command execution API |
-| CMDEXEC_007 | HIGH | PowerShell command execution |
-| CMDEXEC_008 | MEDIUM | Terminal multiplexer command injection |
-| CMDEXEC_009 | MEDIUM | Agent shell tool usage |
-| CMDEXEC_010 | MEDIUM | MCP code execution tool |
-| CMDEXEC_011 | MEDIUM | Cron or scheduled command execution |
-| CMDEXEC_012 | MEDIUM | Chained shell command execution |
-| CMDEXEC_013 | LOW | Shell script file execution |
-| INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
-
-</details>
-
-<details>
-<summary><strong>Indirect Injection</strong> (6 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| INDIRECT_001 | HIGH | Fetch URL and use as instructions |
-| INDIRECT_003 | HIGH | Read external content and apply as rules |
-| INDIRECT_004 | HIGH | Remote config controlling agent behavior |
-| INDIRECT_005 | MEDIUM | User-provided URL consumed by agent |
-| INDIRECT_008 | HIGH | Email or message content as instructions |
-| INDIRECT_009 | MEDIUM | External API response drives agent behavior |
-
-</details>
-
-<details>
-<summary><strong>Third-Party Content</strong> (4 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| THIRDPARTY_001 | LOW | Runtime URL controlling behavior |
-| THIRDPARTY_002 | LOW | Mutable GitHub raw content reference |
-| THIRDPARTY_004 | MEDIUM | External API response used without validation |
-| THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
-
-</details>
-
-<details>
-<summary><strong>SSRF & Cloud</strong> (8 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| SSRF_001 | CRITICAL | Cloud metadata URL |
-| SSRF_002 | HIGH | Internal IP range access |
-| SSRF_003 | HIGH | Kubernetes service discovery |
-| SSRF_004 | CRITICAL | AWS IMDS token request |
-| SSRF_005 | HIGH | Docker socket access |
-| SSRF_006 | HIGH | Localhost bypass |
-| SSRF_007 | CRITICAL | Cloud credential endpoint |
-| SSRF_008 | MEDIUM | DNS rebinding setup |
-
-</details>
-
-<details>
-<summary><strong>Unicode Attack</strong> (7 rules)</summary>
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| UNI_001 | HIGH | Right-to-left override |
-| UNI_002 | HIGH | Bidi text manipulation |
-| UNI_003 | MEDIUM | Homoglyph domain spoofing |
-| UNI_004 | MEDIUM | Invisible separator injection |
-| UNI_005 | MEDIUM | Combining character obfuscation |
-| UNI_006 | HIGH | Tag characters for hidden data |
-| UNI_007 | MEDIUM | Punycode domains |
-
-</details>
-
-<details>
-<summary><strong>Toxic Flow</strong> (3 rules)</summary>
-
-Detected by the toxic-flow analyzer (Go engine, not YAML rules).
-
-| Rule | Severity | Description |
-|------|----------|-------------|
-| TOXIC_001 | HIGH | User input flows to dangerous sink without sanitization |
-| TOXIC_002 | HIGH | Environment variable flows to shell execution |
-| TOXIC_003 | HIGH | API response flows to code execution |
-
-</details>
+See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
 
 ### Custom Rules
 
@@ -395,6 +166,10 @@ examples:
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
+## Aguara Watch
+
+[Aguara Watch](https://watch.aguarascan.com/) continuously scans **28,000+ AI agent skills** across 5 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
+
 ## Architecture
 
 ```
@@ -403,31 +178,23 @@ internal/
   engine/
     pattern/           Layer 1: regex/contains matcher + base64/hex decoder
     nlp/               Layer 2: goldmark AST walker, keyword classifier, injection detector
+    rugpull/           Rug-pull detection analyzer
+    toxicflow/         Taint tracking: source -> sink flow analysis
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           85 embedded rules across 8 YAML files (go:embed)
+    builtin/           138 embedded rules across 12 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
-  output/              Formatters: terminal (ANSI), JSON, SARIF
+  output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader
+  state/               Persistence for incremental scanning
   types/               Shared types (Finding, Severity, ScanResult)
-```
-
-## Building
-
-Requires Go 1.25+.
-
-```bash
-make build        # Production binary
-make test         # Tests with race detector
-make lint         # golangci-lint
-make fmt          # gofmt
-make vet          # go vet
-make clean        # Remove binary
 ```
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, adding rules, and the PR process.
+
+For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## License
 
