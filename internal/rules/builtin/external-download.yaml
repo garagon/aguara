@@ -184,7 +184,7 @@ examples:
 id: EXTDL_010
 name: "go install from remote"
 description: "Detects go install fetching and compiling arbitrary Go packages"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -225,7 +225,7 @@ examples:
 id: EXTDL_012
 name: "Cargo or gem install from remote"
 description: "Detects cargo install or gem install fetching packages from remote registries"
-severity: MEDIUM
+severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any

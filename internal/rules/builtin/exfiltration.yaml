@@ -246,7 +246,7 @@ examples:
 id: EXFIL_012
 name: "Unrestricted email or messaging access"
 description: "Detects CLI tools granting unrestricted send/read access to email or messaging"
-severity: HIGH
+severity: MEDIUM
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: any

@@ -128,7 +128,7 @@ examples:
 id: MCP_007
 name: "Cross-tool data leakage"
 description: "Detects patterns where credential or secret reads are combined with external data transmission"
-severity: HIGH
+severity: MEDIUM
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: all

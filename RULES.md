@@ -50,7 +50,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXFIL_009 | MEDIUM | Base64 encode and send |
 | EXFIL_010 | MEDIUM | Non-standard port communication |
 | EXFIL_011 | HIGH | External context or knowledge sync |
-| EXFIL_012 | HIGH | Unrestricted email or messaging access |
+| EXFIL_012 | MEDIUM | Unrestricted email or messaging access |
 | EXFIL_013 | HIGH | Read sensitive files and transmit externally |
 | EXFIL_014 | HIGH | Environment variable credential in POST data |
 | EXFIL_015 | MEDIUM | Screenshot or screen capture with transmission |
@@ -89,7 +89,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCP_004 | HIGH | Parameter schema injection |
 | MCP_005 | CRITICAL | Hidden tool registration |
 | MCP_006 | HIGH | Tool output interception |
-| MCP_007 | HIGH | Cross-tool data leakage |
+| MCP_007 | MEDIUM | Cross-tool data leakage |
 | MCP_008 | CRITICAL | Server manifest tampering |
 | MCP_009 | HIGH | Capability escalation |
 | MCP_010 | HIGH | Prompt cache poisoning |
@@ -140,9 +140,9 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXTDL_007 | CRITICAL | Binary download and execute |
 | EXTDL_008 | LOW | Unverified npx package execution |
 | EXTDL_009 | LOW | pip install arbitrary package |
-| EXTDL_010 | MEDIUM | go install from remote |
+| EXTDL_010 | LOW | go install from remote |
 | EXTDL_011 | LOW | System package manager install |
-| EXTDL_012 | MEDIUM | Cargo or gem install from remote |
+| EXTDL_012 | LOW | Cargo or gem install from remote |
 | EXTDL_013 | CRITICAL | Curl or wget piped to shell |
 | EXTDL_014 | MEDIUM | Conditional download and install |
 | EXTDL_015 | MEDIUM | Docker pull and run untrusted image |

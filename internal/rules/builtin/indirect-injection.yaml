@@ -7,7 +7,7 @@ targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
   - type: regex
-    value: "(?i)(WebFetch|fetch|curl|wget|requests\\.get|http\\.get)\\s+.{0,30}(instructions?|rules?|guidelines?|directives?|prompts?)"
+    value: "(?i)(WebFetch|fetch|curl|wget|requests\\.get|http\\.get)\\s+.{0,30}(instructions?|rules?|guidelines?|directives?)"
   - type: regex
     value: "(?i)(instructions?|rules?|guidelines?|directives?|prompts?)\\s+.{0,25}(from|via|at)\\s+.{0,15}(url|http|api|remote|server)"
 examples:
