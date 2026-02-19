@@ -101,7 +101,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 |------|----------|-------------|
 | MCPCFG_001 | LOW | npx MCP server without version pin |
 | MCPCFG_002 | HIGH | Shell metacharacters in MCP config args |
-| MCPCFG_003 | MEDIUM | Hardcoded secrets in MCP env block |
+| MCPCFG_003 | LOW | Hardcoded secrets in MCP env block |
 | MCPCFG_004 | LOW | Non-localhost remote MCP server URL |
 | MCPCFG_005 | HIGH | sudo in MCP server command |
 | MCPCFG_006 | HIGH | Inline code execution in MCP command |
@@ -153,7 +153,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | Rule | Severity | Description |
 |------|----------|-------------|
 | CMDEXEC_001 | HIGH | Shell subprocess with shell=True |
-| CMDEXEC_002 | HIGH | Dynamic code evaluation |
+| CMDEXEC_002 | MEDIUM | Dynamic code evaluation |
 | CMDEXEC_003 | HIGH | Python subprocess execution |
 | CMDEXEC_004 | HIGH | Node.js child process execution |
 | CMDEXEC_005 | HIGH | Shell command with dangerous payload |
@@ -163,7 +163,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CMDEXEC_009 | MEDIUM | Agent shell tool usage |
 | CMDEXEC_010 | MEDIUM | MCP code execution tool |
 | CMDEXEC_011 | MEDIUM | Cron or scheduled command execution |
-| CMDEXEC_012 | MEDIUM | Chained shell command execution |
+| CMDEXEC_012 | LOW | Chained shell command execution |
 | CMDEXEC_013 | LOW | Shell script file execution |
 | INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 

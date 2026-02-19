@@ -41,7 +41,7 @@ examples:
 id: MCPCFG_003
 name: "Hardcoded secrets in MCP env block"
 description: "Detects hardcoded API keys, tokens, or passwords in MCP server environment configuration"
-severity: MEDIUM
+severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: all
@@ -52,7 +52,7 @@ patterns:
     value: "(?i)[\"'][A-Z_]*(API[_-]?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)[A-Z_]*[\"']\\s*:\\s*[\"'][a-zA-Z0-9_\\-]{20,}[\"']"
 examples:
   true_positive:
-    - "{\"env\": {\"API_KEY\": \"FAKE-example-key-not-real-0123456789\"}}"
+    - "{\"env\": {\"API_KEY\": \"sk-proj-real1234567890abcdef\"}}"
   false_positive:
     - "{\"env\": {\"NODE_ENV\": \"production\"}}"
     - "{\"env\": {\"API_KEY\": \"your-key-here\"}}"

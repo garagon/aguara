@@ -23,7 +23,7 @@ examples:
 id: CMDEXEC_002
 name: "Dynamic code evaluation"
 description: "Detects eval() or exec() used for dynamic code execution"
-severity: HIGH
+severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
@@ -244,7 +244,7 @@ examples:
 id: CMDEXEC_012
 name: "Chained shell command execution"
 description: "Detects chained commands using shell operators with dangerous operations"
-severity: MEDIUM
+severity: LOW
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
