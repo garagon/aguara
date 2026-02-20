@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -44,9 +46,25 @@ func (s *Scanner) SetIgnorePatterns(patterns []string) {
 	s.ignorePatterns = patterns
 }
 
-// Scan performs a full scan of the given root directory.
+// Scan performs a full scan of the given path. The path can be a directory
+// (walked recursively) or a single file.
 func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
-	// 1. Discover targets
+	// Check if root is a single file (not a directory).
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		// Single-file scan: use the filename as RelPath so target-filtered
+		// rules (e.g. "*.md", "*.json") can match correctly.
+		targets := []*Target{{
+			Path:    root,
+			RelPath: filepath.Base(root),
+		}}
+		return s.ScanTargets(ctx, targets)
+	}
+
+	// Directory scan: discover all files recursively.
 	discovery := &TargetDiscovery{IgnorePatterns: s.ignorePatterns}
 	targets, err := discovery.Discover(root)
 	if err != nil {

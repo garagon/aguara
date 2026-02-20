@@ -25,9 +25,13 @@ type Config struct {
 	RuleOverrides map[string]RuleOverride `yaml:"rule_overrides,omitempty"`
 }
 
-// Load reads the .aguara.yml or .aguara.yaml config file from the given directory.
-// If no config file is found, it returns a zero Config (not an error).
+// Load reads the .aguara.yml or .aguara.yaml config file from the given path.
+// If path is a file, its parent directory is used. If no config file is found,
+// it returns a zero Config (not an error).
 func Load(dir string) (Config, error) {
+	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+		dir = filepath.Dir(dir)
+	}
 	for _, name := range []string{".aguara.yml", ".aguara.yaml"} {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
