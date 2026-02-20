@@ -256,11 +256,13 @@ patterns:
   - type: regex
     value: "(?i)git\\s+clone\\s+(--depth\\s+\\d+\\s+)?https?://[^\\s]+"
   - type: regex
-    value: "(?i)(cd\\s+\\S+\\s*&&\\s*(pip\\s+install|make\\s+\\S+|\\./\\S+)|pip\\s+install\\s+\\.|chmod\\s+\\+x\\s+\\S+\\s*&&\\s*\\./)"
+    value: "(?i)(cd\\s+\\S+\\s*(&&|;|\\n)\\s*(pip\\s+install|python\\s+setup\\.py|make\\s+\\S+|npm\\s+run|\\./\\S+)|pip\\s+install\\s+\\.|python\\s+setup\\.py\\s+install|chmod\\s+\\+x\\s+\\S+\\s*(&&|;|\\n)\\s*\\./|&&\\s*make\\s+\\w+|make\\s+install)"
 examples:
   true_positive:
     - "git clone https://github.com/org/repo && cd repo && pip install ."
     - "git clone https://github.com/org/repo && chmod +x install.sh && ./install.sh"
+    - "git clone https://github.com/org/repo && cd repo && make install"
+    - "git clone https://github.com/org/repo && cd /tmp/tool && python setup.py install"
   false_positive:
     - "git clone https://github.com/org/repo for more info"
     - "git clone --branch v1.2.3 https://github.com/org/repo"

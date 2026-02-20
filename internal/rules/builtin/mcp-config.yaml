@@ -127,30 +127,36 @@ patterns:
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"']docker[\"'].{0,200}--privileged"
   - type: regex
     value: "(?i)[\"']args[\"']\\s*:.{0,200}-v.{0,30}/(var/run/docker|etc/|root/|home/)"
+  - type: regex
+    value: "(?i)-v.{0,10}/:/[a-zA-Z]"
 examples:
   true_positive:
     - "\"command\": \"docker\", \"args\": [\"run\", \"--privileged\", \"mcp-server\"]"
     - "\"args\": [\"run\", \"-v\", \"/var/run/docker.sock:/var/run/docker.sock\", \"mcp-img\"]"
+    - "\"args\": [\"run\", \"-v\", \"/:/host\", \"mcp-server\"]"
   false_positive:
     - "\"command\": \"docker\", \"args\": [\"run\", \"-p\", \"3000:3000\", \"mcp-server\"]"
 ---
 id: MCPCFG_008
 name: "Auto-confirm flag bypassing user verification"
-description: "Detects -y or --yes flags in MCP/skill install commands that bypass user confirmation"
+description: "Detects -y, --yes, or --auto-approve flags in MCP/skill install commands that bypass user confirmation"
 severity: MEDIUM
 category: mcp-config
-targets: ["*.md", "*.txt"]
+targets: ["*.md", "*.txt", "*.json"]
 match_mode: any
 patterns:
   - type: regex
-    value: "(?i)(npx|clawhub|skills)\\s+\\S+\\s+(-[a-z]*y\\b|--yes\\b)"
+    value: "(?i)(npx|clawhub|skills)\\s+\\S+\\s+(-[a-z]*y\\b|--yes\\b|--auto-approve\\b)"
   - type: regex
-    value: "(?i)(install|add)\\s+\\S+\\s+.{0,30}(-y\\b|--yes\\b)"
+    value: "(?i)(install|add)\\s+\\S+\\s+.{0,30}(-y\\b|--yes\\b|--auto-approve\\b)"
+  - type: regex
+    value: "(?i)[\"']--?(auto-approve|yes|y)[\"']"
 examples:
   true_positive:
     - "npx skills add owner/repo@skill -y"
     - "clawhub install my-skill --yes"
     - "npx exo-installer install --all -y"
+    - "\"args\": [\"install\", \"--auto-approve\"]"
   false_positive:
     - "npm install express"
     - "pip install requests"

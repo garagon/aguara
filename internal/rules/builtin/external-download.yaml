@@ -95,10 +95,16 @@ patterns:
     value: "(?i)(echo|cat|append|add|write|>>)\\s.{0,60}~/?\\.?(bashrc|bash_profile|zshrc|zprofile|profile|zshenv)"
   - type: regex
     value: "(?i)(export\\s+[A-Z_]+=).{0,80}(>>\\s*~/?\\.?(bashrc|zshrc|profile))"
+  - type: regex
+    value: "(?i)(modify|edit|append|write|update|insert|inject|persist|backdoor).{0,40}~/?\\.?(bashrc|bash_profile|zshrc|zprofile|profile|zshenv)"
+  - type: regex
+    value: "(?i)>>\\s*~/?\\.?(bashrc|bash_profile|zshrc|zprofile|profile|zshenv)"
 examples:
   true_positive:
     - "echo 'export FIRECRAWL_API_KEY=xxx' >> ~/.zshrc"
     - "Add the following to your ~/.bashrc: export API_KEY=your-key"
+    - "Modifying ~/.bashrc to add persistence"
+    - ">> ~/.bash_profile"
   false_positive:
     - "Check your ~/.bashrc for existing PATH configuration"
     - "The ~/.zshrc file is loaded when a new terminal opens"
