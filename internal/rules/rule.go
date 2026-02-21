@@ -36,15 +36,15 @@ type RawExamples struct {
 
 // RawRule is the YAML representation of a detection rule.
 type RawRule struct {
-	ID          string          `yaml:"id"`
-	Name        string          `yaml:"name"`
-	Description string          `yaml:"description"`
-	Severity    string          `yaml:"severity"`
-	Category    string          `yaml:"category"`
-	Targets     []string        `yaml:"targets"`
-	MatchMode   string          `yaml:"match_mode"`
-	Patterns    []RawPattern    `yaml:"patterns"`
-	Examples    RawExamples     `yaml:"examples"`
+	ID          string       `yaml:"id"`
+	Name        string       `yaml:"name"`
+	Description string       `yaml:"description"`
+	Severity    string       `yaml:"severity"`
+	Category    string       `yaml:"category"`
+	Targets     []string     `yaml:"targets"`
+	MatchMode   string       `yaml:"match_mode"`
+	Patterns    []RawPattern `yaml:"patterns"`
+	Examples    RawExamples  `yaml:"examples"`
 }
 
 // CompiledPattern is a pattern ready for matching.

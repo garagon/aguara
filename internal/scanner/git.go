@@ -77,4 +77,3 @@ func splitLines(s string) []string {
 	}
 	return strings.Split(s, "\n")
 }
-

@@ -124,13 +124,22 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		return nil, ctx.Err()
 	}
 
-	// Post-processing: dedup, score, correlate, filter, sort
+	findings = s.postProcess(findings)
+
+	return &ScanResult{
+		Findings:     findings,
+		FilesScanned: len(targets),
+		Duration:     time.Since(start),
+	}, nil
+}
+
+// postProcess deduplicates, scores, correlates, filters, and sorts findings.
+func (s *Scanner) postProcess(findings []Finding) []Finding {
 	findings = meta.Deduplicate(findings)
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)
 	findings = flattenGroups(groups)
 
-	// Filter by minimum severity
 	if s.minSeverity > SeverityInfo {
 		var filtered []Finding
 		for _, f := range findings {
@@ -141,7 +150,6 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		findings = filtered
 	}
 
-	// Sort: by severity desc, then by file path, then by line
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Severity != findings[j].Severity {
 			return findings[i].Severity > findings[j].Severity
@@ -152,11 +160,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		return findings[i].Line < findings[j].Line
 	})
 
-	return &ScanResult{
-		Findings:     findings,
-		FilesScanned: len(targets),
-		Duration:     time.Since(start),
-	}, nil
+	return findings
 }
 
 func flattenGroups(groups []meta.CorrelationGroup) []Finding {

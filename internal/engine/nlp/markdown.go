@@ -40,7 +40,7 @@ func (s SectionType) String() string {
 type MarkdownSection struct {
 	Type     SectionType
 	Text     string
-	Line     int // 1-based line number
+	Line     int    // 1-based line number
 	Language string // for code blocks
 	Level    int    // for headings
 }
