@@ -20,6 +20,7 @@
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#usage">Usage</a> &bull;
   <a href="#rules">Rules</a> &bull;
+  <a href="#aguara-mcp">Aguara MCP</a> &bull;
   <a href="#aguara-watch">Aguara Watch</a> &bull;
   <a href="#contributing">Contributing</a>
 </p>
@@ -165,6 +166,18 @@ examples:
 ```bash
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
+
+## Aguara MCP
+
+[Aguara MCP](https://github.com/garagon/aguara-mcp) is an MCP server that gives AI agents the ability to scan skills and configurations for security threats — before installing or running them.
+
+```bash
+# Install and register with Claude Code
+go install github.com/garagon/aguara-mcp@latest
+claude mcp add aguara -- aguara-mcp
+```
+
+Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `explain_rule`. No network, no LLM, millisecond scans — the agent checks first, then decides.
 
 ## Aguara Watch
 
