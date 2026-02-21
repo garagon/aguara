@@ -26,8 +26,6 @@ var (
 	configHeadingRe = regexp.MustCompile(`(?i)\b(config|configuration|setup|options|settings|parameters|properties|environment|variables|env vars|reference|install|getting started|prerequisites|requirements|usage|api|authentication|integration|quickstart|features|overview|examples|troubleshooting|development|deployment|testing|contributing|changelog|faq|tools|commands|workflow|permissions|security|license|credits|dependencies|compatibility|support|limitations|notes|server|service|tool|plugin|client|provider|connector|adapter|bridge|wrapper|sdk|library|package|module|utility|helper|demo|tutorial|guide|readme|description|documentation|introduction|about|summary|comments|mirror|how to|what is|purpose|input|output|resources|methods|endpoints|responses|error|warning|common|advanced|basic)\b`)
 	semanticTagRe   = regexp.MustCompile(`(?i)^<!--\s*(</?[a-z][-a-z0-9]*[^>]*>|@[a-z]|TODO|NOTE|FIXME|WARNING|HACK|XXX|DEPRECATED)`)
 	devCommentRe    = regexp.MustCompile(`(?i)^<!--\s*\n?\s*(PROGRESSIVE|SKILL|TEMPLATE|LAYOUT|FORMAT|STYLE|DESIGN|GUIDELINE|CONVENTION|PATTERN|STRUCTURE|VERSION|METADATA|MARKER|ANCHOR|REGION|SECTION|SLOT|PLACEHOLDER|BLOCK)`)
-
-
 )
 
 // InjectionAnalyzer implements the Analyzer interface for NL-based injection detection.
@@ -54,133 +52,153 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 			return findings, ctx.Err()
 		}
 
-		// 1. Hidden HTML comments with action verbs
-		if section.Type == SectionHTMLComment {
-			// Skip comments that are semantic XML tags or developer notes
-			if semanticTagRe.MatchString(section.Text) || devCommentRe.MatchString(section.Text) {
-				continue
-			}
-			if actionVerbRe.MatchString(section.Text) {
-				findings = append(findings, makeFinding(
-					"NLP_HIDDEN_INSTRUCTION",
-					"Hidden HTML comment contains action verbs",
-					scanner.SeverityHigh,
-					"prompt-injection",
-					section, lines, target,
-				))
-			}
-		}
-
-		// 2. Code block language mismatch
-		if section.Type == SectionCodeBlock && section.Language != "" {
-			if mismatchBenignLangs[section.Language] && hasExecutableContent(section.Text) {
-				findings = append(findings, makeFinding(
-					"NLP_CODE_MISMATCH",
-					fmt.Sprintf("Code block labeled %q contains executable content", section.Language),
-					scanner.SeverityHigh,
-					"prompt-injection",
-					section, lines, target,
-				))
-			}
-		}
-
-		// 3. Heading-body mismatch: benign heading + dangerous body
-		if section.Type == SectionHeading && i+1 < len(sections) {
-			nextSection := sections[i+1]
-			if nextSection.Type == SectionParagraph || nextSection.Type == SectionListItem {
-				// Skip config/settings headings — they legitimately contain
-				// words like "secret", "password", "token" as field names.
-				if configHeadingRe.MatchString(section.Text) {
-					continue
-				}
-				// Skip markdown tables (lines starting with |)
-				if isMarkdownTable(nextSection.Text) {
-					continue
-				}
-				headingClass := Classify(section.Text)
-				bodyClass := Classify(nextSection.Text)
-				if headingClass.Score < 0.5 && bodyClass.Score >= 3.5 {
-					findings = append(findings, makeFinding(
-						"NLP_HEADING_MISMATCH",
-						fmt.Sprintf("Benign heading %q followed by dangerous content (category: %s)",
-							truncate(section.Text, 40), bodyClass.Category),
-						scanner.SeverityMedium,
-						"prompt-injection",
-						nextSection, lines, target,
-					))
-				}
-			}
-		}
-
-		// 4. Authority claiming sections
-		if section.Type == SectionParagraph || section.Type == SectionHeading {
-			// Skip markdown tables — field names like "secret" are not authority claims
-			if isMarkdownTable(section.Text) {
-				continue
-			}
-			if authorityRe.MatchString(section.Text) && urgencyRe.MatchString(section.Text) {
-				// Skip sections that look like API/product documentation
-				if isLikelyAPIDoc(section.Text) || isLikelyProductDesc(section.Text) {
-					continue
-				}
-				bodyClass := Classify(section.Text)
-				if bodyClass.Score >= 2.0 {
-					findings = append(findings, makeFinding(
-						"NLP_AUTHORITY_CLAIM",
-						"Section claims authority and urgency with dangerous instructions",
-						scanner.SeverityMedium,
-						"prompt-injection",
-						section, lines, target,
-					))
-				}
-			}
-		}
-
-		// 5. Dangerous instruction combinations
-		if section.Type == SectionParagraph || section.Type == SectionListItem {
-			cats := ClassifyAll(section.Text)
-			var credScore, networkScore, overrideScore float64
-			for _, c := range cats {
-				switch c.Category {
-				case CategoryCredentialAccess:
-					credScore = c.Score
-				case CategoryNetworkRequest, CategoryDataTransmission:
-					if c.Score > networkScore {
-						networkScore = c.Score
-					}
-				case CategoryInstructionOverride:
-					overrideScore = c.Score
-				}
-			}
-
-			// Dampen scores when text looks like legitimate API documentation
-			if isLikelyAPIDoc(section.Text) {
-				credScore *= 0.4
-				networkScore *= 0.4
-			}
-
-			if credScore >= 1.0 && networkScore >= 1.2 {
-				findings = append(findings, makeFinding(
-					"NLP_CRED_EXFIL_COMBO",
-					"Text combines credential access with network transmission",
-					scanner.SeverityCritical,
-					"exfiltration",
-					section, lines, target,
-				))
-			}
-			if overrideScore >= 1.0 && (networkScore >= 1.0 || credScore >= 1.0) {
-				findings = append(findings, makeFinding(
-					"NLP_OVERRIDE_DANGEROUS",
-					"Instruction override combined with dangerous operations",
-					scanner.SeverityCritical,
-					"prompt-injection",
-					section, lines, target,
-				))
-			}
-		}
+		findings = append(findings, checkHiddenComment(section, lines, target)...)
+		findings = append(findings, checkCodeMismatch(section, lines, target)...)
+		findings = append(findings, checkHeadingMismatch(sections, i, lines, target)...)
+		findings = append(findings, checkAuthorityClaim(section, lines, target)...)
+		findings = append(findings, checkDangerousCombos(section, lines, target)...)
 	}
 
 	return findings, nil
+}
+
+// checkHiddenComment detects hidden HTML comments with action verbs.
+func checkHiddenComment(section MarkdownSection, lines []string, target *scanner.Target) []scanner.Finding {
+	if section.Type != SectionHTMLComment {
+		return nil
+	}
+	if semanticTagRe.MatchString(section.Text) || devCommentRe.MatchString(section.Text) {
+		return nil
+	}
+	if !actionVerbRe.MatchString(section.Text) {
+		return nil
+	}
+	return []scanner.Finding{makeFinding(
+		"NLP_HIDDEN_INSTRUCTION",
+		"Hidden HTML comment contains action verbs",
+		scanner.SeverityHigh,
+		"prompt-injection",
+		section, lines, target,
+	)}
+}
+
+// checkCodeMismatch detects code blocks labeled as benign but containing executable content.
+func checkCodeMismatch(section MarkdownSection, lines []string, target *scanner.Target) []scanner.Finding {
+	if section.Type != SectionCodeBlock || section.Language == "" {
+		return nil
+	}
+	if !mismatchBenignLangs[section.Language] || !hasExecutableContent(section.Text) {
+		return nil
+	}
+	return []scanner.Finding{makeFinding(
+		"NLP_CODE_MISMATCH",
+		fmt.Sprintf("Code block labeled %q contains executable content", section.Language),
+		scanner.SeverityHigh,
+		"prompt-injection",
+		section, lines, target,
+	)}
+}
+
+// checkHeadingMismatch detects benign headings followed by dangerous body content.
+func checkHeadingMismatch(sections []MarkdownSection, i int, lines []string, target *scanner.Target) []scanner.Finding {
+	section := sections[i]
+	if section.Type != SectionHeading || i+1 >= len(sections) {
+		return nil
+	}
+	next := sections[i+1]
+	if next.Type != SectionParagraph && next.Type != SectionListItem {
+		return nil
+	}
+	if configHeadingRe.MatchString(section.Text) || isMarkdownTable(next.Text) {
+		return nil
+	}
+	headingClass := Classify(section.Text)
+	bodyClass := Classify(next.Text)
+	if headingClass.Score >= 0.5 || bodyClass.Score < 3.5 {
+		return nil
+	}
+	return []scanner.Finding{makeFinding(
+		"NLP_HEADING_MISMATCH",
+		fmt.Sprintf("Benign heading %q followed by dangerous content (category: %s)",
+			truncate(section.Text, 40), bodyClass.Category),
+		scanner.SeverityMedium,
+		"prompt-injection",
+		next, lines, target,
+	)}
+}
+
+// checkAuthorityClaim detects sections that claim authority and urgency with dangerous instructions.
+func checkAuthorityClaim(section MarkdownSection, lines []string, target *scanner.Target) []scanner.Finding {
+	if section.Type != SectionParagraph && section.Type != SectionHeading {
+		return nil
+	}
+	if isMarkdownTable(section.Text) {
+		return nil
+	}
+	if !authorityRe.MatchString(section.Text) || !urgencyRe.MatchString(section.Text) {
+		return nil
+	}
+	if isLikelyAPIDoc(section.Text) || isLikelyProductDesc(section.Text) {
+		return nil
+	}
+	bodyClass := Classify(section.Text)
+	if bodyClass.Score < 2.0 {
+		return nil
+	}
+	return []scanner.Finding{makeFinding(
+		"NLP_AUTHORITY_CLAIM",
+		"Section claims authority and urgency with dangerous instructions",
+		scanner.SeverityMedium,
+		"prompt-injection",
+		section, lines, target,
+	)}
+}
+
+// checkDangerousCombos detects dangerous instruction combinations (cred+exfil, override+dangerous).
+func checkDangerousCombos(section MarkdownSection, lines []string, target *scanner.Target) []scanner.Finding {
+	if section.Type != SectionParagraph && section.Type != SectionListItem {
+		return nil
+	}
+	cats := ClassifyAll(section.Text)
+	var credScore, networkScore, overrideScore float64
+	for _, c := range cats {
+		switch c.Category {
+		case CategoryCredentialAccess:
+			credScore = c.Score
+		case CategoryNetworkRequest, CategoryDataTransmission:
+			if c.Score > networkScore {
+				networkScore = c.Score
+			}
+		case CategoryInstructionOverride:
+			overrideScore = c.Score
+		}
+	}
+
+	if isLikelyAPIDoc(section.Text) {
+		credScore *= 0.4
+		networkScore *= 0.4
+	}
+
+	var findings []scanner.Finding
+	if credScore >= 1.0 && networkScore >= 1.2 {
+		findings = append(findings, makeFinding(
+			"NLP_CRED_EXFIL_COMBO",
+			"Text combines credential access with network transmission",
+			scanner.SeverityCritical,
+			"exfiltration",
+			section, lines, target,
+		))
+	}
+	if overrideScore >= 1.0 && (networkScore >= 1.0 || credScore >= 1.0) {
+		findings = append(findings, makeFinding(
+			"NLP_OVERRIDE_DANGEROUS",
+			"Instruction override combined with dangerous operations",
+			scanner.SeverityCritical,
+			"prompt-injection",
+			section, lines, target,
+		))
+	}
+	return findings
 }
 
 func makeFinding(ruleID, desc string, sev scanner.Severity, category string, section MarkdownSection, lines []string, target *scanner.Target) scanner.Finding {

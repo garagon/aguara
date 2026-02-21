@@ -129,17 +129,17 @@ func TestMatcherContextCancellation(t *testing.T) {
 
 func TestBuildCodeBlockMap(t *testing.T) {
 	lines := []string{
-		"# Header",           // 0: false
-		"Some text",          // 1: false
-		"```bash",            // 2: false (opening fence)
-		"npm install foo",    // 3: true
-		"echo hello",         // 4: true
-		"```",                // 5: true (closing fence, still inside)
-		"Outside again",      // 6: false
-		"```",                // 7: false (opening fence)
-		"nested content",     // 8: true
-		"```python",          // 9: true (closing fence — ``` prefix matches)
-		"after close",        // 10: false
+		"# Header",        // 0: false
+		"Some text",       // 1: false
+		"```bash",         // 2: false (opening fence)
+		"npm install foo", // 3: true
+		"echo hello",      // 4: true
+		"```",             // 5: true (closing fence, still inside)
+		"Outside again",   // 6: false
+		"```",             // 7: false (opening fence)
+		"nested content",  // 8: true
+		"```python",       // 9: true (closing fence — ``` prefix matches)
+		"after close",     // 10: false
 	}
 	cbMap := pattern.BuildCodeBlockMap(lines)
 	require.Len(t, cbMap, len(lines))

@@ -235,4 +235,4 @@ For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)

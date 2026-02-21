@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -36,35 +37,45 @@ type explainInfo struct {
 func runExplain(cmd *cobra.Command, args []string) error {
 	ruleID := strings.ToUpper(strings.TrimSpace(args[0]))
 
-	// Load and compile rules
+	found, err := findRule(ruleID)
+	if err != nil {
+		return err
+	}
+
+	patterns := describePatterns(found)
+	w := cmd.OutOrStdout()
+
+	if strings.ToLower(flagFormat) == "json" {
+		return writeExplainJSON(w, found, patterns)
+	}
+	return writeExplainTerminal(w, found, patterns)
+}
+
+func findRule(ruleID string) (*rules.CompiledRule, error) {
 	rawRules, err := rules.LoadFromFS(builtin.FS())
 	if err != nil {
-		return fmt.Errorf("loading built-in rules: %w", err)
+		return nil, fmt.Errorf("loading built-in rules: %w", err)
 	}
 	if flagRules != "" {
 		customRules, err := rules.LoadFromDir(flagRules)
 		if err != nil {
-			return fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
+			return nil, fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
 		}
 		rawRules = append(rawRules, customRules...)
 	}
 	compiled, _ := rules.CompileAll(rawRules)
 
-	// Find the rule
-	var found *rules.CompiledRule
 	for _, r := range compiled {
 		if r.ID == ruleID {
-			found = r
-			break
+			return r, nil
 		}
 	}
-	if found == nil {
-		return fmt.Errorf("rule %q not found", ruleID)
-	}
+	return nil, fmt.Errorf("rule %q not found", ruleID)
+}
 
-	// Build pattern descriptions
-	patterns := make([]string, len(found.Patterns))
-	for i, p := range found.Patterns {
+func describePatterns(r *rules.CompiledRule) []string {
+	patterns := make([]string, len(r.Patterns))
+	for i, p := range r.Patterns {
 		switch p.Type {
 		case rules.PatternRegex:
 			patterns[i] = fmt.Sprintf("[regex] %s", p.Regex.String())
@@ -72,26 +83,26 @@ func runExplain(cmd *cobra.Command, args []string) error {
 			patterns[i] = fmt.Sprintf("[contains] %s", p.Value)
 		}
 	}
+	return patterns
+}
 
-	w := cmd.OutOrStdout()
-
-	if strings.ToLower(flagFormat) == "json" {
-		info := explainInfo{
-			ID:             found.ID,
-			Name:           found.Name,
-			Severity:       found.Severity.String(),
-			Category:       found.Category,
-			Description:    found.Description,
-			Patterns:       patterns,
-			TruePositives:  found.Examples.TruePositive,
-			FalsePositives: found.Examples.FalsePositive,
-		}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(info)
+func writeExplainJSON(w io.Writer, r *rules.CompiledRule, patterns []string) error {
+	info := explainInfo{
+		ID:             r.ID,
+		Name:           r.Name,
+		Severity:       r.Severity.String(),
+		Category:       r.Category,
+		Description:    r.Description,
+		Patterns:       patterns,
+		TruePositives:  r.Examples.TruePositive,
+		FalsePositives: r.Examples.FalsePositive,
 	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(info)
+}
 
-	// Terminal output
+func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []string) error {
 	color := func(code, text string) string {
 		if flagNoColor {
 			return text

@@ -23,11 +23,11 @@ import (
 )
 
 var (
-	flagFailOn   string
-	flagCI       bool
-	flagVerbose  bool
-	flagChanged  bool
-	flagMonitor  bool
+	flagFailOn    string
+	flagCI        bool
+	flagVerbose   bool
+	flagChanged   bool
+	flagMonitor   bool
 	flagStatePath string
 )
 
@@ -51,12 +51,49 @@ func init() {
 func runScan(cmd *cobra.Command, args []string) error {
 	targetPath := args[0]
 
-	// Load config file
+	cfg := loadScanConfig(cmd, targetPath)
+	applyCIDefaults()
+
+	minSev, err := parseSeverityFlag()
+	if err != nil {
+		return err
+	}
+
+	compiled, err := loadAndCompileRules(cfg)
+	if err != nil {
+		return err
+	}
+
+	s, store := buildScanner(compiled, cfg, minSev)
+
+	ctx, cancel := contextWithInterrupt()
+	defer cancel()
+
+	result, err := executeScan(ctx, s, targetPath)
+	if err != nil {
+		return err
+	}
+	result.RulesLoaded = len(compiled)
+	result.Target = targetPath
+
+	if store != nil {
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
+		}
+	}
+
+	if err := writeOutput(result); err != nil {
+		return err
+	}
+
+	return checkFailOnThreshold(result)
+}
+
+func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 	cfg, err := config.Load(targetPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
-	// Apply config defaults (CLI flags take precedence)
 	if !cmd.Flags().Changed("severity") && cfg.Severity != "" {
 		flagSeverity = cfg.Severity
 	}
@@ -69,8 +106,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if !cmd.Flags().Changed("rules") && cfg.Rules != "" {
 		flagRules = cfg.Rules
 	}
+	return cfg
+}
 
-	// CI mode defaults
+func applyCIDefaults() {
 	if flagCI {
 		if flagFailOn == "" {
 			flagFailOn = "high"
@@ -79,46 +118,41 @@ func runScan(cmd *cobra.Command, args []string) error {
 			flagNoColor = true
 		}
 	}
-
-	// Check NO_COLOR env var
 	if os.Getenv("NO_COLOR") != "" {
 		flagNoColor = true
 	}
+}
 
-	// Parse minimum severity
-	minSev := scanner.SeverityInfo
-	if flagSeverity != "" {
-		sev, err := scanner.ParseSeverity(flagSeverity)
-		if err != nil {
-			return fmt.Errorf("invalid --severity: %w", err)
-		}
-		minSev = sev
+func parseSeverityFlag() (scanner.Severity, error) {
+	if flagSeverity == "" {
+		return scanner.SeverityInfo, nil
 	}
+	sev, err := scanner.ParseSeverity(flagSeverity)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --severity: %w", err)
+	}
+	return sev, nil
+}
 
-	// Load built-in rules
+func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 	rawRules, err := rules.LoadFromFS(builtin.FS())
 	if err != nil {
-		return fmt.Errorf("loading built-in rules: %w", err)
+		return nil, fmt.Errorf("loading built-in rules: %w", err)
 	}
 
-	// Load custom rules if specified
 	if flagRules != "" {
 		customRules, err := rules.LoadFromDir(flagRules)
 		if err != nil {
-			return fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
+			return nil, fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
 		}
 		rawRules = append(rawRules, customRules...)
 	}
 
-	// Compile rules
 	compiled, errs := rules.CompileAll(rawRules)
-	if len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-		}
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	// Apply config rule overrides
 	if len(cfg.RuleOverrides) > 0 {
 		overrides := make(map[string]rules.RuleOverride, len(cfg.RuleOverrides))
 		for id, ovr := range cfg.RuleOverrides {
@@ -131,7 +165,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Apply --disable-rule flag
 	if len(flagDisableRules) > 0 {
 		disabled := make(map[string]bool)
 		for _, id := range flagDisableRules {
@@ -140,19 +173,20 @@ func runScan(cmd *cobra.Command, args []string) error {
 		compiled = rules.FilterByIDs(compiled, disabled)
 	}
 
-	// Create scanner
+	return compiled, nil
+}
+
+func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity) (*scanner.Scanner, *state.Store) {
 	s := scanner.New(flagWorkers)
 	s.SetMinSeverity(minSev)
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
 
-	// Register analyzers
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 
-	// Register rug-pull analyzer if monitoring is enabled
 	var store *state.Store
 	if flagMonitor {
 		statePath := flagStatePath
@@ -166,58 +200,57 @@ func runScan(cmd *cobra.Command, args []string) error {
 		s.RegisterAnalyzer(rugpull.New(store))
 	}
 
-	// Create context with cancellation (Ctrl+C)
+	return s, store
+}
+
+func contextWithInterrupt() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
 		cancel()
 	}()
+	return ctx, cancel
+}
 
-	// Run scan
-	var result *scanner.ScanResult
+func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
 	if flagChanged {
-		changedFiles, err := scanner.GitChangedFiles(targetPath)
-		if err != nil {
-			return fmt.Errorf("getting changed files: %w", err)
-		}
-		var targets []*scanner.Target
-		for _, relPath := range changedFiles {
-			absPath := filepath.Join(targetPath, relPath)
-			if _, err := os.Stat(absPath); err != nil {
-				continue // skip deleted files
-			}
-			targets = append(targets, &scanner.Target{
-				Path:    absPath,
-				RelPath: relPath,
-			})
-		}
-		result, err = s.ScanTargets(ctx, targets)
-		if err != nil {
-			return fmt.Errorf("scan failed: %w", err)
-		}
-	} else {
-		result, err = s.Scan(ctx, targetPath)
-		if err != nil {
-			return fmt.Errorf("scan failed: %w", err)
-		}
+		return scanChangedFiles(ctx, s, targetPath)
 	}
-	result.RulesLoaded = len(compiled)
-	result.Target = targetPath
-
-	// Save rug-pull state after scan
-	if store != nil {
-		if err := store.Save(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
-		}
+	result, err := s.Scan(ctx, targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("scan failed: %w", err)
 	}
+	return result, nil
+}
 
-	// Set tool version for SARIF output
+func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
+	changedFiles, err := scanner.GitChangedFiles(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("getting changed files: %w", err)
+	}
+	var targets []*scanner.Target
+	for _, relPath := range changedFiles {
+		absPath := filepath.Join(targetPath, relPath)
+		if _, err := os.Stat(absPath); err != nil {
+			continue
+		}
+		targets = append(targets, &scanner.Target{
+			Path:    absPath,
+			RelPath: relPath,
+		})
+	}
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, fmt.Errorf("scan failed: %w", err)
+	}
+	return result, nil
+}
+
+func writeOutput(result *scanner.ScanResult) error {
 	output.ToolVersion = Version
 
-	// Select formatter
 	var formatter output.Formatter
 	switch strings.ToLower(flagFormat) {
 	case "json":
@@ -230,7 +263,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		formatter = &output.TerminalFormatter{NoColor: flagNoColor, Verbose: flagVerbose}
 	}
 
-	// Select output writer
 	w := os.Stdout
 	if flagOutput != "" {
 		f, err := os.Create(flagOutput)
@@ -241,22 +273,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 		w = f
 	}
 
-	if err := formatter.Format(w, result); err != nil {
-		return fmt.Errorf("formatting output: %w", err)
-	}
+	return formatter.Format(w, result)
+}
 
-	// Check --fail-on threshold
-	if flagFailOn != "" {
-		threshold, err := scanner.ParseSeverity(flagFailOn)
-		if err != nil {
-			return fmt.Errorf("invalid --fail-on: %w", err)
-		}
-		for _, f := range result.Findings {
-			if f.Severity >= threshold {
-				os.Exit(1)
-			}
+func checkFailOnThreshold(result *scanner.ScanResult) error {
+	if flagFailOn == "" {
+		return nil
+	}
+	threshold, err := scanner.ParseSeverity(flagFailOn)
+	if err != nil {
+		return fmt.Errorf("invalid --fail-on: %w", err)
+	}
+	for _, f := range result.Findings {
+		if f.Severity >= threshold {
+			os.Exit(1)
 		}
 	}
-
 	return nil
 }
