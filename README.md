@@ -169,7 +169,7 @@ aguara scan .claude/skills/ --rules ./my-rules/
 
 ## Aguara MCP
 
-[Aguara MCP](https://github.com/garagon/aguara-mcp) is an MCP server that gives AI agents the ability to scan skills and configurations for security threats — before installing or running them.
+[Aguara MCP](https://github.com/garagon/aguara-mcp) is an MCP server that gives AI agents the ability to scan skills and configurations for security threats — before installing or running them. It imports Aguara as a Go library — one `go install`, no external binary needed.
 
 ```bash
 # Install and register with Claude Code
@@ -183,9 +183,33 @@ Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `
 
 [Aguara Watch](https://watch.aguarascan.com/) continuously scans **28,000+ AI agent skills** across 5 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
 
+## Go Library
+
+Aguara exposes a public Go API for embedding the scanner in other tools. [Aguara MCP](https://github.com/garagon/aguara-mcp) uses this API.
+
+```go
+import "github.com/garagon/aguara"
+
+// Scan a directory
+result, err := aguara.Scan(ctx, "./skills/")
+
+// Scan inline content (no disk I/O)
+result, err := aguara.ScanContent(ctx, content, "skill.md")
+
+// List rules, optionally filtered
+rules := aguara.ListRules(aguara.WithCategory("prompt-injection"))
+
+// Get rule details
+detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
+```
+
+Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithRuleOverrides()`, `WithWorkers()`, `WithIgnorePatterns()`.
+
 ## Architecture
 
 ```
+aguara.go              Public API: Scan, ScanContent, ListRules, ExplainRule
+options.go             Functional options for the public API
 cmd/aguara/            CLI entry point (Cobra)
 internal/
   engine/

@@ -15,7 +15,11 @@ type Target struct {
 }
 
 // LoadContent reads the file content into memory.
+// If Content is already populated (e.g. in-memory targets), it is a no-op.
 func (t *Target) LoadContent() error {
+	if t.Content != nil {
+		return nil
+	}
 	data, err := os.ReadFile(t.Path)
 	if err != nil {
 		return err
