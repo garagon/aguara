@@ -27,3 +27,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger observatory rescan
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.OBSERVATORY_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/garagon/aguara-observatory/dispatches \
+            -f event_type=aguara-release \
+            -f "client_payload[tag]=${{ github.ref_name }}"
