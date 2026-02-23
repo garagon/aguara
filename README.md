@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **138+ rules across 15 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
+- **138+ rules across 14 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
 - **Catches obfuscated attacks** that regex-only tools miss, using NLP-based markdown structure analysis and taint tracking.
 - **Deterministic** — same input, same output. Every scan is reproducible.
 - **CI-ready** — JSON, SARIF, and Markdown output. `--fail-on` threshold. `--changed` for incremental scans.
@@ -121,7 +121,7 @@ rule_overrides:
 
 ## Rules
 
-138+ built-in rules across 15 categories:
+138+ built-in rules across 14 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|

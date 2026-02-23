@@ -3,6 +3,29 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2] — 2026-02-21
+
+### Changed
+
+- Reduced cyclomatic complexity across multiple packages (`gocyclo` clean)
+- Applied `gofmt -s` simplifications project-wide
+
+---
+
+## [0.2.1] — 2026-02-21
+
+### Added
+
+- **Public Go API** for embedding Aguara as a library:
+  - `aguara.Scan(ctx, path, ...Option)` — scan files/directories
+  - `aguara.ScanContent(ctx, content, filename, ...Option)` — scan inline content (no disk I/O)
+  - `aguara.ListRules(...Option)` — list detection rules
+  - `aguara.ExplainRule(id, ...Option)` — explain a rule by ID
+  - Options: `WithMinSeverity`, `WithDisabledRules`, `WithCustomRules`, `WithWorkers`, `WithRuleOverrides`, `WithIgnorePatterns`, `WithCategory`
+  - Re-exported types: `Severity`, `Finding`, `ScanResult`, `ContextLine`
+
+---
+
 ## [0.2.0] — 2026-02-18
 
 Major expansion: 85 → **138 rules** across 12 YAML files, 2 → **5 analyzers**, 7 new rule categories, and 2 new CLI flags.

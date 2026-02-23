@@ -171,7 +171,7 @@ Severity is an integer: 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL.
 
 ## Detection Rules
 
-138+ built-in rules across 15 categories.
+138+ built-in rules across 14 categories.
 
 | Category | Rules | What It Detects |
 |---|---|---|
@@ -180,7 +180,7 @@ Severity is an integer: 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL.
 | `exfiltration` | 17 | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
 | `external-download` | 16 | Binary downloads, curl-pipe-shell, auto-installs |
 | `supply-chain` | 14 | Download-and-execute, reverse shells, obfuscated commands |
-| `command-execution` | 14 | shell=True, eval, subprocess, child_process, PowerShell |
+| `command-execution` | 13 | shell=True, eval, subprocess, child_process, PowerShell |
 | `mcp-attack` | 11 | Tool injection, name shadowing, manifest tampering, capability escalation |
 | `ssrf-cloud` | 8 | Cloud metadata (IMDS), Docker socket, internal IPs |
 | `mcp-config` | 8 | Unpinned npx, hardcoded secrets, shell metacharacters in args |

@@ -148,7 +148,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXTDL_015 | MEDIUM | Docker pull and run untrusted image |
 | EXTDL_016 | MEDIUM | Download binary or archive from URL |
 
-## Command Execution (14 rules)
+## Command Execution (13 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -165,9 +165,8 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CMDEXEC_011 | MEDIUM | Cron or scheduled command execution |
 | CMDEXEC_012 | LOW | Chained shell command execution |
 | CMDEXEC_013 | LOW | Shell script file execution |
-| INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 
-## Indirect Injection (6 rules)
+## Indirect Injection (7 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -177,6 +176,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | INDIRECT_005 | LOW | User-provided URL consumed by agent |
 | INDIRECT_008 | HIGH | Email or message content as instructions |
 | INDIRECT_009 | MEDIUM | External API response drives agent behavior |
+| INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 
 ## Third-Party Content (4 rules)
 
