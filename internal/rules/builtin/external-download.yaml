@@ -271,9 +271,9 @@ targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
   - type: regex
-    value: "(?i)cargo\\s+install\\s+[a-z]"
+    value: "(?i)cargo\\s+install\\s+[a-z][a-z0-9_-]+"
   - type: regex
-    value: "(?i)gem\\s+install\\s+[a-z]"
+    value: "(?i)gem\\s+install\\s+[a-z][a-z0-9_-]+"
 examples:
   true_positive:
     - "cargo install ripgrep"

@@ -67,6 +67,13 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)[\"'](serverUrl|url|transport_url)[\"']\\s*:\\s*[\"']https?://[a-zA-Z][a-zA-Z0-9-]*\\.[a-zA-Z][^\"']*[\"']"
+exclude_patterns:
+  - type: regex
+    value: "(?i)https?://(www\\.)?example\\.(com|org|net)"
+  - type: regex
+    value: "(?i)https?://[^\"']*docs\\."
+  - type: regex
+    value: "(?i)https?://[^\"']*/docs/"
 examples:
   true_positive:
     - "\"serverUrl\": \"https://mcp.example.com/sse\""
@@ -74,6 +81,7 @@ examples:
   false_positive:
     - "\"serverUrl\": \"http://localhost:3000/sse\""
     - "\"url\": \"http://127.0.0.1:8080/mcp\""
+    - "\"url\": \"https://docs.example.com/guide\""
 ---
 id: MCPCFG_005
 name: "sudo in MCP server command"

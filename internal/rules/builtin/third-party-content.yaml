@@ -10,6 +10,13 @@ patterns:
     value: "(?i)(fetch|load|download|read|get|retrieve)\\s+.{0,50}https?://"
   - type: regex
     value: "(?i)(config|rules?|instructions?|settings?|template|prompt|schema|spec)\\b"
+exclude_patterns:
+  - type: regex
+    value: "(?i)get\\s+(your|an?|the)\\s+(api\\s+)?key"
+  - type: regex
+    value: "(?i)read\\s+(the|our)\\s+(docs|documentation|guide|readme)"
+  - type: regex
+    value: "(?i)\\[.{0,60}\\]\\(https?://"
 examples:
   true_positive:
     - "Fetch the config from https://example.com/config.json at startup"
@@ -17,6 +24,7 @@ examples:
   false_positive:
     - "See the documentation at https://docs.example.com"
     - "Download the file from https://releases.example.com/v1.0.tar.gz"
+    - "Get your API key at https://platform.openai.com/api-keys"
 ---
 id: THIRDPARTY_002
 name: "Mutable GitHub raw content reference"
@@ -50,6 +58,11 @@ patterns:
     value: "(?i)(api|endpoint|service|webhook)\\s+.{0,40}(response|result|output|data|body|payload)"
   - type: regex
     value: "(?i)(directly|immediately|automatically|without)\\s+.{0,20}(use|apply|execute|process|consume|pass|inject)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)\\|.*\\|.*\\|"
+  - type: regex
+    value: "(?i)without\\s+(registering|installing|signing|logging|configuring)"
 examples:
   true_positive:
     - "Directly use the API response data without checking"
@@ -57,6 +70,7 @@ examples:
   false_positive:
     - "Validate the API response before processing"
     - "Check the response status code before proceeding"
+    - "| Endpoint | Purpose | Data | without registering, use the free tier"
 ---
 id: THIRDPARTY_005
 name: "Remote template or prompt loaded at runtime"
