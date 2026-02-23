@@ -72,6 +72,15 @@ patterns:
     value: "(?i)sudo\\s+npm\\s+install"
   - type: regex
     value: "(?i)sudo\\s+pip3?\\s+install"
+exclude_patterns:
+  - type: contains
+    value: "## installation"
+  - type: contains
+    value: "## prerequisites"
+  - type: contains
+    value: "## setup"
+  - type: contains
+    value: "## getting started"
 examples:
   true_positive:
     - "npm install -g agent-browser"
@@ -178,6 +187,19 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)pip3?\\s+install\\s+[a-z@][a-z0-9._-]"
+exclude_patterns:
+  - type: regex
+    value: "(?i)pip3?\\s+install\\s+(-r\\s|--requirement\\s|-e\\s|--editable\\s|--upgrade\\s+(pip|setuptools|wheel))"
+  - type: contains
+    value: "## installation"
+  - type: contains
+    value: "## prerequisites"
+  - type: contains
+    value: "## setup"
+  - type: contains
+    value: "## getting started"
+  - type: contains
+    value: "## requirements"
 examples:
   true_positive:
     - "pip install firecrawl-py"
@@ -186,6 +208,7 @@ examples:
     - "pip install -r requirements.txt"
     - "pip install -e ."
     - "pip install --upgrade pip"
+    - "## Installation\npip install requests"
 ---
 id: EXTDL_010
 name: "go install from remote"
@@ -219,6 +242,17 @@ patterns:
     value: "(?i)(apt-get|apt)\\s+install\\s+(-y\\s+)?[a-z]"
   - type: regex
     value: "(?i)(yum|dnf)\\s+install\\s+(-y\\s+)?[a-z]"
+exclude_patterns:
+  - type: contains
+    value: "## installation"
+  - type: contains
+    value: "## prerequisites"
+  - type: contains
+    value: "## setup"
+  - type: contains
+    value: "## getting started"
+  - type: contains
+    value: "## requirements"
 examples:
   true_positive:
     - "brew install playwright"

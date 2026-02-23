@@ -39,23 +39,39 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 	}
 
 	for i, p := range raw.Patterns {
-		cp := CompiledPattern{Type: p.Type, Value: p.Value}
-		switch p.Type {
-		case PatternRegex:
-			re, err := regexp.Compile(p.Value)
-			if err != nil {
-				return nil, fmt.Errorf("rule %s pattern %d: invalid regex: %w", raw.ID, i, err)
-			}
-			cp.Regex = re
-		case PatternContains:
-			cp.Value = strings.ToLower(p.Value)
-		default:
-			return nil, fmt.Errorf("rule %s pattern %d: unknown type %q", raw.ID, i, p.Type)
+		cp, err := compilePattern(p)
+		if err != nil {
+			return nil, fmt.Errorf("rule %s pattern %d: %w", raw.ID, i, err)
 		}
 		compiled.Patterns = append(compiled.Patterns, cp)
 	}
 
+	for i, p := range raw.ExcludePatterns {
+		cp, err := compilePattern(p)
+		if err != nil {
+			return nil, fmt.Errorf("rule %s exclude_pattern %d: %w", raw.ID, i, err)
+		}
+		compiled.ExcludePatterns = append(compiled.ExcludePatterns, cp)
+	}
+
 	return compiled, nil
+}
+
+func compilePattern(p RawPattern) (CompiledPattern, error) {
+	cp := CompiledPattern{Type: p.Type, Value: p.Value}
+	switch p.Type {
+	case PatternRegex:
+		re, err := regexp.Compile(p.Value)
+		if err != nil {
+			return cp, fmt.Errorf("invalid regex: %w", err)
+		}
+		cp.Regex = re
+	case PatternContains:
+		cp.Value = strings.ToLower(p.Value)
+	default:
+		return cp, fmt.Errorf("unknown type %q", p.Type)
+	}
+	return cp, nil
 }
 
 // CompileAll compiles a slice of raw rules, returning compiled rules and any errors.

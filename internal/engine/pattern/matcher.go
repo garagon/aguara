@@ -62,6 +62,9 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 	for _, pat := range rule.Patterns {
 		hits := matchPattern(pat, content, lines)
 		for _, hit := range hits {
+			if isExcluded(rule.ExcludePatterns, lines, hit.line) {
+				continue
+			}
 			sev := rule.Severity
 			inCB := isInCodeBlock(cbMap, hit.line)
 			if inCB {
@@ -97,6 +100,9 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 	}
 	// Use the first hit of the first pattern as the finding location
 	firstHit := allHits[0][0]
+	if isExcluded(rule.ExcludePatterns, lines, firstHit.line) {
+		return nil
+	}
 	var matchedParts []string
 	for _, hits := range allHits {
 		matchedParts = append(matchedParts, hits[0].text)
@@ -124,6 +130,33 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 type matchHit struct {
 	line int
 	text string
+}
+
+// isExcluded returns true if the matched line or nearby context (3 lines before)
+// matches any exclude pattern. This allows heading-based exclusions like
+// "## Installation" to suppress matches on following lines.
+func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) bool {
+	if len(excludes) == 0 || lineNum < 1 || lineNum > len(lines) {
+		return false
+	}
+	// Check the matched line and up to 3 lines before it
+	start := max(lineNum-3, 1)
+	for _, ep := range excludes {
+		for i := start; i <= lineNum; i++ {
+			line := lines[i-1]
+			switch ep.Type {
+			case rules.PatternRegex:
+				if ep.Regex != nil && ep.Regex.MatchString(line) {
+					return true
+				}
+			case rules.PatternContains:
+				if strings.Contains(strings.ToLower(line), ep.Value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func matchPattern(pat rules.CompiledPattern, content string, lines []string) []matchHit {

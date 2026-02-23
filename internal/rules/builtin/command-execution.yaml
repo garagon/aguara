@@ -187,6 +187,9 @@ patterns:
     value: "(?i)run_terminal_cmd\\s*\\("
   - type: regex
     value: "(?i)execute_command\\s*\\("
+exclude_patterns:
+  - type: regex
+    value: "(?i)(Bash|shell|terminal)\\s+tool\\s+(to\\s+)?(run|execute)\\s+(the\\s+)?(test|lint|format|check|build|compile)"
 examples:
   true_positive:
     - "Use the Bash tool to run the install script"
@@ -195,6 +198,7 @@ examples:
   false_positive:
     - "The Bash tool allows running commands in the terminal"
     - "Use the terminal to check the output"
+    - "Use the Bash tool to run the tests"
 ---
 id: CMDEXEC_010
 name: "MCP code execution tool"

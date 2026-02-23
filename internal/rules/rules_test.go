@@ -195,16 +195,31 @@ func matchesRule(rule *rules.CompiledRule, text string) bool {
 				return false
 			}
 		}
+		if isExcludedText(rule.ExcludePatterns, text) {
+			return false
+		}
 		return true
 	default: // MatchAny
-		// Any pattern triggers
+		// Any pattern triggers, but check excludes per line
 		for _, pat := range rule.Patterns {
 			if patternMatches(pat, text) {
-				return true
+				if !isExcludedText(rule.ExcludePatterns, text) {
+					return true
+				}
 			}
 		}
 		return false
 	}
+}
+
+// isExcludedText checks if any line in the text matches an exclude pattern.
+func isExcludedText(excludes []rules.CompiledPattern, text string) bool {
+	for _, ep := range excludes {
+		if patternMatches(ep, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func patternMatches(pat rules.CompiledPattern, text string) bool {
