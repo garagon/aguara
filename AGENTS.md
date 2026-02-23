@@ -207,12 +207,19 @@ match_mode: any             # "any" (OR, default) | "all" (AND)
 patterns:
   - type: regex             # "regex" (RE2) | "contains"
     value: "(?i)pattern"
+exclude_patterns:            # optional: cancel match when context matches
+  - type: contains
+    value: "## installation"
+  - type: regex
+    value: "(?i)pip3?\\s+install\\s+--upgrade\\s+(pip|setuptools)"
 examples:
   true_positive:
     - "Text that should trigger"
   false_positive:
     - "Text that should not trigger"
 ```
+
+Exclude patterns suppress a match when the matched line (or up to 3 lines before it) matches any exclude pattern. Use this to reduce false positives in documentation contexts like installation guides.
 
 ## Analyzers
 

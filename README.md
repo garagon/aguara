@@ -156,12 +156,17 @@ patterns:
     value: "https?://internal\\.mycompany\\.com"
   - type: contains
     value: "api.internal"
+exclude_patterns:            # optional: suppress match in these contexts
+  - type: contains
+    value: "## documentation"
 examples:
   true_positive:
     - "Fetch data from https://internal.mycompany.com/api/users"
   false_positive:
     - "Our public API is at https://api.mycompany.com"
 ```
+
+`exclude_patterns` suppress a match when the matched line (or up to 3 lines before it) matches any exclude pattern. Useful for reducing false positives in documentation headings, installation guides, etc.
 
 ```bash
 aguara scan .claude/skills/ --rules ./my-rules/
