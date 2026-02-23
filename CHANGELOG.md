@@ -3,6 +3,19 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.3] — 2026-02-23
+
+### Added
+
+- **`exclude_patterns` for rules**: Rules can now define patterns that cancel a match when the matched line (or up to 3 lines before it) matches an exclude pattern. Reduces false positives in documentation contexts like installation guides and setup headings.
+- Applied `exclude_patterns` to 4 high-FP rules: EXTDL_004, EXTDL_009, EXTDL_011, CMDEXEC_009.
+
+### Changed
+
+- Documented `exclude_patterns` in README and AGENTS.md custom rules schema.
+
+---
+
 ## [0.2.2] — 2026-02-21
 
 ### Changed
