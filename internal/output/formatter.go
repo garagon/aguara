@@ -1,3 +1,5 @@
+// Package output formats scan results for terminal (ANSI), JSON, SARIF,
+// and Markdown output.
 package output
 
 import (

@@ -1,3 +1,5 @@
+// Package pattern implements Layer 1 detection: regex and contains matching
+// with base64/hex decoding, code block awareness, and exclude patterns.
 package pattern
 
 import (

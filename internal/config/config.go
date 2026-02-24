@@ -1,3 +1,5 @@
+// Package config loads and applies .aguara.yml configuration files
+// for rule overrides, severity adjustments, and scan settings.
 package config
 
 import (

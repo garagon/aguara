@@ -1,3 +1,5 @@
+// Package rules loads, compiles, and manages YAML-defined detection rules
+// with regex/contains patterns, match modes, severity levels, and self-test examples.
 package rules
 
 import (

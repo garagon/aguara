@@ -333,6 +333,66 @@ func TestTerminalFormatterNonVerboseNoDescription(t *testing.T) {
 	require.NotContains(t, out, "Should not appear either")
 }
 
+func TestMarkdownFormatterNoFindings(t *testing.T) {
+	f := &output.MarkdownFormatter{}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings:     nil,
+		FilesScanned: 5,
+		RulesLoaded:  70,
+	}
+	require.NoError(t, f.Format(&buf, result))
+	out := buf.String()
+	require.Contains(t, out, "## Aguara Security Scan")
+	require.Contains(t, out, "**Passed**")
+	require.Contains(t, out, "No security issues found")
+}
+
+func TestMarkdownFormatterWithFindings(t *testing.T) {
+	f := &output.MarkdownFormatter{}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings: []types.Finding{
+			{RuleID: "PI_001", RuleName: "Prompt injection", Severity: types.SeverityCritical, Category: "prompt-injection", FilePath: "skill.md", Line: 5},
+			{RuleID: "CRED_001", RuleName: "Credential leak", Severity: types.SeverityHigh, Category: "credential-leak", FilePath: "skill.md", Line: 12},
+			{RuleID: "EXFIL_001", RuleName: "Data exfiltration", Severity: types.SeverityHigh, Category: "exfiltration", FilePath: "config.yaml", Line: 3},
+		},
+		FilesScanned: 2,
+		RulesLoaded:  138,
+		Target:       "testdata/malicious",
+	}
+	require.NoError(t, f.Format(&buf, result))
+	out := buf.String()
+	// Header with severity badges
+	require.Contains(t, out, "critical")
+	require.Contains(t, out, "high")
+	// File grouping
+	require.Contains(t, out, "`skill.md`")
+	require.Contains(t, out, "`config.yaml`")
+	// Table structure
+	require.Contains(t, out, "| Severity | Rule |")
+	require.Contains(t, out, "`PI_001`")
+	// Footer
+	require.Contains(t, out, "Aguara")
+}
+
+func TestMarkdownEscapesPipeChars(t *testing.T) {
+	f := &output.MarkdownFormatter{}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings: []types.Finding{
+			{RuleID: "R1", RuleName: "Rule with | pipe and <angle>", Severity: types.SeverityMedium, FilePath: "a.md", Line: 1},
+		},
+		FilesScanned: 1,
+	}
+	require.NoError(t, f.Format(&buf, result))
+	out := buf.String()
+	// Pipe should be escaped, angle brackets converted
+	require.Contains(t, out, "\\|")
+	require.Contains(t, out, "&lt;")
+	require.Contains(t, out, "&gt;")
+}
+
 func TestSARIFFormatterEmpty(t *testing.T) {
 	f := &output.SARIFFormatter{}
 	var buf bytes.Buffer
