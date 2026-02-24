@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -63,7 +64,10 @@ func findRule(ruleID string) (*rules.CompiledRule, error) {
 		}
 		rawRules = append(rawRules, customRules...)
 	}
-	compiled, _ := rules.CompileAll(rawRules)
+	compiled, compileErrs := rules.CompileAll(rawRules)
+	for _, e := range compileErrs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+	}
 
 	for _, r := range compiled {
 		if r.ID == ruleID {

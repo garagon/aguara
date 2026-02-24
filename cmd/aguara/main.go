@@ -1,3 +1,4 @@
+// Aguara CLI entry point.
 package main
 
 import (

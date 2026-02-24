@@ -50,7 +50,10 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	}
 
 	// Compile rules
-	compiled, _ := rules.CompileAll(rawRules)
+	compiled, compileErrs := rules.CompileAll(rawRules)
+	for _, e := range compileErrs {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", e)
+	}
 
 	// Apply --disable-rule flag
 	if len(flagDisableRules) > 0 {

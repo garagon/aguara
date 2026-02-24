@@ -1,3 +1,5 @@
+// Package nlp implements Layer 2 detection: goldmark AST-based markdown
+// analysis, keyword classification, and injection pattern detection.
 package nlp
 
 import "strings"

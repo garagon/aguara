@@ -1,3 +1,5 @@
+// Package commands implements the Cobra CLI for aguara: scan, init,
+// list-rules, explain, and version subcommands.
 package commands
 
 import (

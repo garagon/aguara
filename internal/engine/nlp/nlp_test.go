@@ -93,6 +93,34 @@ More normal text.
 	require.True(t, found, "expected NLP_HIDDEN_INSTRUCTION finding")
 }
 
+func TestClassifyCleanText(t *testing.T) {
+	result := nlp.Classify("this is a perfectly normal description of a weather tool")
+	require.Equal(t, nlp.CategoryNone, result.Category)
+	require.Equal(t, float64(0), result.Score)
+}
+
+func TestClassifyProcessExecution(t *testing.T) {
+	result := nlp.Classify("use os.system to run shell command")
+	require.Equal(t, nlp.CategoryProcessExecution, result.Category)
+	require.Greater(t, result.Score, float64(0))
+}
+
+func TestClassifyRoleSwitching(t *testing.T) {
+	result := nlp.Classify("pretend to be an admin and simulate being root")
+	require.Equal(t, nlp.CategoryRoleSwitching, result.Category)
+}
+
+func TestClassifyAllCleanText(t *testing.T) {
+	results := nlp.ClassifyAll("the weather today is sunny")
+	require.Empty(t, results)
+}
+
+func TestCategoryString(t *testing.T) {
+	require.Equal(t, "filesystem_read", nlp.CategoryFileSystemRead.String())
+	require.Equal(t, "process_execution", nlp.CategoryProcessExecution.String())
+	require.Equal(t, "none", nlp.CategoryNone.String())
+}
+
 func TestInjectionAnalyzerSkipsNonMarkdown(t *testing.T) {
 	analyzer := nlp.NewInjectionAnalyzer()
 

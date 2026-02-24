@@ -1,3 +1,5 @@
+// Package meta provides post-processing of scan findings: deduplication,
+// risk scoring, and cross-finding correlation.
 package meta
 
 import (

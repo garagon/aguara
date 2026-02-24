@@ -1,3 +1,4 @@
+// Package builtin embeds the YAML detection rule files via go:embed.
 package builtin
 
 import "embed"

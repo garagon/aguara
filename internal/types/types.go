@@ -1,3 +1,5 @@
+// Package types defines shared data structures (Finding, Severity, ScanResult)
+// used across scanner, meta, and engine packages to prevent import cycles.
 package types
 
 import (
