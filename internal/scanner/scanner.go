@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/garagon/aguara/internal/meta"
@@ -18,6 +19,7 @@ type Scanner struct {
 	workers        int
 	minSeverity    Severity
 	ignorePatterns []string
+	onProgress     func(current, total int)
 }
 
 // New creates a new Scanner with the given number of workers.
@@ -44,6 +46,13 @@ func (s *Scanner) SetMinSeverity(sev Severity) {
 // SetIgnorePatterns sets additional file ignore patterns from config.
 func (s *Scanner) SetIgnorePatterns(patterns []string) {
 	s.ignorePatterns = patterns
+}
+
+// SetProgressFunc sets an optional callback invoked after each file is scanned.
+// The callback receives the number of files processed so far and the total count.
+// It may be called from multiple goroutines concurrently.
+func (s *Scanner) SetProgressFunc(fn func(current, total int)) {
+	s.onProgress = fn
 }
 
 // Scan performs a full scan of the given path. The path can be a directory
@@ -86,11 +95,13 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	close(fileCh)
 
 	var (
-		mu       sync.Mutex
-		findings []Finding
-		wg       sync.WaitGroup
+		mu        sync.Mutex
+		findings  []Finding
+		wg        sync.WaitGroup
+		processed atomic.Int32
 	)
 
+	total := len(targets)
 	for range s.workers {
 		wg.Go(func() {
 			for target := range fileCh {
@@ -113,6 +124,10 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 						findings = append(findings, results...)
 						mu.Unlock()
 					}
+				}
+				if s.onProgress != nil {
+					n := int(processed.Add(1))
+					s.onProgress(n, total)
 				}
 			}
 		})

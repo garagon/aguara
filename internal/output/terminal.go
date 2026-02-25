@@ -174,7 +174,7 @@ func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Fi
 	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, finding.RuleID)
 	name := truncate(finding.RuleName, nameWidth)
 	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("L%d", finding.Line)
+	lineStr := fmt.Sprintf("%s:%d", finding.FilePath, finding.Line)
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
 	}
@@ -200,7 +200,7 @@ func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Fin
 	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, finding.RuleID)
 	name := truncate(finding.RuleName, nameWidth)
 	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("L%d", finding.Line)
+	lineStr := fmt.Sprintf("%s:%d", finding.FilePath, finding.Line)
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
 	}

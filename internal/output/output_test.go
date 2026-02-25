@@ -61,7 +61,7 @@ func TestTerminalFormatterWithFindings(t *testing.T) {
 	require.Contains(t, out, "1 files scanned")
 	// Critical finding should show matched text preview
 	require.Contains(t, out, "bad stuff")
-	require.Contains(t, out, "L5")
+	require.Contains(t, out, "test.md:5")
 }
 
 func TestJSONFormatter(t *testing.T) {

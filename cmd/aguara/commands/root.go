@@ -3,17 +3,20 @@
 package commands
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
 var (
-	flagSeverity     string
-	flagFormat       string
-	flagOutput       string
-	flagWorkers      int
-	flagRules        string
-	flagNoColor      bool
-	flagDisableRules []string
+	flagSeverity      string
+	flagFormat        string
+	flagOutput        string
+	flagWorkers       int
+	flagRules         string
+	flagNoColor       bool
+	flagDisableRules  []string
+	flagNoUpdateCheck bool
 )
 
 var rootCmd = &cobra.Command{
@@ -30,9 +33,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagRules, "rules", "", "Additional rules directory")
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable colored output")
 	rootCmd.PersistentFlags().StringSliceVar(&flagDisableRules, "disable-rule", nil, "Rule IDs to disable (comma-separated, repeatable)")
+	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable update check")
 }
 
 // Execute runs the root command.
 func Execute() error {
+	if os.Getenv("AGUARA_NO_UPDATE_CHECK") == "1" {
+		flagNoUpdateCheck = true
+	}
 	return rootCmd.Execute()
 }
