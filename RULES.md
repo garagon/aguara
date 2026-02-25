@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-Aguara ships with **138+ built-in rules** across 15 categories, plus NLP-based and toxic-flow analyzers.
+Aguara ships with **148+ built-in rules** across 13 categories, plus NLP-based and toxic-flow analyzers.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
@@ -57,7 +57,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXFIL_016 | MEDIUM | Git history or diff access with transmission |
 | NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
 
-## Credential Leak (17 rules)
+## Credential Leak (19 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -79,7 +79,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CRED_016 | MEDIUM | SSH private key in command |
 | CRED_017 | LOW | Docker environment credentials |
 
-## MCP Attack (11 rules)
+## MCP Attack (12 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -108,7 +108,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
 | MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
 
-## Supply Chain (14 rules)
+## Supply Chain (15 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -127,7 +127,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
 | SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
 
-## External Download (16 rules)
+## External Download (17 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -148,7 +148,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXTDL_015 | MEDIUM | Docker pull and run untrusted image |
 | EXTDL_016 | MEDIUM | Download binary or archive from URL |
 
-## Command Execution (13 rules)
+## Command Execution (16 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -166,7 +166,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CMDEXEC_012 | LOW | Chained shell command execution |
 | CMDEXEC_013 | LOW | Shell script file execution |
 
-## Indirect Injection (7 rules)
+## Indirect Injection (6 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -178,7 +178,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | INDIRECT_009 | MEDIUM | External API response drives agent behavior |
 | INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 
-## Third-Party Content (4 rules)
+## Third-Party Content (5 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -187,7 +187,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | THIRDPARTY_004 | LOW | External API response used without validation |
 | THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
 
-## SSRF & Cloud (8 rules)
+## SSRF & Cloud (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|

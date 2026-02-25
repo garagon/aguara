@@ -358,7 +358,7 @@ func TestMarkdownFormatterWithFindings(t *testing.T) {
 			{RuleID: "EXFIL_001", RuleName: "Data exfiltration", Severity: types.SeverityHigh, Category: "exfiltration", FilePath: "config.yaml", Line: 3},
 		},
 		FilesScanned: 2,
-		RulesLoaded:  138,
+		RulesLoaded:  148,
 		Target:       "testdata/malicious",
 	}
 	require.NoError(t, f.Format(&buf, result))

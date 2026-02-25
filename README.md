@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **138+ rules across 14 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
+- **148+ rules across 13 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
 - **Catches obfuscated attacks** that regex-only tools miss, using NLP-based markdown structure analysis and taint tracking.
 - **Deterministic** — same input, same output. Every scan is reproducible.
 - **CI-ready** — JSON, SARIF, and Markdown output. `--fail-on` threshold. `--changed` for incremental scans.
@@ -81,6 +81,7 @@ Flags:
       --rules string          Additional rules directory
       --disable-rule strings  Rule IDs to disable (comma-separated, repeatable)
       --no-color              Disable colored output
+      --no-update-check       Disable automatic update check (also: AGUARA_NO_UPDATE_CHECK=1)
       --fail-on string        Exit code 1 if findings at or above this severity
       --ci                    CI mode: --fail-on high --no-color
       --changed               Only scan git-changed files
@@ -143,22 +144,22 @@ rule_overrides:
 
 ## Rules
 
-138+ built-in rules across 14 categories:
+148+ built-in rules across 13 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
 | Prompt Injection | 17 + NLP | Instruction overrides, role switching, delimiter injection, jailbreaks |
 | Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
-| Credential Leak | 17 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings |
-| MCP Attack | 11 | Tool injection, name shadowing, manifest tampering, capability escalation |
+| Credential Leak | 19 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings |
+| MCP Attack | 12 | Tool injection, name shadowing, manifest tampering, capability escalation |
 | MCP Config | 8 | Unpinned npx servers, hardcoded secrets, shell metacharacters |
-| Supply Chain | 14 | Download-and-execute, reverse shells, obfuscated commands, privilege escalation |
-| External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
-| Command Execution | 13 | shell=True, eval, subprocess, child_process, PowerShell |
-| Indirect Injection | 7 | Fetch-and-follow, remote config, email-as-instructions |
-| SSRF & Cloud | 8 | Cloud metadata, IMDS, Docker socket, internal IPs |
+| Supply Chain | 15 | Download-and-execute, reverse shells, obfuscated commands, privilege escalation |
+| External Download | 17 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
+| Command Execution | 16 | shell=True, eval, subprocess, child_process, PowerShell |
+| Indirect Injection | 6 | Fetch-and-follow, remote config, email-as-instructions |
+| SSRF & Cloud | 10 | Cloud metadata, IMDS, Docker socket, internal IPs |
 | Unicode Attack | 7 | RTL override, bidi, homoglyphs, tag characters |
-| Third-Party Content | 4 | Mutable raw content, unvalidated API responses, remote templates |
+| Third-Party Content | 5 | Mutable raw content, unvalidated API responses, remote templates |
 | Toxic Flow | 3 | User input to dangerous sinks, env vars to shell, API to eval |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
@@ -252,7 +253,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Taint tracking: source -> sink flow analysis
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           138 embedded rules across 12 YAML files (go:embed)
+    builtin/           148 embedded rules across 12 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown

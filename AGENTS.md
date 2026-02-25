@@ -162,7 +162,7 @@ Print version and commit hash.
     }
   ],
   "files_scanned": 5,
-  "rules_loaded": 138,
+  "rules_loaded": 148,
   "duration_ms": 42
 }
 ```
@@ -171,22 +171,22 @@ Severity is an integer: 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL.
 
 ## Detection Rules
 
-138+ built-in rules across 14 categories.
+148+ built-in rules across 14 categories.
 
 | Category | Rules | What It Detects |
 |---|---|---|
 | `prompt-injection` | 22 | Instruction overrides, role switching, delimiter injection, jailbreaks |
-| `credential-leak` | 17 | API keys (OpenAI, AWS, GCP, Stripe, Anthropic, GitHub), private keys, DB strings |
+| `credential-leak` | 19 | API keys (OpenAI, AWS, GCP, Stripe, Anthropic, GitHub), private keys, DB strings |
 | `exfiltration` | 17 | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
-| `external-download` | 16 | Binary downloads, curl-pipe-shell, auto-installs |
-| `supply-chain` | 14 | Download-and-execute, reverse shells, obfuscated commands |
-| `command-execution` | 13 | shell=True, eval, subprocess, child_process, PowerShell |
-| `mcp-attack` | 11 | Tool injection, name shadowing, manifest tampering, capability escalation |
-| `ssrf-cloud` | 8 | Cloud metadata (IMDS), Docker socket, internal IPs |
+| `external-download` | 17 | Binary downloads, curl-pipe-shell, auto-installs |
+| `supply-chain` | 15 | Download-and-execute, reverse shells, obfuscated commands |
+| `command-execution` | 16 | shell=True, eval, subprocess, child_process, PowerShell |
+| `mcp-attack` | 12 | Tool injection, name shadowing, manifest tampering, capability escalation |
+| `ssrf-cloud` | 10 | Cloud metadata (IMDS), Docker socket, internal IPs |
 | `mcp-config` | 8 | Unpinned npx, hardcoded secrets, shell metacharacters in args |
 | `unicode-attack` | 7 | RTL override, bidi, homoglyphs, tag characters |
-| `indirect-injection` | 7 | Fetch-and-follow, remote config, email-as-instructions |
-| `third-party-content` | 4 | Mutable raw content, unvalidated API responses |
+| `indirect-injection` | 6 | Fetch-and-follow, remote config, email-as-instructions |
+| `third-party-content` | 5 | Mutable raw content, unvalidated API responses |
 | `toxic-flow` | 3 | User input to dangerous sinks, taint tracking |
 | `rug-pull` | 1 | Tool description changed with dangerous content (requires `--monitor`) |
 
