@@ -23,6 +23,9 @@ var rootCmd = &cobra.Command{
 	Use:   "aguara",
 	Short: "Security scanner for AI agent skills and MCP servers",
 	Long:  `Aguara is a security scanner that detects prompt injection, data exfiltration, and credential leaks in AI agent skill definitions and MCP server configurations.`,
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		checkPathHint()
+	},
 }
 
 func init() {
