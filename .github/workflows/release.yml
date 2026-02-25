@@ -30,6 +30,7 @@ jobs:
 
       - name: Trigger observatory rescan
         if: success()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.OBSERVATORY_DISPATCH_TOKEN }}
         run: |
