@@ -12,6 +12,7 @@ import (
 
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/config"
+	"github.com/garagon/aguara/internal/update"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/rugpull"
@@ -64,6 +65,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return runAutoScan(cmd)
 	}
 
+	// Background update check
+	var updateMsg string
+	if !flagNoUpdateCheck {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if r := update.CheckLatest(Version, "garagon/aguara"); r != nil && r.NeedsUpdate() {
+				updateMsg = fmt.Sprintf("\nUpdate available: %s → %s\n", r.Latest, r.UpdateURL)
+			}
+		}()
+		defer func() {
+			<-done
+			if updateMsg != "" {
+				fmt.Fprint(os.Stderr, updateMsg)
+			}
+		}()
+	}
+
 	targetPath := args[0]
 
 	cfg := loadScanConfig(cmd, targetPath)
@@ -81,10 +100,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	s, store := buildScanner(compiled, cfg, minSev)
 
+	sp := startSpinnerIfTerminal(s, "Discovering files...")
+
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
 	result, err := executeScan(ctx, s, targetPath)
+	stopSpinner(sp)
 	if err != nil {
 		return err
 	}
@@ -145,6 +167,8 @@ func runAutoScan(cmd *cobra.Command) error {
 
 	s, store := buildScanner(compiled, cfg, minSev)
 
+	sp := startSpinnerIfTerminal(s, "Scanning configs...")
+
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
@@ -154,7 +178,10 @@ func runAutoScan(cmd *cobra.Command) error {
 		Target:      "(auto-discovered)",
 	}
 
-	for _, path := range paths {
+	for i, path := range paths {
+		if sp != nil {
+			sp.Update(fmt.Sprintf("Scanning config %d/%d...", i+1, len(paths)))
+		}
 		result, scanErr := s.Scan(ctx, path)
 		if scanErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: scanning %s: %v\n", path, scanErr)
@@ -163,6 +190,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
 	}
+	stopSpinner(sp)
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -362,6 +390,29 @@ func writeOutput(result *scanner.ScanResult) error {
 	}
 
 	return formatter.Format(w, result)
+}
+
+func isTerminalFormat() bool {
+	f := strings.ToLower(flagFormat)
+	return f == "terminal" || f == ""
+}
+
+func startSpinnerIfTerminal(s *scanner.Scanner, message string) *output.Spinner {
+	if !isTerminalFormat() {
+		return nil
+	}
+	sp := output.NewSpinner(os.Stderr)
+	sp.Start(message)
+	s.SetProgressFunc(func(current, total int) {
+		sp.Update(fmt.Sprintf("Scanning %d/%d files...", current, total))
+	})
+	return sp
+}
+
+func stopSpinner(sp *output.Spinner) {
+	if sp != nil {
+		sp.Stop()
+	}
 }
 
 func checkFailOnThreshold(result *scanner.ScanResult) error {
