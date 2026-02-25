@@ -27,26 +27,20 @@ func TestIsGoBinDir(t *testing.T) {
 }
 
 func TestDirInPATH(t *testing.T) {
-	original := os.Getenv("PATH")
-	defer os.Setenv("PATH", original)
-
-	os.Setenv("PATH", "/usr/bin:/home/user/go/bin:/usr/local/bin")
+	t.Setenv("PATH", "/usr/bin:/home/user/go/bin:/usr/local/bin")
 
 	assert.True(t, dirInPATH("/home/user/go/bin"))
 	assert.False(t, dirInPATH("/home/user/other/bin"))
 }
 
 func TestShellConfigFile(t *testing.T) {
-	original := os.Getenv("SHELL")
-	defer os.Setenv("SHELL", original)
-
-	os.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("SHELL", "/bin/zsh")
 	assert.Equal(t, "~/.zshrc", shellConfigFile())
 
-	os.Setenv("SHELL", "/bin/bash")
+	t.Setenv("SHELL", "/bin/bash")
 	assert.Equal(t, "~/.bashrc", shellConfigFile())
 
-	os.Setenv("SHELL", "/usr/local/bin/zsh")
+	t.Setenv("SHELL", "/usr/local/bin/zsh")
 	assert.Equal(t, "~/.zshrc", shellConfigFile())
 }
 
