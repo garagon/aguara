@@ -40,17 +40,25 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 ## Installation
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+```
+
+Installs the latest binary to `~/.local/bin`. Customize with environment variables:
+
+```bash
+VERSION=v0.3.1 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+```
+
+### Alternative methods
+
+**From source** (requires Go 1.25+):
+
+```bash
 go install github.com/garagon/aguara/cmd/aguara@latest
 ```
 
-> **Note:** Make sure `~/go/bin` is in your PATH. If `aguara` is not found after installing, add this to your shell config:
-> ```bash
-> # ~/.zshrc or ~/.bashrc
-> export PATH="$HOME/go/bin:$PATH"
-> ```
-> Then restart your terminal or run `source ~/.zshrc`.
-
-Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/garagon/aguara/releases).
+Pre-built binaries for Linux, macOS, and Windows are also available on the [Releases page](https://github.com/garagon/aguara/releases).
 
 ## Quick Start
 
@@ -117,7 +125,7 @@ aguara scan --auto
 # GitHub Actions
 - name: Scan skills for security issues
   run: |
-    go install github.com/garagon/aguara/cmd/aguara@latest
+    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
     aguara scan .claude/skills/ --ci
 ```
 
@@ -125,7 +133,7 @@ aguara scan --auto
 # GitLab CI
 security-scan:
   script:
-    - go install github.com/garagon/aguara/cmd/aguara@latest
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
     - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
