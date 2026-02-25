@@ -43,6 +43,13 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 go install github.com/garagon/aguara/cmd/aguara@latest
 ```
 
+> **Note:** Make sure `~/go/bin` is in your PATH. If `aguara` is not found after installing, add this to your shell config:
+> ```bash
+> # ~/.zshrc or ~/.bashrc
+> export PATH="$HOME/go/bin:$PATH"
+> ```
+> Then restart your terminal or run `source ~/.zshrc`.
+
 Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/garagon/aguara/releases).
 
 ## Quick Start
