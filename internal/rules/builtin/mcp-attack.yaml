@@ -230,3 +230,32 @@ examples:
   false_positive:
     - "Connect to the configured MCP server"
     - "bun run dev"
+---
+id: MCP_012
+name: "Prototype pollution vector"
+description: "Detects prototype pollution patterns via __proto__, constructor.prototype, or unguarded property traversal in tool code"
+severity: HIGH
+category: mcp-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "\\[\\s*[\"']__proto__[\"']\\s*\\]"
+  - type: regex
+    value: "\\.__proto__\\s*[=.\\[]"
+  - type: regex
+    value: "\\[\\s*[\"']constructor[\"']\\s*\\]\\s*[.\\[]\\s*[\"']?prototype"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(filter|block|reject|strip|delete|remove|skip|check|validate|sanitize).{0,30}__proto__"
+  - type: regex
+    value: "(?i)(__proto__|prototype\\s+pollution).{0,30}(attack|vulnerability|exploit|prevent|defense|mitigation)"
+examples:
+  true_positive:
+    - "obj['__proto__']['isAdmin'] = true"
+    - "payload.__proto__.polluted = 'yes'"
+    - "input['constructor']['prototype'].isAdmin = true"
+  false_positive:
+    - "Filter out __proto__ from user input before merging"
+    - "Prototype pollution attacks target JavaScript objects"
+    - "delete obj['__proto__']"

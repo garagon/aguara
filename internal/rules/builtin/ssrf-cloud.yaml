@@ -168,3 +168,51 @@ examples:
     - "dns_rebinding attack vector"
   false_positive:
     - "DNS rebinding is a technique described in security textbooks"
+---
+id: SSRF_009
+name: "IPv4 alternative numeric encoding"
+description: "Detects IPv4 addresses in hexadecimal, octal, or packed decimal formats used to bypass SSRF IP blocklists"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)https?://0x[0-9a-fA-F]{6,8}[:/\\s\"']"
+  - type: regex
+    value: "(?i)https?://0x[0-9a-fA-F]{1,2}\\.0x[0-9a-fA-F]{1,2}\\."
+  - type: regex
+    value: "(?i)https?://0[0-7]{2,3}\\.[0-9]"
+examples:
+  true_positive:
+    - "curl http://0xA9FEA9FE/latest/meta-data/"
+    - "fetch('http://0x7f.0x00.0x00.0x01:8080/admin')"
+    - "http://0177.0000.0000.0001/secret"
+  false_positive:
+    - "http://192.168.1.1:8080/api"
+    - "The hex value 0x7f represents 127 in ASCII"
+---
+id: SSRF_010
+name: "IPv6 transition address with embedded IPv4"
+description: "Detects IPv6 transition mechanism addresses (IPv4-mapped, NAT64, 6to4, Teredo) that embed private IPv4 addresses to bypass SSRF filters"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)https?://\\[?::ffff:[0-9a-f.:]+\\]?[:/]"
+  - type: regex
+    value: "(?i)https?://\\[?64:ff9b::[0-9a-f.:]+\\]?[:/]"
+  - type: regex
+    value: "(?i)https?://\\[?2002:[0-9a-f:]+\\]?[:/]"
+  - type: regex
+    value: "(?i)https?://\\[?2001:0?000:[0-9a-f:]+\\]?[:/]"
+examples:
+  true_positive:
+    - "curl http://[::ffff:169.254.169.254]/latest/meta-data/"
+    - "fetch('http://[64:ff9b::10.0.0.1]/admin')"
+    - "http://[2002:c0a8:0101::]/config"
+  false_positive:
+    - "IPv6 transition mechanisms are described in RFC 6146"
+    - "The ::ffff prefix denotes IPv4-mapped IPv6 addresses"

