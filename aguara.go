@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
@@ -36,6 +37,18 @@ const (
 	SeverityHigh     = types.SeverityHigh
 	SeverityCritical = types.SeverityCritical
 )
+
+// Re-export discover types so consumers don't need a separate import.
+type (
+	DiscoverResult   = discover.Result
+	DiscoveredServer = discover.MCPServer
+	DiscoveredClient = discover.ClientResult
+)
+
+// Discover finds all MCP client configurations on the local machine.
+func Discover() (*DiscoverResult, error) {
+	return discover.Scan()
+}
 
 // RuleOverride allows changing the severity of a rule or disabling it.
 type RuleOverride struct {

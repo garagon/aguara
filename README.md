@@ -48,6 +48,12 @@ Pre-built binaries for Linux, macOS, and Windows are available on the [Releases 
 ## Quick Start
 
 ```bash
+# Auto-discover and scan all MCP configs on your machine
+aguara scan --auto
+
+# Discover which MCP clients are configured (no scanning)
+aguara discover
+
 # Scan a skills directory
 aguara scan .claude/skills/
 
@@ -64,9 +70,10 @@ aguara scan .claude/skills/ --ci
 ## Usage
 
 ```
-aguara scan <path> [flags]
+aguara scan [path] [flags]
 
 Flags:
+      --auto                  Auto-discover and scan all MCP client configs
       --severity string       Minimum severity to report: critical, high, medium, low, info (default "info")
       --format string         Output format: terminal, json, sarif, markdown (default "terminal")
   -o, --output string         Output file path (default: stdout)
@@ -79,6 +86,21 @@ Flags:
       --changed               Only scan git-changed files
   -v, --verbose               Show rule descriptions for critical and high findings
   -h, --help                  Help
+```
+
+### MCP Client Discovery
+
+Aguara can auto-detect MCP configurations across **17 clients**: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, and JetBrains.
+
+```bash
+# List all detected MCP configs
+aguara discover
+
+# JSON output
+aguara discover --format json
+
+# Discover + scan in one command
+aguara scan --auto
 ```
 
 ### CI Integration
@@ -201,6 +223,12 @@ result, err := aguara.Scan(ctx, "./skills/")
 // Scan inline content (no disk I/O)
 result, err := aguara.ScanContent(ctx, content, "skill.md")
 
+// Discover all MCP client configs on the machine
+discovered, err := aguara.Discover()
+for _, client := range discovered.Clients {
+    fmt.Printf("%s: %d servers\n", client.Client, len(client.Servers))
+}
+
 // List rules, optionally filtered
 rules := aguara.ListRules(aguara.WithCategory("prompt-injection"))
 
@@ -213,8 +241,9 @@ Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithR
 ## Architecture
 
 ```
-aguara.go              Public API: Scan, ScanContent, ListRules, ExplainRule
+aguara.go              Public API: Scan, ScanContent, Discover, ListRules, ExplainRule
 options.go             Functional options for the public API
+discover/              MCP client discovery: 17 clients, config parsers, auto-detection
 cmd/aguara/            CLI entry point (Cobra)
 internal/
   engine/
