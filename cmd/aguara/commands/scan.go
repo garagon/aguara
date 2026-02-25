@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
@@ -29,13 +30,22 @@ var (
 	flagChanged   bool
 	flagMonitor   bool
 	flagStatePath string
+	flagAuto      bool
 )
 
 var scanCmd = &cobra.Command{
-	Use:   "scan <path>",
+	Use:   "scan [path]",
 	Short: "Scan a directory for security issues",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runScan,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if flagAuto {
+			if len(args) > 0 {
+				return fmt.Errorf("--auto does not accept path arguments")
+			}
+			return nil
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
+	RunE: runScan,
 }
 
 func init() {
@@ -45,10 +55,15 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files (staged, unstaged, untracked)")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
+	scanCmd.Flags().BoolVar(&flagAuto, "auto", false, "Auto-discover and scan all MCP client configs")
 	rootCmd.AddCommand(scanCmd)
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	if flagAuto {
+		return runAutoScan(cmd)
+	}
+
 	targetPath := args[0]
 
 	cfg := loadScanConfig(cmd, targetPath)
@@ -87,6 +102,79 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return checkFailOnThreshold(result)
+}
+
+func runAutoScan(cmd *cobra.Command) error {
+	discovered, err := discover.Scan()
+	if err != nil {
+		return fmt.Errorf("discovery failed: %w", err)
+	}
+
+	if discovered.TotalClients() == 0 {
+		fmt.Println("No MCP configurations found — nothing to scan.")
+		return nil
+	}
+
+	// Collect unique config file paths
+	var paths []string
+	seen := map[string]bool{}
+	for _, cr := range discovered.Clients {
+		if !seen[cr.Path] {
+			seen[cr.Path] = true
+			paths = append(paths, cr.Path)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
+		len(paths), discovered.TotalClients())
+
+	applyCIDefaults()
+
+	minSev, err := parseSeverityFlag()
+	if err != nil {
+		return err
+	}
+
+	// Use empty config for auto mode (no per-target .aguara.yml)
+	cfg := config.Config{}
+
+	compiled, err := loadAndCompileRules(cfg)
+	if err != nil {
+		return err
+	}
+
+	s, store := buildScanner(compiled, cfg, minSev)
+
+	ctx, cancel := contextWithInterrupt()
+	defer cancel()
+
+	// Aggregate findings from all config files
+	aggregate := &scanner.ScanResult{
+		RulesLoaded: len(compiled),
+		Target:      "(auto-discovered)",
+	}
+
+	for _, path := range paths {
+		result, scanErr := s.Scan(ctx, path)
+		if scanErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: scanning %s: %v\n", path, scanErr)
+			continue
+		}
+		aggregate.Findings = append(aggregate.Findings, result.Findings...)
+		aggregate.FilesScanned += result.FilesScanned
+	}
+
+	if store != nil {
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
+		}
+	}
+
+	if err := writeOutput(aggregate); err != nil {
+		return err
+	}
+
+	return checkFailOnThreshold(aggregate)
 }
 
 func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
