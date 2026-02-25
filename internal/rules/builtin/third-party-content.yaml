@@ -91,3 +91,33 @@ examples:
   false_positive:
     - "Write the prompt template to a local file"
     - "See the template examples in the docs"
+---
+id: THIRDPARTY_006
+name: "Unescaped user input in HTML output"
+description: "Detects HTML string building with user-controlled variables without output encoding, enabling cross-site scripting"
+severity: HIGH
+category: third-party-content
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)\\.innerHTML\\s*[+=]\\s*[a-zA-Z_$]"
+  - type: regex
+    value: "(?i)document\\.write\\s*\\([^)]*\\+\\s*[a-zA-Z_]"
+  - type: regex
+    value: "(?i)f[\"']<[a-z]+[^>]*>\\{[a-z_]+\\}</"
+  - type: regex
+    value: "(?i)[\"'`]<(img|script|iframe|a|link)\\s[^>]*[\"'`]\\s*\\+\\s*[a-zA-Z_]"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(html\\.escape|escape[Hh]tml|sanitize|encode|DOMPurify|textContent)"
+examples:
+  true_positive:
+    - "element.innerHTML = userInput"
+    - "document.write('<div>' + untrustedData)"
+    - "f'<figcaption>{prompt}</figcaption>'"
+    - "'<img src=\"' + user_file + '\">'"
+  false_positive:
+    - "element.textContent = userInput"
+    - "innerHTML = DOMPurify.sanitize(input)"
+    - "f'<figcaption>{html.escape(prompt)}</figcaption>'"

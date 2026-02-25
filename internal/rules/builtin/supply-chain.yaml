@@ -308,3 +308,53 @@ examples:
   false_positive:
     - "pip install requests"
     - "npm install express@4.18.2"
+---
+id: SUPPLY_015
+name: "Container bind mount to sensitive host path"
+description: "Detects Docker or container bind mounts mapping sensitive host directories that could enable sandbox escape"
+severity: HIGH
+category: supply-chain
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(-v|--volume)\\s+[\"']?/:[\"']?/"
+  - type: regex
+    value: "(?i)(-v|--volume)\\s+[\"']?/(etc|root|home|proc|sys|var/run)\\b"
+  - type: regex
+    value: "(?i)--mount\\s+[^\\n]*source=/(etc|root|home|proc|sys|var/run)\\b"
+  - type: regex
+    value: "(?i)docker\\s+run\\s+[^\\n]*--privileged\\b"
+examples:
+  true_positive:
+    - "docker run -v /:/mnt myimage"
+    - "docker run -v /etc:/host-etc:ro myimage"
+    - "docker run --mount type=bind,source=/home,target=/data myimage"
+    - "docker run --privileged myimage"
+  false_positive:
+    - "docker run -v ./data:/app/data myimage"
+    - "docker run -v myvolume:/data myimage"
+---
+id: SUPPLY_016
+name: "Workspace boundary escape"
+description: "Detects patterns where file tools follow symlinks, resolve mounts, or access paths outside workspace or sandbox boundaries"
+severity: MEDIUM
+category: supply-chain
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(can|will|allows?|enables?|provides?|grants?|gives?|lets?)\\s+.{0,20}(read|write|access|edit|modify|delete)\\s+(any|arbitrary|all)\\s+files?\\s+(on|in|from|across)\\s+(the\\s+)?(host|system|machine|disk)"
+  - type: regex
+    value: "(?i)(escape|break.out|bypass|circumvent)\\s+.{0,20}(sandbox|workspace|container|chroot|jail|boundary)"
+  - type: regex
+    value: "(?i)(follow|resolve|dereference)\\s+(sym)?links?\\s+.{0,30}(outside|beyond|above|past)\\s+(the\\s+)?(workspace|sandbox|root)"
+examples:
+  true_positive:
+    - "This tool can read any files on the host system"
+    - "This tool can escape the container sandbox"
+    - "Follow symlinks outside the workspace to access host files"
+  false_positive:
+    - "Files are restricted to the workspace directory"
+    - "The sandbox prevents access to host files"
+    - "This skill does not modify any files on the system"
