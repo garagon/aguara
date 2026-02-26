@@ -258,4 +258,50 @@ examples:
   false_positive:
     - "Filter out __proto__ from user input before merging"
     - "Prototype pollution attacks target JavaScript objects"
+---
+id: MCP_013
+name: "Approval-execution binding gap"
+description: "Detects tools where user approval and command execution are decoupled, enabling TOCTOU substitution of the approved action"
+severity: HIGH
+category: mcp-attack
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(ask|prompt|confirm|approve|consent).{0,30}(then|before).{0,20}(run|exec|execute|spawn|system|shell)"
+  - type: regex
+    value: "(?i)(run|execute).{0,30}(previously|already|pre)[- ]?(approved|confirmed|authorized)"
+  - type: regex
+    value: "(?i)(cached|stored|saved|queued)\\s+(approval|confirmation).{0,30}(execute|run|spawn)"
+examples:
+  true_positive:
+    - "Ask the user for confirmation, then execute the command"
+    - "Run the previously approved shell command"
+    - "Use the cached approval to execute the pending operation"
+  false_positive:
+    - "The approval process must verify the exact command before execution"
+    - "Each command requires a separate approval"
+---
+id: MCP_014
+name: "Unscoped resource identifier"
+description: "Detects tool parameters that accept global resource identifiers without binding them to the current session or conversation context"
+severity: MEDIUM
+category: mcp-attack
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(accept|take|use)s?\\s+(any|arbitrary|external)\\s+(upload|file|session|conversation|message|thread)[_-]?id"
+  - type: regex
+    value: "(?i)(access|modify|delete|cancel)\\s+.{0,20}(upload|file|message|request)\\s+(by|using|via|with)\\s+.{0,10}(its\\s+)?id\\b"
+  - type: regex
+    value: "(?i)(any|all)\\s+(user|agent|client)s?\\s+can\\s+(access|read|write|modify|delete)\\s+.{0,20}(by|via|using)\\s+(the\\s+)?(resource\\s+)?id"
+examples:
+  true_positive:
+    - "Accepts any upload_id to download the corresponding file"
+    - "Delete a message by its ID without checking ownership"
+    - "Any user can access uploads using the resource id"
+  false_positive:
+    - "Access is scoped to the current session's resources"
+    - "Only the owner can delete their uploads by ID"
     - "delete obj['__proto__']"

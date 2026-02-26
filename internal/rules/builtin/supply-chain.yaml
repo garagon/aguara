@@ -358,3 +358,32 @@ examples:
     - "Files are restricted to the workspace directory"
     - "The sandbox prevents access to host files"
     - "This skill does not modify any files on the system"
+---
+id: SUPPLY_017
+name: "Hardlink workspace escape"
+description: "Detects hardlink creation patterns that bypass realpath-based workspace boundary checks, allowing read/write access to files outside the sandbox"
+severity: HIGH
+category: supply-chain
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)\\bln\\s+[/~.\"][^|;&]{0,60}(etc/|root/|home/|var/run/|\\.ssh/|\\.aws/|\\.env)"
+  - type: regex
+    value: "(?i)\\bln\\s+-[^s\\s][^|;&]{0,60}(etc/|root/|home/|var/run/|\\.ssh/|\\.aws/|\\.env)"
+  - type: regex
+    value: "(?i)\\b(os\\.link|fs\\.link(Sync)?|link\\()\\s*\\("
+  - type: regex
+    value: "(?i)(hard\\s*link|hardlink)\\s+.{0,30}(outside|escape|bypass|sensitive|passwd|shadow|secret|credential)"
+  - type: regex
+    value: "(?i)(create|make|add)\\s+(a\\s+)?hard\\s*links?\\s+.{0,30}(to|from|targeting)"
+examples:
+  true_positive:
+    - "ln /etc/passwd /workspace/myfile"
+    - "os.link('/etc/shadow', '/workspace/shadow_copy')"
+    - "Create a hardlink to escape the sandbox boundary"
+    - "fs.linkSync('/etc/hosts', './hosts_link')"
+  false_positive:
+    - "ln -s ./relative/path ./link"
+    - "Symlinks are blocked to prevent workspace escape"
+    - "Hardlink attacks are mitigated by filesystem checks"
