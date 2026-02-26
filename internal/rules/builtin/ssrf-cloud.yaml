@@ -215,4 +215,25 @@ examples:
     - "http://[2002:c0a8:0101::]/config"
   false_positive:
     - "IPv6 transition mechanisms are described in RFC 6146"
+---
+id: SSRF_011
+name: "IPv6 multicast SSRF bypass"
+description: "Detects IPv6 multicast addresses (ff00::/8) used in URLs to bypass SSRF IP blocklists and probe internal network topology"
+severity: HIGH
+category: ssrf-cloud
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)https?://\\[?ff[0-9a-f]{2}:[0-9a-f:]+"
+  - type: regex
+    value: "(?i)(fetch|request|curl|wget|http\\.get|axios)\\s*\\(?\\s*[\"']?[^\"']*\\[?ff[0-9a-f]{2}:"
+examples:
+  true_positive:
+    - "curl http://[ff02::1]:8080/admin"
+    - "fetch('http://[ff05::1]/config')"
+    - "http://[ff0e::1]:443/internal-api"
+  false_positive:
+    - "IPv6 multicast is used for neighbor discovery (RFC 4861)"
+    - "The ff02::1 address represents all-nodes on the link"
     - "The ::ffff prefix denotes IPv4-mapped IPv6 addresses"
