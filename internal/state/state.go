@@ -5,6 +5,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,10 +43,21 @@ func DefaultPath() string {
 }
 
 // Load reads the state file from disk. If the file doesn't exist,
-// the store starts empty (no error).
+// the store starts empty (no error). Symlinks are rejected.
 func (s *Store) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("state file is a symlink (rejected for security): %s", s.path)
+	}
 
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -59,11 +71,20 @@ func (s *Store) Load() error {
 }
 
 // Save writes the current state to disk, creating parent directories if needed.
+// Directories are created with 0o700, files with 0o600 (owner-only).
+// Symlinks are rejected.
 func (s *Store) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	// Reject symlinks before writing
+	if info, err := os.Lstat(s.path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("state file is a symlink (rejected for security): %s", s.path)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
 
@@ -72,7 +93,7 @@ func (s *Store) Save() error {
 		return err
 	}
 
-	return os.WriteFile(s.path, data, 0o644)
+	return os.WriteFile(s.path, data, 0o600)
 }
 
 // Get returns the entry for the given key and whether it exists.
