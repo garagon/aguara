@@ -12,6 +12,13 @@ import (
 	"github.com/garagon/aguara/internal/types"
 )
 
+const (
+	// maxEncodedBlobSize is the maximum size of an encoded blob to attempt decoding.
+	maxEncodedBlobSize = 1 << 20 // 1 MB
+	// maxDecodedSize is the maximum decoded output to re-scan.
+	maxDecodedSize = 512 << 10 // 512 KB
+)
+
 var (
 	base64Re = regexp.MustCompile(`[A-Za-z0-9+/]{16,}={0,2}`)
 	hexRe    = regexp.MustCompile(`(?:0x)?[0-9a-fA-F]{16,}`)
@@ -26,6 +33,9 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 
 	// Scan for base64 blobs
 	for _, loc := range base64Re.FindAllStringIndex(content, -1) {
+		if loc[1]-loc[0] > maxEncodedBlobSize {
+			continue
+		}
 		encoded := content[loc[0]:loc[1]]
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
@@ -38,12 +48,18 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 		if !isPrintable(decoded) || len(decoded) < 8 {
 			continue
 		}
+		if len(decoded) > maxDecodedSize {
+			decoded = decoded[:maxDecodedSize]
+		}
 		line := lineNumberAtOffset(content, loc[0])
 		findings = append(findings, rescan(decoded, line, lines, target, compiled, "base64", cbMap)...)
 	}
 
 	// Scan for hex blobs
 	for _, loc := range hexRe.FindAllStringIndex(content, -1) {
+		if loc[1]-loc[0] > maxEncodedBlobSize {
+			continue
+		}
 		encoded := content[loc[0]:loc[1]]
 		encoded = strings.TrimPrefix(encoded, "0x")
 		if len(encoded)%2 != 0 {
@@ -55,6 +71,9 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 		}
 		if !isPrintable(decoded) || len(decoded) < 8 {
 			continue
+		}
+		if len(decoded) > maxDecodedSize {
+			decoded = decoded[:maxDecodedSize]
 		}
 		line := lineNumberAtOffset(content, loc[0])
 		findings = append(findings, rescan(decoded, line, lines, target, compiled, "hex", cbMap)...)

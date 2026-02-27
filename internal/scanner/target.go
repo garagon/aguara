@@ -2,10 +2,15 @@ package scanner
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// maxFileSize is the maximum file size (50 MB) that will be scanned.
+// Files larger than this are silently skipped during discovery.
+const maxFileSize = 50 << 20
 
 // Target represents a file to be scanned.
 type Target struct {
@@ -16,9 +21,17 @@ type Target struct {
 
 // LoadContent reads the file content into memory.
 // If Content is already populated (e.g. in-memory targets), it is a no-op.
+// Files larger than maxFileSize are rejected as defense-in-depth.
 func (t *Target) LoadContent() error {
 	if t.Content != nil {
 		return nil
+	}
+	info, err := os.Stat(t.Path)
+	if err != nil {
+		return err
+	}
+	if info.Size() > maxFileSize {
+		return fmt.Errorf("file too large: %s (%d bytes, max %d)", t.Path, info.Size(), maxFileSize)
 	}
 	data, err := os.ReadFile(t.Path)
 	if err != nil {
@@ -56,6 +69,10 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		}
 		// skip binary/large files by extension
 		if isBinaryExt(path) {
+			return nil
+		}
+		// skip oversized files
+		if info.Size() > maxFileSize {
 			return nil
 		}
 		relPath, _ := filepath.Rel(root, path)

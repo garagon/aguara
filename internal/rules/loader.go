@@ -35,7 +35,11 @@ func LoadFromFS(fsys fs.FS) ([]RawRule, error) {
 	return all, err
 }
 
+// maxRuleFileSize is the maximum size for a single YAML rule file (1 MB).
+const maxRuleFileSize = 1 << 20
+
 // LoadFromDir loads rules from a directory on disk.
+// Files larger than 1 MB are skipped. Unknown YAML keys are rejected.
 func LoadFromDir(dir string) ([]RawRule, error) {
 	var all []RawRule
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -43,6 +47,10 @@ func LoadFromDir(dir string) ([]RawRule, error) {
 			return err
 		}
 		if info.IsDir() || !isYAML(path) {
+			return nil
+		}
+		if info.Size() > maxRuleFileSize {
+			fmt.Fprintf(os.Stderr, "warning: skipping oversized rule file %s (%d bytes, max %d)\n", path, info.Size(), maxRuleFileSize)
 			return nil
 		}
 		data, err := os.ReadFile(path)

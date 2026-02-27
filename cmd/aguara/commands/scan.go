@@ -257,9 +257,20 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 	}
 
 	if flagRules != "" {
-		customRules, err := rules.LoadFromDir(flagRules)
+		rulesDir, err := filepath.Abs(flagRules)
 		if err != nil {
-			return nil, fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
+			return nil, fmt.Errorf("resolving rules path: %w", err)
+		}
+		info, err := os.Stat(rulesDir)
+		if err != nil {
+			return nil, fmt.Errorf("rules directory: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("--rules path is not a directory: %s", rulesDir)
+		}
+		customRules, err := rules.LoadFromDir(rulesDir)
+		if err != nil {
+			return nil, fmt.Errorf("loading custom rules from %s: %w", rulesDir, err)
 		}
 		rawRules = append(rawRules, customRules...)
 	}
