@@ -3,6 +3,30 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] — 2026-02-28
+
+### Added
+
+- **5 new detection rules** from OpenClaw security analysis:
+  - CREDLEAK_018: Hardcoded credentials in environment mappings (MEDIUM, credential-leak)
+  - MCPATTACK_012: MCP tool name shadowing / override attack (HIGH, mcp-attack)
+  - MCPATTACK_013: Permissive MCP tool auto-approval patterns (HIGH, mcp-attack)
+  - SSRF_009: SSRF via server-controlled redirect following (HIGH, ssrf-cloud)
+  - SUPPLY_015: Executable download disguised as data file (HIGH, supply-chain)
+- **Install script** (`install.sh`): `curl | bash` installer for binary distribution
+- **PATH hint**: One-time hint after `go install` when `~/go/bin` is not in PATH
+
+### Fixed
+
+- **Security hardening**: File-size guardrails (10 MB limit), symlink protection (resolved before read), and stricter input validation across scanner, config loader, rule loader, state persistence, and pattern decoder
+- `.gitignore`: Added `sandbox/` and `coverage.out`
+
+### Summary
+
+**153 total rules** (149 YAML + 4 dynamic from analyzers) across 13 categories.
+
+---
+
 ## [0.2.3] — 2026-02-23
 
 ### Added

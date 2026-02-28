@@ -19,5 +19,9 @@ Thumbs.db
 testdata/
 scripts/
 DOCS/
+sandbox/
 __pycache__/
 *.pyc
+
+# Coverage
+coverage.out
