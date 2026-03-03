@@ -93,7 +93,15 @@ func (s *Store) Save() error {
 		return err
 	}
 
-	return os.WriteFile(s.path, data, 0o600)
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		_ = os.Remove(tmpPath) // best-effort cleanup on rename failure
+		return err
+	}
+	return nil
 }
 
 // Get returns the entry for the given key and whether it exists.
