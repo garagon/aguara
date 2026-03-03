@@ -387,3 +387,63 @@ examples:
     - "ln -s ./relative/path ./link"
     - "Symlinks are blocked to prevent workspace escape"
     - "Hardlink attacks are mitigated by filesystem checks"
+---
+id: SUPPLY_018
+name: "Sandbox escape via process spawn"
+description: "Detects spawn or exec from a sandboxed context that may inherit unrestricted permissions, allowing sandbox escape"
+severity: CRITICAL
+category: supply-chain
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(exec|spawn|popen|system|subprocess|child_process|os\\.system)\\b.{0,60}(sandbox|restricted|isolated|jailed|contained)"
+  - type: regex
+    value: "(?i)(sandbox|restricted|isolated|jailed|contained).{0,60}(exec|spawn|popen|system|subprocess|child_process|os\\.system)\\b"
+  - type: regex
+    value: "(?i)(escape|break\\s*out|bypass).{0,30}(sandbox|container|jail|isolation).{0,30}(process|spawn|exec|fork)"
+  - type: regex
+    value: "(?i)(child|spawned|forked)\\s+(process|worker).{0,40}(unrestricted|elevated|inherit|full)\\s+(permission|access|privilege)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(prevent|block|detect|mitigat|reject|restrict|deny).{0,40}(sandbox.{0,20}(escape|spawn|exec)|process.{0,20}sandbox)"
+examples:
+  true_positive:
+    - "exec('/bin/sh') from the sandboxed plugin context"
+    - "The sandbox allows subprocess.Popen to spawn unrestricted processes"
+    - "Escape the sandbox isolation via process spawn"
+    - "Child process inherits unrestricted permissions from the sandbox"
+  false_positive:
+    - "Block exec calls to prevent sandbox escape"
+    - "Restrict process spawning inside the sandbox"
+    - "Detect and deny subprocess execution in sandboxed contexts"
+---
+id: SUPPLY_019
+name: "Stale PID lock exploitation"
+description: "Detects lock files based only on PID without validating that the process is still alive, enabling stale lock takeover"
+severity: MEDIUM
+category: supply-chain
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(pid|process.?id)\\s*[:=].{0,20}(os\\.Getpid|getpid|process\\.pid|\\$\\$)"
+  - type: regex
+    value: "(?i)(lock|pid)\\s*file.{0,40}(write|store|save|record).{0,30}(pid|process.?id)"
+  - type: regex
+    value: "(?i)(stale|orphan|leftover|dangling)\\s+(pid|lock)\\s*(file)?"
+  - type: regex
+    value: "(?i)(check|verify|validate)\\s+(only|just)\\s+(the\\s+)?(pid|process.?id|lock).{0,30}(exist|present|file)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(/proc/\\S+/stat|FindProcess|process\\.kill\\(.*0\\)|kill\\(.*0\\)|os\\.Kill)"
+  - type: regex
+    value: "(?i)(validate|verify|check).{0,30}(process|pid).{0,30}(alive|running|still.{0,5}active)"
+examples:
+  true_positive:
+    - "Write pid = os.Getpid() to the lock file for ownership"
+    - "The lock file records the PID and assumes the process is still active"
+    - "Stale PID lock files can be hijacked by a new process"
+    - "Check only the PID file exists before acquiring the lock"
+  false_positive:
+    - "Verify the PID is still running via /proc/PID/stat before trusting the lock"
+    - "Use FindProcess to validate the lock holder is alive"
+    - "Check if the process is alive before reusing the lock"

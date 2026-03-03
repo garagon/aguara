@@ -305,3 +305,63 @@ examples:
     - "Access is scoped to the current session's resources"
     - "Only the owner can delete their uploads by ID"
     - "delete obj['__proto__']"
+---
+id: MCP_015
+name: "Auth-before-body parsing"
+description: "Detects handlers that parse the request body before authenticating the caller, enabling slow-body denial-of-service attacks"
+severity: MEDIUM
+category: mcp-attack
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(json\\.Decode|ReadAll|ioutil\\.ReadAll|request\\.body|req\\.body)\\b.{0,80}(auth|verify|token|session|credential)"
+  - type: regex
+    value: "(?i)(parse|read|decode|consume)\\s+(the\\s+)?(request\\s+)?(body|payload|content)\\s+(before|prior|then|and then)\\s+(auth|verify|validat|check)"
+  - type: regex
+    value: "(?i)(body|payload)\\s+(is\\s+)?(parsed|read|decoded|consumed)\\s+(before|without|prior).{0,30}(auth|verif|token)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(auth|verify|token|session).{0,60}(json\\.Decode|ReadAll|parse.{0,20}body)"
+  - type: regex
+    value: "(?i)(first|before|prior).{0,30}(auth|verify).{0,30}(then|before).{0,30}(parse|read|decode)"
+examples:
+  true_positive:
+    - "Use json.Decode to parse the request body and then verify the auth token"
+    - "Parse the request body before authentication to extract the user ID"
+    - "The body is parsed before verifying the session token"
+  false_positive:
+    - "Verify the auth token first, then json.Decode the body"
+    - "First authenticate the caller, then parse the request body"
+    - "Authentication middleware runs before body parsing"
+---
+id: MCP_016
+name: "Canonicalization bypass"
+description: "Detects double-encoding, manual URL decoding of paths, and authorization bypass via URL encoding tricks"
+severity: HIGH
+category: mcp-attack
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(%252[fF]|%252[eE]|%25252|%2[fF]%2[fF]|%00)"
+  - type: regex
+    value: "(?i)(QueryUnescape|decodeURI(Component)?|url_?decode|percent_?decode|unquote)\\b.{0,40}(path|route|uri|url|endpoint)"
+  - type: regex
+    value: "(?i)(path|route|url|uri).{0,40}(QueryUnescape|decodeURI(Component)?|url_?decode|percent_?decode|unquote)\\b"
+  - type: regex
+    value: "(?i)(bypass|evade|circumvent|skip)\\s+(auth|access|permission|acl).{0,40}(encod|double|percent|url)"
+  - type: regex
+    value: "(?i)(double|nested|recursive)\\s*[- ]?(encod|decod|escape).{0,30}(path|route|url|uri|bypass)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(prevent|block|detect|mitigat|reject|sanitiz|normaliz|protect).{0,40}(double.?encod|canonicali|path.?travers)"
+examples:
+  true_positive:
+    - "Requesting %252F%252E%252E allows directory traversal"
+    - "Use QueryUnescape on the path to normalize before routing"
+    - "Bypass auth using double-encoded URL characters like %252f"
+    - "Apply decodeURIComponent to the path before permission checks"
+    - "Double-encoding the path bypasses ACL checks"
+  false_positive:
+    - "Detect and block double-encoding in request paths"
+    - "Sanitize input to prevent canonicalization bypass attacks"
+    - "Normalize paths to protect against path traversal"
