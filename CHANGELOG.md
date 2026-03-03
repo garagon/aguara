@@ -3,6 +3,115 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] — 2026-03-03
+
+153 → **173 rules**, new confidence scoring system, configurable file-size limits, and security hardening improvements.
+
+### Added
+
+#### 20 new detection rules
+
+**Indirect Injection** (+4 rules, 6 → 10)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| INDIRECT_011 | Database/cache query driving agent behavior | HIGH |
+| INDIRECT_012 | Webhook/callback registration with external service | HIGH |
+| INDIRECT_013 | Git clone and execute fetched code | HIGH |
+| INDIRECT_014 | Environment variable injection from external source | MEDIUM |
+
+**Third-Party Content** (+5 rules, 5 → 10)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| THIRDPARTY_003 | JavaScript eval/Function with external data | HIGH |
+| THIRDPARTY_007 | Unsafe deserialization from untrusted source | HIGH |
+| THIRDPARTY_008 | Script/asset without integrity check | MEDIUM |
+| THIRDPARTY_009 | HTTP downgrade from HTTPS | MEDIUM |
+| THIRDPARTY_010 | Unsigned plugin/extension loading | HIGH |
+
+**Unicode Attack** (+3 rules, 7 → 10)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| UNI_008 | Zero-width character sequences | MEDIUM |
+| UNI_009 | Unicode normalization inconsistency | MEDIUM |
+| UNI_010 | Mixed-script confusable in identifiers | MEDIUM |
+
+**MCP Config** (+2 rules, 9 → 11)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| MCPCFG_010 | Docker capabilities escalation (`--cap-add`) | HIGH |
+| MCPCFG_011 | Unrestricted container network access (`--network host`) | MEDIUM |
+
+**MCP Attack** (+2 rules, 14 → 16)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| MCP_015 | Auth-before-body parsing (slow-body DoS) | MEDIUM |
+| MCP_016 | Canonicalization bypass (double-encoding) | HIGH |
+
+**Supply Chain** (+2 rules, 16 → 18)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| SUPPLY_017 | Symlink/hardlink to sensitive path outside workspace | HIGH |
+| SUPPLY_018 | Sandbox escape via process spawn | CRITICAL |
+
+**Prompt Injection** (+1 rule, 17 → 18)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| PROMPT_INJECTION_018 | Runtime events as user-role prompt | HIGH |
+
+**Credential Leak** (+1 rule, 19 → 20)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| CREDLEAK_019 | HMAC/signing secret in source | HIGH |
+
+#### Confidence scoring system
+
+New `Confidence` field (0.0–1.0) on every finding, measuring how certain the scanner is that a finding is a true positive. Independent from the existing risk `Score` (0–100).
+
+- **Base confidence by analyzer**: pattern `match_mode=all` → 0.95, pattern `match_mode=any` → 0.85, decoded content → 0.90, NLP → 0.70, ToxicFlow → 0.90, Rug-Pull → 0.95
+- **Post-processing adjustments**: findings inside markdown code blocks → ×0.6 downgrade; correlated findings (2+ within 5 lines) → ×1.1 boost (capped at 1.0)
+- **Output**: `confidence` field in JSON/SARIF output; `[85%]` badge in `--verbose` terminal mode; SARIF `rank` property (0–100 scale)
+
+#### Configurable max file size
+
+- New `--max-file-size` CLI flag (e.g. `--max-file-size 100MB`), range 1 MB–500 MB, default 50 MB
+- New `max_file_size` field in `.aguara.yml` config
+- New `WithMaxFileSize(bytes)` library option
+
+### Fixed
+
+- **Atomic state file writes**: State persistence (`~/.aguara/state.json`) now uses tmp+rename pattern to prevent corruption on crash or power loss
+
+### Summary
+
+**177 total rules** (173 YAML + 4 dynamic from analyzers) across 13 categories.
+
+| Category | Rules | Severity Breakdown |
+|----------|-------|-------------------|
+| credential-leak | 20 | 7 CRITICAL, 8 HIGH, 4 MEDIUM, 1 LOW |
+| prompt-injection | 18 | 4 CRITICAL, 9 HIGH, 5 MEDIUM |
+| supply-chain | 18 | 2 CRITICAL, 10 HIGH, 6 MEDIUM |
+| external-download | 17 | 3 CRITICAL, 2 HIGH, 5 MEDIUM, 7 LOW |
+| command-execution | 16 | 6 HIGH, 7 MEDIUM, 3 LOW |
+| exfiltration | 16 | 10 HIGH, 6 MEDIUM |
+| mcp-attack | 16 | 3 CRITICAL, 10 HIGH, 3 MEDIUM |
+| mcp-config | 11 | 5 HIGH, 3 MEDIUM, 3 LOW |
+| ssrf-cloud | 11 | 3 CRITICAL, 7 HIGH, 1 MEDIUM |
+| indirect-injection | 10 | 7 HIGH, 2 MEDIUM, 1 LOW |
+| third-party-content | 10 | 5 HIGH, 2 MEDIUM, 3 LOW |
+| unicode-attack | 10 | 3 HIGH, 7 MEDIUM |
+
+**5 analyzer engines**: Pattern Matcher → NLP Injection Detector → Toxic Flow Analyzer → Rug Pull Detector → Post-processing (dedup, scoring, correlation, confidence)
+
+---
+
 ## [0.4.0] — 2026-02-28
 
 ### Added
