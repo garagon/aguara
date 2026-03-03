@@ -171,6 +171,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)
 	findings = flattenGroups(groups)
+	findings = meta.AdjustConfidence(findings)
 
 	if s.minSeverity > SeverityInfo {
 		var filtered []Finding

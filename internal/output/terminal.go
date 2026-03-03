@@ -178,6 +178,9 @@ func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Fi
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
 	}
+	if f.Verbose && finding.Confidence > 0 {
+		lineStr += " " + f.color(dim, fmt.Sprintf("[%d%%]", int(finding.Confidence*100)))
+	}
 
 	fmt.Fprintf(w, "\n    %s %s %s %s\n",
 		icon,
@@ -203,6 +206,9 @@ func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Fin
 	lineStr := fmt.Sprintf("%s:%d", finding.FilePath, finding.Line)
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
+	}
+	if f.Verbose && finding.Confidence > 0 {
+		lineStr += " " + f.color(dim, fmt.Sprintf("[%d%%]", int(finding.Confidence*100)))
 	}
 
 	fmt.Fprintf(w, "    %s %s %s %s\n",

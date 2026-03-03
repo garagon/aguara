@@ -158,6 +158,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			Line:        line,
 			MatchedText: matchedText,
 			Analyzer:    "toxicflow",
+			Confidence:  0.90,
 		})
 	}
 
