@@ -19,6 +19,7 @@ type Scanner struct {
 	workers        int
 	minSeverity    Severity
 	ignorePatterns []string
+	maxFileSize    int64
 	onProgress     func(current, total int)
 }
 
@@ -48,6 +49,12 @@ func (s *Scanner) SetIgnorePatterns(patterns []string) {
 	s.ignorePatterns = patterns
 }
 
+// SetMaxFileSize sets the maximum file size for scanning.
+// Zero means use the default (50 MB).
+func (s *Scanner) SetMaxFileSize(size int64) {
+	s.maxFileSize = size
+}
+
 // SetProgressFunc sets an optional callback invoked after each file is scanned.
 // The callback receives the number of files processed so far and the total count.
 // It may be called from multiple goroutines concurrently.
@@ -67,14 +74,15 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		// Single-file scan: use the filename as RelPath so target-filtered
 		// rules (e.g. "*.md", "*.json") can match correctly.
 		targets := []*Target{{
-			Path:    root,
-			RelPath: filepath.Base(root),
+			Path:        root,
+			RelPath:     filepath.Base(root),
+			MaxFileSize: s.maxFileSize,
 		}}
 		return s.ScanTargets(ctx, targets)
 	}
 
 	// Directory scan: discover all files recursively.
-	discovery := &TargetDiscovery{IgnorePatterns: s.ignorePatterns}
+	discovery := &TargetDiscovery{IgnorePatterns: s.ignorePatterns, MaxFileSize: s.maxFileSize}
 	targets, err := discovery.Discover(root)
 	if err != nil {
 		return nil, err
@@ -86,6 +94,15 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
 func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResult, error) {
 	start := time.Now()
+
+	// Fill MaxFileSize for targets that don't have it set.
+	if s.maxFileSize > 0 {
+		for _, t := range targets {
+			if t.MaxFileSize <= 0 {
+				t.MaxFileSize = s.maxFileSize
+			}
+		}
+	}
 
 	// Fan-out files to workers
 	fileCh := make(chan *Target, len(targets))
@@ -154,6 +171,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)
 	findings = flattenGroups(groups)
+	findings = meta.AdjustConfidence(findings)
 
 	if s.minSeverity > SeverityInfo {
 		var filtered []Finding

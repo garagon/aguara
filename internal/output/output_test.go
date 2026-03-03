@@ -298,6 +298,66 @@ func TestTerminalFormatterVerbose(t *testing.T) {
 	require.NotContains(t, out, "Medium description here")
 }
 
+func TestTerminalFormatterVerboseConfidence(t *testing.T) {
+	f := &output.TerminalFormatter{NoColor: true, Verbose: true}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings: []types.Finding{
+			{
+				RuleID:     "C1",
+				RuleName:   "Critical Rule",
+				Severity:   types.SeverityCritical,
+				Category:   "test",
+				FilePath:   "a.md",
+				Line:       1,
+				MatchedText: "bad",
+				Confidence: 0.85,
+			},
+			{
+				RuleID:     "H1",
+				RuleName:   "High Rule",
+				Severity:   types.SeverityHigh,
+				Category:   "test",
+				FilePath:   "b.md",
+				Line:       2,
+				Confidence: 0.95,
+			},
+		},
+		FilesScanned: 2,
+		RulesLoaded:  10,
+	}
+
+	require.NoError(t, f.Format(&buf, result))
+	out := buf.String()
+	require.Contains(t, out, "[85%]")
+	require.Contains(t, out, "[95%]")
+}
+
+func TestTerminalFormatterNonVerboseNoConfidence(t *testing.T) {
+	f := &output.TerminalFormatter{NoColor: true, Verbose: false}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings: []types.Finding{
+			{
+				RuleID:     "H1",
+				RuleName:   "High Rule",
+				Severity:   types.SeverityHigh,
+				Category:   "test",
+				FilePath:   "a.md",
+				Line:       1,
+				Confidence: 0.85,
+			},
+		},
+		FilesScanned: 1,
+		RulesLoaded:  10,
+	}
+
+	require.NoError(t, f.Format(&buf, result))
+	out := buf.String()
+	// Confidence should NOT appear when not verbose
+	require.NotContains(t, out, "[85%]")
+}
+
 func TestTerminalFormatterNonVerboseNoDescription(t *testing.T) {
 	f := &output.TerminalFormatter{NoColor: true, Verbose: false}
 	var buf bytes.Buffer
@@ -391,6 +451,51 @@ func TestMarkdownEscapesPipeChars(t *testing.T) {
 	require.Contains(t, out, "\\|")
 	require.Contains(t, out, "&lt;")
 	require.Contains(t, out, "&gt;")
+}
+
+func TestSARIFFormatterConfidenceRank(t *testing.T) {
+	f := &output.SARIFFormatter{}
+	var buf bytes.Buffer
+	result := &types.ScanResult{
+		Findings: []types.Finding{
+			{
+				RuleID:     "R1",
+				RuleName:   "Rule with confidence",
+				Severity:   types.SeverityHigh,
+				FilePath:   "a.md",
+				Line:       1,
+				Confidence: 0.85,
+			},
+			{
+				RuleID:   "R2",
+				RuleName: "Rule without confidence",
+				Severity: types.SeverityLow,
+				FilePath: "b.md",
+				Line:     1,
+			},
+		},
+		FilesScanned: 2,
+	}
+	require.NoError(t, f.Format(&buf, result))
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	runs := parsed["runs"].([]any)
+	run := runs[0].(map[string]any)
+	results := run["results"].([]any)
+
+	r0 := results[0].(map[string]any)
+	props0 := r0["properties"].(map[string]any)
+	require.Equal(t, 0.85, props0["confidence"])
+	require.Equal(t, float64(85), props0["rank"])
+
+	r1 := results[1].(map[string]any)
+	// No confidence means no properties (or no rank key)
+	if props1, ok := r1["properties"]; ok {
+		p := props1.(map[string]any)
+		_, hasRank := p["rank"]
+		require.False(t, hasRank)
+	}
 }
 
 func TestSARIFFormatterEmpty(t *testing.T) {

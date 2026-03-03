@@ -70,6 +70,44 @@ func TestLoadConfigInvalid(t *testing.T) {
 	require.Contains(t, err.Error(), "parsing")
 }
 
+func TestValidateMaxFileSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   int64
+		wantErr bool
+	}{
+		{"valid 50MB", 50 << 20, false},
+		{"valid minimum 1MB", 1 << 20, false},
+		{"valid maximum 500MB", 500 << 20, false},
+		{"valid 100MB", 100 << 20, false},
+		{"too small 512KB", 512 << 10, true},
+		{"too small zero", 0, true},
+		{"too large 501MB", 501 << 20, true},
+		{"too large 1GB", 1 << 30, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := config.ValidateMaxFileSize(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.input, v)
+			}
+		})
+	}
+}
+
+func TestLoadConfigMaxFileSize(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte("max_file_size: 104857600\n") // 100 MB
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguara.yml"), data, 0644))
+
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Equal(t, int64(104857600), cfg.MaxFileSize)
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()

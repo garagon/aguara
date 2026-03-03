@@ -168,3 +168,89 @@ examples:
   false_positive:
     - "npm install express"
     - "pip install requests"
+---
+id: MCPCFG_009
+name: "Writable workspace mount"
+description: "Detects bind mounts configured as read-write in MCP server configurations, allowing the server to modify the host workspace"
+severity: MEDIUM
+category: mcp-config
+targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)[\"']?[/~.][^\"'\\s]*:[^\"'\\s]*:rw[\"']?"
+  - type: regex
+    value: "(?i)[\"']?readOnly[\"']?\\s*[:=]\\s*[\"']?false[\"']?"
+  - type: regex
+    value: "(?i)(workspace|project|host|source)\\s+(directory|folder|path|mount).{0,40}(writable|read[- ]?write|rw\\b|mutable)"
+  - type: regex
+    value: "(?i)(mount|bind|volume).{0,40}(workspace|project|source).{0,40}(writable|read[- ]?write|rw\\b)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)[\"']?[/~.][^\"'\\s]*:[^\"'\\s]*:ro[\"']?"
+  - type: regex
+    value: "(?i)[\"']?readOnly[\"']?\\s*[:=]\\s*[\"']?true[\"']?"
+examples:
+  true_positive:
+    - "\"args\": [\"-v\", \"/home/user/project:/workspace:rw\"]"
+    - "\"readOnly\": false"
+    - "The workspace directory is mounted as read-write into the container"
+    - "Bind mount the source folder as writable for the MCP server"
+  false_positive:
+    - "\"args\": [\"-v\", \"/home/user/project:/workspace:ro\"]"
+    - "\"readOnly\": true"
+    - "Mount the workspace as read-only for security"
+---
+id: MCPCFG_010
+name: "Docker capabilities escalation"
+description: "Detects --cap-add flags granting dangerous Linux capabilities in container configurations"
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)--cap-add[\\s=]\\s*(SYS_ADMIN|SYS_PTRACE|NET_ADMIN|ALL|DAC_OVERRIDE|SYS_RAWIO|NET_RAW)"
+  - type: regex
+    value: "(?i)cap_add\\s*:\\s*.{0,20}(SYS_ADMIN|SYS_PTRACE|NET_ADMIN|ALL|DAC_OVERRIDE|SYS_RAWIO|NET_RAW)"
+  - type: regex
+    value: "(?i)add\\s+(capability|cap)\\s+.{0,20}(SYS_ADMIN|SYS_PTRACE|NET_ADMIN|ALL|DAC_OVERRIDE|SYS_RAWIO)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(--cap-drop|cap_drop|remove\\s+capability|drop\\s+cap)"
+examples:
+  true_positive:
+    - "\"args\": [\"run\", \"--cap-add=SYS_ADMIN\", \"mcp-server\"]"
+    - "cap_add:\n  - SYS_PTRACE"
+  false_positive:
+    - "\"args\": [\"run\", \"--cap-drop=ALL\", \"mcp-server\"]"
+    - "Always drop unnecessary capabilities"
+---
+id: MCPCFG_011
+name: "Unrestricted container network access"
+description: "Detects --network host or network_mode: host giving containers full host network access"
+severity: MEDIUM
+category: mcp-config
+targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)--(network|net)[\\s=]+host\\b"
+  - type: regex
+    value: "(?i)[\"']args[\"']\\s*:.{0,200}--(network|net).{0,20}host"
+  - type: regex
+    value: "(?i)network_mode\\s*:\\s*[\"']?host[\"']?"
+exclude_patterns:
+  - type: regex
+    value: "(?i)--(network|net)[\\s=]+none\\b"
+  - type: regex
+    value: "(?i)network_mode\\s*:\\s*[\"']?none[\"']?"
+  - type: regex
+    value: "(?i)isolated\\s+network"
+examples:
+  true_positive:
+    - "\"args\": [\"run\", \"--network=host\", \"mcp-server\"]"
+    - "network_mode: host"
+  false_positive:
+    - "\"args\": [\"run\", \"--network=none\", \"mcp-server\"]"
+    - "Use an isolated network for the container"

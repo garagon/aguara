@@ -93,6 +93,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			Line:        lineNum,
 			MatchedText: matchedText,
 			Analyzer:    "rugpull",
+			Confidence:  0.95,
 		})
 
 		// One finding per file is enough to flag the rug-pull

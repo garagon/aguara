@@ -55,6 +55,48 @@ func TestStoreCreatesDirs(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestStoreSaveAtomicNoTmpLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	s := New(path)
+	s.Set("key", "val")
+	require.NoError(t, s.Save())
+
+	// The .tmp file must not remain after a successful save
+	_, err := os.Stat(path + ".tmp")
+	assert.True(t, os.IsNotExist(err), ".tmp file should not exist after successful save")
+
+	// The actual state file must exist and be valid
+	s2 := New(path)
+	require.NoError(t, s2.Load())
+	e, ok := s2.Get("key")
+	assert.True(t, ok)
+	assert.Equal(t, "val", e.Hash)
+}
+
+func TestStoreSymlinkRejection(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real-state.json")
+	linkPath := filepath.Join(dir, "link-state.json")
+
+	// Create a real file and a symlink pointing to it
+	require.NoError(t, os.WriteFile(realPath, []byte(`{"entries":{}}`), 0o600))
+	require.NoError(t, os.Symlink(realPath, linkPath))
+
+	// Save must reject symlink
+	s := New(linkPath)
+	err := s.Save()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+
+	// Load must reject symlink
+	s2 := New(linkPath)
+	err = s2.Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+}
+
 func TestDefaultPath(t *testing.T) {
 	p := DefaultPath()
 	assert.Contains(t, p, "state.json")

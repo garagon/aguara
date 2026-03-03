@@ -222,6 +222,7 @@ func makeFinding(ruleID, desc string, sev scanner.Severity, category string, sec
 		MatchedText: matchedText,
 		Context:     extractContext(lines, line),
 		Analyzer:    "nlp-injection",
+		Confidence:  0.70,
 	}
 }
 

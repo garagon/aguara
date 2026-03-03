@@ -119,8 +119,17 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 				},
 			},
 		}
+		props := map[string]any{}
 		if finding.InCodeBlock {
-			r.Properties = map[string]any{"in_code_block": true}
+			props["in_code_block"] = true
+		}
+		if finding.Confidence > 0 {
+			props["confidence"] = finding.Confidence
+			// SARIF rank convention: 0-100 scale
+			props["rank"] = finding.Confidence * 100
+		}
+		if len(props) > 0 {
+			r.Properties = props
 		}
 		results = append(results, r)
 	}

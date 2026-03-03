@@ -84,6 +84,7 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 				Context:     extractContext(lines, hit.line, contextRadius),
 				Analyzer:    "pattern",
 				InCodeBlock: inCB,
+				Confidence:  0.85,
 			})
 		}
 	}
@@ -126,6 +127,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 		Context:     extractContext(lines, firstHit.line, contextRadius),
 		Analyzer:    "pattern",
 		InCodeBlock: inCB,
+		Confidence:  0.95,
 	}}
 }
 

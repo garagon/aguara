@@ -25,13 +25,14 @@ import (
 )
 
 var (
-	flagFailOn    string
-	flagCI        bool
-	flagVerbose   bool
-	flagChanged   bool
-	flagMonitor   bool
-	flagStatePath string
-	flagAuto      bool
+	flagFailOn      string
+	flagCI          bool
+	flagVerbose     bool
+	flagChanged     bool
+	flagMonitor     bool
+	flagStatePath   string
+	flagAuto        bool
+	flagMaxFileSize string
 )
 
 var scanCmd = &cobra.Command{
@@ -57,6 +58,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
 	scanCmd.Flags().BoolVar(&flagAuto, "auto", false, "Auto-discover and scan all MCP client configs")
+	scanCmd.Flags().StringVar(&flagMaxFileSize, "max-file-size", "", "Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB–500MB)")
 	rootCmd.AddCommand(scanCmd)
 }
 
@@ -310,6 +312,12 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
 
+	if maxSize, err := parseMaxFileSize(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	} else if maxSize > 0 {
+		s.SetMaxFileSize(maxSize)
+	}
+
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -423,6 +431,56 @@ func startSpinnerIfTerminal(s *scanner.Scanner, message string) *output.Spinner 
 func stopSpinner(sp *output.Spinner) {
 	if sp != nil {
 		sp.Stop()
+	}
+}
+
+// parseMaxFileSize resolves the max-file-size from flag or config.
+// Returns 0 if neither is set (use default).
+func parseMaxFileSize(cfg config.Config) (int64, error) {
+	if flagMaxFileSize != "" {
+		v, err := parseByteSize(flagMaxFileSize)
+		if err != nil {
+			return 0, fmt.Errorf("invalid --max-file-size: %w", err)
+		}
+		return config.ValidateMaxFileSize(v)
+	}
+	if cfg.MaxFileSize > 0 {
+		return config.ValidateMaxFileSize(cfg.MaxFileSize)
+	}
+	return 0, nil
+}
+
+// parseByteSize parses human-readable byte sizes like "50MB", "100mb", "1GB".
+func parseByteSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty size value")
+	}
+
+	// Find where the numeric part ends
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		i++
+	}
+	numStr := s[:i]
+	unit := strings.ToUpper(strings.TrimSpace(s[i:]))
+
+	var num float64
+	if _, err := fmt.Sscanf(numStr, "%f", &num); err != nil {
+		return 0, fmt.Errorf("cannot parse %q as byte size", s)
+	}
+
+	switch unit {
+	case "", "B":
+		return int64(num), nil
+	case "KB", "K":
+		return int64(num * 1024), nil
+	case "MB", "M":
+		return int64(num * 1024 * 1024), nil
+	case "GB", "G":
+		return int64(num * 1024 * 1024 * 1024), nil
+	default:
+		return 0, fmt.Errorf("unknown size unit %q in %q", unit, s)
 	}
 }
 
