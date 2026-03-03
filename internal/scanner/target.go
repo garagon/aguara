@@ -8,30 +8,35 @@ import (
 	"strings"
 )
 
-// maxFileSize is the maximum file size (50 MB) that will be scanned.
+// DefaultMaxFileSize is the default maximum file size (50 MB) that will be scanned.
 // Files larger than this are silently skipped during discovery.
-const maxFileSize = 50 << 20
+const DefaultMaxFileSize = 50 << 20
 
 // Target represents a file to be scanned.
 type Target struct {
-	Path    string
-	RelPath string
-	Content []byte
+	Path        string
+	RelPath     string
+	Content     []byte
+	MaxFileSize int64 // 0 means use DefaultMaxFileSize
 }
 
 // LoadContent reads the file content into memory.
 // If Content is already populated (e.g. in-memory targets), it is a no-op.
-// Files larger than maxFileSize are rejected as defense-in-depth.
+// Files larger than the configured MaxFileSize (or DefaultMaxFileSize) are rejected.
 func (t *Target) LoadContent() error {
 	if t.Content != nil {
 		return nil
+	}
+	limit := t.MaxFileSize
+	if limit <= 0 {
+		limit = DefaultMaxFileSize
 	}
 	info, err := os.Stat(t.Path)
 	if err != nil {
 		return err
 	}
-	if info.Size() > maxFileSize {
-		return fmt.Errorf("file too large: %s (%d bytes, max %d)", t.Path, info.Size(), maxFileSize)
+	if info.Size() > limit {
+		return fmt.Errorf("file too large: %s (%d bytes, max %d)", t.Path, info.Size(), limit)
 	}
 	data, err := os.ReadFile(t.Path)
 	if err != nil {
@@ -49,11 +54,17 @@ func (t *Target) Lines() []string {
 // TargetDiscovery walks a directory and returns scannable targets.
 type TargetDiscovery struct {
 	IgnorePatterns []string
+	MaxFileSize    int64 // 0 means use DefaultMaxFileSize
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
 func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 	td.loadIgnoreFile(root)
+
+	limit := td.MaxFileSize
+	if limit <= 0 {
+		limit = DefaultMaxFileSize
+	}
 
 	var targets []*Target
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -72,7 +83,7 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			return nil
 		}
 		// skip oversized files
-		if info.Size() > maxFileSize {
+		if info.Size() > limit {
 			return nil
 		}
 		relPath, _ := filepath.Rel(root, path)
@@ -80,8 +91,9 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			return nil
 		}
 		targets = append(targets, &Target{
-			Path:    path,
-			RelPath: relPath,
+			Path:        path,
+			RelPath:     relPath,
+			MaxFileSize: td.MaxFileSize,
 		})
 		return nil
 	})

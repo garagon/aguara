@@ -251,6 +251,9 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	if len(cfg.ignorePatterns) > 0 {
 		s.SetIgnorePatterns(cfg.ignorePatterns)
 	}
+	if cfg.maxFileSize > 0 {
+		s.SetMaxFileSize(cfg.maxFileSize)
+	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())

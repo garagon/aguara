@@ -8,6 +8,7 @@ type scanConfig struct {
 	minSeverity    Severity
 	workers        int
 	ignorePatterns []string
+	maxFileSize    int64
 	category       string // only for ListRules
 }
 
@@ -53,6 +54,14 @@ func WithWorkers(n int) Option {
 func WithIgnorePatterns(patterns []string) Option {
 	return func(c *scanConfig) {
 		c.ignorePatterns = patterns
+	}
+}
+
+// WithMaxFileSize sets the maximum file size (in bytes) for scanned files.
+// Zero means use the default (50 MB).
+func WithMaxFileSize(bytes int64) Option {
+	return func(c *scanConfig) {
+		c.maxFileSize = bytes
 	}
 }
 

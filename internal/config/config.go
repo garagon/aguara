@@ -10,6 +10,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// DefaultMaxFileSize is the default maximum file size (50 MB).
+	DefaultMaxFileSize int64 = 50 << 20
+	// MinMaxFileSize is the minimum allowed value for max_file_size (1 MB).
+	MinMaxFileSize int64 = 1 << 20
+	// MaxMaxFileSize is the maximum allowed value for max_file_size (500 MB).
+	MaxMaxFileSize int64 = 500 << 20
+)
+
+// ValidateMaxFileSize checks that a max-file-size value is within bounds.
+// Returns the value clamped to [MinMaxFileSize, MaxMaxFileSize] or an error.
+func ValidateMaxFileSize(v int64) (int64, error) {
+	if v < MinMaxFileSize {
+		return 0, fmt.Errorf("max-file-size %d bytes is below minimum (%d bytes / 1 MB)", v, MinMaxFileSize)
+	}
+	if v > MaxMaxFileSize {
+		return 0, fmt.Errorf("max-file-size %d bytes exceeds maximum (%d bytes / 500 MB)", v, MaxMaxFileSize)
+	}
+	return v, nil
+}
+
 // RuleOverride allows per-rule severity or disable.
 type RuleOverride struct {
 	Severity string `yaml:"severity,omitempty"`
@@ -25,6 +46,7 @@ type Config struct {
 	Format        string                  `yaml:"format,omitempty"`
 	Rules         string                  `yaml:"rules,omitempty"`
 	RuleOverrides map[string]RuleOverride `yaml:"rule_overrides,omitempty"`
+	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
 }
 
 // Load reads the .aguara.yml or .aguara.yaml config file from the given path.
