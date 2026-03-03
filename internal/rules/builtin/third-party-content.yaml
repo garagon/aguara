@@ -46,6 +46,33 @@ examples:
     - "https://raw.githubusercontent.com/org/repo/v1.2.3/config.yaml"
     - "https://github.com/org/repo/blob/abc1234/file.md"
 ---
+id: THIRDPARTY_003
+name: "JavaScript eval or Function with external data"
+description: "Detects eval(), new Function(), or setTimeout(string) used with data from external sources"
+severity: HIGH
+category: third-party-content
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(eval|new\\s+Function|setTimeout|setInterval)\\s*\\(.{0,40}(response|fetch|request|data|body|payload|api|external)"
+  - type: regex
+    value: "(?i)(response|fetch|request|api)\\s*\\.?.{0,30}(eval|new\\s+Function|setTimeout|setInterval)\\s*\\("
+  - type: regex
+    value: "(?i)(eval|execute|run)\\s+.{0,20}(code|script|javascript)\\s+.{0,20}(from|returned|received|fetched)\\s+.{0,20}(api|server|external|remote|response)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(JSON\\.parse|json\\.loads)\\s*\\("
+  - type: regex
+    value: "(?i)(test|mock|stub|spec|fixture)\\s+.{0,10}(suite|file|case|data)"
+examples:
+  true_positive:
+    - "eval(response.data)"
+    - "Execute code returned from the external API response using eval"
+  false_positive:
+    - "JSON.parse(response.body)"
+    - "Use eval for local math expressions"
+---
 id: THIRDPARTY_004
 name: "External API response used without validation"
 description: "Detects patterns where external API responses are used directly without validation or sanitization"
@@ -121,3 +148,105 @@ examples:
     - "element.textContent = userInput"
     - "innerHTML = DOMPurify.sanitize(input)"
     - "f'<figcaption>{html.escape(prompt)}</figcaption>'"
+---
+id: THIRDPARTY_007
+name: "Unsafe deserialization from untrusted source"
+description: "Detects unsafe deserialization functions like pickle.loads, yaml.load, or unserialize with external data"
+severity: HIGH
+category: third-party-content
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(pickle\\.loads?|yaml\\.load|yaml\\.unsafe_load|unserialize|Marshal\\.load|readObject)\\s*\\(.{0,40}(input|request|url|body|payload|data|external|response|user)"
+  - type: regex
+    value: "(?i)(deserializ\\w*|unmarshal\\w*|unpickle\\w*)\\s+.{0,30}(untrusted|external|user|remote|input|request)"
+  - type: regex
+    value: "(?i)(pickle|yaml\\.load|unserialize|marshal)\\s+.{0,20}(from|with|using)\\s+.{0,20}(external|remote|untrusted|user)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(safe_load|SafeLoader|json\\.loads|JSON\\.parse|yaml\\.safe_load)"
+examples:
+  true_positive:
+    - "pickle.loads(request.data)"
+    - "Deserialize untrusted input from the user request"
+  false_positive:
+    - "yaml.safe_load(config_file)"
+    - "JSON.parse(response.body)"
+---
+id: THIRDPARTY_008
+name: "Script or asset loaded without integrity check"
+description: "Detects scripts or assets loaded from CDNs or external sources without subresource integrity hashes"
+severity: MEDIUM
+category: third-party-content
+targets: ["*.html", "*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)<script\\s+src\\s*=\\s*[\"']https?://[^\"']+[\"'][^>]*>"
+  - type: regex
+    value: "(?i)(cdn|jsdelivr|unpkg|cdnjs|cloudflare)\\.[a-z]+/.{0,80}@(latest|next|\\*)"
+  - type: regex
+    value: "(?i)load\\s+.{0,20}(script|asset|library|module)\\s+from\\s+.{0,20}(cdn|external|remote).{0,30}without\\s+.{0,10}(hash|integrity|sri|checksum)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)integrity\\s*=\\s*[\"']sha(256|384|512)-"
+examples:
+  true_positive:
+    - "<script src=\"https://cdn.example.com/lib.js\"></script>"
+    - "Load script from CDN without integrity hash verification"
+  false_positive:
+    - "<script src=\"https://cdn.example.com/lib.js\" integrity=\"sha384-abc123\"></script>"
+    - "Always add integrity hashes to external scripts"
+---
+id: THIRDPARTY_009
+name: "HTTP downgrade from HTTPS"
+description: "Detects fetching resources over plain HTTP when HTTPS should be used"
+severity: MEDIUM
+category: third-party-content
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(fetch|request|get|post|curl|wget|download)\\s+.{0,20}http://[a-zA-Z][a-zA-Z0-9.-]+\\.[a-z]{2,}"
+  - type: regex
+    value: "(?i)[\"']http://[a-zA-Z][a-zA-Z0-9.-]+\\.(com|org|net|io|dev|co)(/[^\"'\\s]*)?"
+  - type: regex
+    value: "(?i)(url|endpoint|server|api|host)\\s*[:=]\\s*[\"']?http://[a-zA-Z]"
+exclude_patterns:
+  - type: regex
+    value: "(?i)http://(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]|example\\.(com|org|net))"
+examples:
+  true_positive:
+    - "fetch http://api.real-service.com/data"
+    - "url: http://production-server.com/api"
+  false_positive:
+    - "fetch http://localhost:3000/api"
+    - "url: http://example.com/test"
+---
+id: THIRDPARTY_010
+name: "Unsigned plugin or extension loading"
+description: "Detects loading plugins, extensions, or modules from external sources without signature verification"
+severity: HIGH
+category: third-party-content
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(load|install|import|download)\\s+.{0,20}(plugin|extension|addon|add-on|module)\\s+.{0,20}(from|via|at)\\s+.{0,20}https?://"
+  - type: regex
+    value: "(?i)(plugin|extension|addon|module)\\s+.{0,20}(url|source|repo|download)\\s*[:=]\\s*[\"']?https?://"
+  - type: regex
+    value: "(?i)(dynamic|runtime|remote)\\s+(require|import|load)\\s+.{0,30}(plugin|extension|module|package)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(verify|signature|checksum|hash|gpg|sign|integrity)\\s+.{0,20}(plugin|extension|module|addon|package)"
+  - type: regex
+    value: "(?i)(plugin|extension|module|addon)\\s+.{0,20}(verify|signature|checksum|hash|signed|integrity)"
+examples:
+  true_positive:
+    - "Load plugin from https://external-source.com/plugin.so"
+    - "Dynamic import of remote plugin at runtime"
+  false_positive:
+    - "Verify the plugin signature before loading"
+    - "Load plugin from the local plugins directory"

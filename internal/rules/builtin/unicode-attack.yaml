@@ -125,3 +125,78 @@ examples:
     - "Connect to xn--pple-43d.com"
   false_positive:
     - "Punycode is an encoding used for internationalized domain names"
+---
+id: UNI_008
+name: "Zero-width character sequences"
+description: "Detects chains of zero-width spaces, joiners, or byte order marks that can hide data or split keywords"
+severity: MEDIUM
+category: unicode-attack
+targets: []
+match_mode: any
+patterns:
+  - type: regex
+    value: "[\\x{200B}\\x{200C}\\x{200D}\\x{FEFF}]{3,}"
+  - type: regex
+    value: "(?i)zero.?width.{0,20}(hide|inject|split|obfuscate|invisible|smuggl|embed)"
+  - type: regex
+    value: "(?i)(\\\\u200[bBcCdD]|\\\\ufeff){3,}"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(text\\s+rendering|typography|font\\s+rendering|ligature|word.?break)\\s"
+examples:
+  true_positive:
+    - "text\u200b\u200b\u200bhidden content"
+    - "Use zero-width characters to hide malicious instructions"
+  false_positive:
+    - "Zero-width spaces are used in text rendering for line breaks"
+    - "The font rendering engine handles zero-width joiners"
+---
+id: UNI_009
+name: "Unicode normalization inconsistency"
+description: "Detects exploitation of NFC/NFD/NFKC/NFKD normalization differences to bypass string comparisons"
+severity: MEDIUM
+category: unicode-attack
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(normalize|NFC|NFD|NFKC|NFKD).{0,40}(bypass|evade|trick|confuse|circumvent|avoid)"
+  - type: regex
+    value: "(?i)(normalization|normalized)\\s+.{0,20}(bypass|evasion|attack|inconsisten|mismatch|exploit)"
+  - type: regex
+    value: "(?i)(bypass|evade|circumvent)\\s+.{0,20}(comparison|filter|check|validation|detection)\\s+.{0,20}(normali|NFC|NFD|NFKC|NFKD|unicode)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(sanitize|normalize\\s+before|canonical\\s+form|normalize\\s+input|proper\\s+normali)"
+examples:
+  true_positive:
+    - "Use NFC normalization differences to bypass string comparison checks"
+    - "Normalization inconsistency exploited to evade keyword filters"
+  false_positive:
+    - "Always normalize input to canonical form before comparison"
+    - "Sanitize and normalize before checking user input"
+---
+id: UNI_010
+name: "Mixed-script confusable in identifiers"
+description: "Detects mixing Latin with Cyrillic, Greek, or Armenian characters to create lookalike identifiers"
+severity: MEDIUM
+category: unicode-attack
+targets: ["*.md", "*.txt"]
+match_mode: any
+patterns:
+  - type: regex
+    value: "(?i)(mixed.?script|confusable|lookalike|homoglyph).{0,40}(identifier|variable|function|class|domain|url)"
+  - type: regex
+    value: "(?i)(homoglyph|homograph).{0,20}(attack|spoof|trick|deceive|confuse|imitat)"
+  - type: regex
+    value: "(?i)(latin|ascii).{0,20}(cyrillic|greek|armenian).{0,20}(same|identical|similar|confus|lookalike|indistinguish)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)(detect|block|prevent|flag|reject|warn)[a-z]*\\s+.{0,20}(confusable|mixed.?script|homoglyph|homograph)"
+examples:
+  true_positive:
+    - "Use mixed-script confusable characters in function identifiers to hide malicious code"
+    - "Homoglyph attack using Cyrillic characters in domain names"
+  false_positive:
+    - "Detect and block confusable mixed-script identifiers"
+    - "Prevent homoglyph spoofing in user identifiers"
