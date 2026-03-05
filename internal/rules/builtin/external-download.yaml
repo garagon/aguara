@@ -26,6 +26,7 @@ severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Bundle required files locally instead of fetching at runtime. If remote fetch is needed, pin to a specific commit SHA."
 patterns:
   - type: regex
     value: "(?i)(WebFetch|fetch|curl|wget)\\s.{0,20}(load|read|retrieve|get)\\s"
@@ -46,6 +47,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Remove the -y flag to require user confirmation before installing packages. Pin to a specific version."
 patterns:
   - type: regex
     value: "(?i)npx\\s+[^\\n]*\\s-[a-z]*y"
@@ -66,6 +68,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Use project-local installs (npm install without -g, or virtualenvs) instead of global installation."
 patterns:
   - type: regex
     value: "(?i)npm\\s+install\\s+(-g|--global)\\s+[a-z@]"
@@ -100,6 +103,7 @@ severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Use project-local .env files or direnv instead of modifying global shell profiles."
 patterns:
   - type: regex
     value: "(?i)(echo|cat|append|add|write|>>)\\s.{0,60}~/?\\.?(bashrc|bash_profile|zshrc|zprofile|profile|zshenv)"
@@ -126,6 +130,7 @@ severity: HIGH
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Manually review and register MCP servers. Verify the package source and pin to a specific version before adding."
 patterns:
   - type: regex
     value: "(?i)claude\\s+mcp\\s+add\\s+"
@@ -145,6 +150,7 @@ severity: CRITICAL
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Use a package manager instead. If direct download is required, verify the SHA256 checksum before executing."
 patterns:
   - type: regex
     value: "(?i)(curl|wget)\\s+(-[a-zA-Z]+\\s+)*(-[oO]\\s+\\S+\\s+)?https?://[^\\s]+(releases|download|bin|dist|assets|binary|archive)"
@@ -166,6 +172,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Pin the package to a specific version (e.g., npx @scope/package@1.2.3) to prevent supply-chain attacks."
 patterns:
   - type: regex
     value: "(?i)npx\\s+@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*([\\s)`]|$)"
@@ -185,6 +192,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Use a virtual environment and pin dependencies in requirements.txt with hashes (pip install --require-hashes)."
 patterns:
   - type: regex
     value: "(?i)pip3?\\s+install\\s+[a-z@][a-z0-9._-]"
@@ -218,6 +226,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Pin to a specific version tag (e.g., @v1.2.3) instead of @latest. Verify the module with go mod verify."
 patterns:
   - type: regex
     value: "(?i)go\\s+install\\s+[a-z]+[./]\\S+@"
@@ -236,6 +245,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Document required packages in a manifest file. Use containerized environments to avoid host-level changes."
 patterns:
   - type: regex
     value: "(?i)brew\\s+install\\s+[a-z]"
@@ -270,6 +280,7 @@ severity: LOW
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Pin to a specific version (cargo install pkg@version, gem install pkg -v version) and verify checksums."
 patterns:
   - type: regex
     value: "(?i)cargo\\s+install\\s+[a-z][a-z0-9_-]+"
@@ -290,6 +301,7 @@ severity: CRITICAL
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Download the script first, inspect its contents, verify its checksum, then execute it separately."
 patterns:
   - type: regex
     value: "(?i)(curl|wget)\\s+[^|]+\\|\\s*(sudo\\s+)?(bash|sh|zsh|python|perl|ruby|node)\\b"
@@ -310,6 +322,7 @@ severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "List required tools as explicit prerequisites. Let the user install them manually rather than auto-installing."
 patterns:
   - type: regex
     value: "(?i)(which|command\\s+-v|type\\s+-p)\\s+\\S+\\s*(\\|\\||;|&&)\\s*(pip|npm|brew|apt|curl|wget|go)\\s+install"
@@ -331,6 +344,7 @@ severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Pin Docker images by digest (image@sha256:...) instead of mutable tags. Use only trusted registries."
 patterns:
   - type: regex
     value: "(?i)docker\\s+pull\\s+[a-z0-9][a-z0-9_./-]+"
@@ -352,6 +366,7 @@ severity: MEDIUM
 category: external-download
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Use a package manager when possible. If direct download is needed, verify SHA256 checksums before extracting."
 patterns:
   - type: regex
     value: "(?i)(curl|wget|download|fetch)\\s+.{0,60}https?://\\S+\\.(zip|tar\\.gz|tgz|tar\\.bz2|exe|msi|dmg|deb|rpm|pkg|AppImage|snap)\\b"

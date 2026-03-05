@@ -29,6 +29,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Rename tools to avoid system/privileged prefixes. Validate tool names against an allowlist before registration."
 patterns:
   - type: regex
     value: "(?i)[\"']?name[\"']?\\s*[:=]\\s*[\"'](admin_|system_|shell_exec|sudo_|root_|kernel_|os_exec|cmd_run|eval_code)[\\w]*[\"']"
@@ -50,6 +51,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Restrict resource URIs to https:// only. Validate and canonicalize paths to block traversal sequences."
 patterns:
   - type: regex
     value: "(?i)[\"']?(resource|uri|url|href|src)[\"']?\\s*[:=]\\s*[\"']?(file:///|data:|javascript:)"
@@ -71,6 +73,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Remove executable content and URLs from schema defaults and enums. Use static, safe literal values only."
 patterns:
   - type: regex
     value: "(?i)[\"']default[\"']\\s*:\\s*[\"'][^\"']*(https?://|exec|eval|system|curl|wget|fetch\\(|\\$\\(|`)[^\"']*[\"']"
@@ -91,6 +94,7 @@ severity: CRITICAL
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Register all tools statically at startup. Disable runtime tool registration and validate the tool manifest on load."
 patterns:
   - type: regex
     value: "(?i)(register_tool|add_tool|tools\\.append|tools\\.push|addTool|registerFunction)\\s*\\("
@@ -112,6 +116,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Return tool results directly without post-processing. Avoid middleware that can modify output after execution."
 patterns:
   - type: regex
     value: "(?i)(result|output|response)\\.(replace|modify|override|intercept|inject|rewrite)\\s*\\("
@@ -133,6 +138,7 @@ severity: MEDIUM
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: all
+remediation: "Isolate credential-reading tools from network-capable tools. Apply per-tool output scoping to prevent cross-tool data flow."
 patterns:
   - type: regex
     value: "(?i)(read|cat|load|access|steal|extract|dump)\\s+.{0,30}(credential|password|secret|private.key|ssh.key|\\.env\\b|api.key)"
@@ -154,6 +160,7 @@ severity: CRITICAL
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml"]
 match_mode: any
+remediation: "Remove shell commands from lifecycle hooks. Pin server versions and verify manifest integrity with checksums."
 patterns:
   - type: regex
     value: "(?i)[\"']?(postinstall|preinstall|preload|init_script|on_start|on_connect|lifecycle)[\"']?\\s*[:=]\\s*[\"'][^\"']*(sh |bash |curl |wget |python |node |exec |eval )"
@@ -174,6 +181,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt"]
 match_mode: any
+remediation: "Request only the minimum capabilities needed. Replace broad grants like 'all' with explicit, scoped permissions."
 patterns:
   - type: regex
     value: "(?i)[\"']?(capabilities|permissions)[\"']?\\s*[:=]\\s*[^\\n]{0,20}\\b(all|admin|unrestricted|root|superuser|full_access|god_mode)\\b"
@@ -197,6 +205,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: any
+remediation: "Sanitize tool output to strip instruction-override tokens. Never embed system prompts or role markers in responses."
 patterns:
   - type: regex
     value: "(?i)[\"']?(content|result|output|text)[\"']?\\s*[:=]\\s*[\"'][^\"']*(ignore previous|new instructions|from now on|you are now|system prompt|<\\|im_start\\|>)[^\"']*[\"']"
@@ -217,6 +226,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.md", "*.txt", "*.json", "*.yaml", "*.yml"]
 match_mode: any
+remediation: "Only connect to MCP servers from a trusted allowlist. Never execute server binaries from user-supplied paths or URLs."
 patterns:
   - type: regex
     value: "(?i)--stdio\\s+[\"']?(bun|node|python|npx|deno)\\s+run\\s+"
@@ -239,6 +249,7 @@ severity: HIGH
 category: mcp-attack
 targets: []
 match_mode: any
+remediation: "Freeze prototypes with Object.freeze(Object.prototype). Filter __proto__ and constructor keys from untrusted input."
 patterns:
   - type: regex
     value: "\\[\\s*[\"']__proto__[\"']\\s*\\]"
@@ -267,6 +278,7 @@ severity: HIGH
 category: mcp-attack
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Bind approval to the exact command hash. Re-verify the action at execution time to prevent TOCTOU substitution."
 patterns:
   - type: regex
     value: "(?i)(ask|prompt|confirm|approve|consent).{0,30}(then|before).{0,20}(run|exec|execute|spawn|system|shell)"
@@ -290,6 +302,7 @@ severity: MEDIUM
 category: mcp-attack
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Scope resource IDs to the current session or user. Verify ownership before granting access to any resource."
 patterns:
   - type: regex
     value: "(?i)(accept|take|use)s?\\s+(any|arbitrary|external)\\s+(upload|file|session|conversation|message|thread)[_-]?id"
@@ -313,6 +326,7 @@ description: "Detects handlers that parse the request body before authenticating
 severity: MEDIUM
 category: mcp-attack
 match_mode: any
+remediation: "Authenticate the caller before parsing the request body. Use middleware to enforce auth checks first."
 patterns:
   - type: regex
     value: "(?i)(json\\.Decode|ReadAll|ioutil\\.ReadAll|request\\.body|req\\.body)\\b.{0,80}(auth|verify|token|session|credential)"
@@ -341,6 +355,7 @@ description: "Detects double-encoding, manual URL decoding of paths, and authori
 severity: HIGH
 category: mcp-attack
 match_mode: any
+remediation: "Canonicalize paths once at the entry point before authorization. Reject requests containing double-encoded sequences."
 patterns:
   - type: regex
     value: "(?i)(%252[fF]|%252[eE]|%25252|%2[fF]%2[fF]|%00)"

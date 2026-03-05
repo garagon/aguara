@@ -50,6 +50,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Remove commands that transmit secrets externally. Use a secrets manager and restrict outbound network access."
 patterns:
   - type: regex
     value: "(?i)(send|post|upload|transmit|exfiltrate|forward)\\s+(the\\s+)?(secrets?|keys?|tokens?|credentials?|passwords?|private.keys?)\\s+(to|via|using|through)"
@@ -74,6 +75,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Remove DNS-based data exfiltration commands. Restrict DNS resolution to trusted resolvers only."
 patterns:
   - type: regex
     value: "(?i)(nslookup|dig|host)\\s+[\"']?\\$[({]"
@@ -95,6 +97,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Remove curl/wget commands that POST sensitive files. Use an API client with an allowlist of safe endpoints instead."
 patterns:
   - type: regex
     value: "(?i)curl\\s+.*(-d|--data)\\s+.*\\$\\((cat|base64|openssl)\\b"
@@ -120,6 +123,7 @@ severity: MEDIUM
 category: exfiltration
 targets: []
 match_mode: all
+remediation: "Do not pipe clipboard contents to network commands. If clipboard access is needed, keep data local."
 patterns:
   - type: regex
     value: "(?i)(pbcopy|pbpaste|xclip|xsel|clip\\.exe|Get-Clipboard|Set-Clipboard)"
@@ -138,6 +142,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Never pipe environment variables to network commands. Access only specific, non-secret variables when needed."
 patterns:
   - type: regex
     value: "(?i)(printenv|\\benv\\b|\\bset\\b)\\s*\\|\\s*(curl|wget|nc|netcat|base64)"
@@ -162,6 +167,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Remove file-to-network pipes. If data must be sent, use an allowlist of permitted files and destinations."
 patterns:
   - type: regex
     value: "(?i)(cat|type|get-content)\\s+[^|]+\\|\\s*(curl|wget|nc|netcat)"
@@ -183,6 +189,7 @@ severity: MEDIUM
 category: exfiltration
 targets: []
 match_mode: all
+remediation: "Remove the encode-and-send pattern. If encoding is needed, keep the output local and do not transmit it."
 patterns:
   - type: regex
     value: "(?i)(btoa|b64encode|base64\\s+encode|base64\\s+the)"
@@ -205,6 +212,7 @@ severity: MEDIUM
 category: exfiltration
 targets: []
 match_mode: any
+remediation: "Remove connections to non-standard ports. Use standard HTTPS (443) endpoints and restrict outbound ports via firewall."
 patterns:
   - type: regex
     value: "(?i)(nc|netcat|ncat)\\s+(-e\\s+)?[a-z0-9.-]+\\s+\\d{4,5}"
@@ -227,6 +235,7 @@ severity: HIGH
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Audit and remove commands that sync project code to external services. Use version control for code sharing instead."
 patterns:
   - type: regex
     value: "(?i)(curate|sync|upload|push|send)\\s+.{0,60}-f\\s+\\S+\\.(ts|js|py|go|rb|java|md)"
@@ -252,6 +261,7 @@ severity: MEDIUM
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Restrict email/messaging access to specific recipients via an allowlist. Require user confirmation before sending."
 patterns:
   - type: regex
     value: "(?i)(gmail|email|mail|smtp|imap)\\s+(send|compose|reply|forward)\\s+(--to|--subject|--body|--cc)"
@@ -277,6 +287,7 @@ severity: HIGH
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Separate credential access from network operations. Use a secrets manager and never transmit raw credentials."
 patterns:
   - type: regex
     value: "(?i)(read|access|open|load|cat)\\s+.{0,30}(credentials?|secrets?|password|private.key|\\.(ssh|env|aws|gnupg))"
@@ -298,6 +309,7 @@ severity: HIGH
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Never include credential variables in POST data. Use secure auth mechanisms (OAuth, mTLS) instead of raw secrets."
 patterns:
   - type: regex
     value: "(?i)(curl|wget)\\s+.{0,60}(-d|--data|--data-raw)\\s+.{0,30}\\$[({]?[A-Z_]*(SECRET|PASSWORD|CREDENTIAL|PRIVATE)[A-Z_]*[)}]?"
@@ -318,6 +330,7 @@ severity: MEDIUM
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Store screenshots locally only. If sharing is required, use an allowlisted destination with user consent."
 patterns:
   - type: regex
     value: "(?i)(screenshot|screen.?capture|screengrab|screen.?shot|capture.?screen|take.?screenshot)"
@@ -338,6 +351,7 @@ severity: MEDIUM
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Keep git history data local. If repo analysis is needed, run it on-device and do not transmit results externally."
 patterns:
   - type: regex
     value: "(?i)(git\\s+(log|diff|show|stash|blame|shortlog)|repository\\s+(history|content|data|code))"

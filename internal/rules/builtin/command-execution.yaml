@@ -51,6 +51,7 @@ severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Use subprocess with explicit argument lists instead of shell strings. Never pass unsanitized user input to os.system() or subprocess."
 patterns:
   - type: regex
     value: "(?i)subprocess\\.(run|call|Popen|check_output|check_call)\\s*\\("
@@ -72,6 +73,7 @@ severity: HIGH
 category: command-execution
 targets: ["*.md", "*.txt", "*.js", "*.ts"]
 match_mode: any
+remediation: "Use execFile or spawn with argument arrays instead of exec. Validate and sanitize all inputs passed to child_process methods."
 patterns:
   - type: regex
     value: "(?i)(child_process|require\\([\"']child_process[\"']\\))\\.(exec|execSync|execFile|spawn|spawnSync|fork)\\s*\\("
@@ -95,6 +97,7 @@ severity: HIGH
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Avoid passing dangerous commands via bash -c. Use direct command invocation with validated arguments and restrict file operations."
 patterns:
   - type: regex
     value: "(?i)(bash|sh)\\s+-c\\s+.{0,30}(rm\\s+-r|chmod\\s+[0-7]|cat\\s+/etc/|nc\\s+|netcat\\s+|\\|\\s*sh\\b)"
@@ -114,6 +117,7 @@ severity: HIGH
 category: command-execution
 targets: ["*.md", "*.txt", "*.java", "*.go"]
 match_mode: any
+remediation: "Use ProcessBuilder with explicit argument lists (Java) or exec.Command with separate args (Go). Never interpolate user input into commands."
 patterns:
   - type: regex
     value: "(?i)Runtime\\.getRuntime\\(\\)\\.exec\\s*\\("
@@ -137,6 +141,7 @@ severity: HIGH
 category: command-execution
 targets: ["*.md", "*.txt", "*.ps1"]
 match_mode: any
+remediation: "Replace Invoke-Expression with direct cmdlet calls. Use Start-Process with explicit argument lists and validate all inputs."
 patterns:
   - type: regex
     value: "(?i)Invoke-Expression\\s+"
@@ -162,6 +167,7 @@ severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Avoid injecting commands via tmux send-keys or screen stuff. Use direct process execution with proper argument handling instead."
 patterns:
   - type: regex
     value: "(?i)tmux\\s+send-keys\\s+"
@@ -182,6 +188,7 @@ severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Restrict agent shell tool access to an allowlist of safe commands. Avoid granting agents unrestricted shell execution capabilities."
 patterns:
   - type: regex
     value: "(?i)(use|run|execute|invoke)\\s+(the\\s+)?(Bash|shell|terminal)\\s+tool\\s+(to\\s+)?(run|execute|install|download)"
@@ -209,6 +216,7 @@ severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt", "*.json", "*.yaml", "*.yml"]
 match_mode: any
+remediation: "Sandbox code execution tools with restricted permissions. Use allowlists for permitted operations and enforce resource limits."
 patterns:
   - type: regex
     value: "(?i)[\"']?(executeCode|run_code|execute_code|eval_code|run_command|execute_command)[\"']?"
@@ -231,6 +239,7 @@ severity: MEDIUM
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Audit scheduled tasks for unauthorized commands. Use absolute paths, restrict permissions, and avoid fetching remote scripts in cron jobs."
 patterns:
   - type: regex
     value: "(?i)(crontab|cron\\s+job).{0,50}(curl|wget|python|bash|sh|node)\\s+"
@@ -254,6 +263,7 @@ severity: LOW
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Download scripts to a file first, inspect them, then execute. Never pipe curl/wget output directly into a shell interpreter."
 patterns:
   - type: regex
     value: "(?i)(curl|wget)\\s+[^|]+\\|\\s*(bash|sh|python|perl|ruby|node)\\b"
@@ -277,6 +287,7 @@ severity: LOW
 category: command-execution
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Review shell scripts before execution. Verify file integrity with checksums and ensure scripts come from trusted sources."
 patterns:
   - type: regex
     value: "(?i)\\b(bash|sh|zsh)\\s+\\S+\\.(sh|bash)\\b"
@@ -302,6 +313,7 @@ severity: HIGH
 category: command-execution
 targets: []
 match_mode: any
+remediation: "Block piping decoded content to shell interpreters. Validate decoded payloads before execution and reject obfuscated inputs."
 patterns:
   - type: regex
     value: "(?i)(printf|echo)\\s+[\"'][^\"']*\\\\x[0-9a-fA-F]{2}[^\"']*[\"']\\s*\\|\\s*(sh|bash|zsh|python|perl)\\b"
@@ -331,6 +343,7 @@ severity: HIGH
 category: command-execution
 targets: []
 match_mode: any
+remediation: "Download files explicitly, verify integrity, then execute. Avoid eval with remote content and block /dev/tcp reverse shell patterns."
 patterns:
   - type: regex
     value: "(?i)(bash|sh|zsh|source)\\s+<\\(\\s*(curl|wget|nc|ncat|fetch)"
