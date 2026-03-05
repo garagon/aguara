@@ -13,13 +13,14 @@
   <a href="https://pkg.go.dev/github.com/garagon/aguara"><img src="https://pkg.go.dev/badge/github.com/garagon/aguara.svg" alt="Go Reference"></a>
   <a href="https://github.com/garagon/aguara/releases"><img src="https://img.shields.io/github/v/release/garagon/aguara" alt="GitHub Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/garagon/aguara" alt="License"></a>
-  <a href="https://github.com/garagon/aguara/pkgs/container/aguara"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fgaragon%2Faguara-blue" alt="Docker"></a>
+  <a href="https://github.com/garagon/aguara/blob/main/Dockerfile"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fgaragon%2Faguara-blue?logo=docker" alt="Docker"></a>
   <a href="#installation"><img src="https://img.shields.io/badge/homebrew-garagon%2Ftap-orange" alt="Homebrew"></a>
 </p>
 
 <p align="center">
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#how-it-works">How It Works</a> &bull;
   <a href="#usage">Usage</a> &bull;
   <a href="#rules">Rules</a> &bull;
   <a href="#aguara-mcp">Aguara MCP</a> &bull;
@@ -33,11 +34,13 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **173+ rules across 13 categories** covering prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, and more.
-- **Confidence scoring** — every finding carries a confidence level (0.0–1.0), so you can prioritize triage and filter noise.
-- **Catches obfuscated attacks** that regex-only tools miss, using NLP-based markdown structure analysis and taint tracking.
+- **173 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
+- **4-layer analysis engine** — pattern matching, NLP-based markdown analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
+- **Confidence scoring** — every finding carries a confidence level (0.0-1.0), so you can prioritize triage and filter noise.
+- **Remediation guidance** — high-impact rules include actionable fix suggestions in the scan output.
 - **Deterministic** — same input, same output. Every scan is reproducible.
-- **CI-ready** — JSON, SARIF, and Markdown output. `--fail-on` threshold. `--changed` for incremental scans.
+- **CI-ready** — JSON, SARIF, and Markdown output. GitHub Action. `--fail-on` threshold. `--changed` for incremental scans.
+- **17 MCP clients supported** — auto-discover and scan configs from Claude Desktop, Cursor, VS Code, Windsurf, and 13 more.
 - **Extensible** — write custom rules in YAML. No code required.
 
 ## Installation
@@ -61,10 +64,17 @@ INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/
 brew install garagon/tap/aguara
 ```
 
-**Docker**:
+**Docker** (no install required):
 
 ```bash
+# Scan current directory
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
+
+# Scan with options
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
+
+# Use a specific version
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.5.0 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -95,7 +105,23 @@ aguara scan . --severity high
 
 # CI mode (exit 1 on high+, no color)
 aguara scan .claude/skills/ --ci
+
+# Verbose mode (show descriptions, confidence scores, remediation)
+aguara scan . --verbose
 ```
+
+## How It Works
+
+Aguara runs 4 analysis layers sequentially on every file. Each layer catches different attack patterns:
+
+| Layer | Engine | What it catches |
+|-------|--------|-----------------|
+| **Pattern Matcher** | Regex + contains matching | Known attack signatures, credential patterns, dangerous commands. Decodes base64/hex blobs and re-scans. Downgrades severity for matches inside markdown code blocks. |
+| **NLP Analyzer** | Goldmark AST walker | Prompt injection in markdown structure — instruction overrides, role-switching, and jailbreaks detected via keyword classification on headings, paragraphs, and list items. |
+| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations: reading private data + writing to external URLs, environment variables flowing to shell execution, API responses piped to eval. |
+| **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans — catches MCP servers that modify their behavior after initial review. Requires `--monitor` flag. |
+
+All layers report findings with severity, confidence score, matched text, file location with context lines, and remediation guidance when available.
 
 ## Usage
 
@@ -110,19 +136,29 @@ Flags:
       --workers int           Number of worker goroutines (default: NumCPU)
       --rules string          Additional rules directory
       --disable-rule strings  Rule IDs to disable (comma-separated, repeatable)
-      --max-file-size string  Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB–500MB)
+      --max-file-size string  Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB-500MB)
       --no-color              Disable colored output
       --no-update-check       Disable automatic update check (also: AGUARA_NO_UPDATE_CHECK=1)
       --fail-on string        Exit code 1 if findings at or above this severity
       --ci                    CI mode: --fail-on high --no-color
       --changed               Only scan git-changed files
-  -v, --verbose               Show rule descriptions and confidence scores
+      --monitor               Enable rug-pull detection: track file hashes across runs
+  -v, --verbose               Show rule descriptions, confidence scores, and remediation
   -h, --help                  Help
 ```
 
+### Output Formats
+
+| Format | Flag | Use case |
+|--------|------|----------|
+| **Terminal** | `--format terminal` (default) | Human-readable with color, severity dashboard, top-files chart |
+| **JSON** | `--format json` | Machine processing, API integration, custom tooling |
+| **SARIF** | `--format sarif` | GitHub Code Scanning, IDE integrations, SAST dashboards |
+| **Markdown** | `--format markdown` | GitHub Actions job summaries, PR comments |
+
 ### MCP Client Discovery
 
-Aguara can auto-detect MCP configurations across **17 clients**: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, and JetBrains.
+Aguara auto-detects MCP configurations across **17 clients**: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, and JetBrains.
 
 ```bash
 # List all detected MCP configs
@@ -166,6 +202,14 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 
 > **Note**: SARIF upload requires the `security-events: write` permission and is free for public repositories.
 
+#### Docker in CI
+
+```yaml
+# GitHub Actions with Docker (no install step)
+- name: Scan for security issues
+  run: docker run --rm -v "${{ github.workspace }}":/scan ghcr.io/garagon/aguara scan /scan --ci
+```
+
 #### Manual / GitLab CI
 
 ```yaml
@@ -194,7 +238,7 @@ Create `.aguara.yml` in your project root:
 ```yaml
 severity: medium
 fail_on: high
-max_file_size: 104857600  # 100 MB (default: 50 MB, range: 1 MB–500 MB)
+max_file_size: 104857600  # 100 MB (default: 50 MB, range: 1 MB-500 MB)
 ignore:
   - "vendor/**"
   - "node_modules/**"
@@ -219,7 +263,7 @@ api_key: "sk-test-1234567890"  # this finding is suppressed
 Ignore all previous instructions (this is a test)
 ```
 
-Supported formats:
+Supported directives:
 
 | Directive | Effect |
 |-----------|--------|
@@ -232,25 +276,41 @@ Supported formats:
 
 ## Rules
 
-173+ built-in rules across 13 categories:
+173 built-in rules across 13 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
 | Credential Leak | 20 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings, HMAC secrets |
 | Prompt Injection | 18 + NLP | Instruction overrides, role switching, delimiter injection, jailbreaks, event injection |
-| Supply Chain | 18 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation |
-| External Download | 17 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
+| Supply Chain | 19 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation |
+| External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
 | MCP Attack | 16 | Tool injection, name shadowing, canonicalization bypass, capability escalation |
 | Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
-| Command Execution | 16 | shell=True, eval, subprocess, child_process, PowerShell |
+| Command Execution | 15 | shell=True, eval, subprocess, child_process, PowerShell |
 | MCP Config | 11 | Unpinned npx servers, hardcoded secrets, Docker cap-add, host networking |
+| Indirect Injection | 11 | Fetch-and-follow, remote config, DB-driven instructions, webhook registration |
 | SSRF & Cloud | 11 | Cloud metadata, IMDS, Docker socket, internal IPs, redirect following |
-| Indirect Injection | 10 | Fetch-and-follow, remote config, DB-driven instructions, webhook registration |
 | Third-Party Content | 10 | eval with external data, unsafe deserialization, missing SRI, HTTP downgrade |
 | Unicode Attack | 10 | RTL override, bidi, homoglyphs, zero-width sequences, normalization bypass |
 | Toxic Flow | 3 | User input to dangerous sinks, env vars to shell, API to eval |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
+
+### Remediation Guidance
+
+High-impact rules include remediation text in their findings:
+
+```json
+{
+  "rule_id": "PROMPT_INJECTION_001",
+  "severity": 4,
+  "matched_text": "Ignore all previous instructions",
+  "remediation": "Remove instruction override text. If this is documentation, wrap it in a code block to indicate it is an example.",
+  "confidence": 0.85
+}
+```
+
+Use `--verbose` in terminal output or `--format json` to see remediation guidance.
 
 ### Custom Rules
 
@@ -262,6 +322,7 @@ severity: HIGH
 category: custom
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Replace internal API URLs with the public endpoint or environment variable."
 patterns:
   - type: regex
     value: "https?://internal\\.mycompany\\.com"
@@ -321,11 +382,12 @@ for _, client := range discovered.Clients {
 // List rules, optionally filtered
 rules := aguara.ListRules(aguara.WithCategory("prompt-injection"))
 
-// Get rule details
+// Get rule details with remediation
 detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
+fmt.Println(detail.Remediation)
 ```
 
-Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithRuleOverrides()`, `WithWorkers()`, `WithIgnorePatterns()`, `WithMaxFileSize()`.
+Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithRuleOverrides()`, `WithWorkers()`, `WithIgnorePatterns()`, `WithMaxFileSize()`, `WithCategory()`.
 
 ## Architecture
 
@@ -338,15 +400,15 @@ internal/
   engine/
     pattern/           Layer 1: regex/contains matcher + base64/hex decoder + code block awareness
     nlp/               Layer 2: goldmark AST walker, keyword classifier, injection detector
-    rugpull/           Rug-pull detection analyzer
-    toxicflow/         Taint tracking: source -> sink flow analysis
+    toxicflow/         Layer 3: taint tracking — source-to-sink flow analysis
+    rugpull/           Layer 4: rug-pull detection — SHA256-based tool description change tracking
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           173 embedded rules across 12 YAML files (go:embed)
-  scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
+  scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
   meta/                Post-processing: dedup, scoring, correlation, confidence adjustment
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader
-  state/               Persistence for incremental scanning
+  state/               Persistence for incremental scanning and rug-pull detection
   types/               Shared types (Finding, Severity, ScanResult)
 ```
 
