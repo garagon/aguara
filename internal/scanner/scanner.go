@@ -128,6 +128,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				if err := target.LoadContent(); err != nil {
 					continue
 				}
+				ignoreIndex := buildIgnoreIndex(parseIgnoreDirectives(target.Content))
 				for _, analyzer := range s.analyzers {
 					if ctx.Err() != nil {
 						return
@@ -137,9 +138,20 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 						continue
 					}
 					if len(results) > 0 {
-						mu.Lock()
-						findings = append(findings, results...)
-						mu.Unlock()
+						if ignoreIndex != nil {
+							var kept []Finding
+							for _, f := range results {
+								if !isIgnoredByInline(ignoreIndex, f.Line, f.RuleID) {
+									kept = append(kept, f)
+								}
+							}
+							results = kept
+						}
+						if len(results) > 0 {
+							mu.Lock()
+							findings = append(findings, results...)
+							mu.Unlock()
+						}
 					}
 				}
 				if s.onProgress != nil {

@@ -102,6 +102,50 @@ func TestScannerCorrelationBonus(t *testing.T) {
 	}
 }
 
+func TestScannerInlineIgnore(t *testing.T) {
+	dir := t.TempDir()
+	// Line 1: ignore directive for R1
+	// Line 2: content where R1 finding is on line 2
+	// Line 3: content where R2 finding is on line 3 (not ignored)
+	content := "# aguara-ignore-next-line R1\nmatched by R1\nmatched by R2\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte(content), 0644))
+
+	s := scanner.New(1)
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			{RuleID: "R1", Severity: types.SeverityHigh, Line: 2},
+			{RuleID: "R2", Severity: types.SeverityHigh, Line: 3},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1, "R1 on line 2 should be suppressed by ignore-next-line on line 1")
+	require.Equal(t, "R2", result.Findings[0].RuleID)
+}
+
+func TestScannerInlineIgnoreAll(t *testing.T) {
+	dir := t.TempDir()
+	content := "# aguara-ignore\nmatched by R1 and R2\nmatched by R3\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte(content), 0644))
+
+	s := scanner.New(1)
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			{RuleID: "R1", Severity: types.SeverityHigh, Line: 1},
+			{RuleID: "R2", Severity: types.SeverityMedium, Line: 1},
+			{RuleID: "R3", Severity: types.SeverityHigh, Line: 3},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1, "R1 and R2 on line 1 should be suppressed by aguara-ignore on same line")
+	require.Equal(t, "R3", result.Findings[0].RuleID)
+}
+
 func TestScannerContextCancellation(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))

@@ -27,5 +27,17 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - repository:
+      owner: garagon
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/garagon/aguara"
+    description: "Security scanner for AI agent skills and MCP servers"
+    license: "Apache-2.0"
+    test: |
+      system "#{bin}/aguara", "version"
+
 changelog:
   use: github-native
