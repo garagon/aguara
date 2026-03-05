@@ -3,6 +3,89 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] — 2026-03-05
+
+Remediation guidance on all 173 rules, Docker distribution, Homebrew tap, inline ignore comments, and 80% test coverage.
+
+### Added
+
+#### Remediation guidance — 173/173 rules
+
+Every detection rule now includes a `remediation` field with actionable fix guidance. Shown in `--verbose` terminal output, JSON, and SARIF.
+
+```json
+{
+  "rule_id": "PROMPT_INJECTION_001",
+  "remediation": "Remove instruction override text. If this is documentation, wrap it in a code block."
+}
+```
+
+#### Docker distribution
+
+- Multi-stage Dockerfile (golang:1.25-alpine → alpine:3.21)
+- GHCR publish workflow: `ghcr.io/garagon/aguara` with semver tags
+- `docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan`
+
+#### Homebrew tap
+
+```bash
+brew install garagon/tap/aguara
+```
+
+Auto-updated by GoReleaser on every release via `garagon/homebrew-tap`.
+
+#### Inline ignore comments
+
+Suppress findings directly in source files:
+
+| Directive | Effect |
+|-----------|--------|
+| `# aguara-ignore RULE_ID` | Suppress on same line |
+| `# aguara-ignore-next-line RULE_ID` | Suppress on next line |
+| `# aguara-ignore` | Suppress all rules on same line |
+| `<!-- aguara-ignore RULE_ID -->` | HTML/Markdown variant |
+| `// aguara-ignore RULE_ID` | C-style variant |
+
+#### `disable_rules` config shorthand
+
+New `.aguara.yml` field for simpler rule disabling:
+
+```yaml
+disable_rules:
+  - CRED_004
+  - EXFIL_005
+```
+
+#### GitHub Action for CI scanning
+
+```yaml
+- uses: garagon/aguara@v1
+```
+
+Scans repository, uploads SARIF to GitHub Code Scanning, optionally fails build.
+
+#### Pattern matcher deduplication
+
+Findings are now deduplicated by line within `match_mode: any` rules — multiple patterns matching the same line produce a single finding.
+
+### Improved
+
+- **Test coverage**: 76.3% → 80.0% global (NLP 69.1% → 93.2%, cmd 57.9% → 63.2%)
+- **447 test functions** across 28 test files
+- **NLP and scanner E2E benchmarks** added
+- **README**: new "How It Works" section, output formats table, Docker/CI docs, remediation examples
+
+### Fixed
+
+- **Regex pattern length limit**: patterns exceeding 4096 chars are rejected at compile time
+- **Community docs**: improved CODE_OF_CONDUCT.md and PR template
+
+### Summary
+
+**173 YAML rules + 4 dynamic** across 13 categories. 6 distribution channels. 80% test coverage. 447 tests. 0 lint issues.
+
+---
+
 ## [0.5.0] — 2026-03-03
 
 153 → **173 rules**, new confidence scoring system, configurable file-size limits, and security hardening improvements.
