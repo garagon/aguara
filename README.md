@@ -13,6 +13,7 @@
   <a href="https://pkg.go.dev/github.com/garagon/aguara"><img src="https://pkg.go.dev/badge/github.com/garagon/aguara.svg" alt="Go Reference"></a>
   <a href="https://github.com/garagon/aguara/releases"><img src="https://img.shields.io/github/v/release/garagon/aguara" alt="GitHub Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/garagon/aguara" alt="License"></a>
+  <a href="https://github.com/garagon/aguara/stargazers"><img src="https://img.shields.io/github/stars/garagon/aguara?style=flat" alt="GitHub Stars"></a>
   <a href="https://github.com/garagon/aguara/blob/main/Dockerfile"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fgaragon%2Faguara-blue?logo=docker" alt="Docker"></a>
   <a href="#installation"><img src="https://img.shields.io/badge/homebrew-garagon%2Ftap-orange" alt="Homebrew"></a>
 </p>
@@ -411,6 +412,24 @@ internal/
   state/               Persistence for incremental scanning and rug-pull detection
   types/               Shared types (Finding, Severity, ScanResult)
 ```
+
+## Comparison
+
+Aguara is purpose-built for AI agent content. General-purpose SAST tools target application source code, not the skill files, tool descriptions, and MCP configs that agents consume.
+
+| Feature | Aguara | Semgrep | Snyk Code | CodeQL |
+|---------|--------|---------|-----------|--------|
+| AI agent skill scanning | Yes | No | No | No |
+| MCP config analysis | Yes | No | No | No |
+| Prompt injection detection | Yes (18 rules + NLP) | No | No | No |
+| Rug-pull detection | Yes | No | No | No |
+| Taint tracking for skills | Yes | Yes | Yes | Yes |
+| Offline / no account | Yes | Partial | No | Partial |
+| Custom YAML rules | Yes | Yes | No | No |
+| SARIF output | Yes | Yes | Yes | Yes |
+| Free & open source | Yes (Apache 2.0) | Partial | No | Partial |
+
+Aguara complements traditional SAST - use Semgrep for your app code, Aguara for your agent skills and MCP servers.
 
 ## Contributing
 
