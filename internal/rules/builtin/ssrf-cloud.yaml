@@ -32,6 +32,7 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)https?://(10\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]{1,3}\\.[0-9]{1,3}|192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3})[:/]"
+remediation: "Validate and restrict outbound URLs against an allowlist of permitted hosts. Reject requests targeting RFC 1918 private IP ranges."
 examples:
   true_positive:
     - "curl http://10.0.0.1:8080/admin"
@@ -55,6 +56,7 @@ patterns:
     value: "/var/run/secrets/kubernetes.io"
   - type: regex
     value: "(?i)kubernetes\\.default\\.svc"
+remediation: "Restrict network policies to prevent unauthorized access to K8s services. Mount service account tokens as read-only and rotate them."
 examples:
   true_positive:
     - "curl http://my-service.default.svc.cluster.local/api"
@@ -76,6 +78,7 @@ patterns:
     value: "(?i)latest/meta-data/(iam|identity|credentials|hostname|instance-id)"
   - type: regex
     value: "(?i)latest/api/token"
+remediation: "Enforce IMDSv2 with a hop limit of 1. Restrict IAM roles to least-privilege and disable IMDS on instances that do not need it."
 examples:
   true_positive:
     - "curl -H 'X-aws-ec2-metadata-token: token' http://169.254.169.254/latest/meta-data/iam/security-credentials/"
@@ -97,6 +100,7 @@ patterns:
     value: "(?i)unix:///var/run/docker"
   - type: regex
     value: "(?i)(curl|wget|fetch)\\s+--unix-socket"
+remediation: "Remove Docker socket mounts from containers. Use the Docker API over TLS with certificate authentication instead."
 examples:
   true_positive:
     - "curl --unix-socket /var/run/docker.sock http://localhost/containers/json"
@@ -116,6 +120,7 @@ patterns:
     value: "(?i)(https?://|fetch|curl|wget|request)\\s*[\"'(]?https?://(0\\.0\\.0\\.0|\\[::1\\]|0177\\.0\\.0\\.1|2130706433|0x7f000001|127\\.0\\.0\\.1:)"
   - type: regex
     value: "(?i)https?://(0\\.0\\.0\\.0|\\[::1\\]|0177\\.0+\\.0+\\.0*1|2130706433)"
+remediation: "Resolve and normalize URLs before validation. Reject requests to loopback addresses in all representations (decimal, hex, octal)."
 examples:
   true_positive:
     - "curl http://0.0.0.0:8080/admin"
@@ -140,6 +145,7 @@ patterns:
     value: "(?i)login\\.microsoftonline\\.com.*/oauth2/token"
   - type: regex
     value: "(?i)https?://[^\\s]*/(iam/security-credentials|federation-token|access-token)[/\\s\"']"
+remediation: "Use workload identity federation instead of long-lived credentials. Restrict outbound access to cloud OAuth/STS endpoints via network policy."
 examples:
   true_positive:
     - "POST https://oauth2.googleapis.com/token"
@@ -162,6 +168,7 @@ patterns:
     value: "(?i)\\b(rebind|rbndr|taviso)\\.[a-z]+\\b"
   - type: regex
     value: "(?i)dns[_-]?rebind"
+remediation: "Validate resolved IPs after DNS lookup, not just hostnames. Block requests where DNS resolves to private/loopback ranges."
 examples:
   true_positive:
     - "curl http://127.0.0.1.nip.io/admin"
@@ -184,6 +191,7 @@ patterns:
     value: "(?i)https?://0x[0-9a-fA-F]{1,2}\\.0x[0-9a-fA-F]{1,2}\\."
   - type: regex
     value: "(?i)https?://0[0-7]{2,3}\\.[0-9]"
+remediation: "Parse and normalize IP addresses from all numeric formats (hex, octal, decimal) before applying SSRF blocklists."
 examples:
   true_positive:
     - "curl http://0xA9FEA9FE/latest/meta-data/"
@@ -209,6 +217,7 @@ patterns:
     value: "(?i)https?://\\[?2002:[0-9a-f:]+\\]?[:/]"
   - type: regex
     value: "(?i)https?://\\[?2001:0?000:[0-9a-f:]+\\]?[:/]"
+remediation: "Expand and normalize IPv6 addresses before validation. Block IPv4-mapped, NAT64, 6to4, and Teredo addresses targeting private ranges."
 examples:
   true_positive:
     - "curl http://[::ffff:169.254.169.254]/latest/meta-data/"
@@ -229,6 +238,7 @@ patterns:
     value: "(?i)https?://\\[?ff[0-9a-f]{2}:[0-9a-f:]+"
   - type: regex
     value: "(?i)(fetch|request|curl|wget|http\\.get|axios)\\s*\\(?\\s*[\"']?[^\"']*\\[?ff[0-9a-f]{2}:"
+remediation: "Block outbound requests to IPv6 multicast addresses (ff00::/8). Validate destination IPs are unicast and non-private before connecting."
 examples:
   true_positive:
     - "curl http://[ff02::1]:8080/admin"

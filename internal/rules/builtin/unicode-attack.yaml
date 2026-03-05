@@ -5,6 +5,7 @@ severity: HIGH
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Strip U+202E and U+202D right-to-left/left-to-right override characters from all input before processing."
 patterns:
   - type: regex
     value: "[\\x{202E}\\x{202D}]"
@@ -21,6 +22,7 @@ severity: HIGH
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Remove all Unicode bidirectional control characters (U+2066-U+2069, U+200E, U+200F) from untrusted input."
 patterns:
   - type: regex
     value: "[\\x{2066}\\x{2067}\\x{2068}\\x{2069}]"
@@ -39,6 +41,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Enforce ASCII-only characters in domain names and URLs. Use IDNA validation to reject mixed-script domains."
 patterns:
   - type: regex
     value: "[\\x{0400}-\\x{04FF}][a-zA-Z].*?(://|\\.com|\\.org|\\.net|\\.io)"
@@ -61,6 +64,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Strip Unicode separators (U+2028, U+2029), soft hyphens (U+00AD), and exotic whitespace before processing input."
 patterns:
   - type: regex
     value: "[\\x{2028}\\x{2029}]"
@@ -81,6 +85,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Apply Unicode NFC normalization and strip excess combining marks (U+0300-U+036F) beyond one per base character."
 patterns:
   - type: regex
     value: "[\\x{0300}-\\x{036F}]{3,}"
@@ -99,6 +104,7 @@ severity: HIGH
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Reject or strip all Unicode tag characters (U+E0001-U+E007F) from input; they have no legitimate use in tool definitions."
 patterns:
   - type: regex
     value: "[\\x{E0001}-\\x{E007F}]"
@@ -114,6 +120,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt"]
 match_mode: any
+remediation: "Replace punycode (xn--) domains with their decoded Unicode form and verify the intended domain. Use an allowlist for trusted domains."
 patterns:
   - type: regex
     value: "(?i)\\bxn--[a-z0-9-]+\\.[a-z]{2,}"
@@ -133,6 +140,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: []
 match_mode: any
+remediation: "Strip zero-width characters (U+200B-U+200D, U+FEFF) from all input. Filter at ingestion before any keyword matching."
 patterns:
   - type: regex
     value: "[\\x{200B}\\x{200C}\\x{200D}\\x{FEFF}]{3,}"
@@ -158,6 +166,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Normalize all input to NFC form before any string comparison, filtering, or security check."
 patterns:
   - type: regex
     value: "(?i)(normalize|NFC|NFD|NFKC|NFKD).{0,40}(bypass|evade|trick|confuse|circumvent|avoid)"
@@ -183,6 +192,7 @@ severity: MEDIUM
 category: unicode-attack
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Restrict identifiers to a single Unicode script. Reject or flag strings mixing Latin with Cyrillic, Greek, or Armenian."
 patterns:
   - type: regex
     value: "(?i)(mixed.?script|confusable|lookalike|homoglyph).{0,40}(identifier|variable|function|class|domain|url)"

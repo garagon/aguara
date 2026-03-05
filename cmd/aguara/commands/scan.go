@@ -294,9 +294,10 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 		}
 	}
 
-	if len(flagDisableRules) > 0 {
+	disableList := append(cfg.DisableRules, flagDisableRules...)
+	if len(disableList) > 0 {
 		disabled := make(map[string]bool)
-		for _, id := range flagDisableRules {
+		for _, id := range disableList {
 			disabled[strings.TrimSpace(id)] = true
 		}
 		compiled = rules.FilterByIDs(compiled, disabled)

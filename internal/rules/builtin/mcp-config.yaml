@@ -47,6 +47,7 @@ severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: all
+remediation: "Use environment variable references (e.g., $ENV_VAR) or a secrets manager instead of hardcoding credentials."
 patterns:
   - type: regex
     value: "(?i)[\"']env[\"']\\s*:\\s*\\{"
@@ -66,6 +67,7 @@ severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
+remediation: "Use localhost or 127.0.0.1 for MCP server URLs. If a remote server is required, verify its authenticity and use TLS."
 patterns:
   - type: regex
     value: "(?i)[\"'](serverUrl|url|transport_url)[\"']\\s*:\\s*[\"']https?://[a-zA-Z][a-zA-Z0-9-]*\\.[a-zA-Z][^\"']*[\"']"
@@ -92,6 +94,7 @@ severity: HIGH
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
+remediation: "Remove sudo from the MCP command. Run the server as an unprivileged user or configure permissions at the system level."
 patterns:
   - type: regex
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"']sudo[\"']"
@@ -112,6 +115,7 @@ severity: HIGH
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
+remediation: "Replace inline code execution with a dedicated script file. Point the MCP command to the script instead of using -e or -c flags."
 patterns:
   - type: regex
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"'](node|python[23]?|ruby|perl|bash|sh)[\"']\\s*,\\s*[\"']args[\"']\\s*:\\s*\\[[^\\]]*[\"'](-e|-c|--eval)[\"']"
@@ -132,6 +136,7 @@ severity: HIGH
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: any
+remediation: "Remove --privileged flag and host mounts. Use specific --cap-add flags and named volumes with minimal scope instead."
 patterns:
   - type: regex
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"']docker[\"'].{0,200}--privileged"
@@ -154,6 +159,7 @@ severity: MEDIUM
 category: mcp-config
 targets: ["*.md", "*.txt", "*.json"]
 match_mode: any
+remediation: "Remove -y/--yes/--auto-approve flags so users can review and confirm each installation step manually."
 patterns:
   - type: regex
     value: "(?i)(npx|clawhub|skills)\\s+\\S+\\s+(-[a-z]*y\\b|--yes\\b|--auto-approve\\b)"
@@ -178,6 +184,7 @@ severity: MEDIUM
 category: mcp-config
 targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
 match_mode: any
+remediation: "Mount workspace volumes as read-only (:ro) and use a separate writable volume for output only."
 patterns:
   - type: regex
     value: "(?i)[\"']?[/~.][^\"'\\s]*:[^\"'\\s]*:rw[\"']?"
@@ -210,6 +217,7 @@ severity: HIGH
 category: mcp-config
 targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
 match_mode: any
+remediation: "Remove --cap-add and use --cap-drop=ALL, then add back only the minimal capabilities the server actually needs."
 patterns:
   - type: regex
     value: "(?i)--cap-add[\\s=]\\s*(SYS_ADMIN|SYS_PTRACE|NET_ADMIN|ALL|DAC_OVERRIDE|SYS_RAWIO|NET_RAW)"
@@ -235,6 +243,7 @@ severity: MEDIUM
 category: mcp-config
 targets: ["*.json", "*.yaml", "*.yml", "*.toml"]
 match_mode: any
+remediation: "Use bridge networking (default) or --network=none. Expose only required ports with -p instead of granting full host network."
 patterns:
   - type: regex
     value: "(?i)--(network|net)[\\s=]+host\\b"

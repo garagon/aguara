@@ -108,6 +108,21 @@ func TestLoadConfigMaxFileSize(t *testing.T) {
 	require.Equal(t, int64(104857600), cfg.MaxFileSize)
 }
 
+func TestLoadConfigDisableRules(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`
+disable_rules:
+  - CRED_004
+  - EXFIL_005
+  - PROMPT_INJECTION_001
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguara.yml"), data, 0644))
+
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"CRED_004", "EXFIL_005", "PROMPT_INJECTION_001"}, cfg.DisableRules)
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()

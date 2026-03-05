@@ -5,6 +5,7 @@ severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Pin remote resources to a specific version or commit hash and validate content integrity before use."
 patterns:
   - type: regex
     value: "(?i)(fetch|load|download|read|get|retrieve)\\s+.{0,50}https?://"
@@ -33,6 +34,7 @@ severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Reference a specific commit SHA or tagged release instead of a mutable branch name like main or master."
 patterns:
   - type: regex
     value: "(?i)raw\\.githubusercontent\\.com/[^/]+/[^/]+/(main|master|dev|develop)/"
@@ -53,6 +55,7 @@ severity: HIGH
 category: third-party-content
 targets: []
 match_mode: any
+remediation: "Never pass external data to eval() or new Function(). Parse responses with JSON.parse() and use structured APIs instead."
 patterns:
   - type: regex
     value: "(?i)(eval|new\\s+Function|setTimeout|setInterval)\\s*\\(.{0,40}(response|fetch|request|data|body|payload|api|external)"
@@ -80,6 +83,7 @@ severity: LOW
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: all
+remediation: "Validate and sanitize all external API responses against an expected schema before processing."
 patterns:
   - type: regex
     value: "(?i)(api|endpoint|service|webhook)\\s+.{0,40}(response|result|output|data|body|payload)"
@@ -106,6 +110,7 @@ severity: HIGH
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Bundle prompt templates locally and version-control them. If remote loading is required, pin by hash and verify integrity."
 patterns:
   - type: regex
     value: "(?i)(load|fetch|download|pull|import)\\s+.{0,30}(prompt|template|system.?message|instruction).{0,20}(from|via|using)\\s+.{0,20}(url|http|api|remote|server)"
@@ -126,6 +131,7 @@ severity: HIGH
 category: third-party-content
 targets: []
 match_mode: any
+remediation: "Use textContent instead of innerHTML, or sanitize with DOMPurify/html.escape() before inserting into the DOM."
 patterns:
   - type: regex
     value: "(?i)\\.innerHTML\\s*[+=]\\s*[a-zA-Z_$]"
@@ -156,6 +162,7 @@ severity: HIGH
 category: third-party-content
 targets: []
 match_mode: any
+remediation: "Use safe alternatives: yaml.safe_load(), JSON.parse(), or json.loads(). Never deserialize untrusted data with pickle or Marshal."
 patterns:
   - type: regex
     value: "(?i)(pickle\\.loads?|yaml\\.load|yaml\\.unsafe_load|unserialize|Marshal\\.load|readObject)\\s*\\(.{0,40}(input|request|url|body|payload|data|external|response|user)"
@@ -181,6 +188,7 @@ severity: MEDIUM
 category: third-party-content
 targets: ["*.html", "*.md", "*.txt"]
 match_mode: any
+remediation: "Add a Subresource Integrity (SRI) hash attribute (integrity=\"sha384-...\") to all external script and link tags."
 patterns:
   - type: regex
     value: "(?i)<script\\s+src\\s*=\\s*[\"']https?://[^\"']+[\"'][^>]*>"
@@ -206,6 +214,7 @@ severity: MEDIUM
 category: third-party-content
 targets: []
 match_mode: any
+remediation: "Replace http:// with https:// for all external resource URLs to prevent man-in-the-middle attacks."
 patterns:
   - type: regex
     value: "(?i)(fetch|request|get|post|curl|wget|download)\\s+.{0,20}http://[a-zA-Z][a-zA-Z0-9.-]+\\.[a-z]{2,}"
@@ -231,6 +240,7 @@ severity: HIGH
 category: third-party-content
 targets: ["*.md", "*.txt"]
 match_mode: any
+remediation: "Verify plugin signatures or checksums before loading. Use a curated allowlist and pin plugins to specific versions."
 patterns:
   - type: regex
     value: "(?i)(load|install|import|download)\\s+.{0,20}(plugin|extension|addon|add-on|module)\\s+.{0,20}(from|via|at)\\s+.{0,20}https?://"

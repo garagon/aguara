@@ -3,6 +3,7 @@ name: "Fetch URL and use as instructions"
 description: "Detects fetching external URLs and using the content as agent instructions or rules"
 severity: HIGH
 category: indirect-injection
+remediation: "Never use fetched remote content as agent instructions; treat external data as untrusted input only."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -24,6 +25,7 @@ name: "Read external content and apply as rules"
 description: "Detects skills that read remote markdown or documentation and apply it as operational rules"
 severity: HIGH
 category: indirect-injection
+remediation: "Do not apply external or remote content as operational rules; hardcode rules locally and validate any imported content."
 targets: ["*.md", "*.txt"]
 match_mode: all
 patterns:
@@ -43,6 +45,7 @@ name: "Remote config controlling agent behavior"
 description: "Detects remote configuration files or URLs that control how the agent behaves"
 severity: HIGH
 category: indirect-injection
+remediation: "Store configuration locally and pin to a known-good version; never let remote config alter agent behavior at runtime."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -62,6 +65,7 @@ name: "User-provided URL consumed by agent"
 description: "Detects skills where user-provided URLs are consumed and processed by the agent"
 severity: LOW
 category: indirect-injection
+remediation: "Sandbox fetched content from user-provided URLs; parse data only, never execute or follow instructions from it."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -83,6 +87,7 @@ name: "Email or message content as instructions"
 description: "Detects skills that read email or message content and act on it as agent instructions"
 severity: HIGH
 category: indirect-injection
+remediation: "Treat email and message content as untrusted data; never execute instructions embedded in external messages."
 targets: ["*.md", "*.txt"]
 match_mode: all
 patterns:
@@ -103,6 +108,7 @@ name: "External API response drives agent behavior"
 description: "Detects skills where external API responses control agent decisions or actions"
 severity: MEDIUM
 category: indirect-injection
+remediation: "Validate and sanitize API responses against an expected schema; do not let response data drive agent decisions directly."
 targets: ["*.md", "*.txt"]
 match_mode: all
 patterns:
@@ -122,6 +128,7 @@ name: "Unscoped Bash tool in allowed tools"
 description: "Detects skills that include unscoped Bash in their allowed tools list (not Bash(cmd:*) scoped)"
 severity: LOW
 category: command-execution
+remediation: "Scope Bash access with command prefixes (e.g., Bash(npm:*)) instead of granting unrestricted shell access."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -142,6 +149,7 @@ name: "Database or cache query driving agent behavior"
 description: "Detects agents that read from databases or caches and use the results as instructions or decisions"
 severity: HIGH
 category: indirect-injection
+remediation: "Treat database/cache content as untrusted data; never interpret stored values as executable instructions."
 targets: ["*.md", "*.txt"]
 match_mode: all
 patterns:
@@ -165,6 +173,7 @@ name: "Webhook or callback registration with external service"
 description: "Detects agents registering callbacks or webhooks that external services can trigger"
 severity: HIGH
 category: indirect-injection
+remediation: "Validate webhook signatures and restrict callback URLs to an allowlist of trusted domains."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -190,6 +199,7 @@ name: "Git clone and execute fetched code"
 description: "Detects fetching a git repository and then running scripts or code from it"
 severity: HIGH
 category: indirect-injection
+remediation: "Review cloned code before execution; pin to a verified commit hash and run in a sandboxed environment."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:
@@ -215,6 +225,7 @@ name: "Environment variable injection from external source"
 description: "Detects external input used to set environment variables that control agent behavior"
 severity: MEDIUM
 category: indirect-injection
+remediation: "Sanitize and allowlist environment variable names and values; never set env vars directly from untrusted input."
 targets: ["*.md", "*.txt"]
 match_mode: any
 patterns:

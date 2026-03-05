@@ -45,6 +45,7 @@ type Config struct {
 	FailOn        string                  `yaml:"fail_on,omitempty"`
 	Format        string                  `yaml:"format,omitempty"`
 	Rules         string                  `yaml:"rules,omitempty"`
+	DisableRules  []string                `yaml:"disable_rules,omitempty"`
 	RuleOverrides map[string]RuleOverride `yaml:"rule_overrides,omitempty"`
 	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
 }
