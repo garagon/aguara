@@ -53,6 +53,12 @@ INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/
 
 ### Alternative methods
 
+**Homebrew** (macOS/Linux):
+
+```bash
+brew install garagon/tap/aguara
+```
+
 **From source** (requires Go 1.25+):
 
 ```bash
@@ -190,6 +196,31 @@ rule_overrides:
   EXTDL_004:
     disabled: true
 ```
+
+### Inline Ignore
+
+Suppress specific findings directly in your source files using inline comments:
+
+```yaml
+# aguara-ignore CRED_004
+api_key: "sk-test-1234567890"  # this finding is suppressed
+```
+
+```markdown
+<!-- aguara-ignore-next-line PROMPT_INJECTION_001 -->
+Ignore all previous instructions (this is a test)
+```
+
+Supported formats:
+
+| Directive | Effect |
+|-----------|--------|
+| `# aguara-ignore RULE_ID` | Suppress rule on the same line |
+| `# aguara-ignore RULE_ID, RULE_ID2` | Suppress multiple rules on the same line |
+| `# aguara-ignore-next-line RULE_ID` | Suppress rule on the next line |
+| `# aguara-ignore` | Suppress all rules on the same line |
+| `<!-- aguara-ignore RULE_ID -->` | HTML/Markdown comment variant |
+| `// aguara-ignore RULE_ID` | C-style comment variant |
 
 ## Rules
 
