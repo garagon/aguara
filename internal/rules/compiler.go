@@ -57,8 +57,15 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 	return compiled, nil
 }
 
+// maxPatternLength is the maximum length of a single regex or contains pattern value.
+// Protects against excessive memory use during regex compilation from custom rules.
+const maxPatternLength = 4096
+
 func compilePattern(p RawPattern) (CompiledPattern, error) {
 	cp := CompiledPattern{Type: p.Type, Value: p.Value}
+	if len(p.Value) > maxPatternLength {
+		return cp, fmt.Errorf("pattern too long (%d chars, max %d)", len(p.Value), maxPatternLength)
+	}
 	switch p.Type {
 	case PatternRegex:
 		re, err := regexp.Compile(p.Value)
