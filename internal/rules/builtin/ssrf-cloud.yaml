@@ -14,6 +14,7 @@ patterns:
     value: "(?i)https?://169\\.254\\.170\\.2"
   - type: regex
     value: "(?i)https?://(metadata\\.azure\\.com|instance-data)"
+remediation: "Block requests to cloud metadata endpoints (169.254.169.254). Use IMDS v2 with hop limit if metadata access is required."
 examples:
   true_positive:
     - "Fetch http://169.254.169.254/latest/meta-data/"

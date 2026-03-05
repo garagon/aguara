@@ -71,6 +71,7 @@ type RuleDetail struct {
 	Severity       string   `json:"severity"`
 	Category       string   `json:"category"`
 	Description    string   `json:"description"`
+	Remediation    string   `json:"remediation,omitempty"`
 	Patterns       []string `json:"patterns"`
 	TruePositives  []string `json:"true_positives"`
 	FalsePositives []string `json:"false_positives"`
@@ -179,6 +180,7 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 		Severity:       found.Severity.String(),
 		Category:       found.Category,
 		Description:    found.Description,
+		Remediation:    found.Remediation,
 		Patterns:       patterns,
 		TruePositives:  found.Examples.TruePositive,
 		FalsePositives: found.Examples.FalsePositive,

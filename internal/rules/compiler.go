@@ -35,6 +35,7 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		Category:    raw.Category,
 		Targets:     raw.Targets,
 		MatchMode:   mode,
+		Remediation: raw.Remediation,
 		Examples:    raw.Examples,
 	}
 

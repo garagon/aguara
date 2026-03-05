@@ -13,6 +13,8 @@
   <a href="https://pkg.go.dev/github.com/garagon/aguara"><img src="https://pkg.go.dev/badge/github.com/garagon/aguara.svg" alt="Go Reference"></a>
   <a href="https://github.com/garagon/aguara/releases"><img src="https://img.shields.io/github/v/release/garagon/aguara" alt="GitHub Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/garagon/aguara" alt="License"></a>
+  <a href="https://github.com/garagon/aguara/pkgs/container/aguara"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fgaragon%2Faguara-blue" alt="Docker"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/homebrew-garagon%2Ftap-orange" alt="Homebrew"></a>
 </p>
 
 <p align="center">
@@ -57,6 +59,12 @@ INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/
 
 ```bash
 brew install garagon/tap/aguara
+```
+
+**Docker**:
+
+```bash
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 ```
 
 **From source** (requires Go 1.25+):

@@ -61,9 +61,15 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
+	// Deduplicate findings by line to avoid reporting the same line from
+	// multiple patterns. Track which lines already have a finding.
+	seenLines := make(map[int]bool)
 	for _, pat := range rule.Patterns {
 		hits := matchPattern(pat, content, lines)
 		for _, hit := range hits {
+			if seenLines[hit.line] {
+				continue
+			}
 			if isExcluded(rule.ExcludePatterns, lines, hit.line) {
 				continue
 			}
@@ -72,12 +78,14 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 			if inCB {
 				sev = types.DowngradeSeverity(sev)
 			}
+			seenLines[hit.line] = true
 			findings = append(findings, scanner.Finding{
 				RuleID:      rule.ID,
 				RuleName:    rule.Name,
 				Severity:    sev,
 				Category:    rule.Category,
 				Description: rule.Description,
+				Remediation: rule.Remediation,
 				FilePath:    target.RelPath,
 				Line:        hit.line,
 				MatchedText: hit.text,
@@ -121,6 +129,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 		Severity:    sev,
 		Category:    rule.Category,
 		Description: rule.Description,
+		Remediation: rule.Remediation,
 		FilePath:    target.RelPath,
 		Line:        firstHit.line,
 		MatchedText: strings.Join(matchedParts, " + "),

@@ -10,6 +10,7 @@ patterns:
     value: "(?i)subprocess\\.(run|call|Popen|check_output|check_call)\\s*\\([^)]*shell\\s*=\\s*True"
   - type: regex
     value: "(?i)shell\\s*[=:]\\s*(true|True|1)\\b"
+remediation: "Avoid shell=True and eval(). Use subprocess with explicit argument lists. Validate all inputs before execution."
 examples:
   true_positive:
     - "subprocess.run(cmd, shell=True)"
@@ -32,6 +33,7 @@ patterns:
     value: "(?i)\\beval\\s*\\(\\s*[\"'$a-z]"
   - type: regex
     value: "(?i)\\bexec\\s*\\(\\s*[\"'$a-z(f]"
+remediation: "Replace eval/exec with safer alternatives. Parse structured data with json.loads() or ast.literal_eval()."
 examples:
   true_positive:
     - "eval(user_input)"

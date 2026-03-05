@@ -76,6 +76,7 @@ type Finding struct {
 	Context     []ContextLine `json:"context,omitempty"`
 	Score       float64       `json:"score,omitempty"`
 	Confidence  float64       `json:"confidence,omitempty"`
+	Remediation string        `json:"remediation,omitempty"`
 	Analyzer    string        `json:"analyzer"`
 	InCodeBlock bool          `json:"in_code_block,omitempty"`
 }

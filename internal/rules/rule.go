@@ -47,6 +47,7 @@ type RawRule struct {
 	MatchMode       string       `yaml:"match_mode"`
 	Patterns        []RawPattern `yaml:"patterns"`
 	ExcludePatterns []RawPattern `yaml:"exclude_patterns"`
+	Remediation     string       `yaml:"remediation"`
 	Examples        RawExamples  `yaml:"examples"`
 }
 
@@ -68,5 +69,6 @@ type CompiledRule struct {
 	MatchMode       MatchMode
 	Patterns        []CompiledPattern
 	ExcludePatterns []CompiledPattern
+	Remediation     string
 	Examples        RawExamples
 }
