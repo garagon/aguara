@@ -1,16 +1,9 @@
-## Description
+## Summary
 
-<!-- What does this PR do? Why is it needed? -->
+<!-- Brief description of what this PR does and why -->
 
-## Changes
+## Test plan
 
-<!-- List the key changes -->
-
--
-
-## Checklist
-
-- [ ] Tests pass (`make test`)
-- [ ] No lint issues (`make lint`)
-- [ ] CHANGELOG.md updated (if user-facing change)
-- [ ] No breaking changes (or clearly documented)
+- [ ] `make test` passes
+- [ ] `make lint` passes
+- [ ] Manual testing (describe below if applicable)
