@@ -466,3 +466,49 @@ examples:
     - "Verify the PID is still running via /proc/PID/stat before trusting the lock"
     - "Use FindProcess to validate the lock holder is alive"
     - "Check if the process is alive before reusing the lock"
+---
+id: SUPPLY_020
+name: "GitHub Actions untrusted input injection"
+description: "Detects user-controlled GitHub Actions event data used directly in run blocks, which enables script injection"
+severity: HIGH
+category: supply-chain
+targets: ["*.yml", "*.yaml", "*.md", "*.txt"]
+match_mode: any
+remediation: "Assign the expression to an environment variable first, then reference the env var in the run block. Never interpolate user-controlled event data directly in shell commands."
+patterns:
+  - type: regex
+    value: "\\$\\{\\{\\s*github\\.event\\.(issue|pull_request|discussion|comment|review|review_comment)\\.(title|body)"
+  - type: regex
+    value: "\\$\\{\\{\\s*github\\.event\\.head_commit\\.message"
+  - type: regex
+    value: "\\$\\{\\{\\s*github\\.event\\.commits\\[.*\\]\\.message"
+examples:
+  true_positive:
+    - "run: echo ${{ github.event.issue.title }}"
+    - "run: echo \"${{ github.event.pull_request.body }}\""
+    - "run: git commit -m \"${{ github.event.head_commit.message }}\""
+  false_positive:
+    - "run: echo ${{ github.sha }}"
+    - "run: echo ${{ github.repository }}"
+    - "if: github.event.issue.title == 'deploy'"
+---
+id: SUPPLY_021
+name: "GitHub Actions overly broad permissions"
+description: "Detects GitHub Actions workflows with write-all or overly permissive token permissions"
+severity: MEDIUM
+category: supply-chain
+targets: ["*.yml", "*.yaml", "*.md", "*.txt"]
+match_mode: any
+remediation: "Use the principle of least privilege. Declare only the specific permissions needed (e.g., contents: read, issues: write) instead of write-all."
+patterns:
+  - type: regex
+    value: "(?i)permissions\\s*:\\s*write-all"
+  - type: regex
+    value: "(?i)permissions\\s*:\\s*\\{[^}]*write-all[^}]*\\}"
+examples:
+  true_positive:
+    - "permissions: write-all"
+    - "permissions: {write-all}"
+  false_positive:
+    - "permissions: contents: read"
+    - "permissions: issues: write"
