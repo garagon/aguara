@@ -620,6 +620,29 @@ func TestFormatMarkdown_MultipleClients(t *testing.T) {
 	}
 }
 
+func TestFormatMarkdown_PipeInPath(t *testing.T) {
+	result := &Result{
+		Clients: []ClientResult{
+			{
+				Client: "cursor",
+				Path:   "/home/user/my|config/mcp.json",
+				Servers: []MCPServer{
+					{Name: "test", Command: "node"},
+				},
+			},
+		},
+	}
+
+	output := FormatMarkdown(result)
+
+	if strings.Contains(output, "my|config") {
+		t.Error("unescaped pipe character in markdown table would break rendering")
+	}
+	if !strings.Contains(output, `my\|config`) {
+		t.Error("expected escaped pipe in path")
+	}
+}
+
 func TestClientDisplayName_AllClients(t *testing.T) {
 	expected := map[string]string{
 		"claude-desktop": "Claude Desktop",

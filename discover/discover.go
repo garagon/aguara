@@ -152,7 +152,8 @@ func FormatMarkdown(result *Result) string {
 	b.WriteString("|--------|------------|--------|\n")
 
 	for _, cr := range result.Clients {
-		fmt.Fprintf(&b, "| %s | `%s` | %d |\n", clientDisplayName(cr.Client), cr.Path, len(cr.Servers))
+		escapedPath := strings.ReplaceAll(cr.Path, "|", "\\|")
+		fmt.Fprintf(&b, "| %s | `%s` | %d |\n", clientDisplayName(cr.Client), escapedPath, len(cr.Servers))
 	}
 
 	b.WriteString("\n")
