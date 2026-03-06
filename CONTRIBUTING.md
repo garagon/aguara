@@ -40,7 +40,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Taint tracking: source -> sink flow analysis
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           148 embedded rules across 12 YAML files (go:embed)
+    builtin/           177 embedded rules across 12 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
@@ -61,6 +61,7 @@ severity: HIGH             # CRITICAL, HIGH, MEDIUM, LOW, INFO
 category: exfiltration     # Must match an existing category
 targets: ["*.md", "*.txt", "*.json"]
 match_mode: any            # "any" = OR, "all" = AND across patterns
+remediation: "How to fix the issue found by this rule."
 patterns:
   - type: regex            # "regex" or "contains"
     value: "pattern here"

@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **173 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
+- **177 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
 - **4-layer analysis engine** — pattern matching, NLP-based markdown analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
 - **Confidence scoring** — every finding carries a confidence level (0.0-1.0), so you can prioritize triage and filter noise.
 - **Remediation guidance** — high-impact rules include actionable fix suggestions in the scan output.
@@ -277,13 +277,13 @@ Supported directives:
 
 ## Rules
 
-173 built-in rules across 13 categories:
+177 built-in rules across 13 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
-| Credential Leak | 20 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings, HMAC secrets |
+| Credential Leak | 22 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings, HMAC secrets |
 | Prompt Injection | 18 + NLP | Instruction overrides, role switching, delimiter injection, jailbreaks, event injection |
-| Supply Chain | 19 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation |
+| Supply Chain | 21 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation |
 | External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
 | MCP Attack | 16 | Tool injection, name shadowing, canonicalization bypass, capability escalation |
 | Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
@@ -404,7 +404,7 @@ internal/
     toxicflow/         Layer 3: taint tracking — source-to-sink flow analysis
     rugpull/           Layer 4: rug-pull detection — SHA256-based tool description change tracking
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           173 embedded rules across 12 YAML files (go:embed)
+    builtin/           177 embedded rules across 12 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
   meta/                Post-processing: dedup, scoring, correlation, confidence adjustment
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
