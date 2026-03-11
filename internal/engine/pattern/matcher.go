@@ -12,16 +12,47 @@ import (
 	"github.com/garagon/aguara/internal/types"
 )
 
-const contextRadius = 3
+// ctxRadius is the number of context lines before and after a match.
+const ctxRadius = 3
+
 
 // Matcher implements the Analyzer interface using compiled pattern rules.
+// Rules are pre-grouped by target extension for fast lookup.
 type Matcher struct {
-	rules []*rules.CompiledRule
+	allRules     []*rules.CompiledRule            // all rules (for decoder rescan)
+	allFileRules []*rules.CompiledRule            // rules with targets: [] (match all)
+	byExt        map[string][]*rules.CompiledRule // ".ext" -> rules targeting that ext
 }
 
 // NewMatcher creates a new pattern matcher with the given compiled rules.
+// Rules are pre-grouped by target extension to skip inapplicable rules per file.
 func NewMatcher(compiled []*rules.CompiledRule) *Matcher {
-	return &Matcher{rules: compiled}
+	m := &Matcher{
+		allRules: compiled,
+		byExt:    make(map[string][]*rules.CompiledRule),
+	}
+	for _, rule := range compiled {
+		if len(rule.Targets) == 0 {
+			m.allFileRules = append(m.allFileRules, rule)
+			continue
+		}
+		// Extract extensions from simple globs like "*.md", "*.json"
+		// Non-simple globs (e.g. "Makefile") get the literal as key
+		for _, glob := range rule.Targets {
+			ext := globToExt(glob)
+			m.byExt[ext] = append(m.byExt[ext], rule)
+		}
+	}
+	return m
+}
+
+// globToExt extracts a lookup key from a target glob.
+// "*.md" -> ".md", "*.json" -> ".json", "Makefile" -> "Makefile"
+func globToExt(glob string) string {
+	if strings.HasPrefix(glob, "*.") {
+		return glob[1:] // "*.md" -> ".md"
+	}
+	return glob // literal filename like "Makefile"
 }
 
 func (m *Matcher) Name() string { return "pattern" }
@@ -37,12 +68,12 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 		cbMap = BuildCodeBlockMap(lines)
 	}
 
-	for _, rule := range m.rules {
+	// Collect applicable rules: allFileRules + extension-matched rules
+	applicable := m.rulesForFile(target.RelPath)
+
+	for _, rule := range applicable {
 		if ctx.Err() != nil {
 			return findings, ctx.Err()
-		}
-		if !matchesTarget(rule.Targets, target.RelPath) {
-			continue
 		}
 
 		switch rule.MatchMode {
@@ -54,9 +85,28 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	}
 
 	// Phase 4: decode base64/hex blobs and re-scan
-	findings = append(findings, DecodeAndRescan(target, m.rules, cbMap)...)
+	findings = append(findings, DecodeAndRescan(target, m.allRules, cbMap)...)
 
 	return findings, nil
+}
+
+// rulesForFile returns the rules applicable to a given file path.
+// Combines allFileRules (targets: []) with rules matching the file's extension
+// and literal filename.
+func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
+	result := make([]*rules.CompiledRule, 0, len(m.allFileRules)+20)
+	result = append(result, m.allFileRules...)
+
+	ext := strings.ToLower(filepath.Ext(relPath))
+	if ext != "" {
+		result = append(result, m.byExt[ext]...)
+	}
+	// Also check literal filename matches (e.g. "Makefile", "setup.py")
+	base := filepath.Base(relPath)
+	if rules, ok := m.byExt[base]; ok {
+		result = append(result, rules...)
+	}
+	return result
 }
 
 func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
@@ -89,7 +139,7 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 				FilePath:    target.RelPath,
 				Line:        hit.line,
 				MatchedText: hit.text,
-				Context:     extractContext(lines, hit.line, contextRadius),
+				Context:     types.ExtractContext(lines, hit.line, ctxRadius, ctxRadius),
 				Analyzer:    "pattern",
 				InCodeBlock: inCB,
 				Confidence:  0.85,
@@ -133,7 +183,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []str
 		FilePath:    target.RelPath,
 		Line:        firstHit.line,
 		MatchedText: strings.Join(matchedParts, " + "),
-		Context:     extractContext(lines, firstHit.line, contextRadius),
+		Context:     types.ExtractContext(lines, firstHit.line, ctxRadius, ctxRadius),
 		Analyzer:    "pattern",
 		InCodeBlock: inCB,
 		Confidence:  0.95,
@@ -215,20 +265,6 @@ func lineNumberAtOffset(content string, offset int) int {
 		}
 	}
 	return line
-}
-
-func extractContext(lines []string, lineNum, radius int) []scanner.ContextLine {
-	var ctx []scanner.ContextLine
-	start := max(lineNum-radius-1, 0)
-	end := min(lineNum+radius, len(lines))
-	for i := start; i < end; i++ {
-		ctx = append(ctx, scanner.ContextLine{
-			Line:    i + 1,
-			Content: lines[i],
-			IsMatch: i+1 == lineNum,
-		})
-	}
-	return ctx
 }
 
 func matchesTarget(targetGlobs []string, relPath string) bool {

@@ -62,6 +62,22 @@ type ContextLine struct {
 	IsMatch bool   `json:"is_match"`
 }
 
+// ExtractContext returns lines surrounding lineNum (1-based) as ContextLine slice.
+// before/after control how many lines to include above and below the match.
+func ExtractContext(lines []string, lineNum, before, after int) []ContextLine {
+	var ctx []ContextLine
+	start := max(lineNum-before-1, 0)
+	end := min(lineNum+after, len(lines))
+	for i := start; i < end; i++ {
+		ctx = append(ctx, ContextLine{
+			Line:    i + 1,
+			Content: lines[i],
+			IsMatch: i+1 == lineNum,
+		})
+	}
+	return ctx
+}
+
 // Finding represents a single security finding.
 type Finding struct {
 	RuleID      string        `json:"rule_id"`

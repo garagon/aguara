@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 var (
@@ -220,7 +221,7 @@ func makeFinding(ruleID, desc string, sev scanner.Severity, category string, sec
 		FilePath:    target.RelPath,
 		Line:        line,
 		MatchedText: matchedText,
-		Context:     extractContext(lines, line),
+		Context:     types.ExtractContext(lines, line, 4, 3),
 		Analyzer:    "nlp-injection",
 		Confidence:  0.70,
 	}
@@ -242,20 +243,6 @@ func approximateLine(content []byte, section MarkdownSection) int {
 		}
 	}
 	return line
-}
-
-func extractContext(lines []string, lineNum int) []scanner.ContextLine {
-	var ctx []scanner.ContextLine
-	start := max(lineNum-4, 0)
-	end := min(lineNum+3, len(lines))
-	for i := start; i < end; i++ {
-		ctx = append(ctx, scanner.ContextLine{
-			Line:    i + 1,
-			Content: lines[i],
-			IsMatch: i+1 == lineNum,
-		})
-	}
-	return ctx
 }
 
 func hasExecutableContent(text string) bool {

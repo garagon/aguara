@@ -359,7 +359,7 @@ Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `
 
 ## Aguara Watch
 
-[Aguara Watch](https://watch.aguarascan.com/) continuously scans **28,000+ AI agent skills** across 5 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
+[Aguara Watch](https://watch.aguarascan.com/) continuously scans **50,000+ AI agent skills** across 5 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
 
 ## Go Library
 

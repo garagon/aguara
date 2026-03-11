@@ -17,11 +17,14 @@ const (
 	maxEncodedBlobSize = 1 << 20 // 1 MB
 	// maxDecodedSize is the maximum decoded output to re-scan.
 	maxDecodedSize = 512 << 10 // 512 KB
+	// maxBlobsPerFile caps the number of encoded blobs rescanned per file
+	// to avoid quadratic behavior on files with many short encoded strings.
+	maxBlobsPerFile = 10
 )
 
 var (
-	base64Re = regexp.MustCompile(`[A-Za-z0-9+/]{16,}={0,2}`)
-	hexRe    = regexp.MustCompile(`(?:0x)?[0-9a-fA-F]{16,}`)
+	base64Re = regexp.MustCompile(`[A-Za-z0-9+/]{40,}={0,2}`)
+	hexRe    = regexp.MustCompile(`(?:0x)?[0-9a-fA-F]{32,}`)
 )
 
 // DecodeAndRescan detects encoded blobs in content, decodes them, and re-scans with provided rules.
@@ -30,9 +33,13 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 	var findings []scanner.Finding
 	content := string(target.Content)
 	lines := target.Lines()
+	blobCount := 0
 
 	// Scan for base64 blobs
 	for _, loc := range base64Re.FindAllStringIndex(content, -1) {
+		if blobCount >= maxBlobsPerFile {
+			break
+		}
 		if loc[1]-loc[0] > maxEncodedBlobSize {
 			continue
 		}
@@ -51,12 +58,16 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 		if len(decoded) > maxDecodedSize {
 			decoded = decoded[:maxDecodedSize]
 		}
+		blobCount++
 		line := lineNumberAtOffset(content, loc[0])
 		findings = append(findings, rescan(decoded, line, lines, target, compiled, "base64", cbMap)...)
 	}
 
 	// Scan for hex blobs
 	for _, loc := range hexRe.FindAllStringIndex(content, -1) {
+		if blobCount >= maxBlobsPerFile {
+			break
+		}
 		if loc[1]-loc[0] > maxEncodedBlobSize {
 			continue
 		}
@@ -75,6 +86,7 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 		if len(decoded) > maxDecodedSize {
 			decoded = decoded[:maxDecodedSize]
 		}
+		blobCount++
 		line := lineNumberAtOffset(content, loc[0])
 		findings = append(findings, rescan(decoded, line, lines, target, compiled, "hex", cbMap)...)
 	}
@@ -110,7 +122,7 @@ func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Ta
 					FilePath:    target.RelPath,
 					Line:        origLine,
 					MatchedText: hit.text,
-					Context:     extractContext(origLines, origLine, contextRadius),
+					Context:     types.ExtractContext(origLines, origLine, ctxRadius, ctxRadius),
 					Analyzer:    "pattern-decoder",
 					InCodeBlock: inCB,
 					Confidence:  0.90,

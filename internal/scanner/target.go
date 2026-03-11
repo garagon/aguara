@@ -85,6 +85,10 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			}
 			return nil
 		}
+		// skip symlinks to prevent path traversal
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
 		// skip binary/large files by extension
 		if isBinaryExt(path) {
 			return nil
