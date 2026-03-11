@@ -54,6 +54,7 @@ func TestCompileInvalidRegex(t *testing.T) {
 	raw := rules.RawRule{
 		ID:       "TEST_003",
 		Name:     "Bad Regex",
+		Category: "test",
 		Severity: "LOW",
 		Patterns: []rules.RawPattern{
 			{Type: rules.PatternRegex, Value: "[invalid"},

@@ -42,7 +42,7 @@ id: SUPPLY_003
 name: "Download-and-execute"
 description: "Detects patterns of downloading and piping to shell execution"
 severity: CRITICAL
-category: external-download
+category: supply-chain
 targets: []
 match_mode: any
 patterns:

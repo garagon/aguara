@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -240,8 +241,10 @@ func TestScanFailOnHelper(t *testing.T) {
 		rootCmd.SetErr(nil)
 		resetFlags()
 	})
-	// This will call os.Exit(1) if findings >= high are found.
-	_ = rootCmd.Execute()
+	// ErrThresholdExceeded causes exit code 1 via main.go.
+	if err := rootCmd.Execute(); errors.Is(err, ErrThresholdExceeded) {
+		os.Exit(1)
+	}
 }
 
 func TestScanCI(t *testing.T) {

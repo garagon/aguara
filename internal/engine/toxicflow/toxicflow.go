@@ -154,7 +154,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			Severity:    types.SeverityHigh,
 			Category:    "toxic-flow",
 			Description: tp.description,
-			FilePath:    target.Path,
+			FilePath:    target.RelPath,
 			Line:        line,
 			MatchedText: matchedText,
 			Analyzer:    "toxicflow",

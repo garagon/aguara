@@ -89,15 +89,12 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			Severity:    types.SeverityCritical,
 			Category:    "rug-pull",
 			Description: "File content changed since last scan and now contains suspicious patterns. This may indicate a rug-pull attack where a previously safe tool becomes malicious.",
-			FilePath:    target.Path,
+			FilePath:    target.RelPath,
 			Line:        lineNum,
 			MatchedText: matchedText,
 			Analyzer:    "rugpull",
 			Confidence:  0.95,
 		})
-
-		// One finding per file is enough to flag the rug-pull
-		break
 	}
 
 	return findings, nil

@@ -45,11 +45,14 @@ type MarkdownSection struct {
 	Level    int    // for headings
 }
 
+// mdParser is a package-level goldmark instance reused across calls.
+// goldmark.New() is stateless and safe for concurrent use.
+var mdParser = goldmark.New()
+
 // ParseMarkdown extracts structured sections from markdown content.
 func ParseMarkdown(source []byte) []MarkdownSection {
-	md := goldmark.New()
 	reader := text.NewReader(source)
-	doc := md.Parser().Parse(reader)
+	doc := mdParser.Parser().Parse(reader)
 
 	var sections []MarkdownSection
 	walkNode(doc, source, &sections, source)

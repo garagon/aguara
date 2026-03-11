@@ -485,6 +485,9 @@ func parseByteSize(s string) (int64, error) {
 	}
 }
 
+// ErrThresholdExceeded is returned when findings meet or exceed the --fail-on severity.
+var ErrThresholdExceeded = fmt.Errorf("findings exceed severity threshold")
+
 func checkFailOnThreshold(result *scanner.ScanResult) error {
 	if flagFailOn == "" {
 		return nil
@@ -495,7 +498,7 @@ func checkFailOnThreshold(result *scanner.ScanResult) error {
 	}
 	for _, f := range result.Findings {
 		if f.Severity >= threshold {
-			os.Exit(1)
+			return ErrThresholdExceeded
 		}
 	}
 	return nil

@@ -5,6 +5,35 @@ import (
 	"strings"
 )
 
+// sensitiveEnvKeys matches env variable names that likely contain secrets.
+var sensitiveEnvKeys = []string{
+	"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL",
+	"AUTH", "PRIVATE", "API_KEY", "APIKEY",
+}
+
+// redactEnv returns a copy of the env map with sensitive values masked.
+func redactEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return env
+	}
+	redacted := make(map[string]string, len(env))
+	for k, v := range env {
+		upper := strings.ToUpper(k)
+		masked := false
+		for _, sensitive := range sensitiveEnvKeys {
+			if strings.Contains(upper, sensitive) {
+				redacted[k] = "***REDACTED***"
+				masked = true
+				break
+			}
+		}
+		if !masked {
+			redacted[k] = v
+		}
+	}
+	return redacted
+}
+
 // MCPServer represents a discovered MCP server from a client config.
 type MCPServer struct {
 	Name    string            `json:"name"`
@@ -43,6 +72,24 @@ func (r *Result) TotalClients() int {
 		}
 	}
 	return n
+}
+
+// Redacted returns a copy of the result with sensitive env values masked.
+func (r *Result) Redacted() *Result {
+	out := &Result{Clients: make([]ClientResult, len(r.Clients))}
+	for i, c := range r.Clients {
+		servers := make([]MCPServer, len(c.Servers))
+		for j, s := range c.Servers {
+			servers[j] = MCPServer{
+				Name:    s.Name,
+				Command: s.Command,
+				Args:    s.Args,
+				Env:     redactEnv(s.Env),
+			}
+		}
+		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
+	}
+	return out
 }
 
 // AllServers returns a flat list of all discovered servers with their client name.

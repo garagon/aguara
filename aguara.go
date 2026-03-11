@@ -7,7 +7,6 @@ package aguara
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -214,20 +213,14 @@ func loadAndCompile(cfg *scanConfig) ([]*rules.CompiledRule, error) {
 	}
 
 	compiled, compileErrs := rules.CompileAll(rawRules)
-	for _, e := range compileErrs {
-		fmt.Fprintf(os.Stderr, "aguara: warning: %v\n", e)
-	}
+	_ = compileErrs // non-fatal: invalid rules are skipped
 
 	if len(cfg.ruleOverrides) > 0 {
 		overrides := make(map[string]rules.RuleOverride, len(cfg.ruleOverrides))
 		for id, ovr := range cfg.ruleOverrides {
 			overrides[id] = rules.RuleOverride{Severity: ovr.Severity, Disabled: ovr.Disabled}
 		}
-		var overrideErrs []error
-		compiled, overrideErrs = rules.ApplyOverrides(compiled, overrides)
-		for _, e := range overrideErrs {
-			fmt.Fprintf(os.Stderr, "aguara: warning: %v\n", e)
-		}
+		compiled, _ = rules.ApplyOverrides(compiled, overrides)
 	}
 
 	if len(cfg.disabledRules) > 0 {

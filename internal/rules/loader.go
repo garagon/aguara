@@ -2,7 +2,9 @@ package rules
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -75,7 +77,7 @@ func parseMultiDocYAML(data []byte) ([]RawRule, error) {
 		var raw RawRule
 		err := decoder.Decode(&raw)
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, err

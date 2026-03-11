@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // DefaultMaxFileSize is the default maximum file size (50 MB) that will be scanned.
@@ -18,6 +19,9 @@ type Target struct {
 	RelPath     string
 	Content     []byte
 	MaxFileSize int64 // 0 means use DefaultMaxFileSize
+
+	linesOnce sync.Once
+	lines     []string
 }
 
 // LoadContent reads the file content into memory.
@@ -46,9 +50,12 @@ func (t *Target) LoadContent() error {
 	return nil
 }
 
-// Lines returns the content split into lines.
+// Lines returns the content split into lines. The result is cached.
 func (t *Target) Lines() []string {
-	return strings.Split(string(t.Content), "\n")
+	t.linesOnce.Do(func() {
+		t.lines = strings.Split(string(t.Content), "\n")
+	})
+	return t.lines
 }
 
 // TargetDiscovery walks a directory and returns scannable targets.

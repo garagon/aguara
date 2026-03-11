@@ -13,6 +13,12 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 	if raw.ID == "" {
 		return nil, fmt.Errorf("rule missing ID")
 	}
+	if raw.Name == "" {
+		return nil, fmt.Errorf("rule %s: missing name", raw.ID)
+	}
+	if raw.Category == "" {
+		return nil, fmt.Errorf("rule %s: missing category", raw.ID)
+	}
 	if len(raw.Patterns) == 0 {
 		return nil, fmt.Errorf("rule %s: no patterns defined", raw.ID)
 	}

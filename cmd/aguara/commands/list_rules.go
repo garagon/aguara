@@ -73,7 +73,7 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	if flagCategory != "" {
 		var filtered []*rules.CompiledRule
 		for _, r := range compiled {
-			if r.Category == flagCategory {
+			if strings.EqualFold(r.Category, flagCategory) {
 				filtered = append(filtered, r)
 			}
 		}
