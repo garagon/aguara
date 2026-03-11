@@ -3,13 +3,94 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.7.0] — 2026-03-05
+## [0.8.0] — 2026-03-11
 
-Remediation guidance on all 173 rules, Docker distribution, Homebrew tap, inline ignore comments, and 80% test coverage.
+Community contributions, 3-phase security audit, and developer experience improvements.
 
 ### Added
 
-#### Remediation guidance — 173/173 rules
+#### 4 new detection rules
+
+**Supply Chain** (+2 rules, 18 → 20)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| SUPPLY_020 | GitHub Actions workflow injection via untrusted input | HIGH |
+| SUPPLY_021 | GitHub Actions expression injection in run step | HIGH |
+
+**Credential Leak** (+2 rules, 20 → 22)
+
+| Rule | Name | Severity |
+|------|------|----------|
+| CRED_021 | .env file with secrets committed to repository | HIGH |
+| CRED_022 | Environment variable exposure in shell history or logs | MEDIUM |
+
+#### Markdown output for `aguara discover`
+
+`aguara discover --format markdown` generates a structured markdown report of discovered MCP configurations, suitable for documentation or issue templates.
+
+#### Remediation in all output formats
+
+Remediation guidance now appears in every output format, not just `--verbose` terminal and JSON:
+
+- **Terminal**: always shown for CRITICAL findings; shown for all severities in `--verbose` mode
+- **JSON**: `remediation` field on every finding
+- **SARIF**: `help` field on each rule entry
+- **Markdown**: blockquote remediation for HIGH+ findings after the results table
+- **Explain**: `aguara explain RULE_ID` shows remediation in both terminal and JSON output
+
+#### Credential redaction in discover output
+
+`aguara discover --format json` now redacts environment variable values by default, replacing them with `***REDACTED***` to prevent accidental credential exposure.
+
+### Improved
+
+#### Security audit (3 phases, 24 fixes)
+
+Ran a comprehensive security audit across the entire codebase, resulting in 24 fixes across 3 PRs:
+
+**Phase 1 - Hardening (12 fixes)**
+- Strict YAML field validation (`KnownFields(true)`) rejects unknown keys in custom rule files
+- Hardened regex patterns across credential-leak, prompt-injection, and unicode-attack rules
+- Added `exclude_patterns` to reduce false positives in documentation contexts
+- Secured binary extension check with case-insensitive comparison
+
+**Phase 2 - Performance and correctness (5 fixes)**
+- `StringContent()` method with `sync.Once` cache eliminates 4-5 redundant `string(Content)` conversions per file
+- Pre-computed `lowerContent` avoids repeated `strings.ToLower()` in pattern matching
+- Deterministic dedup with stable `RuleID` tiebreaker - same input always produces same output
+- Capped base64/hex blob scanning (`maxBlobsPerFile*3`) prevents quadratic behavior
+- Rule pre-filtering passes only applicable rules to the decoder, removing redundant target checks
+
+**Phase 3 - Developer experience and quality (7 fixes)**
+- Remediation text in all output formats (see above)
+- Fixed mismatched remediation text on CRED_002 (AWS keys) and CRED_003 (GitHub tokens)
+- Added `false_positive` examples to 6 rules that were missing them
+- Pre-computed `lowerDecoded` in decoder for base64/hex content scanning
+
+- **Test count**: 447 → 454 test functions
+- **Rules**: 173 → 177 YAML rules (all with remediation and false_positive examples)
+- **README**: updated to reflect all improvements from Phases 1-3
+
+### Fixed
+
+- Escape pipe characters in markdown table paths
+- Add `.gitguardian.yaml` to exclude test fixture files from secret scanning
+- Fix `md` alias and plural grammar in `FormatMarkdown`
+
+### Summary
+
+**177 YAML rules + 4 dynamic** across 13 categories. 6 distribution channels. 80% test coverage. 454 tests. 0 lint issues.
+
+---
+
+## [0.7.0] — 2026-03-05
+
+Remediation guidance on all rules, Docker distribution, Homebrew tap, inline ignore comments, and 80% test coverage.
+
+### Added
+
+#### Remediation guidance — all rules
 
 Every detection rule now includes a `remediation` field with actionable fix guidance. Shown in `--verbose` terminal output, JSON, and SARIF.
 
