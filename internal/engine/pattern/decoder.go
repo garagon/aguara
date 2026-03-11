@@ -31,12 +31,12 @@ var (
 // cbMap is the code block map for the file (nil for non-markdown files).
 func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
-	content := string(target.Content)
+	content := target.StringContent()
 	lines := target.Lines()
 	blobCount := 0
 
-	// Scan for base64 blobs
-	for _, loc := range base64Re.FindAllStringIndex(content, -1) {
+	// Scan for base64 blobs (cap regex matches to avoid computing all when only maxBlobsPerFile are used)
+	for _, loc := range base64Re.FindAllStringIndex(content, maxBlobsPerFile*3) {
 		if blobCount >= maxBlobsPerFile {
 			break
 		}
@@ -64,7 +64,7 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 	}
 
 	// Scan for hex blobs
-	for _, loc := range hexRe.FindAllStringIndex(content, -1) {
+	for _, loc := range hexRe.FindAllStringIndex(content, maxBlobsPerFile*3) {
 		if blobCount >= maxBlobsPerFile {
 			break
 		}
@@ -97,17 +97,15 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Target, compiled []*rules.CompiledRule, encoding string, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	decodedStr := string(decoded)
+	lowerDecoded := strings.ToLower(decodedStr)
 	decodedLines := strings.Split(decodedStr, "\n")
 
 	// Decoded blob inherits code block status from the line where the blob was found
 	inCB := isInCodeBlock(cbMap, origLine)
 
 	for _, rule := range compiled {
-		if !matchesTarget(rule.Targets, target.RelPath) {
-			continue
-		}
 		for _, pat := range rule.Patterns {
-			hits := matchPattern(pat, decodedStr, decodedLines)
+			hits := matchPattern(pat, decodedStr, lowerDecoded, decodedLines)
 			for _, hit := range hits {
 				sev := rule.Severity
 				if inCB {

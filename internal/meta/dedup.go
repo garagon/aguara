@@ -31,7 +31,9 @@ func Deduplicate(findings []types.Finding) []types.Finding {
 	for _, f := range byRule {
 		k := fmt.Sprintf("%s:%d", f.FilePath, f.Line)
 		if existing, ok := byLine[k]; ok {
-			if f.Severity > existing.Severity || (f.Severity == existing.Severity && f.Confidence > existing.Confidence) {
+			if f.Severity > existing.Severity ||
+				(f.Severity == existing.Severity && f.Confidence > existing.Confidence) ||
+				(f.Severity == existing.Severity && f.Confidence == existing.Confidence && f.RuleID < existing.RuleID) {
 				byLine[k] = f
 			}
 		} else {

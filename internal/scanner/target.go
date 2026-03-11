@@ -22,6 +22,8 @@ type Target struct {
 
 	linesOnce sync.Once
 	lines     []string
+	strOnce   sync.Once
+	strContent string
 }
 
 // LoadContent reads the file content into memory.
@@ -48,6 +50,14 @@ func (t *Target) LoadContent() error {
 	}
 	t.Content = data
 	return nil
+}
+
+// StringContent returns the content as a string. The result is cached.
+func (t *Target) StringContent() string {
+	t.strOnce.Do(func() {
+		t.strContent = string(t.Content)
+	})
+	return t.strContent
 }
 
 // Lines returns the content split into lines. The result is cached.

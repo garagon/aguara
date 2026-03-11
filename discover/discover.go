@@ -80,12 +80,8 @@ func (r *Result) Redacted() *Result {
 	for i, c := range r.Clients {
 		servers := make([]MCPServer, len(c.Servers))
 		for j, s := range c.Servers {
-			servers[j] = MCPServer{
-				Name:    s.Name,
-				Command: s.Command,
-				Args:    s.Args,
-				Env:     redactEnv(s.Env),
-			}
+			servers[j] = s
+			servers[j].Env = redactEnv(s.Env)
 		}
 		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
 	}

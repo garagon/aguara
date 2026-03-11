@@ -40,6 +40,7 @@ type sarifRule struct {
 	ID               string              `json:"id"`
 	Name             string              `json:"name"`
 	ShortDescription sarifMessage        `json:"shortDescription"`
+	Help             *sarifMessage       `json:"help,omitempty"`
 	DefaultConfig    sarifDefaultConfig  `json:"defaultConfiguration"`
 	Properties       sarifRuleProperties `json:"properties"`
 }
@@ -90,13 +91,17 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 	for _, finding := range result.Findings {
 		if _, ok := ruleIndex[finding.RuleID]; !ok {
 			ruleIndex[finding.RuleID] = len(rules)
-			rules = append(rules, sarifRule{
+			sr := sarifRule{
 				ID:               finding.RuleID,
 				Name:             finding.RuleName,
 				ShortDescription: sarifMessage{Text: finding.RuleName},
 				DefaultConfig:    sarifDefaultConfig{Level: severityToLevel(finding.Severity)},
 				Properties:       sarifRuleProperties{Tags: []string{finding.Category}},
-			})
+			}
+			if finding.Remediation != "" {
+				sr.Help = &sarifMessage{Text: finding.Remediation}
+			}
+			rules = append(rules, sr)
 		}
 	}
 

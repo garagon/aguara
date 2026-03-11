@@ -19,7 +19,6 @@ const ctxRadius = 3
 // Matcher implements the Analyzer interface using compiled pattern rules.
 // Rules are pre-grouped by target extension for fast lookup.
 type Matcher struct {
-	allRules     []*rules.CompiledRule            // all rules (for decoder rescan)
 	allFileRules []*rules.CompiledRule            // rules with targets: [] (match all)
 	byExt        map[string][]*rules.CompiledRule // ".ext" -> rules targeting that ext
 }
@@ -28,8 +27,7 @@ type Matcher struct {
 // Rules are pre-grouped by target extension to skip inapplicable rules per file.
 func NewMatcher(compiled []*rules.CompiledRule) *Matcher {
 	m := &Matcher{
-		allRules: compiled,
-		byExt:    make(map[string][]*rules.CompiledRule),
+		byExt: make(map[string][]*rules.CompiledRule),
 	}
 	for _, rule := range compiled {
 		if len(rule.Targets) == 0 {
@@ -59,7 +57,8 @@ func (m *Matcher) Name() string { return "pattern" }
 
 func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
 	var findings []scanner.Finding
-	content := string(target.Content)
+	content := target.StringContent()
+	lowerContent := strings.ToLower(content)
 	lines := target.Lines()
 
 	// Build code block map for markdown files
@@ -78,14 +77,14 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAny(rule, content, lines, target, cbMap)...)
+			findings = append(findings, m.matchAny(rule, content, lowerContent, lines, target, cbMap)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lines, target, cbMap)...)
+			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
 		}
 	}
 
-	// Phase 4: decode base64/hex blobs and re-scan
-	findings = append(findings, DecodeAndRescan(target, m.allRules, cbMap)...)
+	// Phase 4: decode base64/hex blobs and re-scan with same applicable rules
+	findings = append(findings, DecodeAndRescan(target, applicable, cbMap)...)
 
 	return findings, nil
 }
@@ -109,13 +108,13 @@ func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
 	return result
 }
 
-func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
 	seenLines := make(map[int]bool)
 	for _, pat := range rule.Patterns {
-		hits := matchPattern(pat, content, lines)
+		hits := matchPattern(pat, content, lowerContent, lines)
 		for _, hit := range hits {
 			if seenLines[hit.line] {
 				continue
@@ -149,11 +148,11 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content string, lines []str
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	// All patterns must have at least one hit
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
-		hits := matchPattern(pat, content, lines)
+		hits := matchPattern(pat, content, lowerContent, lines)
 		if len(hits) == 0 {
 			return nil
 		}
@@ -222,7 +221,7 @@ func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) b
 	return false
 }
 
-func matchPattern(pat rules.CompiledPattern, content string, lines []string) []matchHit {
+func matchPattern(pat rules.CompiledPattern, content, lowerContent string, lines []string) []matchHit {
 	var hits []matchHit
 	switch pat.Type {
 	case rules.PatternRegex:
@@ -239,11 +238,10 @@ func matchPattern(pat rules.CompiledPattern, content string, lines []string) []m
 			hits = append(hits, matchHit{line: line, text: matched})
 		}
 	case rules.PatternContains:
-		lower := strings.ToLower(content)
 		target := pat.Value // already lowercased during compilation
 		idx := 0
 		for {
-			pos := strings.Index(lower[idx:], target)
+			pos := strings.Index(lowerContent[idx:], target)
 			if pos == -1 {
 				break
 			}
@@ -265,22 +263,6 @@ func lineNumberAtOffset(content string, offset int) int {
 		}
 	}
 	return line
-}
-
-func matchesTarget(targetGlobs []string, relPath string) bool {
-	if len(targetGlobs) == 0 {
-		return true // no filter = match all
-	}
-	base := filepath.Base(relPath)
-	for _, glob := range targetGlobs {
-		if matched, _ := filepath.Match(glob, base); matched {
-			return true
-		}
-		if matched, _ := filepath.Match(glob, relPath); matched {
-			return true
-		}
-	}
-	return false
 }
 
 // isMarkdown returns true if the file path has a markdown extension.

@@ -73,6 +73,7 @@ func LoadFromDir(dir string) ([]RawRule, error) {
 func parseMultiDocYAML(data []byte) ([]RawRule, error) {
 	var rules []RawRule
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
 	for {
 		var raw RawRule
 		err := decoder.Decode(&raw)

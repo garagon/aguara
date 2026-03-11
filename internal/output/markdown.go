@@ -82,6 +82,12 @@ func (f *MarkdownFormatter) printFindingsByFile(w io.Writer, findings []scanner.
 			fmt.Fprintf(w, "| %s | `%s` | %s | %d |\n",
 				emoji, finding.RuleID, escapeMarkdown(finding.RuleName), finding.Line)
 		}
+		// Show remediation for high+ severity findings
+		for _, finding := range sorted {
+			if finding.Remediation != "" && finding.Severity >= scanner.SeverityHigh {
+				fmt.Fprintf(w, "\n> **%s**: %s\n", finding.RuleID, escapeMarkdown(finding.Remediation))
+			}
+		}
 		fmt.Fprintf(w, "\n")
 	}
 }

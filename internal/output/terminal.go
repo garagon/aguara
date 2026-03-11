@@ -196,6 +196,9 @@ func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Fi
 	if f.Verbose && finding.Description != "" {
 		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, finding.Description))
 	}
+	if finding.Remediation != "" {
+		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, finding.Remediation))
+	}
 }
 
 func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Finding) {
@@ -219,6 +222,9 @@ func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Fin
 	)
 	if f.Verbose && finding.Severity >= scanner.SeverityHigh && finding.Description != "" {
 		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, finding.Description))
+	}
+	if f.Verbose && finding.Remediation != "" {
+		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, finding.Remediation))
 	}
 }
 

@@ -13,7 +13,8 @@ examples:
   true_positive:
     - "normal text\u202etxt.exe"
     - "\u202dsome hidden direction"
-  false_positive: []
+  false_positive:
+    - "RTL override is used in Arabic and Hebrew text rendering"
 ---
 id: UNI_002
 name: "Bidi text manipulation"
@@ -32,7 +33,8 @@ examples:
   true_positive:
     - "text\u2066hidden content\u2069visible"
     - "\u200f\u200fmanipulated text"
-  false_positive: []
+  false_positive:
+    - "Bidi isolate characters support mixed LTR and RTL layouts"
 ---
 id: UNI_003
 name: "Homoglyph domain spoofing"
@@ -76,7 +78,8 @@ examples:
   true_positive:
     - "visible\u2028hidden on new line"
     - "soft\u00ad\u00adhyphen hiding"
-  false_positive: []
+  false_positive:
+    - "Line separator U+2028 appears in JSON string escaping documentation"
 ---
 id: UNI_005
 name: "Combining character obfuscation"
@@ -111,7 +114,8 @@ patterns:
 examples:
   true_positive:
     - "text\U000E0001\U000E0068\U000E0065\U000E006C\U000E006Chidden"
-  false_positive: []
+  false_positive:
+    - "Tag characters were originally designed for language tagging in plain text"
 ---
 id: UNI_007
 name: "Punycode domains"

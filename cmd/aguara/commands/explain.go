@@ -30,6 +30,7 @@ type explainInfo struct {
 	Severity       string   `json:"severity"`
 	Category       string   `json:"category"`
 	Description    string   `json:"description"`
+	Remediation    string   `json:"remediation,omitempty"`
 	Patterns       []string `json:"patterns"`
 	TruePositives  []string `json:"true_positives"`
 	FalsePositives []string `json:"false_positives"`
@@ -97,6 +98,7 @@ func writeExplainJSON(w io.Writer, r *rules.CompiledRule, patterns []string) err
 		Severity:       r.Severity.String(),
 		Category:       r.Category,
 		Description:    r.Description,
+		Remediation:    r.Remediation,
 		Patterns:       patterns,
 		TruePositives:  r.Examples.TruePositive,
 		FalsePositives: r.Examples.FalsePositive,
@@ -138,6 +140,10 @@ func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []str
 
 	if found.Description != "" {
 		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Description:"), found.Description)
+	}
+
+	if found.Remediation != "" {
+		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Remediation:"), color(green, found.Remediation))
 	}
 
 	if len(patterns) > 0 {
