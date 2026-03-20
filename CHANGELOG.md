@@ -3,6 +3,106 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] — 2026-03-20
+
+Context-aware scanning, false-positive reduction infrastructure, Unicode evasion prevention, and performance optimization.
+
+### Added
+
+#### Context-aware scanning API
+
+New `ScanContentAs()` function accepts a tool name for context-aware false-positive reduction:
+
+```go
+result, err := aguara.ScanContentAs(ctx, content, "skill.md", "Edit")
+```
+
+When the scanner knows which tool generated the content, it can automatically skip rules that are always false positives for that tool. Also available as an option: `aguara.WithToolName("Edit")`.
+
+#### Built-in tool exemptions
+
+Automatic false-positive elimination for known tool+rule combinations:
+
+| Rule | Exempt tools | Reason |
+|------|-------------|--------|
+| TC-005 | Bash, Write, Edit, MultiEdit, NotebookEdit, Agent | Shell metacharacters are normal syntax in these tools |
+| MCPCFG_002 | Bash, Write, Edit, MultiEdit, NotebookEdit, Agent | MCP config patterns in file-editing tools |
+| MCPCFG_004 | WebFetch, Fetch, WebSearch | Remote URLs are the purpose of fetch tools |
+| MCPCFG_006 | Bash, Write, Edit, MultiEdit, NotebookEdit | Server config patterns in file-editing tools |
+| THIRDPARTY_001 | WebFetch, Fetch, WebSearch | Third-party content is the purpose of fetch tools |
+
+Exemptions activate automatically when a tool name is provided. User config overrides take precedence.
+
+#### Scan profiles
+
+Three enforcement profiles control how aggressively findings block:
+
+| Profile | Behavior | Use case |
+|---------|----------|----------|
+| `strict` | All rules enforce (default) | Standalone scanning, untrusted agents |
+| `content-aware` | Only TC-001, TC-003, TC-006 block | Development agents (Claude Code, Cursor) |
+| `minimal` | TC-001, TC-003, TC-006 flag only | Trusted internal agents |
+
+Findings are always preserved in the result. Only the verdict changes. CLI: `--profile content-aware`.
+
+#### Verdict field
+
+`ScanResult` now includes a `Verdict` field (clean/flag/block) computed from findings and profile:
+
+```json
+{"findings": [...], "verdict": 2, "tool_name": "Edit", ...}
+```
+
+- `0` = clean (no actionable findings)
+- `1` = flag (informational)
+- `2` = block (action required)
+
+#### Tool-scoped rules in config
+
+Rules can be restricted to specific tools in `.aguara.yml`:
+
+```yaml
+rule_overrides:
+  TC-005:
+    apply_to_tools: ["Bash"]       # only enforce on Bash
+  MCPCFG_004:
+    exempt_tools: ["WebFetch"]     # enforce on everything except WebFetch
+```
+
+`apply_to_tools` and `exempt_tools` are mutually exclusive per rule.
+
+#### NFKC Unicode normalization
+
+All content is NFKC-normalized before scanning, both in `ScanContent()`/`ScanContentAs()` and in file-based `Scan()`. Fullwidth characters, compatibility forms, and homoglyphs are collapsed to their canonical ASCII equivalents before pattern matching.
+
+Example: `\uFF29\uFF47\uFF4E\uFF4F\uFF52\uFF45` (fullwidth "Ignore") is normalized to ASCII "Ignore" and detected by existing rules. Zero false-positive cost.
+
+#### CLI flags
+
+- `--tool-name <name>`: Set tool context for false-positive reduction
+- `--profile <strict|content-aware|minimal>`: Set scan enforcement profile
+
+#### WASM build
+
+- `make wasm` produces `aguara.wasm` (6.1MB) + `wasm_exec.js`
+- Exposes `aguaraScanContent`, `aguaraScanContentAs`, `aguaraListRules` to JavaScript
+- Example HTML page at `cmd/wasm/index.html` for browser-based scanning
+- Client-side only, no data leaves the browser
+
+### Improved
+
+#### Aho-Corasick multi-pattern matching
+
+Pattern matcher now uses an Aho-Corasick automaton for `contains` patterns. All substring patterns are compiled into a single DFA at initialization, enabling O(n+m) multi-pattern search. Rules with only `contains` patterns that have no matches are skipped entirely without running individual pattern matching.
+
+Measured improvement: ~7.5% faster on clean files (majority case). The main bottleneck remains regex matching.
+
+### Summary
+
+**177 YAML rules + 4 dynamic** across 13 categories. 7 distribution channels (+ WASM). 500 tests. 0 lint issues. 2 new dependencies (`golang.org/x/text`, `petar-dambovaliev/aho-corasick`).
+
+---
+
 ## [0.8.0] — 2026-03-11
 
 Community contributions, 3-phase security audit, and developer experience improvements.

@@ -15,12 +15,15 @@ import (
 
 // Scanner orchestrates the scanning process.
 type Scanner struct {
-	analyzers      []Analyzer
-	workers        int
-	minSeverity    Severity
-	ignorePatterns []string
-	maxFileSize    int64
-	onProgress     func(current, total int)
+	analyzers        []Analyzer
+	workers          int
+	minSeverity      Severity
+	ignorePatterns   []string
+	maxFileSize      int64
+	onProgress       func(current, total int)
+	toolName         string
+	scanProfile      ScanProfile
+	toolScopedRules  map[string]ToolScopedRule
 }
 
 // New creates a new Scanner with the given number of workers.
@@ -60,6 +63,21 @@ func (s *Scanner) SetMaxFileSize(size int64) {
 // It may be called from multiple goroutines concurrently.
 func (s *Scanner) SetProgressFunc(fn func(current, total int)) {
 	s.onProgress = fn
+}
+
+// SetToolName sets the tool context for tool-aware false-positive reduction.
+func (s *Scanner) SetToolName(name string) {
+	s.toolName = name
+}
+
+// SetScanProfile sets the enforcement profile.
+func (s *Scanner) SetScanProfile(profile ScanProfile) {
+	s.scanProfile = profile
+}
+
+// SetToolScopedRules sets per-rule tool filtering from user configuration.
+func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
+	s.toolScopedRules = rules
 }
 
 // Scan performs a full scan of the given path. The path can be a directory
@@ -170,15 +188,26 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	findings = s.postProcess(findings)
 
+	verdict := computeVerdict(findings)
+	if s.scanProfile != ProfileStrict && len(findings) > 0 {
+		verdict = applyProfile(s.scanProfile, findings)
+	}
+
 	return &ScanResult{
 		Findings:     findings,
 		FilesScanned: len(targets),
+		Verdict:      verdict,
+		ToolName:     s.toolName,
 		Duration:     time.Since(start),
 	}, nil
 }
 
 // postProcess deduplicates, scores, correlates, filters, and sorts findings.
 func (s *Scanner) postProcess(findings []Finding) []Finding {
+	// Apply tool exemptions before dedup/scoring (removes definite false positives)
+	if s.toolName != "" {
+		findings = applyToolExemptions(s.toolName, findings, s.toolScopedRules)
+	}
 	findings = meta.Deduplicate(findings)
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)

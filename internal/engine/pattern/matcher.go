@@ -18,27 +18,36 @@ const ctxRadius = 3
 
 // Matcher implements the Analyzer interface using compiled pattern rules.
 // Rules are pre-grouped by target extension for fast lookup.
+// Contains patterns use Aho-Corasick multi-pattern matching for O(n+m) search.
 type Matcher struct {
 	allFileRules []*rules.CompiledRule            // rules with targets: [] (match all)
 	byExt        map[string][]*rules.CompiledRule // ".ext" -> rules targeting that ext
+	acAll        *acSearcher                      // AC automaton for allFileRules contains patterns
+	acByExt      map[string]*acSearcher           // AC automaton per extension group
 }
 
 // NewMatcher creates a new pattern matcher with the given compiled rules.
 // Rules are pre-grouped by target extension to skip inapplicable rules per file.
 func NewMatcher(compiled []*rules.CompiledRule) *Matcher {
 	m := &Matcher{
-		byExt: make(map[string][]*rules.CompiledRule),
+		byExt:   make(map[string][]*rules.CompiledRule),
+		acByExt: make(map[string]*acSearcher),
 	}
 	for _, rule := range compiled {
 		if len(rule.Targets) == 0 {
 			m.allFileRules = append(m.allFileRules, rule)
 			continue
 		}
-		// Extract extensions from simple globs like "*.md", "*.json"
-		// Non-simple globs (e.g. "Makefile") get the literal as key
 		for _, glob := range rule.Targets {
 			ext := globToExt(glob)
 			m.byExt[ext] = append(m.byExt[ext], rule)
+		}
+	}
+	// Build Aho-Corasick automatons for contains patterns
+	m.acAll = buildACSearcher(m.allFileRules)
+	for ext, extRules := range m.byExt {
+		if ac := buildACSearcher(extRules); ac != nil {
+			m.acByExt[ext] = ac
 		}
 	}
 	return m
@@ -70,9 +79,18 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	// Collect applicable rules: allFileRules + extension-matched rules
 	applicable := m.rulesForFile(target.RelPath)
 
+	// Pre-filter: run Aho-Corasick to find which rules have contains matches.
+	// Rules with no contains hits and only contains patterns can be skipped entirely.
+	acHitRules := m.acPrefilter(target.RelPath, lowerContent)
+
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
 			return findings, ctx.Err()
+		}
+
+		// Skip rules that only have contains patterns and got no AC hits
+		if acHitRules != nil && !acHitRules[rule.ID] && isContainsOnly(rule) {
+			continue
 		}
 
 		switch rule.MatchMode {
@@ -87,6 +105,52 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	findings = append(findings, DecodeAndRescan(target, applicable, cbMap)...)
 
 	return findings, nil
+}
+
+// acPrefilter runs all AC automatons applicable to this file and returns the set
+// of rule IDs that had at least one contains hit. Returns nil if no AC searchers
+// are available (meaning no optimization - all rules run).
+func (m *Matcher) acPrefilter(relPath, lowerContent string) map[string]bool {
+	if m.acAll == nil && len(m.acByExt) == 0 {
+		return nil
+	}
+
+	hitRules := make(map[string]bool)
+
+	// Search with the all-files AC automaton
+	if m.acAll != nil {
+		for _, match := range m.acAll.findAll(lowerContent) {
+			hitRules[match.ruleID] = true
+		}
+	}
+
+	// Search with extension-specific AC automatons
+	ext := strings.ToLower(filepath.Ext(relPath))
+	if ext != "" {
+		if ac, ok := m.acByExt[ext]; ok {
+			for _, match := range ac.findAll(lowerContent) {
+				hitRules[match.ruleID] = true
+			}
+		}
+	}
+	base := filepath.Base(relPath)
+	if ac, ok := m.acByExt[base]; ok {
+		for _, match := range ac.findAll(lowerContent) {
+			hitRules[match.ruleID] = true
+		}
+	}
+
+	return hitRules
+}
+
+// isContainsOnly returns true if the rule has only contains patterns (no regex).
+func isContainsOnly(rule *rules.CompiledRule) bool {
+	for _, pat := range rule.Patterns {
+		if pat.Type != rules.PatternContains {
+			return false
+		}
+	}
+	return true
 }
 
 // rulesForFile returns the rules applicable to a given file path.

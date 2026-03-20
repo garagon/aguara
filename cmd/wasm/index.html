@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Aguara Scanner - Browser</title>
+    <style>
+        body { font-family: monospace; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        textarea { width: 100%; height: 200px; font-family: monospace; font-size: 14px; }
+        button { padding: 0.5rem 1rem; margin: 0.5rem 0; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; }
+        .loading { color: #666; }
+        .error { color: #c00; }
+    </style>
+</head>
+<body>
+    <h1>Aguara Security Scanner</h1>
+    <p>Client-side scanning - no data leaves your browser.</p>
+
+    <label for="filename">Filename hint:</label>
+    <input id="filename" type="text" value="skill.md" />
+
+    <label for="content">Content to scan:</label>
+    <textarea id="content" placeholder="Paste skill description, MCP config, or agent tool content here..."></textarea>
+
+    <button id="scan" disabled>Loading WASM...</button>
+
+    <h2>Results</h2>
+    <pre id="results">Waiting for scan...</pre>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        const go = new Go();
+        WebAssembly.instantiateStreaming(fetch("aguara.wasm"), go.importObject).then((result) => {
+            go.run(result.instance);
+            document.getElementById("scan").disabled = false;
+            document.getElementById("scan").textContent = "Scan";
+        });
+
+        document.getElementById("scan").addEventListener("click", async () => {
+            const content = document.getElementById("content").value;
+            const filename = document.getElementById("filename").value || "skill.md";
+            const results = document.getElementById("results");
+
+            results.textContent = "Scanning...";
+            results.className = "loading";
+
+            try {
+                const json = await aguaraScanContent(content, filename);
+                const parsed = JSON.parse(json);
+                results.className = "";
+                if (parsed.findings && parsed.findings.length > 0) {
+                    results.textContent = JSON.stringify(parsed, null, 2);
+                } else {
+                    results.textContent = "No findings. Content looks clean.";
+                }
+            } catch (e) {
+                results.textContent = "Error: " + e.message;
+                results.className = "error";
+            }
+        });
+    </script>
+</body>
+</html>

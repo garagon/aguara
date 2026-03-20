@@ -10,6 +10,8 @@ type (
 	ContextLine = types.ContextLine
 	Finding     = types.Finding
 	ScanResult  = types.ScanResult
+	Verdict     = types.Verdict
+	ScanProfile = types.ScanProfile
 )
 
 const (
@@ -21,3 +23,13 @@ const (
 )
 
 var ParseSeverity = types.ParseSeverity
+
+const (
+	VerdictClean = types.VerdictClean
+	VerdictFlag  = types.VerdictFlag
+	VerdictBlock = types.VerdictBlock
+
+	ProfileStrict       = types.ProfileStrict
+	ProfileContentAware = types.ProfileContentAware
+	ProfileMinimal      = types.ProfileMinimal
+)

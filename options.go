@@ -10,6 +10,8 @@ type scanConfig struct {
 	ignorePatterns []string
 	maxFileSize    int64
 	category       string // only for ListRules
+	toolName       string
+	scanProfile    ScanProfile
 }
 
 // Option configures a scan operation.
@@ -69,5 +71,24 @@ func WithMaxFileSize(bytes int64) Option {
 func WithCategory(cat string) Option {
 	return func(c *scanConfig) {
 		c.category = cat
+	}
+}
+
+// WithToolName sets the tool context for false-positive reduction.
+// When set, built-in tool exemptions and scan profiles can filter findings
+// that are always false positives for that tool (e.g. TC-005 in Edit).
+func WithToolName(name string) Option {
+	return func(c *scanConfig) {
+		c.toolName = name
+	}
+}
+
+// WithScanProfile sets the enforcement profile for the scan.
+// ProfileStrict (default) enforces all rules. ProfileContentAware only enforces
+// MinimalEnforceRules (path traversal, system dir write, credentials).
+// ProfileMinimal flags MinimalEnforceRules but doesn't block.
+func WithScanProfile(profile ScanProfile) Option {
+	return func(c *scanConfig) {
+		c.scanProfile = profile
 	}
 }

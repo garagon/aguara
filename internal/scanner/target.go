@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // DefaultMaxFileSize is the default maximum file size (50 MB) that will be scanned.
@@ -52,18 +54,19 @@ func (t *Target) LoadContent() error {
 	return nil
 }
 
-// StringContent returns the content as a string. The result is cached.
+// StringContent returns the content as a NFKC-normalized string. The result is cached.
+// NFKC normalization prevents Unicode evasion attacks (e.g. fullwidth chars).
 func (t *Target) StringContent() string {
 	t.strOnce.Do(func() {
-		t.strContent = string(t.Content)
+		t.strContent = norm.NFKC.String(string(t.Content))
 	})
 	return t.strContent
 }
 
-// Lines returns the content split into lines. The result is cached.
+// Lines returns the NFKC-normalized content split into lines. The result is cached.
 func (t *Target) Lines() []string {
 	t.linesOnce.Do(func() {
-		t.lines = strings.Split(string(t.Content), "\n")
+		t.lines = strings.Split(t.StringContent(), "\n")
 	})
 	return t.lines
 }
