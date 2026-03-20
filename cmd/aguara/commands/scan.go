@@ -33,6 +33,8 @@ var (
 	flagStatePath   string
 	flagAuto        bool
 	flagMaxFileSize string
+	flagToolName    string
+	flagProfile     string
 )
 
 var scanCmd = &cobra.Command{
@@ -58,7 +60,9 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
 	scanCmd.Flags().BoolVar(&flagAuto, "auto", false, "Auto-discover and scan all MCP client configs")
-	scanCmd.Flags().StringVar(&flagMaxFileSize, "max-file-size", "", "Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB–500MB)")
+	scanCmd.Flags().StringVar(&flagMaxFileSize, "max-file-size", "", "Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB-500MB)")
+	scanCmd.Flags().StringVar(&flagToolName, "tool-name", "", "Tool context for false-positive reduction (e.g. Bash, Edit, WebFetch)")
+	scanCmd.Flags().StringVar(&flagProfile, "profile", "", "Scan profile: strict (default), content-aware, minimal")
 	rootCmd.AddCommand(scanCmd)
 }
 
@@ -285,7 +289,12 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 	if len(cfg.RuleOverrides) > 0 {
 		overrides := make(map[string]rules.RuleOverride, len(cfg.RuleOverrides))
 		for id, ovr := range cfg.RuleOverrides {
-			overrides[id] = rules.RuleOverride{Severity: ovr.Severity, Disabled: ovr.Disabled}
+			overrides[id] = rules.RuleOverride{
+				Severity:     ovr.Severity,
+				Disabled:     ovr.Disabled,
+				ApplyToTools: ovr.ApplyToTools,
+				ExemptTools:  ovr.ExemptTools,
+			}
 		}
 		var ovrErrs []error
 		compiled, ovrErrs = rules.ApplyOverrides(compiled, overrides)
@@ -317,6 +326,32 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	} else if maxSize > 0 {
 		s.SetMaxFileSize(maxSize)
+	}
+
+	if flagToolName != "" {
+		s.SetToolName(flagToolName)
+	}
+
+	if profile, err := parseProfileFlag(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	} else if profile != scanner.ProfileStrict {
+		s.SetScanProfile(profile)
+	}
+
+	// Propagate tool-scoped rule overrides from config
+	if len(cfg.RuleOverrides) > 0 {
+		toolScoped := make(map[string]scanner.ToolScopedRule)
+		for id, ovr := range cfg.RuleOverrides {
+			if len(ovr.ApplyToTools) > 0 || len(ovr.ExemptTools) > 0 {
+				toolScoped[id] = scanner.ToolScopedRule{
+					ApplyToTools: ovr.ApplyToTools,
+					ExemptTools:  ovr.ExemptTools,
+				}
+			}
+		}
+		if len(toolScoped) > 0 {
+			s.SetToolScopedRules(toolScoped)
+		}
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
@@ -482,6 +517,19 @@ func parseByteSize(s string) (int64, error) {
 		return int64(num * 1024 * 1024 * 1024), nil
 	default:
 		return 0, fmt.Errorf("unknown size unit %q in %q", unit, s)
+	}
+}
+
+func parseProfileFlag() (scanner.ScanProfile, error) {
+	switch strings.ToLower(strings.TrimSpace(flagProfile)) {
+	case "", "strict":
+		return scanner.ProfileStrict, nil
+	case "content-aware":
+		return scanner.ProfileContentAware, nil
+	case "minimal":
+		return scanner.ProfileMinimal, nil
+	default:
+		return scanner.ProfileStrict, fmt.Errorf("invalid --profile %q: use strict, content-aware, or minimal", flagProfile)
 	}
 }
 

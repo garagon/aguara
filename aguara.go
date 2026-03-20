@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
@@ -27,6 +29,8 @@ type (
 	Finding     = types.Finding
 	ScanResult  = types.ScanResult
 	ContextLine = types.ContextLine
+	Verdict     = types.Verdict
+	ScanProfile = types.ScanProfile
 )
 
 const (
@@ -35,6 +39,14 @@ const (
 	SeverityMedium   = types.SeverityMedium
 	SeverityHigh     = types.SeverityHigh
 	SeverityCritical = types.SeverityCritical
+
+	VerdictClean = types.VerdictClean
+	VerdictFlag  = types.VerdictFlag
+	VerdictBlock = types.VerdictBlock
+
+	ProfileStrict       = types.ProfileStrict
+	ProfileContentAware = types.ProfileContentAware
+	ProfileMinimal      = types.ProfileMinimal
 )
 
 // Re-export discover types so consumers don't need a separate import.
@@ -49,10 +61,13 @@ func Discover() (*DiscoverResult, error) {
 	return discover.Scan()
 }
 
-// RuleOverride allows changing the severity of a rule or disabling it.
+// RuleOverride allows changing the severity of a rule, disabling it, or
+// restricting it to specific tools.
 type RuleOverride struct {
-	Severity string
-	Disabled bool
+	Severity     string
+	Disabled     bool
+	ApplyToTools []string // only enforce on these tools (mutually exclusive with ExemptTools)
+	ExemptTools  []string // enforce on all tools except these
 }
 
 // RuleInfo provides summary metadata about a detection rule.
@@ -93,11 +108,31 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 
 // ScanContent scans inline content without writing to disk.
 // filename is a hint for rule target matching (e.g. "skill.md", "config.json").
+// Content is NFKC-normalized before scanning to prevent Unicode evasion attacks.
 func ScanContent(ctx context.Context, content string, filename string, opts ...Option) (*ScanResult, error) {
+	return scanContentInternal(ctx, content, filename, "", opts)
+}
+
+// ScanContentAs scans inline content with tool context for false-positive reduction.
+// toolName identifies the tool that generated the content (e.g. "Bash", "Edit", "WebFetch").
+// When provided, built-in tool exemptions and scan profiles can reduce false positives.
+// Content is NFKC-normalized before scanning to prevent Unicode evasion attacks.
+func ScanContentAs(ctx context.Context, content string, filename string, toolName string, opts ...Option) (*ScanResult, error) {
+	return scanContentInternal(ctx, content, filename, toolName, opts)
+}
+
+func scanContentInternal(ctx context.Context, content string, filename string, toolName string, opts []Option) (*ScanResult, error) {
 	if filename == "" {
 		filename = "skill.md"
 	}
+	// NFKC normalization prevents Unicode evasion (e.g. fullwidth "Ｉｇｎｏｒｅ" → "Ignore")
+	content = norm.NFKC.String(content)
+
 	cfg := applyOpts(opts)
+	// Explicit toolName parameter takes precedence over WithToolName option
+	if toolName != "" {
+		cfg.toolName = toolName
+	}
 	s, compiled, err := buildScanner(cfg)
 	if err != nil {
 		return nil, err
@@ -118,7 +153,8 @@ func ScanContent(ctx context.Context, content string, filename string, opts ...O
 // Use WithCategory to filter by category.
 func ListRules(opts ...Option) []RuleInfo {
 	cfg := applyOpts(opts)
-	compiled, _ := loadAndCompile(cfg)
+	cr, _ := loadAndCompile(cfg)
+	compiled := cr.compiled
 
 	sort.Slice(compiled, func(i, j int) bool {
 		return compiled[i].ID < compiled[j].ID
@@ -150,7 +186,8 @@ func ListRules(opts ...Option) []RuleInfo {
 func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 	id = strings.ToUpper(strings.TrimSpace(id))
 	cfg := applyOpts(opts)
-	compiled, _ := loadAndCompile(cfg)
+	cr, _ := loadAndCompile(cfg)
+	compiled := cr.compiled
 
 	var found *rules.CompiledRule
 	for _, r := range compiled {
@@ -196,9 +233,14 @@ func applyOpts(opts []Option) *scanConfig {
 	return cfg
 }
 
+type compileResult struct {
+	compiled         []*rules.CompiledRule
+	toolScopedRules  map[string]scanner.ToolScopedRule
+}
+
 // loadAndCompile loads built-in (and optionally custom) rules, compiles them,
 // and applies overrides/filters. Used by all public functions.
-func loadAndCompile(cfg *scanConfig) ([]*rules.CompiledRule, error) {
+func loadAndCompile(cfg *scanConfig) (*compileResult, error) {
 	rawRules, err := rules.LoadFromFS(builtin.FS())
 	if err != nil {
 		return nil, fmt.Errorf("loading built-in rules: %w", err)
@@ -215,12 +257,30 @@ func loadAndCompile(cfg *scanConfig) ([]*rules.CompiledRule, error) {
 	compiled, compileErrs := rules.CompileAll(rawRules)
 	_ = compileErrs // non-fatal: invalid rules are skipped
 
+	var toolScoped map[string]scanner.ToolScopedRule
 	if len(cfg.ruleOverrides) > 0 {
 		overrides := make(map[string]rules.RuleOverride, len(cfg.ruleOverrides))
 		for id, ovr := range cfg.ruleOverrides {
-			overrides[id] = rules.RuleOverride{Severity: ovr.Severity, Disabled: ovr.Disabled}
+			overrides[id] = rules.RuleOverride{
+				Severity:     ovr.Severity,
+				Disabled:     ovr.Disabled,
+				ApplyToTools: ovr.ApplyToTools,
+				ExemptTools:  ovr.ExemptTools,
+			}
 		}
 		compiled, _ = rules.ApplyOverrides(compiled, overrides)
+		// Collect tool-scoped overrides for runtime filtering
+		for id, ovr := range overrides {
+			if len(ovr.ApplyToTools) > 0 || len(ovr.ExemptTools) > 0 {
+				if toolScoped == nil {
+					toolScoped = make(map[string]scanner.ToolScopedRule)
+				}
+				toolScoped[id] = scanner.ToolScopedRule{
+					ApplyToTools: ovr.ApplyToTools,
+					ExemptTools:  ovr.ExemptTools,
+				}
+			}
+		}
 	}
 
 	if len(cfg.disabledRules) > 0 {
@@ -231,12 +291,12 @@ func loadAndCompile(cfg *scanConfig) ([]*rules.CompiledRule, error) {
 		compiled = rules.FilterByIDs(compiled, disabled)
 	}
 
-	return compiled, nil
+	return &compileResult{compiled: compiled, toolScopedRules: toolScoped}, nil
 }
 
 // buildScanner creates a fully wired Scanner with all standard analyzers.
 func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, error) {
-	compiled, err := loadAndCompile(cfg)
+	cr, err := loadAndCompile(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -249,10 +309,19 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	if cfg.maxFileSize > 0 {
 		s.SetMaxFileSize(cfg.maxFileSize)
 	}
+	if cfg.toolName != "" {
+		s.SetToolName(cfg.toolName)
+	}
+	if cfg.scanProfile != ProfileStrict {
+		s.SetScanProfile(cfg.scanProfile)
+	}
+	if len(cr.toolScopedRules) > 0 {
+		s.SetToolScopedRules(cr.toolScopedRules)
+	}
 
-	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
+	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 
-	return s, compiled, nil
+	return s, cr.compiled, nil
 }

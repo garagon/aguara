@@ -47,6 +47,27 @@ func TestParseSeverity(t *testing.T) {
 	}
 }
 
+func TestVerdictString(t *testing.T) {
+	tests := []struct {
+		v    types.Verdict
+		want string
+	}{
+		{types.VerdictClean, "clean"},
+		{types.VerdictFlag, "flag"},
+		{types.VerdictBlock, "block"},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.want, tt.v.String())
+	}
+}
+
+func TestScanProfileConstants(t *testing.T) {
+	// Ensure profiles have correct ordering
+	require.Equal(t, types.ScanProfile(0), types.ProfileStrict)
+	require.Equal(t, types.ScanProfile(1), types.ProfileContentAware)
+	require.Equal(t, types.ScanProfile(2), types.ProfileMinimal)
+}
+
 func TestDowngradeSeverity(t *testing.T) {
 	tests := []struct {
 		input types.Severity

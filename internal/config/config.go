@@ -31,10 +31,13 @@ func ValidateMaxFileSize(v int64) (int64, error) {
 	return v, nil
 }
 
-// RuleOverride allows per-rule severity or disable.
+// RuleOverride allows per-rule severity, disable, or tool-scoped filtering.
+// ApplyToTools and ExemptTools are mutually exclusive.
 type RuleOverride struct {
-	Severity string `yaml:"severity,omitempty"`
-	Disabled bool   `yaml:"disabled,omitempty"`
+	Severity     string   `yaml:"severity,omitempty"`
+	Disabled     bool     `yaml:"disabled,omitempty"`
+	ApplyToTools []string `yaml:"apply_to_tools,omitempty"`
+	ExemptTools  []string `yaml:"exempt_tools,omitempty"`
 }
 
 // Config represents the .aguara.yml configuration file.
@@ -76,6 +79,12 @@ func Load(dir string) (Config, error) {
 		var cfg Config
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		// Validate mutually exclusive tool-scoped fields
+		for id, ovr := range cfg.RuleOverrides {
+			if len(ovr.ApplyToTools) > 0 && len(ovr.ExemptTools) > 0 {
+				return Config{}, fmt.Errorf("rule %s: apply_to_tools and exempt_tools are mutually exclusive", id)
+			}
 		}
 		return cfg, nil
 	}

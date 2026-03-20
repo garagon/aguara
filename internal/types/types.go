@@ -112,11 +112,52 @@ func DowngradeSeverity(sev Severity) Severity {
 	}
 }
 
+// ScanProfile controls how aggressively findings are enforced.
+type ScanProfile int
+
+const (
+	// ProfileStrict enforces all rules (default for standalone scanning).
+	ProfileStrict ScanProfile = iota
+	// ProfileContentAware only enforces MinimalEnforceRules; everything else
+	// is downgraded to clean. Use for content/file-editing tools.
+	ProfileContentAware
+	// ProfileMinimal only enforces MinimalEnforceRules as flags; everything
+	// else is downgraded to clean. Use for trusted internal agents.
+	ProfileMinimal
+)
+
+// Verdict represents the final policy decision after all filtering layers.
+type Verdict int
+
+const (
+	// VerdictClean means no actionable findings.
+	VerdictClean Verdict = iota
+	// VerdictFlag means findings are informational only (not blocking).
+	VerdictFlag
+	// VerdictBlock means findings require action (blocking).
+	VerdictBlock
+)
+
+func (v Verdict) String() string {
+	switch v {
+	case VerdictClean:
+		return "clean"
+	case VerdictFlag:
+		return "flag"
+	case VerdictBlock:
+		return "block"
+	default:
+		return "unknown"
+	}
+}
+
 // ScanResult holds the complete results of a scan.
 type ScanResult struct {
 	Findings     []Finding     `json:"findings"`
 	FilesScanned int           `json:"files_scanned"`
 	RulesLoaded  int           `json:"rules_loaded"`
+	Verdict      Verdict       `json:"verdict"`
+	ToolName     string        `json:"tool_name,omitempty"`
 	Duration     time.Duration `json:"-"`
 	Target       string        `json:"-"`
 }

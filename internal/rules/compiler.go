@@ -103,10 +103,12 @@ func CompileAll(raws []RawRule) ([]*CompiledRule, []error) {
 	return rules, errs
 }
 
-// RuleOverride allows per-rule severity change or disable from config.
+// RuleOverride allows per-rule severity change, disable, or tool-scoped filtering.
 type RuleOverride struct {
-	Severity string
-	Disabled bool
+	Severity     string
+	Disabled     bool
+	ApplyToTools []string // only enforce on these tools (mutually exclusive with ExemptTools)
+	ExemptTools  []string // enforce on all tools except these
 }
 
 // ApplyOverrides applies config-based rule overrides to compiled rules.

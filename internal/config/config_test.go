@@ -123,6 +123,42 @@ disable_rules:
 	require.Equal(t, []string{"CRED_004", "EXFIL_005", "PROMPT_INJECTION_001"}, cfg.DisableRules)
 }
 
+func TestLoadConfigToolScopedRules(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`
+rule_overrides:
+  TC-005:
+    apply_to_tools:
+      - Bash
+  MCPCFG_004:
+    exempt_tools:
+      - WebFetch
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguara.yml"), data, 0644))
+
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Bash"}, cfg.RuleOverrides["TC-005"].ApplyToTools)
+	require.Equal(t, []string{"WebFetch"}, cfg.RuleOverrides["MCPCFG_004"].ExemptTools)
+}
+
+func TestLoadConfigToolScopedMutuallyExclusive(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`
+rule_overrides:
+  TC-005:
+    apply_to_tools:
+      - Bash
+    exempt_tools:
+      - Edit
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguara.yml"), data, 0644))
+
+	_, err := config.Load(dir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mutually exclusive")
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()
