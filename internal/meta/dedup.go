@@ -8,11 +8,17 @@ import (
 	"github.com/garagon/aguara/internal/types"
 )
 
-// Deduplicate removes duplicate findings in two passes:
-//  1. By (FilePath, RuleID, Line) — collapses same-rule duplicates on the same line.
-//  2. By (FilePath, Line) — collapses cross-rule duplicates on the same line,
-//     keeping the highest severity (then highest confidence) instance.
+// Deduplicate removes duplicate findings using DeduplicateFull mode (default).
 func Deduplicate(findings []types.Finding) []types.Finding {
+	return DeduplicateWithMode(findings, types.DeduplicateFull)
+}
+
+// DeduplicateWithMode removes duplicate findings according to the specified mode.
+//
+// Pass 1 (always): By (FilePath, RuleID, Line) — collapses same-rule duplicates on the same line.
+// Pass 2 (DeduplicateFull only): By (FilePath, Line) — collapses cross-rule duplicates,
+// keeping the highest severity (then highest confidence) instance.
+func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) []types.Finding {
 	// Pass 1: same-rule dedup
 	byRule := make(map[string]types.Finding)
 	for _, f := range findings {
@@ -24,6 +30,14 @@ func Deduplicate(findings []types.Finding) []types.Finding {
 		} else {
 			byRule[k] = f
 		}
+	}
+
+	if mode == types.DeduplicateSameRuleOnly {
+		result := make([]types.Finding, 0, len(byRule))
+		for _, f := range byRule {
+			result = append(result, f)
+		}
+		return result
 	}
 
 	// Pass 2: cross-rule dedup by (FilePath, Line)

@@ -13,17 +13,31 @@ import (
 	"github.com/garagon/aguara/internal/meta"
 )
 
+// CrossFileAccumulator can accumulate per-file data and finalize cross-file findings.
+type CrossFileAccumulator interface {
+	Accumulate(relPath string, content string)
+	Finalize() []Finding
+}
+
+// StateSaver can persist state after a scan completes.
+type StateSaver interface {
+	Save() error
+}
+
 // Scanner orchestrates the scanning process.
 type Scanner struct {
-	analyzers        []Analyzer
-	workers          int
-	minSeverity      Severity
-	ignorePatterns   []string
-	maxFileSize      int64
-	onProgress       func(current, total int)
-	toolName         string
-	scanProfile      ScanProfile
-	toolScopedRules  map[string]ToolScopedRule
+	analyzers            []Analyzer
+	workers              int
+	minSeverity          Severity
+	ignorePatterns       []string
+	maxFileSize          int64
+	onProgress           func(current, total int)
+	toolName             string
+	scanProfile          ScanProfile
+	toolScopedRules      map[string]ToolScopedRule
+	deduplicateMode      DeduplicateMode
+	crossFileAccumulator CrossFileAccumulator
+	stateStore           StateSaver
 }
 
 // New creates a new Scanner with the given number of workers.
@@ -78,6 +92,21 @@ func (s *Scanner) SetScanProfile(profile ScanProfile) {
 // SetToolScopedRules sets per-rule tool filtering from user configuration.
 func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
 	s.toolScopedRules = rules
+}
+
+// SetDeduplicateMode sets how findings on the same line are deduplicated.
+func (s *Scanner) SetDeduplicateMode(mode DeduplicateMode) {
+	s.deduplicateMode = mode
+}
+
+// SetCrossFileAccumulator sets the cross-file analyzer for directory scans.
+func (s *Scanner) SetCrossFileAccumulator(cfa CrossFileAccumulator) {
+	s.crossFileAccumulator = cfa
+}
+
+// SetStateStore sets a state saver to persist state after scan completes.
+func (s *Scanner) SetStateStore(store StateSaver) {
+	s.stateStore = store
 }
 
 // Scan performs a full scan of the given path. The path can be a directory
@@ -146,6 +175,10 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				if err := target.LoadContent(); err != nil {
 					continue
 				}
+				// Accumulate content for cross-file analysis
+				if s.crossFileAccumulator != nil {
+					s.crossFileAccumulator.Accumulate(target.RelPath, target.StringContent())
+				}
 				ignoreIndex := buildIgnoreIndex(parseIgnoreDirectives(target.Content))
 				for _, analyzer := range s.analyzers {
 					if ctx.Err() != nil {
@@ -186,6 +219,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		return nil, ctx.Err()
 	}
 
+	// Cross-file analysis: finalize after all workers complete
+	if s.crossFileAccumulator != nil {
+		findings = append(findings, s.crossFileAccumulator.Finalize()...)
+	}
+
 	findings = s.postProcess(findings)
 
 	verdict := computeVerdict(findings)
@@ -193,10 +231,18 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		verdict = applyProfile(s.scanProfile, findings)
 	}
 
+	// Persist state (rug-pull hashes) if configured
+	if s.stateStore != nil {
+		_ = s.stateStore.Save() // best-effort; scan results are still valid
+	}
+
+	riskScore := meta.ComputeRiskScore(findings)
+
 	return &ScanResult{
 		Findings:     findings,
 		FilesScanned: len(targets),
 		Verdict:      verdict,
+		RiskScore:    riskScore,
 		ToolName:     s.toolName,
 		Duration:     time.Since(start),
 	}, nil
@@ -208,7 +254,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	if s.toolName != "" {
 		findings = applyToolExemptions(s.toolName, findings, s.toolScopedRules)
 	}
-	findings = meta.Deduplicate(findings)
+	findings = meta.DeduplicateWithMode(findings, s.deduplicateMode)
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)
 	findings = flattenGroups(groups)

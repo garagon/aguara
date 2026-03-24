@@ -177,8 +177,13 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent strin
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
 	seenLines := make(map[int]bool)
+	// Count how many distinct patterns produced at least one hit (for dynamic confidence)
+	hitPatterns := 0
 	for _, pat := range rule.Patterns {
 		hits := matchPattern(pat, content, lowerContent, lines)
+		if len(hits) > 0 {
+			hitPatterns++
+		}
 		for _, hit := range hits {
 			if seenLines[hit.line] {
 				continue
@@ -205,10 +210,19 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent strin
 				Context:     types.ExtractContext(lines, hit.line, ctxRadius, ctxRadius),
 				Analyzer:    "pattern",
 				InCodeBlock: inCB,
-				Confidence:  0.85,
+				Confidence:  0.85, // placeholder, updated below
 			})
 		}
 	}
+
+	// Dynamic confidence: 0.70 (1 of many patterns) to 0.95 (all patterns hit)
+	if len(findings) > 0 && len(rule.Patterns) > 0 {
+		conf := 0.70 + 0.25*(float64(hitPatterns)/float64(len(rule.Patterns)))
+		for i := range findings {
+			findings[i].Confidence = conf
+		}
+	}
+
 	return findings
 }
 

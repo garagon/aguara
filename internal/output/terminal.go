@@ -271,6 +271,9 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		fmt.Sprintf("%d findings", len(result.Findings)),
 		fmt.Sprintf("%d rules", result.RulesLoaded),
 	}
+	if result.RiskScore > 0 {
+		parts = append(parts, fmt.Sprintf("risk: %.1f/100", result.RiskScore))
+	}
 	if result.Duration > 0 {
 		parts = append(parts, fmt.Sprintf("%.2fs", result.Duration.Seconds()))
 	}

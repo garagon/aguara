@@ -126,6 +126,16 @@ const (
 	ProfileMinimal
 )
 
+// DeduplicateMode controls how findings are deduplicated.
+type DeduplicateMode int
+
+const (
+	// DeduplicateFull removes same-rule AND cross-rule duplicates per line (default, CLI behavior).
+	DeduplicateFull DeduplicateMode = iota
+	// DeduplicateSameRuleOnly removes same-rule duplicates but keeps cross-rule findings on same line.
+	DeduplicateSameRuleOnly
+)
+
 // Verdict represents the final policy decision after all filtering layers.
 type Verdict int
 
@@ -157,6 +167,7 @@ type ScanResult struct {
 	FilesScanned int           `json:"files_scanned"`
 	RulesLoaded  int           `json:"rules_loaded"`
 	Verdict      Verdict       `json:"verdict"`
+	RiskScore    float64       `json:"risk_score"`
 	ToolName     string        `json:"tool_name,omitempty"`
 	Duration     time.Duration `json:"-"`
 	Target       string        `json:"-"`

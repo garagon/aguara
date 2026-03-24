@@ -2,7 +2,10 @@
 // analysis, keyword classification, and injection pattern detection.
 package nlp
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // InstructionCategory represents a category of dangerous instruction.
 type InstructionCategory int
@@ -107,18 +110,23 @@ type ClassifyResult struct {
 }
 
 // Classify returns the top instruction category for the given text.
+// Applies proximity weighting: clustered keywords score higher, sparse
+// keywords in long text score lower.
 func Classify(text string) ClassifyResult {
 	lower := strings.ToLower(text)
+	words := strings.Fields(lower)
+	totalWords := len(words)
+
 	var bestCat InstructionCategory
 	var bestScore float64
 
 	for cat, keywords := range categoryKeywords {
-		var score float64
-		for _, kw := range keywords {
-			if strings.Contains(lower, kw.keyword) {
-				score += kw.weight
-			}
+		rawScore, hitPositions := scoreCategory(lower, keywords)
+		if rawScore == 0 {
+			continue
 		}
+
+		score := applyProximityWeighting(rawScore, hitPositions, totalWords)
 		if score > bestScore {
 			bestScore = score
 			bestCat = cat
@@ -129,20 +137,63 @@ func Classify(text string) ClassifyResult {
 }
 
 // ClassifyAll returns all categories with non-zero scores.
+// Applies the same proximity weighting as Classify.
 func ClassifyAll(text string) []ClassifyResult {
 	lower := strings.ToLower(text)
+	words := strings.Fields(lower)
+	totalWords := len(words)
+
 	var results []ClassifyResult
 
 	for cat, keywords := range categoryKeywords {
-		var score float64
-		for _, kw := range keywords {
-			if strings.Contains(lower, kw.keyword) {
-				score += kw.weight
-			}
+		rawScore, hitPositions := scoreCategory(lower, keywords)
+		if rawScore == 0 {
+			continue
 		}
-		if score > 0 {
-			results = append(results, ClassifyResult{Category: cat, Score: score})
-		}
+
+		score := applyProximityWeighting(rawScore, hitPositions, totalWords)
+		results = append(results, ClassifyResult{Category: cat, Score: score})
 	}
 	return results
+}
+
+// scoreCategory returns the raw keyword score and word positions of hits.
+func scoreCategory(lower string, keywords []weightedKeyword) (float64, []int) {
+	var rawScore float64
+	var hitPositions []int
+
+	for _, kw := range keywords {
+		idx := strings.Index(lower, kw.keyword)
+		if idx >= 0 {
+			rawScore += kw.weight
+			// Approximate word position by counting spaces before the match
+			wordPos := strings.Count(lower[:idx], " ")
+			hitPositions = append(hitPositions, wordPos)
+		}
+	}
+	return rawScore, hitPositions
+}
+
+// applyProximityWeighting adjusts raw score based on keyword clustering and text density.
+func applyProximityWeighting(rawScore float64, hitPositions []int, totalWords int) float64 {
+	// Proximity bonus: keywords close together score higher
+	proximityFactor := 1.0
+	if len(hitPositions) >= 2 {
+		sort.Ints(hitPositions)
+		span := hitPositions[len(hitPositions)-1] - hitPositions[0]
+		avgGap := float64(span) / float64(len(hitPositions))
+		if avgGap < 10 {
+			proximityFactor = 1.3 // clustered keywords = suspicious
+		} else if avgGap > 30 {
+			proximityFactor = 0.7 // spread out = likely benign
+		}
+	}
+
+	// Density penalty: few keywords in very long text are less suspicious
+	densityFactor := 1.0
+	if totalWords > 50 && len(hitPositions) < 3 {
+		densityFactor = 0.6 // few keywords in long text
+	}
+
+	return rawScore * proximityFactor * densityFactor
 }
