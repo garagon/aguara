@@ -36,15 +36,20 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
 - **177 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
-- **4-layer analysis engine** — pattern matching, NLP-based markdown analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
+- **4-layer analysis engine** — pattern matching, NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
+- **6 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, and hex escapes. Obfuscated payloads are decoded and re-scanned automatically.
+- **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
+- **Cross-file toxic flow analysis** — detects dangerous capability combinations split across files in the same MCP server directory (e.g., one tool reads credentials, another sends to a webhook).
+- **Aggregate risk score** — 0-100 score with diminishing returns across findings. Available in JSON, SARIF, and terminal output.
 - **Context-aware scanning** — pass the tool name (`--tool-name Edit`) and the scanner automatically skips rules that are always false positives for that tool. Built-in exemptions for Edit, Write, WebFetch, Bash, and more.
 - **Scan profiles** — `strict` (default), `content-aware`, or `minimal` enforcement. Findings are always preserved for audit; only the verdict (clean/flag/block) changes.
-- **Unicode evasion prevention** — NFKC normalization catches fullwidth character evasion (e.g. fullwidth "Ignore" normalized to ASCII before matching).
-- **Confidence scoring** — every finding carries a confidence level (0.0-1.0), so you can prioritize triage and filter noise.
+- **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 6 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
+- **Dynamic confidence scoring** — every finding carries a confidence level (0.50-0.95) that reflects signal quality: pattern hit ratio, classifier score, and code-block awareness.
 - **Remediation guidance** — all 177 rules include actionable fix suggestions, shown in every output format.
 - **Deterministic** — same input, same output. Every scan is reproducible.
 - **CI-ready** — JSON, SARIF, and Markdown output. GitHub Action. `--fail-on` threshold. `--changed` for incremental scans.
 - **17 MCP clients supported** — auto-discover and scan configs from Claude Desktop, Cursor, VS Code, Windsurf, and 13 more.
+- **Library API for embedding** — `WithDeduplicateMode()` preserves all cross-rule findings for verdict pipelines. `WithStateDir()` enables rug-pull detection for persistent consumers.
 - **Extensible** — write custom rules in YAML. No code required.
 
 ## Installation
@@ -56,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | ba
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-VERSION=v0.5.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+VERSION=v0.10.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 ```
 
@@ -78,7 +83,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.9.1 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.10.0 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -120,12 +125,12 @@ Aguara runs 4 analysis layers sequentially on every file. Each layer catches dif
 
 | Layer | Engine | What it catches |
 |-------|--------|-----------------|
-| **Pattern Matcher** | Regex + Aho-Corasick matching | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern substring search. Rules pre-grouped by file extension. Decodes base64/hex blobs and re-scans. Downgrades severity for matches inside markdown code blocks. |
-| **NLP Analyzer** | Goldmark AST walker | Prompt injection in markdown structure — instruction overrides, role-switching, and jailbreaks detected via keyword classification on headings, paragraphs, and list items. |
-| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations: reading private data + writing to external URLs, environment variables flowing to shell execution, API responses piped to eval. |
-| **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans — catches MCP servers that modify their behavior after initial review. Requires `--monitor` flag. |
+| **Pattern Matcher** | Regex + Aho-Corasick matching | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern search. 6 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes) decode obfuscated payloads and re-scan. Code-block severity downgrade. Dynamic confidence based on pattern hit ratio. |
+| **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting - clustered keywords score higher, sparse keywords in long text get penalized. |
+| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations within a single file and across files in the same directory. Detects credential reads paired with webhook sends, env vars flowing to shell execution, and destructive + exec combos across MCP server tools. |
+| **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans. CLI: `--monitor` flag. Library: `WithStateDir()` for persistent consumers. |
 
-All content is NFKC-normalized before scanning to prevent Unicode evasion attacks. All layers report findings with severity, confidence score, matched text, file location with context lines, and remediation guidance.
+All content is NFKC-normalized before scanning to prevent Unicode evasion attacks. All layers report findings with severity, dynamic confidence score (0.50-0.95), matched text, file location with context lines, and remediation guidance. An aggregate risk score (0-100) summarizes overall threat level.
 
 ## Usage
 
@@ -301,13 +306,13 @@ Supported directives:
 | External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
 | MCP Attack | 16 | Tool injection, name shadowing, canonicalization bypass, capability escalation |
 | Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
-| Command Execution | 15 | shell=True, eval, subprocess, child_process, PowerShell |
+| Command Execution | 16 | shell=True, eval, subprocess, child_process, PowerShell |
 | MCP Config | 11 | Unpinned npx servers, hardcoded secrets, Docker cap-add, host networking |
-| Indirect Injection | 11 | Fetch-and-follow, remote config, DB-driven instructions, webhook registration |
+| Indirect Injection | 10 | Fetch-and-follow, remote config, DB-driven instructions, webhook registration |
 | SSRF & Cloud | 11 | Cloud metadata, IMDS, Docker socket, internal IPs, redirect following |
 | Third-Party Content | 10 | eval with external data, unsafe deserialization, missing SRI, HTTP downgrade |
 | Unicode Attack | 10 | RTL override, bidi, homoglyphs, zero-width sequences, normalization bypass |
-| Toxic Flow | 3 | User input to dangerous sinks, env vars to shell, API to eval |
+| Toxic Flow | 3 + cross-file | Single-file taint tracking plus cross-file correlation across MCP server directories |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
 
@@ -335,7 +340,7 @@ aguara scan . --verbose
   "severity": 4,
   "matched_text": "Ignore all previous instructions",
   "remediation": "Remove instruction override text. If this is documentation, wrap it in a code block to indicate it is an example.",
-  "confidence": 0.85
+  "confidence": 0.95
 }
 ```
 
@@ -387,7 +392,7 @@ Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `
 
 ## Aguara Watch
 
-[Aguara Watch](https://watch.aguarascan.com/) continuously scans **50,000+ AI agent skills** across 5 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
+[Aguara Watch](https://watch.aguarascan.com/) continuously scans **28,000+ AI agent skills** across 6 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
 
 ## Go Library
 
@@ -413,6 +418,17 @@ result, err := aguara.ScanContent(ctx, content, "skill.md",
     aguara.WithToolName("Edit"),
     aguara.WithScanProfile(aguara.ProfileContentAware),
 )
+// result.RiskScore: 0-100 aggregate risk score
+
+// Preserve cross-rule findings (for verdict pipelines)
+result, err := aguara.ScanContent(ctx, content, "skill.md",
+    aguara.WithDeduplicateMode(aguara.DeduplicateSameRuleOnly),
+)
+
+// Enable rug-pull detection with persistent state
+result, err := aguara.ScanContent(ctx, content, "tool.md",
+    aguara.WithStateDir("/var/lib/myapp/aguara-state"),
+)
 
 // Discover all MCP client configs on the machine
 discovered, err := aguara.Discover()
@@ -428,31 +444,31 @@ detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
 fmt.Println(detail.Remediation)
 ```
 
-Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithRuleOverrides()`, `WithWorkers()`, `WithIgnorePatterns()`, `WithMaxFileSize()`, `WithCategory()`, `WithToolName()`, `WithScanProfile()`.
+Options: `WithMinSeverity()`, `WithDisabledRules()`, `WithCustomRules()`, `WithRuleOverrides()`, `WithWorkers()`, `WithIgnorePatterns()`, `WithMaxFileSize()`, `WithCategory()`, `WithToolName()`, `WithScanProfile()`, `WithDeduplicateMode()`, `WithStateDir()`.
 
 ## Architecture
 
 ```
 aguara.go              Public API: Scan, ScanContent, ScanContentAs, Discover, ListRules, ExplainRule
-options.go             Functional options (WithToolName, WithScanProfile, WithMinSeverity, ...)
+options.go             Functional options (WithToolName, WithStateDir, WithDeduplicateMode, ...)
 discover/              MCP client discovery: 17 clients, config parsers, auto-detection
 cmd/aguara/            CLI entry point (Cobra)
 cmd/wasm/              WASM build for browser-based scanning
 internal/
   engine/
-    pattern/           Layer 1: Aho-Corasick + regex matcher, base64/hex decoder, code block awareness
-    nlp/               Layer 2: goldmark AST walker, keyword classifier, injection detector
-    toxicflow/         Layer 3: taint tracking - source-to-sink flow analysis
-    rugpull/           Layer 4: rug-pull detection - SHA256-based tool description change tracking
+    pattern/           Layer 1: Aho-Corasick + regex, 6 decoders (base64/hex/URL/Unicode/HTML/hex-escape)
+    nlp/               Layer 2: markdown AST + JSON/YAML string extraction, proximity-weighted classifier
+    toxicflow/         Layer 3: single-file taint tracking + cross-file correlation across directories
+    rugpull/           Layer 4: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           177 embedded rules across 12 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
     exemptions.go      Tool exemptions, scan profiles, verdict computation
-  meta/                Post-processing: cross-rule dedup, scoring, correlation, confidence adjustment
+  meta/                Post-processing: configurable dedup, scoring, risk score, correlation, confidence
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader (supports tool-scoped rules)
-  state/               Persistence for incremental scanning and rug-pull detection
-  types/               Shared types (Finding, Severity, ScanResult, Verdict, ScanProfile)
+  state/               Persistence for rug-pull detection (CLI and library mode)
+  types/               Shared types (Finding, Severity, ScanResult, Verdict, DeduplicateMode)
 ```
 
 ## Comparison
