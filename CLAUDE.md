@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.8.0 (2026-03-11). 177 rules, 13 categories, 4 analysis layers, 80% test coverage, 454 tests, 0 lint issues.
+Aguara v0.10.0 (2026-03-24). 177 rules, 13 categories, 4 analysis layers, 80% test coverage, 550 tests, 0 lint issues.
 
 Distribution: install.sh, Homebrew tap, Docker (GHCR), GoReleaser, GitHub Action, go install.
 
@@ -17,7 +17,7 @@ Internal docs (gitignored) in `DOCS/` as an Obsidian vault. See `DOCS/Aguara/CON
 Key locations:
 - Dashboard (MOC): `DOCS/Aguara/00 Dashboard.md`
 - Conventions: `DOCS/Aguara/CONVENTIONS.md` - frontmatter schema, types, statuses, tags, naming
-- Product versions: `DOCS/Aguara/product/v0.8.0/_index.md` (version hub with links to all generated content)
+- Product versions: `DOCS/Aguara/product/v0.10.0/_index.md` (version hub with links to all generated content)
 - Distribution channels: `DOCS/Aguara/distribution/<channel>/_index.md` (each has submission log)
 - Growth plan: `DOCS/Aguara/product/roadmap.md`
 - Templates: `DOCS/Aguara/templates/` (channel.md, product-version.md)
@@ -58,10 +58,10 @@ Root package re-exports types from `internal/types` and exposes: `Scan()`, `Scan
 
 ### Analysis Pipeline (4 layers, run sequentially per file)
 
-1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. Handles base64/hex decoding and markdown code-block severity downgrade. Deduplicates findings by line within `match_mode: any`.
-2. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker. Keyword classification for prompt injection in markdown structure.
-3. **ToxicFlow** (`internal/engine/toxicflow/`) - Taint tracking detecting dangerous capability combinations (e.g., reads private data + writes to external URL).
-4. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection (used with `--monitor`).
+1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 6 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
+2. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
+3. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file taint tracking + cross-file correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
+4. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
 All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`.
 
@@ -144,11 +144,11 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 
 When any of these values change, update ALL references across the vault:
 - Rule count (currently 177)
-- Test count (currently 454)
+- Test count (currently 550)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
-- Watch skill count (currently 50,000+)
-- Version number (currently v0.8.0)
+- Watch skill count (currently 28,000+)
+- Version number (currently v0.10.0)
 
 Use `Grep` to find all occurrences before updating.
 
