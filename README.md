@@ -24,6 +24,7 @@
   <a href="#how-it-works">How It Works</a> &bull;
   <a href="#usage">Usage</a> &bull;
   <a href="#rules">Rules</a> &bull;
+  <a href="#incident-response">Incident Response</a> &bull;
   <a href="#aguara-mcp">Aguara MCP</a> &bull;
   <a href="#aguara-watch">Aguara Watch</a> &bull;
   <a href="#contributing">Contributing</a>
@@ -83,7 +84,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.11.0 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.11.1 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -117,6 +118,12 @@ aguara scan .claude/skills/ --ci
 
 # Verbose mode (show descriptions, confidence scores, remediation)
 aguara scan . --verbose
+
+# Check for compromised Python packages (litellm, etc.)
+aguara check
+
+# Clean up compromised packages and persistence artifacts
+aguara clean --dry-run
 ```
 
 ## How It Works
@@ -379,6 +386,51 @@ Custom rules are validated at load time: unknown YAML fields are rejected, and a
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
+## Incident Response
+
+Aguara can detect and clean compromised Python packages. Built in response to the [litellm supply chain attack](https://github.com/garagon/aguara/releases/tag/v0.11.0) (March 2026), where malicious `.pth` files exfiltrated credentials and installed K8s backdoors.
+
+### `aguara check`
+
+Scans installed Python environments for compromised packages, malicious `.pth` files, and persistence artifacts.
+
+```bash
+# Auto-discover Python environment and check
+aguara check
+
+# Check a specific virtualenv
+aguara check --path /opt/venv/lib/python3.12/site-packages/
+
+# Also check pip/uv caches
+aguara check --include-caches
+
+# Machine-readable output
+aguara check --format json
+```
+
+What it checks:
+- **Known compromised versions** (embedded database, updated with each release)
+- **`.pth` files with executable code** (import, subprocess, exec, eval)
+- **Persistence backdoors** (systemd user services, sysmon artifacts)
+- **Credential files at risk** (SSH, AWS, K8s, git, npm, PyPI, databases)
+
+### `aguara clean`
+
+Removes compromised packages and quarantines malicious files for forensics.
+
+```bash
+# Preview what would be removed
+aguara clean --dry-run
+
+# Remove everything (interactive confirmation)
+aguara clean
+
+# Non-interactive, also purge pip/uv caches
+aguara clean --yes --purge-caches
+```
+
+Files are quarantined to `/tmp/aguara-quarantine/`, not deleted. After cleaning, Aguara prints a credential rotation checklist for every credential file that exists on the system.
+
 ## Aguara MCP
 
 [Aguara MCP](https://github.com/garagon/aguara-mcp) is an MCP server that gives AI agents the ability to scan skills and configurations for security threats — before installing or running them. It imports Aguara as a Go library — one `go install`, no external binary needed.
@@ -468,6 +520,7 @@ internal/
   meta/                Post-processing: configurable dedup, scoring, risk score, correlation, confidence
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader (supports tool-scoped rules)
+  incident/            Incident response: compromised package detection, cleanup, quarantine
   state/               Persistence for rug-pull detection (CLI and library mode)
   types/               Shared types (Finding, Severity, ScanResult, Verdict, DeduplicateMode)
 ```
@@ -482,6 +535,8 @@ Aguara is purpose-built for AI agent content. General-purpose SAST tools target 
 | MCP config analysis | Yes | No | No | No |
 | Prompt injection detection | Yes (18 rules + NLP) | No | No | No |
 | Rug-pull detection | Yes | No | No | No |
+| Supply chain exfil detection | Yes (10 rules) | No | No | No |
+| Incident response (check/clean) | Yes | No | No | No |
 | Taint tracking for skills | Yes | Yes | Yes | Yes |
 | Offline / no account | Yes | Partial | No | Partial |
 | Custom YAML rules | Yes | Yes | No | No |
