@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **177 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
+- **187 detection rules across 14 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
 - **4-layer analysis engine** — pattern matching, NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
 - **6 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, and hex escapes. Obfuscated payloads are decoded and re-scanned automatically.
 - **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
@@ -45,7 +45,7 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 - **Scan profiles** — `strict` (default), `content-aware`, or `minimal` enforcement. Findings are always preserved for audit; only the verdict (clean/flag/block) changes.
 - **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 6 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
 - **Dynamic confidence scoring** — every finding carries a confidence level (0.50-0.95) that reflects signal quality: pattern hit ratio, classifier score, and code-block awareness.
-- **Remediation guidance** — all 177 rules include actionable fix suggestions, shown in every output format.
+- **Remediation guidance** — all 187 rules include actionable fix suggestions, shown in every output format.
 - **Deterministic** — same input, same output. Every scan is reproducible.
 - **CI-ready** — JSON, SARIF, and Markdown output. GitHub Action. `--fail-on` threshold. `--changed` for incremental scans.
 - **17 MCP clients supported** — auto-discover and scan configs from Claude Desktop, Cursor, VS Code, Windsurf, and 13 more.
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | ba
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-VERSION=v0.10.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+VERSION=v0.11.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 ```
 
@@ -83,7 +83,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.10.0 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.11.0 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -296,7 +296,7 @@ Supported directives:
 
 ## Rules
 
-177 built-in rules across 13 categories:
+187 built-in rules across 14 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
@@ -312,13 +312,14 @@ Supported directives:
 | SSRF & Cloud | 11 | Cloud metadata, IMDS, Docker socket, internal IPs, redirect following |
 | Third-Party Content | 10 | eval with external data, unsafe deserialization, missing SRI, HTTP downgrade |
 | Unicode Attack | 10 | RTL override, bidi, homoglyphs, zero-width sequences, normalization bypass |
+| Supply Chain Exfil | 10 | Credential file reads, .pth executable code, bulk env collection, K8s secrets access, systemd persistence, archive+POST exfil |
 | Toxic Flow | 3 + cross-file | Single-file taint tracking plus cross-file correlation across MCP server directories |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
 
 ### Remediation Guidance
 
-All 177 rules include remediation text. It appears in every output format:
+All 187 rules include remediation text. It appears in every output format:
 
 - **Terminal**: always shown for CRITICAL findings, shown for all severities with `--verbose`
 - **JSON**: included in every finding object
@@ -461,7 +462,7 @@ internal/
     toxicflow/         Layer 3: single-file taint tracking + cross-file correlation across directories
     rugpull/           Layer 4: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           177 embedded rules across 12 YAML files (go:embed)
+    builtin/           187 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
     exemptions.go      Tool exemptions, scan profiles, verdict computation
   meta/                Post-processing: configurable dedup, scoring, risk score, correlation, confidence
