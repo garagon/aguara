@@ -341,6 +341,87 @@ func TestMatcherExcludePatternsMatchAll(t *testing.T) {
 	require.Empty(t, findings2, "should be excluded by heading context")
 }
 
+func TestConfidence_SinglePatternMatch(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID:        "CONF_001",
+		Name:      "Multi Pattern",
+		Severity:  "HIGH",
+		Category:  "test",
+		MatchMode: "any",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: "trigger one"},
+			{Type: rules.PatternContains, Value: "trigger two"},
+			{Type: rules.PatternContains, Value: "trigger three"},
+			{Type: rules.PatternContains, Value: "trigger four"},
+			{Type: rules.PatternContains, Value: "trigger five"},
+		},
+	})
+
+	matcher := pattern.NewMatcher([]*rules.CompiledRule{rule})
+
+	// Only 1 of 5 patterns matches
+	target := &scanner.Target{
+		RelPath: "test.md",
+		Content: []byte("this has trigger one and nothing else"),
+	}
+	findings, err := matcher.Analyze(context.Background(), target)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	// 0.70 + 0.25 * (1/5) = 0.75
+	require.InDelta(t, 0.75, findings[0].Confidence, 0.01)
+}
+
+func TestConfidence_AllPatternsMatch(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID:        "CONF_002",
+		Name:      "All Patterns",
+		Severity:  "HIGH",
+		Category:  "test",
+		MatchMode: "any",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: "alpha"},
+			{Type: rules.PatternContains, Value: "beta"},
+		},
+	})
+
+	matcher := pattern.NewMatcher([]*rules.CompiledRule{rule})
+
+	target := &scanner.Target{
+		RelPath: "test.md",
+		Content: []byte("alpha and beta on same line"),
+	}
+	findings, err := matcher.Analyze(context.Background(), target)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(findings), 1)
+	// 0.70 + 0.25 * (2/2) = 0.95
+	require.InDelta(t, 0.95, findings[0].Confidence, 0.01)
+}
+
+func TestConfidence_MatchAllMode(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID:        "CONF_003",
+		Name:      "Match All Confidence",
+		Severity:  "CRITICAL",
+		Category:  "test",
+		MatchMode: "all",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: "alpha"},
+			{Type: rules.PatternContains, Value: "beta"},
+		},
+	})
+
+	matcher := pattern.NewMatcher([]*rules.CompiledRule{rule})
+
+	target := &scanner.Target{
+		RelPath: "test.md",
+		Content: []byte("alpha and beta"),
+	}
+	findings, err := matcher.Analyze(context.Background(), target)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	require.Equal(t, 0.95, findings[0].Confidence, "matchAll should always be 0.95")
+}
+
 func BenchmarkMatcher(b *testing.B) {
 	// Build 1000-line content with one trigger near the end
 	var lines []byte

@@ -6,12 +6,13 @@ package scanner
 import "github.com/garagon/aguara/internal/types"
 
 type (
-	Severity    = types.Severity
-	ContextLine = types.ContextLine
-	Finding     = types.Finding
-	ScanResult  = types.ScanResult
-	Verdict     = types.Verdict
-	ScanProfile = types.ScanProfile
+	Severity        = types.Severity
+	ContextLine     = types.ContextLine
+	Finding         = types.Finding
+	ScanResult      = types.ScanResult
+	Verdict         = types.Verdict
+	ScanProfile     = types.ScanProfile
+	DeduplicateMode = types.DeduplicateMode
 )
 
 const (

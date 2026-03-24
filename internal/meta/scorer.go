@@ -1,6 +1,10 @@
 package meta
 
-import "github.com/garagon/aguara/internal/types"
+import (
+	"sort"
+
+	"github.com/garagon/aguara/internal/types"
+)
 
 // Category multipliers for risk scoring.
 var categoryMultiplier = map[string]float64{
@@ -46,4 +50,29 @@ func ScoreFindings(findings []types.Finding) []types.Finding {
 		findings[i].Score = score
 	}
 	return findings
+}
+
+// ComputeRiskScore computes an aggregate risk score (0-100) from all findings.
+// Uses diminishing returns: the highest-scoring finding contributes 100%,
+// the second 50%, the third 25%, etc.
+func ComputeRiskScore(findings []types.Finding) float64 {
+	if len(findings) == 0 {
+		return 0
+	}
+
+	sorted := make([]types.Finding, len(findings))
+	copy(sorted, findings)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Score > sorted[j].Score
+	})
+
+	total := 0.0
+	for i, f := range sorted {
+		weight := 1.0 / float64(int(1) << i)
+		total += f.Score * weight
+	}
+	if total > 100 {
+		total = 100
+	}
+	return total
 }

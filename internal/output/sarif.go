@@ -152,8 +152,11 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 						Rules:          rules,
 					},
 				},
-				Results:    results,
-				Properties: map[string]any{"duration_ms": result.Duration.Milliseconds()},
+				Results: results,
+				Properties: map[string]any{
+					"duration_ms": result.Duration.Milliseconds(),
+					"riskScore":   result.RiskScore,
+				},
 			},
 		},
 	}

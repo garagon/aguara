@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -40,10 +41,20 @@ func (a *InjectionAnalyzer) Name() string { return "nlp-injection" }
 
 func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
 	ext := strings.ToLower(filepath.Ext(target.RelPath))
-	if ext != ".md" && ext != ".markdown" && ext != ".txt" {
+	switch ext {
+	case ".md", ".markdown", ".txt":
+		return a.analyzeMarkdown(ctx, target)
+	case ".json":
+		return a.analyzeJSONStrings(ctx, target)
+	case ".yaml", ".yml":
+		return a.analyzeYAMLStrings(ctx, target)
+	default:
 		return nil, nil
 	}
+}
 
+// analyzeMarkdown runs the full NLP pipeline on markdown files.
+func (a *InjectionAnalyzer) analyzeMarkdown(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
 	sections := ParseMarkdown(target.Content)
 	lines := target.Lines()
 	var findings []scanner.Finding
@@ -61,6 +72,163 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 	}
 
 	return findings, nil
+}
+
+// maxStringsPerFile caps the number of strings extracted from JSON/YAML files.
+const maxStringsPerFile = 100
+
+// minStringLen is the minimum length for a string to be analyzed.
+const minStringLen = 50
+
+// analyzeJSONStrings extracts string values from JSON and runs NLP checks.
+func (a *InjectionAnalyzer) analyzeJSONStrings(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
+	strs := extractJSONStrings(target.Content)
+	return a.analyzeExtractedStrings(ctx, strs, target)
+}
+
+// analyzeYAMLStrings extracts string values from YAML and runs NLP checks.
+func (a *InjectionAnalyzer) analyzeYAMLStrings(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
+	strs := extractYAMLStrings(target.Content)
+	return a.analyzeExtractedStrings(ctx, strs, target)
+}
+
+// extractedString holds a string value and the line where it was found.
+type extractedString struct {
+	text string
+	line int
+}
+
+// analyzeExtractedStrings runs authority claim and dangerous combo checks on extracted strings.
+func (a *InjectionAnalyzer) analyzeExtractedStrings(ctx context.Context, strs []extractedString, target *scanner.Target) ([]scanner.Finding, error) {
+	lines := target.Lines()
+	var findings []scanner.Finding
+
+	for _, s := range strs {
+		if ctx.Err() != nil {
+			return findings, ctx.Err()
+		}
+
+		section := MarkdownSection{
+			Type: SectionParagraph,
+			Text: s.text,
+			Line: s.line,
+		}
+
+		findings = append(findings, checkAuthorityClaim(section, lines, target)...)
+		findings = append(findings, checkDangerousCombos(section, lines, target)...)
+	}
+
+	return findings, nil
+}
+
+// extractJSONStrings walks a JSON value and returns all string values >= minStringLen.
+func extractJSONStrings(content []byte) []extractedString {
+	var raw any
+	if err := json.Unmarshal(content, &raw); err != nil {
+		return nil
+	}
+
+	// Precompute line start offsets for fast line number lookup
+	lineOffsets := computeLineOffsets(content)
+
+	var result []extractedString
+	var walk func(v any)
+	walk = func(v any) {
+		if len(result) >= maxStringsPerFile {
+			return
+		}
+		switch val := v.(type) {
+		case string:
+			if len(val) >= minStringLen {
+				line := findLineForString(content, val, lineOffsets)
+				result = append(result, extractedString{text: val, line: line})
+			}
+		case map[string]any:
+			for _, child := range val {
+				walk(child)
+			}
+		case []any:
+			for _, child := range val {
+				walk(child)
+			}
+		}
+	}
+	walk(raw)
+	return result
+}
+
+// extractYAMLStrings uses a simple line scanner to extract YAML string values >= minStringLen.
+func extractYAMLStrings(content []byte) []extractedString {
+	var result []extractedString
+	lines := strings.Split(string(content), "\n")
+
+	for i, line := range lines {
+		if len(result) >= maxStringsPerFile {
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		// Skip comments and empty lines
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// Find key: value pairs
+		colonIdx := strings.Index(trimmed, ":")
+		if colonIdx < 0 {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[colonIdx+1:])
+		// Strip surrounding quotes
+		value = stripQuotes(value)
+		if len(value) >= minStringLen {
+			result = append(result, extractedString{text: value, line: i + 1})
+		}
+	}
+	return result
+}
+
+// stripQuotes removes surrounding single or double quotes from a string.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// computeLineOffsets returns the byte offset of the start of each line.
+func computeLineOffsets(content []byte) []int {
+	offsets := []int{0}
+	for i, b := range content {
+		if b == '\n' && i+1 < len(content) {
+			offsets = append(offsets, i+1)
+		}
+	}
+	return offsets
+}
+
+// findLineForString returns the 1-based line number where a string first appears in content.
+func findLineForString(content []byte, s string, lineOffsets []int) int {
+	idx := strings.Index(string(content), s)
+	if idx < 0 {
+		// Try with escaped quotes (JSON strings contain escaped content)
+		escaped := strings.ReplaceAll(s, `"`, `\"`)
+		idx = strings.Index(string(content), escaped)
+		if idx < 0 {
+			return 1
+		}
+	}
+	// Binary search for line
+	lo, hi := 0, len(lineOffsets)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if lineOffsets[mid] <= idx {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo // 1-based: lo is the count of offsets <= idx
 }
 
 // checkHiddenComment detects hidden HTML comments with action verbs.
@@ -146,12 +314,13 @@ func checkAuthorityClaim(section MarkdownSection, lines []string, target *scanne
 	if bodyClass.Score < 2.0 {
 		return nil
 	}
-	return []scanner.Finding{makeFinding(
+	return []scanner.Finding{makeFindingWithConfidence(
 		"NLP_AUTHORITY_CLAIM",
 		"Section claims authority and urgency with dangerous instructions",
 		scanner.SeverityMedium,
 		"prompt-injection",
 		section, lines, target,
+		classifierConfidence(bodyClass.Score),
 	)}
 }
 
@@ -182,27 +351,35 @@ func checkDangerousCombos(section MarkdownSection, lines []string, target *scann
 
 	var findings []scanner.Finding
 	if credScore >= 1.0 && networkScore >= 1.2 {
-		findings = append(findings, makeFinding(
+		comboScore := credScore + networkScore
+		findings = append(findings, makeFindingWithConfidence(
 			"NLP_CRED_EXFIL_COMBO",
 			"Text combines credential access with network transmission",
 			scanner.SeverityCritical,
 			"exfiltration",
 			section, lines, target,
+			classifierConfidence(comboScore),
 		))
 	}
 	if overrideScore >= 1.0 && (networkScore >= 1.0 || credScore >= 1.0) {
-		findings = append(findings, makeFinding(
+		comboScore := overrideScore + max(networkScore, credScore)
+		findings = append(findings, makeFindingWithConfidence(
 			"NLP_OVERRIDE_DANGEROUS",
 			"Instruction override combined with dangerous operations",
 			scanner.SeverityCritical,
 			"prompt-injection",
 			section, lines, target,
+			classifierConfidence(comboScore),
 		))
 	}
 	return findings
 }
 
 func makeFinding(ruleID, desc string, sev scanner.Severity, category string, section MarkdownSection, lines []string, target *scanner.Target) scanner.Finding {
+	return makeFindingWithConfidence(ruleID, desc, sev, category, section, lines, target, 0.70)
+}
+
+func makeFindingWithConfidence(ruleID, desc string, sev scanner.Severity, category string, section MarkdownSection, lines []string, target *scanner.Target, confidence float64) scanner.Finding {
 	line := section.Line
 	if line <= 0 {
 		line = 1
@@ -223,8 +400,21 @@ func makeFinding(ruleID, desc string, sev scanner.Severity, category string, sec
 		MatchedText: matchedText,
 		Context:     types.ExtractContext(lines, line, 4, 3),
 		Analyzer:    "nlp-injection",
-		Confidence:  0.70,
+		Confidence:  confidence,
 	}
+}
+
+// classifierConfidence derives a confidence value from a classifier score.
+// score 1.0 -> 0.49, score 3.0 -> 0.67, score 5.0+ -> 0.85
+func classifierConfidence(score float64) float64 {
+	c := 0.40 + (score * 0.09)
+	if c > 0.90 {
+		c = 0.90
+	}
+	if c < 0.50 {
+		c = 0.50
+	}
+	return c
 }
 
 func approximateLine(content []byte, section MarkdownSection) int {

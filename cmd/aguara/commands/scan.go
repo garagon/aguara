@@ -357,6 +357,7 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
+	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
 
 	var store *state.Store
 	if flagMonitor {

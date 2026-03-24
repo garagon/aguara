@@ -3,6 +3,65 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] — 2026-03-24
+
+Engine improvements for evasion prevention, signal quality, and library consumer API. Derived from oktsec IPI Arena benchmark analysis. Validated against 28,207 real MCP skills from Aguara Watch.
+
+### Added
+
+#### Additional decoders in pattern layer
+
+Four new decoders alongside existing base64/hex for detecting encoded evasion attacks:
+
+- URL encoding (`%49%67%6E%6F%72%65` -> "Ignore")
+- Unicode escapes (`\u0049\u0067\u006E` -> "Ign")
+- HTML entities (`&#73;&#103;&#110;` -> "Ign")
+- Hex escapes (`\x49\x67\x6E` -> "Ign")
+
+Shared `maxBlobsPerFile=10` cap across all decoder types. Crypto address filter excludes Ethereum addresses from hex decoding.
+
+#### NLP analysis for JSON/YAML files
+
+`InjectionAnalyzer` now processes `.json`, `.yaml`, and `.yml` files. Extracts string values >= 50 chars and runs `checkAuthorityClaim` and `checkDangerousCombos`. Catches MCP tool description poisoning in structured config files.
+
+#### Aggregate RiskScore
+
+`ScanResult` includes `RiskScore float64` (0-100) computed with diminishing returns: highest-scoring finding contributes 100%, second 50%, third 25%, etc. Shown in JSON, SARIF (`run.properties.riskScore`), and terminal footer.
+
+#### Proximity weighting in NLP classifier
+
+`Classify`/`ClassifyAll` now consider keyword clustering and text density. Clustered keywords get a 1.3x bonus; keywords spread across long text get a 0.7x penalty. Reduces false positives on legitimate API documentation.
+
+#### Dynamic confidence scores
+
+Pattern matcher confidence varies by hit ratio: `0.70 + 0.25 * (hitPatterns/totalPatterns)`. NLP confidence derives from classifier score (0.50-0.90). Replaces flat 0.85/0.70 values.
+
+#### Configurable cross-rule dedup
+
+New `WithDeduplicateMode` option. `DeduplicateFull` (default) collapses cross-rule duplicates per line. `DeduplicateSameRuleOnly` preserves all cross-rule findings for library consumers that need complete signal.
+
+#### Cross-file toxicflow correlation
+
+New `CrossFileAnalyzer` detects dangerous capability combinations across files in the same directory. Rules: TOXIC_CROSS_001 (cred read + public output), TOXIC_CROSS_002 (cred read + code exec), TOXIC_CROSS_003 (destructive + code exec). Skips directories with >50 files (flat registry heuristic).
+
+#### Library-mode rug-pull state API
+
+New `WithStateDir` option enables rug-pull detection for library consumers. State persists between scans. First scan records baseline hashes; subsequent scans detect content changes with dangerous patterns.
+
+### Changed
+
+- Confidence values now vary based on signal quality instead of flat per-analyzer values
+- NLP classifier applies proximity and density factors to keyword scoring
+
+### API additions (non-breaking)
+
+```go
+aguara.WithDeduplicateMode(aguara.DeduplicateSameRuleOnly)
+aguara.WithStateDir("/path/to/state")
+aguara.ScanResult.RiskScore // float64, 0-100
+aguara.DeduplicateMode      // DeduplicateFull | DeduplicateSameRuleOnly
+```
+
 ## [0.9.0] — 2026-03-20
 
 Context-aware scanning, false-positive reduction infrastructure, Unicode evasion prevention, and performance optimization.

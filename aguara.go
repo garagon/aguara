@@ -7,6 +7,7 @@ package aguara
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -15,22 +16,25 @@ import (
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
+	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/state"
 	"github.com/garagon/aguara/internal/types"
 )
 
 // Re-export core types from internal/types so consumers don't need to
 // import internal packages.
 type (
-	Severity    = types.Severity
-	Finding     = types.Finding
-	ScanResult  = types.ScanResult
-	ContextLine = types.ContextLine
-	Verdict     = types.Verdict
-	ScanProfile = types.ScanProfile
+	Severity        = types.Severity
+	Finding         = types.Finding
+	ScanResult      = types.ScanResult
+	ContextLine     = types.ContextLine
+	Verdict         = types.Verdict
+	ScanProfile     = types.ScanProfile
+	DeduplicateMode = types.DeduplicateMode
 )
 
 const (
@@ -47,6 +51,9 @@ const (
 	ProfileStrict       = types.ProfileStrict
 	ProfileContentAware = types.ProfileContentAware
 	ProfileMinimal      = types.ProfileMinimal
+
+	DeduplicateFull         = types.DeduplicateFull
+	DeduplicateSameRuleOnly = types.DeduplicateSameRuleOnly
 )
 
 // Re-export discover types so consumers don't need a separate import.
@@ -324,10 +331,25 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	if len(cr.toolScopedRules) > 0 {
 		s.SetToolScopedRules(cr.toolScopedRules)
 	}
+	if cfg.deduplicateMode != 0 {
+		s.SetDeduplicateMode(cfg.deduplicateMode)
+	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
+	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+
+	// Enable rug-pull detection when stateDir is provided
+	if cfg.stateDir != "" {
+		statePath := filepath.Join(cfg.stateDir, "state.json")
+		store := state.New(statePath)
+		if err := store.Load(); err != nil {
+			return nil, nil, fmt.Errorf("loading state from %s: %w", statePath, err)
+		}
+		s.RegisterAnalyzer(rugpull.New(store))
+		s.SetStateStore(store)
+	}
 
 	return s, cr.compiled, nil
 }

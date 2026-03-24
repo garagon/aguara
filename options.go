@@ -2,16 +2,18 @@ package aguara
 
 // scanConfig holds the resolved configuration for a scan.
 type scanConfig struct {
-	customRulesDir string
-	disabledRules  []string
-	ruleOverrides  map[string]RuleOverride
-	minSeverity    Severity
-	workers        int
-	ignorePatterns []string
-	maxFileSize    int64
-	category       string // only for ListRules
-	toolName       string
-	scanProfile    ScanProfile
+	customRulesDir  string
+	disabledRules   []string
+	ruleOverrides   map[string]RuleOverride
+	minSeverity     Severity
+	workers         int
+	ignorePatterns  []string
+	maxFileSize     int64
+	category        string // only for ListRules
+	toolName        string
+	scanProfile     ScanProfile
+	deduplicateMode DeduplicateMode
+	stateDir        string
 }
 
 // Option configures a scan operation.
@@ -90,5 +92,22 @@ func WithToolName(name string) Option {
 func WithScanProfile(profile ScanProfile) Option {
 	return func(c *scanConfig) {
 		c.scanProfile = profile
+	}
+}
+
+// WithDeduplicateMode controls how findings on the same line are deduplicated.
+// DeduplicateFull (default) removes cross-rule duplicates per line.
+// DeduplicateSameRuleOnly keeps cross-rule findings, only removing same-rule duplicates.
+func WithDeduplicateMode(mode DeduplicateMode) Option {
+	return func(c *scanConfig) {
+		c.deduplicateMode = mode
+	}
+}
+
+// WithStateDir enables stateful scanning features (rug-pull detection)
+// by persisting hashes to the specified directory.
+func WithStateDir(dir string) Option {
+	return func(c *scanConfig) {
+		c.stateDir = dir
 	}
 }
