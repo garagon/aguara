@@ -72,7 +72,7 @@ examples:
 ---
 id: SC-EX-004
 name: ".pth file with executable content"
-description: "Detects .pth files containing import statements, subprocess calls, or any executable Python code. Legitimate .pth files contain only directory paths."
+description: "Detects .pth files containing dangerous executable Python code such as subprocess calls, exec/eval, or dynamic imports. Skips known-safe ecosystem .pth files."
 severity: CRITICAL
 category: supply-chain-exfil
 targets: ["*.pth"]
@@ -80,13 +80,22 @@ match_mode: any
 remediation: "Remove executable code from .pth files. Use proper entry points or setup scripts instead. .pth files should only contain directory paths."
 patterns:
   - type: regex
-    value: "(?i)^import\\s"
-  - type: regex
     value: "(?i)(subprocess|os\\.system|os\\.popen|exec\\(|eval\\(|compile\\()"
   - type: regex
     value: "(?i)(__import__|importlib)"
   - type: regex
     value: "(?i)(open\\(|Path\\(|read\\(\\))"
+  - type: regex
+    value: "(?i)import\\s+\\w+\\s*;\\s*\\w"
+exclude_patterns:
+  - type: contains
+    value: "import _virtualenv"
+  - type: contains
+    value: "import _distutils_hack"
+  - type: contains
+    value: "import coverage"
+  - type: contains
+    value: "import pkg_resources"
 examples:
   true_positive:
     - "import subprocess; subprocess.Popen([sys.executable, \"/tmp/payload.py\"])"
@@ -95,6 +104,7 @@ examples:
   false_positive:
     - "/usr/local/lib/python3.12/site-packages"
     - "./vendor/libs"
+    - "import _virtualenv"
 ---
 id: SC-EX-005
 name: "Cloud metadata endpoint access in Python"
@@ -224,7 +234,7 @@ examples:
 ---
 id: SC-EX-010
 name: ".pth file presence with non-path content"
-description: "Flags .pth files that contain content beyond simple directory paths for manual review. Legitimate .pth files contain only path entries."
+description: "Flags .pth files that contain content beyond simple directory paths for manual review. Skips known-safe ecosystem .pth files."
 severity: MEDIUM
 category: supply-chain-exfil
 targets: ["*.pth"]
@@ -233,9 +243,19 @@ remediation: "Review .pth file contents. Legitimate .pth files should only conta
 patterns:
   - type: regex
     value: "(?i)(import|from\\s+\\w+|def\\s+|class\\s+|print\\(|sys\\.|os\\.)"
+exclude_patterns:
+  - type: contains
+    value: "import _virtualenv"
+  - type: contains
+    value: "import _distutils_hack"
+  - type: contains
+    value: "import coverage"
+  - type: contains
+    value: "import pkg_resources"
 examples:
   true_positive:
     - "import sys; sys.path.insert(0, '/tmp/evil')"
     - "from os import system"
   false_positive:
     - "/usr/local/lib/python3.12/site-packages"
+    - "import _virtualenv"

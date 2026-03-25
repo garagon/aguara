@@ -213,8 +213,23 @@ func findPthFiles(dir string) []string {
 
 var pthExecRe = regexp.MustCompile(`(?i)(^import\s|subprocess|os\.system|os\.popen|exec\(|eval\(|compile\(|__import__|importlib|open\(|Path\()`)
 
+// knownSafePth lists .pth filenames from standard Python ecosystem packages
+// that legitimately use import statements for site customization.
+var knownSafePth = map[string]bool{
+	"_virtualenv.pth":          true,
+	"distutils-precedence.pth": true,
+	"easy-install.pth":         true,
+	"setuptools.pth":           true,
+	"coverage.pth":             true,
+	"zope-nspkg.pth":           true,
+}
+
 // checkPthFile scans a .pth file for executable content.
 func checkPthFile(path string) []Finding {
+	if knownSafePth[filepath.Base(path)] {
+		return nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
