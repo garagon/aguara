@@ -97,10 +97,8 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 	// 4. Check credential files at risk
 	result.Credentials = checkCredentialFiles()
 
-	// 5. If --include-caches, check pip/uv caches for compromised packages
-	if opts.IncludeCaches {
-		result.Findings = append(result.Findings, checkCaches()...)
-	}
+	// 5. Always check pip/uv/npx caches for compromised packages
+	result.Findings = append(result.Findings, checkCaches()...)
 
 	return result, nil
 }
@@ -312,7 +310,7 @@ func checkCredentialFiles() []CredentialFile {
 	return creds
 }
 
-// checkCaches looks for compromised packages in pip/uv cache dirs.
+// checkCaches looks for compromised packages and malicious files in pip/uv/npx cache dirs.
 func checkCaches() []Finding {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -321,29 +319,63 @@ func checkCaches() []Finding {
 
 	var findings []Finding
 	cacheDirs := []string{
-		filepath.Join(home, ".cache/pip/wheels"),
 		filepath.Join(home, ".cache/uv"),
+		filepath.Join(home, ".cache/pip/wheels"),
+		filepath.Join(home, ".cache/pip/http"),
+		filepath.Join(home, ".npm/_npx"),
 		filepath.Join(home, "Library/Caches/pip"), // macOS
 	}
 
+	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
 			continue
 		}
-		// Walk cache looking for compromised package names in filenames
 		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
-			base := strings.ToLower(d.Name())
+			name := d.Name()
+
+			// Check .pth files for executable content
+			if !d.IsDir() && strings.HasSuffix(name, ".pth") {
+				if pthFindings := checkPthFile(path); len(pthFindings) > 0 && !seen[path] {
+					seen[path] = true
+					findings = append(findings, pthFindings...)
+				}
+				return nil
+			}
+
+			// Check METADATA in dist-info dirs for compromised versions
+			if d.IsDir() && strings.HasSuffix(name, ".dist-info") {
+				metaPath := filepath.Join(path, "METADATA")
+				pkg := parseMetadata(metaPath)
+				if pkg.Name != "" {
+					if cp := IsCompromised(pkg.Name, pkg.Version); cp != nil && !seen[path] {
+						seen[path] = true
+						findings = append(findings, Finding{
+							Severity:    SevCritical,
+							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", cp.Name, pkg.Version, cp.Advisory),
+							Detail:      cp.Summary,
+							Path:        path,
+							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+						})
+					}
+				}
+				return filepath.SkipDir
+			}
+
+			// Filename-based check for cache artifacts
+			base := strings.ToLower(name)
 			for _, cp := range KnownCompromised {
 				if strings.Contains(base, cp.Name) {
 					for _, v := range cp.Versions {
-						if strings.Contains(base, v) {
+						if strings.Contains(base, v) && !seen[path] {
+							seen[path] = true
 							findings = append(findings, Finding{
-								Severity: SevWarning,
-								Title:    fmt.Sprintf("Cached compromised package: %s %s", cp.Name, v),
-								Path:     path,
+								Severity:    SevWarning,
+								Title:       fmt.Sprintf("Cached compromised artifact: %s %s", cp.Name, v),
+								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 							})
 						}

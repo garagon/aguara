@@ -64,11 +64,11 @@ func runClean(cmd *cobra.Command, args []string) error {
 
 	// Confirm unless --yes
 	if !flagCleanYes {
-		fmt.Print("Proceed with cleanup? [y/N] ")
+		fmt.Print("Proceed with cleanup? [Y/n] ")
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "y" && answer != "yes" {
+		if answer == "n" || answer == "no" {
 			fmt.Println("Aborted.")
 			return nil
 		}
