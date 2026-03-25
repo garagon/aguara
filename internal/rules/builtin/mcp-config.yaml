@@ -265,3 +265,60 @@ examples:
   false_positive:
     - "\"args\": [\"run\", \"--network=none\", \"mcp-server\"]"
     - "Use an isolated network for the container"
+---
+id: MCPCFG_012
+name: "uvx MCP server without version pin"
+description: "Detects MCP server configs using uvx or uv run to execute packages without version pinning. uvx auto-downloads the latest version from PyPI on every run. If a package is compromised, uvx pulls the malicious version automatically."
+severity: HIGH
+category: mcp-config
+targets: ["*.json", "*.md", "*.txt"]
+match_mode: any
+remediation: "Pin uvx packages to exact versions: uvx run some-package@1.2.3. Or use a lockfile with hashes."
+patterns:
+  - type: regex
+    value: "(?i)[\"']command[\"']\\s*:\\s*[\"'](uvx|uv)[\"']"
+  - type: regex
+    value: "(?i)claude\\s+mcp\\s+add\\s+\\S+\\s+--\\s+uvx\\s+"
+  - type: regex
+    value: "(?i)uvx\\s+run\\s+[a-zA-Z][a-zA-Z0-9_-]+"
+exclude_patterns:
+  - type: regex
+    value: "(?i)uvx\\s+run\\s+\\S+@\\d"
+  - type: regex
+    value: "(?i)\\S+@\\d+\\.\\d+"
+examples:
+  true_positive:
+    - '"command": "uvx", "args": ["litellm", "--proxy"]'
+    - '"command": "uv", "args": ["run", "some-mcp-server"]'
+    - "claude mcp add myserver -- uvx some-mcp-server"
+    - "uvx run mcp-server-github"
+  false_positive:
+    - '"command": "python", "args": ["server.py"]'
+    - "uvx run some-package@2.0.0 --flag"
+---
+id: MCPCFG_013
+name: "pip install without hash verification in MCP server setup"
+description: "Detects pip install commands in MCP server setup instructions that install specific packages without --require-hashes, allowing compromised versions from PyPI."
+severity: MEDIUM
+category: mcp-config
+targets: ["*.md", "*.txt", "*.sh"]
+match_mode: any
+remediation: "Use pip install --require-hashes -r requirements.txt with a lockfile that includes SHA-256 hashes for every package."
+patterns:
+  - type: regex
+    value: "(?i)pip\\s+install\\s+[a-zA-Z][a-zA-Z0-9_-]*(\\s+[a-zA-Z][a-zA-Z0-9_-]*)*\\s*$"
+exclude_patterns:
+  - type: regex
+    value: "(?i)--require-hashes"
+  - type: regex
+    value: "(?i)^\\s*#"
+  - type: regex
+    value: "(?i)(pip|uv)\\s+install\\s+-r\\s+"
+examples:
+  true_positive:
+    - "pip install litellm mcp-server-tools"
+    - "pip install some-mcp-package"
+  false_positive:
+    - "pip install --require-hashes -r requirements.txt"
+    - "pip install -r requirements.txt"
+    - "# pip install example-package"

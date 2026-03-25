@@ -11,28 +11,25 @@ import (
 )
 
 var (
-	flagCheckPath          string
-	flagCheckIncludeCaches bool
+	flagCheckPath string
 )
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check for compromised Python packages and persistence artifacts",
 	Long: `Scan installed Python packages for known compromised versions, malicious .pth
-files, and persistence backdoors. Reports which credential files are at risk.`,
+files, persistence backdoors, and pip/uv/npx caches. Reports which credential files are at risk.`,
 	RunE: runCheck,
 }
 
 func init() {
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to site-packages directory (default: auto-discover)")
-	checkCmd.Flags().BoolVar(&flagCheckIncludeCaches, "include-caches", false, "Also check pip/uv cache directories")
 	rootCmd.AddCommand(checkCmd)
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
 	result, err := incident.Check(incident.CheckOptions{
-		Path:          flagCheckPath,
-		IncludeCaches: flagCheckIncludeCaches,
+		Path: flagCheckPath,
 	})
 	if err != nil {
 		return err
