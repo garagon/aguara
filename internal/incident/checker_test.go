@@ -80,6 +80,38 @@ func TestCheckDetectsMaliciousPth(t *testing.T) {
 	assert.True(t, hasPth, "should detect malicious .pth file")
 }
 
+func TestCheckSkipsKnownSafePth(t *testing.T) {
+	dir := t.TempDir()
+
+	// _virtualenv.pth is a known-safe file
+	pth := filepath.Join(dir, "_virtualenv.pth")
+	require.NoError(t, os.WriteFile(pth, []byte("import _virtualenv\n"), 0644))
+
+	// distutils-precedence.pth is also known-safe
+	pth2 := filepath.Join(dir, "distutils-precedence.pth")
+	require.NoError(t, os.WriteFile(pth2, []byte("import _distutils_hack; _distutils_hack.add_shim()\n"), 0644))
+
+	// But evil.pth should still be flagged
+	evil := filepath.Join(dir, "evil.pth")
+	require.NoError(t, os.WriteFile(evil, []byte("import subprocess; subprocess.Popen(['evil'])\n"), 0644))
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+
+	for _, f := range result.Findings {
+		assert.NotContains(t, f.Path, "_virtualenv.pth", "known-safe _virtualenv.pth should be skipped")
+		assert.NotContains(t, f.Path, "distutils-precedence.pth", "known-safe distutils-precedence.pth should be skipped")
+	}
+
+	hasEvil := false
+	for _, f := range result.Findings {
+		if f.Path == evil {
+			hasEvil = true
+		}
+	}
+	assert.True(t, hasEvil, "evil.pth should still be flagged")
+}
+
 func TestCheckCleanPth(t *testing.T) {
 	dir := t.TempDir()
 
