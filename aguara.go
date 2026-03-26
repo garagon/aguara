@@ -236,6 +236,185 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 	}, nil
 }
 
+// Scanner holds a pre-compiled scanner that can be reused across scans.
+// Build once with NewScanner at startup, then call ScanContent/Scan for
+// each request. The compiled rules, regex patterns, and Aho-Corasick
+// automatons are built once and shared, eliminating per-request overhead.
+// Thread-safe: multiple goroutines can call methods concurrently.
+type Scanner struct {
+	compiled   []*rules.CompiledRule
+	toolScoped map[string]scanner.ToolScopedRule
+	matcher    *pattern.Matcher
+	cfg        *scanConfig
+}
+
+// NewScanner creates a pre-compiled scanner with the given options.
+// Call once at startup, reuse for all subsequent scans.
+func NewScanner(opts ...Option) (*Scanner, error) {
+	cfg := applyOpts(opts)
+	cr, err := loadAndCompile(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Scanner{
+		compiled:   cr.compiled,
+		toolScoped: cr.toolScopedRules,
+		matcher:    pattern.NewMatcher(cr.compiled),
+		cfg:        cfg,
+	}, nil
+}
+
+// ScanContent scans inline content using the pre-compiled scanner.
+// Content is NFKC-normalized before scanning to prevent Unicode evasion.
+func (sc *Scanner) ScanContent(ctx context.Context, content string, filename string) (*ScanResult, error) {
+	return sc.scanContent(ctx, content, filename, "")
+}
+
+// ScanContentAs scans inline content with tool context for false-positive reduction.
+func (sc *Scanner) ScanContentAs(ctx context.Context, content string, filename string, toolName string) (*ScanResult, error) {
+	return sc.scanContent(ctx, content, filename, toolName)
+}
+
+func (sc *Scanner) scanContent(ctx context.Context, content string, filename string, toolName string) (*ScanResult, error) {
+	if filename == "" {
+		filename = "skill.md"
+	}
+	content = norm.NFKC.String(content)
+
+	s, err := sc.buildInternalScanner(toolName)
+	if err != nil {
+		return nil, err
+	}
+	targets := []*scanner.Target{{
+		RelPath: filename,
+		Content: []byte(content),
+	}}
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, err
+	}
+	result.RulesLoaded = len(sc.compiled)
+	return result, nil
+}
+
+// Scan scans a file or directory on disk using the pre-compiled scanner.
+func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
+	s, err := sc.buildInternalScanner("")
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.Scan(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	result.RulesLoaded = len(sc.compiled)
+	return result, nil
+}
+
+// ListRules returns all rules loaded in this scanner, sorted by ID.
+func (sc *Scanner) ListRules() []RuleInfo {
+	compiled := make([]*rules.CompiledRule, len(sc.compiled))
+	copy(compiled, sc.compiled)
+	sort.Slice(compiled, func(i, j int) bool {
+		return compiled[i].ID < compiled[j].ID
+	})
+	infos := make([]RuleInfo, len(compiled))
+	for i, r := range compiled {
+		infos[i] = RuleInfo{
+			ID:       r.ID,
+			Name:     r.Name,
+			Severity: r.Severity.String(),
+			Category: r.Category,
+		}
+	}
+	return infos
+}
+
+// ExplainRule returns detailed information about a specific rule.
+func (sc *Scanner) ExplainRule(id string) (*RuleDetail, error) {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	for _, r := range sc.compiled {
+		if r.ID == id {
+			patterns := make([]string, len(r.Patterns))
+			for i, p := range r.Patterns {
+				switch p.Type {
+				case rules.PatternRegex:
+					patterns[i] = fmt.Sprintf("[regex] %s", p.Regex.String())
+				case rules.PatternContains:
+					patterns[i] = fmt.Sprintf("[contains] %s", p.Value)
+				}
+			}
+			return &RuleDetail{
+				ID:             r.ID,
+				Name:           r.Name,
+				Severity:       r.Severity.String(),
+				Category:       r.Category,
+				Description:    r.Description,
+				Remediation:    r.Remediation,
+				Patterns:       patterns,
+				TruePositives:  r.Examples.TruePositive,
+				FalsePositives: r.Examples.FalsePositive,
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("rule %q not found", id)
+}
+
+// RulesLoaded returns the number of compiled rules in this scanner.
+func (sc *Scanner) RulesLoaded() int {
+	return len(sc.compiled)
+}
+
+// buildInternalScanner creates a lightweight scanner.Scanner reusing the
+// cached pattern matcher. NLP/ToxicFlow analyzers and the cross-file
+// accumulator are created fresh (they're stateless and cheap).
+func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, error) {
+	s := scanner.New(sc.cfg.workers)
+	s.SetMinSeverity(sc.cfg.minSeverity)
+	if len(sc.cfg.ignorePatterns) > 0 {
+		s.SetIgnorePatterns(sc.cfg.ignorePatterns)
+	}
+	if sc.cfg.maxFileSize > 0 {
+		s.SetMaxFileSize(sc.cfg.maxFileSize)
+	}
+	tn := sc.cfg.toolName
+	if toolName != "" {
+		tn = toolName
+	}
+	if tn != "" {
+		s.SetToolName(tn)
+	}
+	if sc.cfg.scanProfile != ProfileStrict {
+		s.SetScanProfile(sc.cfg.scanProfile)
+	}
+	if len(sc.toolScoped) > 0 {
+		s.SetToolScopedRules(sc.toolScoped)
+	}
+	if sc.cfg.deduplicateMode != 0 {
+		s.SetDeduplicateMode(sc.cfg.deduplicateMode)
+	}
+
+	// Reuse pre-compiled pattern matcher (the expensive part: regex + AC automaton)
+	s.RegisterAnalyzer(sc.matcher)
+	// NLP and ToxicFlow are stateless, cheap to instantiate
+	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
+	s.RegisterAnalyzer(toxicflow.New())
+	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+
+	// Rug-pull: fresh state store per scan for thread safety
+	if sc.cfg.stateDir != "" {
+		statePath := filepath.Join(sc.cfg.stateDir, "state.json")
+		store := state.New(statePath)
+		if err := store.Load(); err != nil {
+			return nil, fmt.Errorf("loading state from %s: %w", statePath, err)
+		}
+		s.RegisterAnalyzer(rugpull.New(store))
+		s.SetStateStore(store)
+	}
+
+	return s, nil
+}
+
 // --- internal helpers ---
 
 func applyOpts(opts []Option) *scanConfig {

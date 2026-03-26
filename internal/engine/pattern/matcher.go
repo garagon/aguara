@@ -101,8 +101,9 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 		}
 	}
 
-	// Phase 4: decode base64/hex blobs and re-scan with same applicable rules
-	findings = append(findings, DecodeAndRescan(target, applicable, cbMap)...)
+	// Phase 4: decode base64/hex blobs and re-scan with all-target rules only.
+	// Extension-specific rules are irrelevant for decoded content (no file context).
+	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)
 
 	return findings, nil
 }
