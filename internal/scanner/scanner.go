@@ -250,6 +250,10 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 // postProcess deduplicates, scores, correlates, filters, and sorts findings.
 func (s *Scanner) postProcess(findings []Finding) []Finding {
+	if len(findings) == 0 {
+		return nil
+	}
+
 	// Apply tool exemptions before dedup/scoring (removes definite false positives)
 	if s.toolName != "" {
 		findings = applyToolExemptions(s.toolName, findings, s.toolScopedRules)

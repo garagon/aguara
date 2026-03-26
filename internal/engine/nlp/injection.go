@@ -53,20 +53,42 @@ func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target)
 	}
 }
 
+// hasMarkdownStructure returns true if content has markdown elements that
+// require Goldmark parsing (HTML comments, headings, code blocks, emphasis).
+func hasMarkdownStructure(content string) bool {
+	return strings.Contains(content, "<!--") ||
+		strings.Contains(content, "# ") ||
+		strings.Contains(content, "```") ||
+		strings.Contains(content, "**")
+}
+
 // analyzeMarkdown runs the full NLP pipeline on markdown files.
 func (a *InjectionAnalyzer) analyzeMarkdown(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
-	sections := ParseMarkdown(target.Content)
 	lines := target.Lines()
 	var findings []scanner.Finding
 
-	for i, section := range sections {
-		if ctx.Err() != nil {
-			return findings, ctx.Err()
+	if hasMarkdownStructure(target.StringContent()) {
+		// Full path: parse markdown AST for structure-dependent checks.
+		sections := ParseMarkdown(target.Content)
+		for i, section := range sections {
+			if ctx.Err() != nil {
+				return findings, ctx.Err()
+			}
+			findings = append(findings, checkHiddenComment(section, lines, target)...)
+			findings = append(findings, checkCodeMismatch(section, lines, target)...)
+			findings = append(findings, checkHeadingMismatch(sections, i, lines, target)...)
+			findings = append(findings, checkAuthorityClaim(section, lines, target)...)
+			findings = append(findings, checkDangerousCombos(section, lines, target)...)
 		}
-
-		findings = append(findings, checkHiddenComment(section, lines, target)...)
-		findings = append(findings, checkCodeMismatch(section, lines, target)...)
-		findings = append(findings, checkHeadingMismatch(sections, i, lines, target)...)
+	} else {
+		// Fast path: skip Goldmark parsing for structureless plain text.
+		// Still run authority claim and dangerous combo checks - these detect
+		// social engineering attacks that don't need markdown structure.
+		section := MarkdownSection{
+			Type: SectionParagraph,
+			Text: target.StringContent(),
+			Line: 1,
+		}
 		findings = append(findings, checkAuthorityClaim(section, lines, target)...)
 		findings = append(findings, checkDangerousCombos(section, lines, target)...)
 	}
