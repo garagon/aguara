@@ -4,7 +4,7 @@ VERSION ?= dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 LDFLAGS := -ldflags "-s -w -X $(PKG)/cmd/aguara/commands.Version=$(VERSION) -X $(PKG)/cmd/aguara/commands.Commit=$(COMMIT)"
 
-.PHONY: build test lint run clean fmt vet wasm
+.PHONY: build test lint run clean fmt vet wasm wasm-serve
 
 build:
 	go build $(LDFLAGS) -o $(BINARY) ./cmd/aguara
@@ -27,6 +27,11 @@ run:
 wasm:
 	GOOS=js GOARCH=wasm go build -o aguara.wasm ./cmd/wasm
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" .
+	cp cmd/wasm/index.html .
+
+wasm-serve: wasm
+	@echo "Serving at http://localhost:8080"
+	python3 -m http.server 8080
 
 clean:
-	rm -f $(BINARY) aguara.wasm wasm_exec.js
+	rm -f $(BINARY) aguara.wasm wasm_exec.js index.html
