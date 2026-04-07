@@ -57,6 +57,15 @@ func TestAdjustConfidenceCodeBlockAndCorrelation(t *testing.T) {
 	require.InDelta(t, 0.935, result[1].Confidence, 0.01)
 }
 
+func TestAdjustConfidenceNegativeClampedToZero(t *testing.T) {
+	findings := []types.Finding{
+		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: -0.5},
+	}
+
+	result := meta.AdjustConfidence(findings)
+	require.Equal(t, float64(0), result[0].Confidence)
+}
+
 func TestAdjustConfidenceZeroConfidenceUntouched(t *testing.T) {
 	findings := []types.Finding{
 		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: 0, InCodeBlock: true},

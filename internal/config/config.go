@@ -62,12 +62,15 @@ func Load(dir string) (Config, error) {
 	}
 	for _, name := range []string{".aguara.yml", ".aguara.yaml"} {
 		path := filepath.Join(dir, name)
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return Config{}, fmt.Errorf("reading %s: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return Config{}, fmt.Errorf("%s is a symbolic link (rejected for security)", path)
 		}
 		if info.Size() > 1<<20 {
 			return Config{}, fmt.Errorf("config file too large: %s (%d bytes, max 1 MB)", path, info.Size())
