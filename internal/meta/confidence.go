@@ -49,5 +49,12 @@ func AdjustConfidence(findings []types.Finding) []types.Finding {
 		}
 	}
 
+	// Pass 3: clamp negative confidence values to zero
+	for i := range findings {
+		if findings[i].Confidence < 0 {
+			findings[i].Confidence = 0
+		}
+	}
+
 	return findings
 }

@@ -159,6 +159,17 @@ rule_overrides:
 	require.Contains(t, err.Error(), "mutually exclusive")
 }
 
+func TestLoadConfigSymlinkRejected(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.yml")
+	require.NoError(t, os.WriteFile(target, []byte("severity: high\n"), 0644))
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, ".aguara.yml")))
+
+	_, err := config.Load(dir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "symbolic link")
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()
