@@ -19,11 +19,13 @@ const ctxRadius = 3
 // Matcher implements the Analyzer interface using compiled pattern rules.
 // Rules are pre-grouped by target extension for fast lookup.
 // Contains patterns use Aho-Corasick multi-pattern matching for O(n+m) search.
+// A keyword pre-filter skips rules whose required literals don't appear in content.
 type Matcher struct {
 	allFileRules []*rules.CompiledRule            // rules with targets: [] (match all)
 	byExt        map[string][]*rules.CompiledRule // ".ext" -> rules targeting that ext
 	acAll        *acSearcher                      // AC automaton for allFileRules contains patterns
 	acByExt      map[string]*acSearcher           // AC automaton per extension group
+	pf           *prefilter                       // keyword pre-filter for all rules
 }
 
 // NewMatcher creates a new pattern matcher with the given compiled rules.
@@ -50,6 +52,8 @@ func NewMatcher(compiled []*rules.CompiledRule) *Matcher {
 			m.acByExt[ext] = ac
 		}
 	}
+	// Build keyword pre-filter from all rules (regex + contains)
+	m.pf = buildPrefilter(compiled)
 	return m
 }
 
@@ -79,13 +83,21 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	// Collect applicable rules: allFileRules + extension-matched rules
 	applicable := m.rulesForFile(target.RelPath)
 
-	// Pre-filter: run Aho-Corasick to find which rules have contains matches.
-	// Rules with no contains hits and only contains patterns can be skipped entirely.
+	// Pre-filter: run keyword AC to find which rules could possibly match.
+	// Rules whose required literal substrings don't appear are skipped entirely.
+	candidates := m.pf.candidateRules(lowerContent)
+
+	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
 	acHitRules := m.acPrefilter(target.RelPath, lowerContent)
 
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
 			return findings, ctx.Err()
+		}
+
+		// Skip rules whose keywords don't appear in content
+		if candidates != nil && !candidates[rule.ID] {
+			continue
 		}
 
 		// Skip rules that only have contains patterns and got no AC hits

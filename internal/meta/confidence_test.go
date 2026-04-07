@@ -15,8 +15,8 @@ func TestAdjustConfidenceCodeBlockDowngrade(t *testing.T) {
 	}
 
 	result := meta.AdjustConfidence(findings)
-	require.InDelta(t, 0.51, result[0].Confidence, 0.01) // 0.85 * 0.6
-	require.InDelta(t, 0.85, result[1].Confidence, 0.01) // unchanged
+	require.InDelta(t, 0.459, result[0].Confidence, 0.01) // 0.85 * 0.6 (code block) * 0.9 (md)
+	require.InDelta(t, 0.765, result[1].Confidence, 0.01) // 0.85 * 0.9 (md)
 }
 
 func TestAdjustConfidenceCorrelationBoost(t *testing.T) {
@@ -27,15 +27,16 @@ func TestAdjustConfidenceCorrelationBoost(t *testing.T) {
 	}
 
 	result := meta.AdjustConfidence(findings)
-	require.InDelta(t, 0.935, result[0].Confidence, 0.01) // 0.85 * 1.1
-	require.InDelta(t, 0.935, result[1].Confidence, 0.01) // 0.85 * 1.1
-	require.InDelta(t, 0.85, result[2].Confidence, 0.01)  // no boost
+	require.InDelta(t, 0.8415, result[0].Confidence, 0.01) // 0.85 * 0.9 (md) * 1.1 (correlated)
+	require.InDelta(t, 0.8415, result[1].Confidence, 0.01) // 0.85 * 0.9 (md) * 1.1 (correlated)
+	require.InDelta(t, 0.765, result[2].Confidence, 0.01)  // 0.85 * 0.9 (md), no boost
 }
 
 func TestAdjustConfidenceCapAtOne(t *testing.T) {
+	// Use .py to avoid md multiplier and isolate the cap behavior
 	findings := []types.Finding{
-		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: 0.95},
-		{RuleID: "R2", FilePath: "a.md", Line: 7, Confidence: 0.95},
+		{RuleID: "R1", FilePath: "a.py", Line: 5, Confidence: 0.95},
+		{RuleID: "R2", FilePath: "a.py", Line: 7, Confidence: 0.95},
 	}
 
 	result := meta.AdjustConfidence(findings)
@@ -51,10 +52,10 @@ func TestAdjustConfidenceCodeBlockAndCorrelation(t *testing.T) {
 	}
 
 	result := meta.AdjustConfidence(findings)
-	// R1: 0.85 * 0.6 (code block) = 0.51, then * 1.1 (correlated) = 0.561
-	require.InDelta(t, 0.561, result[0].Confidence, 0.01)
-	// R2: 0.85 * 1.1 (correlated) = 0.935
-	require.InDelta(t, 0.935, result[1].Confidence, 0.01)
+	// R1: 0.85 * 0.6 (code block) * 0.9 (md) * 1.1 (correlated) = 0.5049
+	require.InDelta(t, 0.5049, result[0].Confidence, 0.01)
+	// R2: 0.85 * 0.9 (md) * 1.1 (correlated) = 0.8415
+	require.InDelta(t, 0.8415, result[1].Confidence, 0.01)
 }
 
 func TestAdjustConfidenceNegativeClampedToZero(t *testing.T) {
@@ -64,6 +65,45 @@ func TestAdjustConfidenceNegativeClampedToZero(t *testing.T) {
 
 	result := meta.AdjustConfidence(findings)
 	require.Equal(t, float64(0), result[0].Confidence)
+}
+
+func TestAdjustConfidenceDocSectionDowngrade(t *testing.T) {
+	findings := []types.Finding{
+		{
+			RuleID: "R1", FilePath: "README.md", Line: 5, Confidence: 0.85,
+			Context: []types.ContextLine{
+				{Line: 3, Content: "## Installation"},
+				{Line: 4, Content: ""},
+				{Line: 5, Content: "pip install evil-package", IsMatch: true},
+			},
+		},
+		{
+			RuleID: "R2", FilePath: "skill.md", Line: 10, Confidence: 0.85,
+			Context: []types.ContextLine{
+				{Line: 9, Content: "Some normal text"},
+				{Line: 10, Content: "pip install evil-package", IsMatch: true},
+			},
+		},
+	}
+
+	result := meta.AdjustConfidence(findings)
+	// R1 near "## Installation": 0.85 * 0.7 (doc section) * 0.9 (md file) = 0.5355
+	require.InDelta(t, 0.5355, result[0].Confidence, 0.01)
+	// R2 not in doc section: 0.85 * 0.9 (md file) = 0.765
+	require.InDelta(t, 0.765, result[1].Confidence, 0.01)
+}
+
+func TestAdjustConfidenceFileTypeMultiplier(t *testing.T) {
+	findings := []types.Finding{
+		{RuleID: "R1", FilePath: "skill.md", Line: 5, Confidence: 0.85},
+		{RuleID: "R2", FilePath: "helper.py", Line: 5, Confidence: 0.85},
+		{RuleID: "R3", FilePath: "config.yaml", Line: 5, Confidence: 0.85},
+	}
+
+	result := meta.AdjustConfidence(findings)
+	require.InDelta(t, 0.765, result[0].Confidence, 0.01) // .md: 0.85 * 0.9
+	require.InDelta(t, 0.85, result[1].Confidence, 0.01)   // .py: no change
+	require.InDelta(t, 0.85, result[2].Confidence, 0.01)   // .yaml: no change
 }
 
 func TestAdjustConfidenceZeroConfidenceUntouched(t *testing.T) {
