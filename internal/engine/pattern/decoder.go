@@ -1,6 +1,7 @@
 package pattern
 
 import (
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -33,6 +34,13 @@ var (
 	unicodeEscapeRe = regexp.MustCompile(`(\\u[0-9a-fA-F]{4}){3,}`)
 	hexEscapeRe     = regexp.MustCompile(`(\\x[0-9a-fA-F]{2}){3,}`)
 	htmlEntityRe    = regexp.MustCompile(`(&#x?[0-9a-fA-F]+;){3,}`)
+	// base32Re matches RFC 4648 base32 blobs. Alphabet is A-Z + 2-7 with
+	// optional = padding. Min length 40 prevents matching ALL_CAPS identifiers.
+	base32Re = regexp.MustCompile(`[A-Z2-7]{40,}={0,6}`)
+	// octalEscapeRe matches C-style octal escapes: \NNN where N is 0-7 and
+	// the first digit is 0-3 to bound the byte value to 0-255. Requires 4+
+	// contiguous escapes to avoid matching incidental \NNN literals in prose.
+	octalEscapeRe = regexp.MustCompile(`(\\[0-3][0-7]{2}){4,}`)
 )
 
 // DecodeAndRescan detects encoded blobs in content, decodes them, and re-scans with provided rules.
@@ -183,6 +191,47 @@ func DecodeAndRescan(target *scanner.Target, compiled []*rules.CompiledRule, cbM
 		findings = append(findings, rescan(decoded, line, lines, target, compiled, "html-entity", cbMap)...)
 	}
 
+	// Scan for base32 blobs (RFC 4648 alphabet)
+	for _, loc := range base32Re.FindAllStringIndex(content, maxBlobsPerFile*3) {
+		if blobCount >= maxBlobsPerFile {
+			break
+		}
+		if loc[1]-loc[0] > maxEncodedBlobSize {
+			continue
+		}
+		encoded := content[loc[0]:loc[1]]
+		decoded, err := decodeBase32(encoded)
+		if err != nil || !isPrintable(decoded) || len(decoded) < 8 {
+			continue
+		}
+		if len(decoded) > maxDecodedSize {
+			decoded = decoded[:maxDecodedSize]
+		}
+		blobCount++
+		line := lineNumberAtOffset(content, loc[0])
+		findings = append(findings, rescan(decoded, line, lines, target, compiled, "base32", cbMap)...)
+	}
+
+	// Scan for octal escape blobs (\NNN where NNN is 0-377 in octal = 0-255 byte)
+	for _, loc := range octalEscapeRe.FindAllStringIndex(content, maxBlobsPerFile*3) {
+		if blobCount >= maxBlobsPerFile {
+			break
+		}
+		if loc[1]-loc[0] > maxEncodedBlobSize {
+			continue
+		}
+		decoded, err := decodeOctalEscape(content[loc[0]:loc[1]])
+		if err != nil || !isPrintable(decoded) || len(decoded) < 8 {
+			continue
+		}
+		if len(decoded) > maxDecodedSize {
+			decoded = decoded[:maxDecodedSize]
+		}
+		blobCount++
+		line := lineNumberAtOffset(content, loc[0])
+		findings = append(findings, rescan(decoded, line, lines, target, compiled, "octal-escape", cbMap)...)
+	}
+
 	return findings
 }
 
@@ -226,6 +275,41 @@ func decodeHexEscape(s string) ([]byte, error) {
 				return nil, err
 			}
 			buf = append(buf, b...)
+			s = s[4:]
+		} else {
+			buf = append(buf, s[0])
+			s = s[1:]
+		}
+	}
+	return buf, nil
+}
+
+// decodeBase32 decodes RFC 4648 base32 strings. Tries the strict StdEncoding
+// first, then falls back to NoPadding for blobs that omitted the = chars.
+func decodeBase32(s string) ([]byte, error) {
+	decoded, err := base32.StdEncoding.DecodeString(s)
+	if err == nil {
+		return decoded, nil
+	}
+	stripped := strings.TrimRight(s, "=")
+	return base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(stripped)
+}
+
+// decodeOctalEscape decodes C-style \NNN sequences (e.g. \150\145\154\154\157
+// for "hello"). Each escape is exactly three octal digits with first digit 0-3
+// to keep byte values in 0-255.
+func decodeOctalEscape(s string) ([]byte, error) {
+	var buf []byte
+	for len(s) > 0 {
+		if len(s) >= 4 && s[0] == '\\' &&
+			s[1] >= '0' && s[1] <= '3' &&
+			s[2] >= '0' && s[2] <= '7' &&
+			s[3] >= '0' && s[3] <= '7' {
+			v, err := strconv.ParseUint(s[1:4], 8, 16)
+			if err != nil {
+				return nil, err
+			}
+			buf = append(buf, byte(v))
 			s = s[4:]
 		} else {
 			buf = append(buf, s[0])
