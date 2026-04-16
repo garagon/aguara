@@ -74,9 +74,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Aguara action (fail-on critical)
+      - name: Run Aguara action (fail-on critical, clean fixture, expect exit 0)
         uses: ./
         with:
-          path: ./internal/rules/builtin/
+          path: ./.github/test-fixtures/clean/
           fail-on: critical
           upload-sarif: 'false'

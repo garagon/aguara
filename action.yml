@@ -68,8 +68,9 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
         INSTALL_DIR: ${{ runner.temp }}/aguara-bin
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
-        curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+        curl -fsSL --max-time 30 https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 
     - name: Run Aguara scan
