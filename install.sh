@@ -99,7 +99,12 @@ detect_arch() {
 }
 
 get_latest_version() {
-    response=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest") || err "failed to fetch latest version from GitHub"
+    api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        response=$(curl -fsSL --max-time 30 -H "Authorization: Bearer ${GITHUB_TOKEN}" "$api_url") || err "failed to fetch latest version from GitHub"
+    else
+        response=$(curl -fsSL --max-time 30 "$api_url") || err "failed to fetch latest version from GitHub (set GITHUB_TOKEN to avoid anonymous rate limits)"
+    fi
     version=$(echo "$response" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
     if [ -z "$version" ]; then
         err "could not determine latest version"
