@@ -7,7 +7,7 @@ LDFLAGS := -ldflags "-s -w -X $(PKG)/cmd/aguara/commands.Version=$(VERSION) -X $
 .PHONY: build test lint run clean fmt vet wasm wasm-serve
 
 build:
-	go build $(LDFLAGS) -o $(BINARY) ./cmd/aguara
+	go build -trimpath $(LDFLAGS) -o $(BINARY) ./cmd/aguara
 
 test:
 	go test -race -count=1 ./...
@@ -25,7 +25,7 @@ run:
 	go run ./cmd/aguara $(ARGS)
 
 wasm:
-	GOOS=js GOARCH=wasm go build -o aguara.wasm ./cmd/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -o aguara.wasm ./cmd/wasm
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" .
 	cp cmd/wasm/index.html .
 

@@ -38,7 +38,7 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 
 - **189 detection rules across 14 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
 - **4-layer analysis engine** — pattern matching, NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
-- **6 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, and hex escapes. Obfuscated payloads are decoded and re-scanned automatically.
+- **8 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, and C-style octal escapes. Obfuscated payloads are decoded and re-scanned automatically.
 - **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
 - **Cross-file toxic flow analysis** — detects dangerous capability combinations split across files in the same MCP server directory (e.g., one tool reads credentials, another sends to a webhook).
 - **Aggregate risk score** — 0-100 score with diminishing returns across findings. Available in JSON, SARIF, and terminal output.
@@ -94,6 +94,52 @@ go install github.com/garagon/aguara/cmd/aguara@latest
 ```
 
 Pre-built binaries for Linux, macOS, and Windows are also available on the [Releases page](https://github.com/garagon/aguara/releases).
+
+### Verifying signed releases
+
+Starting with the next release after this section landed, every release is signed with [Cosign](https://github.com/sigstore/cosign) keyless, ships an SPDX SBOM per archive, and is built with `-trimpath` for reproducibility. The container image is signed at the digest and carries SBOM + SLSA provenance attestations.
+
+**Verify the release archive**:
+
+```bash
+VERSION=vX.Y.Z
+ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
+
+# Download archive, checksums, and the cosign bundle
+curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
+curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/checksums.txt
+curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/checksums.txt.bundle
+
+# Verify checksums.txt was signed by the GitHub Actions release workflow
+cosign verify-blob \
+  --bundle checksums.txt.bundle \
+  --certificate-identity "https://github.com/garagon/aguara/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+
+# Now verify the archive matches the signed checksums
+sha256sum --check --ignore-missing checksums.txt
+```
+
+**Verify the container image**:
+
+```bash
+cosign verify ghcr.io/garagon/aguara:${VERSION#v} \
+  --certificate-identity "https://github.com/garagon/aguara/.github/workflows/docker.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+**Inspect the SBOM**:
+
+```bash
+# Release archive SBOM (SPDX)
+curl -fsSL https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}.sbom.json | jq .
+
+# Container image SBOM attestation
+cosign download attestation ghcr.io/garagon/aguara:${VERSION#v} | jq -r '.payload' | base64 -d | jq .
+```
+
+`install.sh` performs SHA256 verification automatically and aborts if `sha256sum`/`shasum` is unavailable, so the curl-pipe install path is never silently downgraded.
 
 ## Quick Start
 

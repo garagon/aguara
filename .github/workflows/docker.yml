@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # id-token: write is required for cosign keyless signing of the image
+  # digest via Sigstore + GitHub OIDC.
+  id-token: write
 
 concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
@@ -26,6 +29,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
       - uses: docker/metadata-action@v5
         id: meta
         with:
@@ -36,8 +42,26 @@ jobs:
             type=raw,value=latest
 
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # SBOM (SPDX) and SLSA build provenance attestations are pushed
+          # alongside the image and visible via `cosign download attestation`.
+          sbom: true
+          provenance: mode=max
+
+      # Sign the image digest produced by build-push-action. Signing the
+      # digest (not the tag) ensures verification cannot be tricked by a tag
+      # being later repointed.
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done

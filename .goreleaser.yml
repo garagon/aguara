@@ -5,6 +5,8 @@ builds:
     binary: aguara
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
       - -X github.com/garagon/aguara/cmd/aguara/commands.Version={{.Version}}
@@ -26,6 +28,28 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+# Cosign keyless signing of the checksums.txt file. Consumers verify the
+# bundle against the OIDC identity of the GitHub Actions release workflow,
+# then verify each artifact's sha256 against the now-trusted checksums.txt.
+# The .bundle format (cosign 2.x+) packs signature, certificate, and TUF
+# metadata into a single file; the older --output-signature / --output-certificate
+# flags are deprecated and silently ignored when --new-bundle-format is in use.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.bundle"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "--yes"
+      - "${artifact}"
+    artifacts: checksum
+    output: true
+
+# SPDX SBOMs generated with syft for each release archive. Lets consumers
+# audit the dependency tree without having to recompute it themselves.
+sboms:
+  - artifacts: archive
 
 brews:
   - repository:
