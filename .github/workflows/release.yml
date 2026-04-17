@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+  # id-token: write is required for cosign keyless signing via Sigstore +
+  # GitHub OIDC. The token never leaves the runner.
+  id-token: write
 
 jobs:
   release:
@@ -22,6 +25,16 @@ jobs:
           go-version: "1.25"
           cache: true
           cache-dependency-path: go.sum
+
+      # cosign signs the checksums.txt produced by GoReleaser. Pinned to a
+      # specific release for reproducibility; consumers can update via
+      # Dependabot.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      # syft generates SPDX SBOMs that GoReleaser attaches to each archive.
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.17.8
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
