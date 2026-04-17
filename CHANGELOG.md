@@ -3,6 +3,87 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.0] — 2026-04-17
+
+Supply-chain hardening release. Every release artifact and the container image are now cryptographically signed with Cosign keyless via GitHub OIDC, ship an SPDX SBOM, and are built reproducibly with `-trimpath`. The `install.sh` script now refuses to install when integrity verification cannot be performed. Two new evasion decoders (base32, C-style octal escapes) extend pattern-layer coverage to 8 encodings.
+
+### Added
+
+#### Signed releases (Cosign keyless)
+
+`checksums.txt` is signed during release with `cosign sign-blob --bundle`, producing `checksums.txt.bundle`. The container image is signed at the digest. No long-lived signing keys; identity is proven by the GitHub Actions OIDC token at release time.
+
+```bash
+VERSION=v0.14.0
+cosign verify-blob \
+  --bundle checksums.txt.bundle \
+  --certificate-identity "https://github.com/garagon/aguara/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+
+cosign verify ghcr.io/garagon/aguara:${VERSION#v} \
+  --certificate-identity "https://github.com/garagon/aguara/.github/workflows/docker.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+#### SPDX SBOMs per archive
+
+Goreleaser invokes `syft` to generate an SBOM (`<archive>.sbom.json`) for every release archive. The container image carries SBOM and SLSA build provenance attestations attached via `docker/build-push-action` (`sbom: true`, `provenance: mode=max`); fetch with `cosign download attestation`.
+
+#### Reproducible builds (`-trimpath`)
+
+All build paths (`Makefile`, `Dockerfile`, `.goreleaser.yml`, wasm target) now pass `-trimpath`. Strips `$GOPATH`/`$HOME` from binaries, so stack traces no longer leak the build host's directory layout, and bytes can be reproduced from a clean checkout.
+
+#### Two new evasion decoders
+
+Pattern layer now decodes 8 encodings (was 6):
+
+- `base32` (RFC 4648, alphabet `A-Z` + `2-7`, min 40 chars to avoid matching ALL_CAPS identifiers, padding optional)
+- `octal escapes` (`\NNN`, 4+ contiguous, first digit constrained to `[0-3]` to keep byte values in 0-255)
+
+Both feed into the existing `DecodeAndRescan` pipeline and respect the shared `maxBlobsPerFile=10` cap.
+
+### Changed
+
+#### `install.sh` aborts when SHA256 tooling is missing
+
+Previously `install.sh` issued a warning and continued the install if neither `sha256sum` (Linux coreutils) nor `shasum` (macOS, perl-Digest-SHA on minimal Linux) was available. An attacker positioned on the network could swap the binary on machines lacking those tools while users only saw a yellow warning.
+
+Now `install.sh` checks for a SHA256 tool at startup, before any download, and aborts with a clear remediation message if neither is found. **This is technically a breaking change** for users on minimal images that lacked these tools and were silently installing without verification — but those installs were never safe.
+
+#### `install.sh` downloads are bounded with retry
+
+All `curl` invocations now use `--max-time` (120s for archives, 30s for the API call) and `--retry 3 --retry-delay 2 --retry-connrefused`. Hung TCP connections can no longer stall the install indefinitely; transient network blips no longer require manual rerun.
+
+#### CI pipeline (no runtime impact)
+
+- Go module cache enabled in `setup-go@v5` via `cache: true` (CI runs ~30-45s faster).
+- `concurrency` groups with `cancel-in-progress: true` on `ci.yml`, `test-action.yml`, `docker.yml` (release.yml intentionally excluded so an in-flight release is never cancelled).
+- Explicit `timeout-minutes` per job (10 CI / 15 test-action / 30 release+docker).
+- `fail-fast: false` on the test-action OS matrix.
+- Dockerfile runtime layer no longer installs `git` (image shrinks ~28MB → ~24MB; `aguara` never invoked git).
+
+#### GitHub Action authenticates the GitHub API
+
+`install.sh` (and therefore the action's install step) now sends `Authorization: Bearer ${GITHUB_TOKEN}` when the env var is present, raising the rate limit from 60/h anonymous to 5000/h authenticated. Fixes intermittent 403 failures on macOS Actions runners that share IP pools. The action passes `${{ github.token }}` into the install step automatically.
+
+#### Test isolation for `fail-on` action job
+
+The `test-action-fail-on` workflow job previously scanned `internal/rules/builtin/` and assumed it was clean — but as of v0.10.0 the rules detect their own `true_positive` examples (260 findings, risk 100/100). The job now scans a controlled `.github/test-fixtures/clean/` fixture (verified to produce zero findings even at `--severity info`).
+
+### Fixed
+
+- `install.sh`: silent-fallback bypass when SHA256 tools were missing (see Changed).
+- Container image: removed unused `git` package (~5MB smaller).
+
+### Library API
+
+No public API changes. Existing `aguara.Scan`, `aguara.ScanContent`, `aguara.NewScanner`, options, and re-exported types are unchanged. Library consumers (`aguara-mcp`, `oktsec`) need no migration. The new decoders may produce additional `Finding` entries on payloads that were previously undetected; rule IDs and the `Analyzer` field (`pattern-decoder`) follow the existing scheme, with new `RuleName` suffixes `(decoded base32)` and `(decoded octal-escape)`.
+
+### Known gap
+
+The CHANGELOG entries for `v0.11.0`, `v0.11.1`, `v0.12.0`, `v0.12.1`, `v0.13.0` were not added at the time of those releases. The git history records what each one contained; reconstructing those entries is tracked separately.
+
 ## [0.10.0] — 2026-03-24
 
 Engine improvements for evasion prevention, signal quality, and library consumer API. Derived from oktsec IPI Arena benchmark analysis. Validated against 28,207 real MCP skills from Aguara Watch.
