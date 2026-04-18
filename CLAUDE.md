@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.10.0 (2026-03-24). 177 rules, 13 categories, 4 analysis layers, 80% test coverage, 550 tests, 0 lint issues.
+Aguara v0.14.0 (2026-04-17). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
 
-Distribution: install.sh, Homebrew tap, Docker (GHCR), GoReleaser, GitHub Action, go install.
+Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
 GitHub: 48 stars, 6 forks. 0 open PRs, 0 open issues. 7 awesome-list PRs pending review in external repos. 7 forks on garagon account (pending cleanup after awesome-list PRs resolve).
 
@@ -17,7 +17,7 @@ Internal docs (gitignored) in `DOCS/` as an Obsidian vault. See `DOCS/Aguara/CON
 Key locations:
 - Dashboard (MOC): `DOCS/Aguara/00 Dashboard.md`
 - Conventions: `DOCS/Aguara/CONVENTIONS.md` - frontmatter schema, types, statuses, tags, naming
-- Product versions: `DOCS/Aguara/product/v0.10.0/_index.md` (version hub with links to all generated content)
+- Product versions: `DOCS/Aguara/product/v0.10.0/_index.md` (version hub with links to all generated content; v0.11.0–v0.14.0 hubs not yet created)
 - Distribution channels: `DOCS/Aguara/distribution/<channel>/_index.md` (each has submission log)
 - Growth plan: `DOCS/Aguara/product/roadmap.md`
 - Templates: `DOCS/Aguara/templates/` (channel.md, product-version.md)
@@ -58,7 +58,7 @@ Root package re-exports types from `internal/types` and exposes: `Scan()`, `Scan
 
 ### Analysis Pipeline (4 layers, run sequentially per file)
 
-1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 6 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
+1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
 2. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
 3. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file taint tracking + cross-file correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
 4. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
@@ -82,11 +82,11 @@ All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `N
 
 ## Rules System
 
-177 rules in `internal/rules/builtin/*.yaml` across 12 files. Each rule requires:
+189 rules in `internal/rules/builtin/*.yaml` across 14 files. Each rule requires:
 
 - `id`, `name`, `severity`, `category`, `patterns` (type: `regex` or `contains`)
 - `match_mode`: `any` (OR, default) or `all` (AND)
-- `remediation`: actionable fix guidance (all 177 rules have this)
+- `remediation`: actionable fix guidance (all 189 rules have this)
 - `examples.true_positive` and `examples.false_positive` - **self-tested automatically by `make test`**
 - Optional: `targets` (file globs), `exclude_patterns` (context-based suppression)
 
@@ -143,12 +143,12 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 177)
-- Test count (currently 550)
+- Rule count (currently 189)
+- Test count (currently ~630)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.10.0)
+- Version number (currently v0.14.0)
 
 Use `Grep` to find all occurrences before updating.
 
