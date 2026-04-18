@@ -3,6 +3,24 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.1] — 2026-04-18
+
+Patch release fixing two preexisting Docker distribution bugs that were exposed only after pulling and running the published `v0.14.0` image. No engine, library, or rule changes.
+
+### Fixed
+
+- **`aguara version` inside the Docker image reported `dev (commit: none)`** instead of the actual release tag. The Dockerfile compiled the binary without injecting the `Version` and `Commit` ldflags, so only the `tar.gz` binaries (built by GoReleaser) carried the right values. The Dockerfile now accepts `ARG VERSION` and `ARG COMMIT` and the workflow passes the tag and SHA via `build-args`.
+- **The Docker image was published only for `linux/amd64`**. Macs (Apple Silicon), AWS Graviton, GitHub ARM runners, and any Linux ARM host could not pull the image without `--platform linux/amd64` (QEMU emulation). The Docker workflow now sets up QEMU and builds for both `linux/amd64` and `linux/arm64` natively.
+
+### Added
+
+- `.github/scripts/verify-release.sh` runs after every tag to validate the published artifacts. Six checks: cosign-signed checksums, archive sha256 match, extracted binary version (catches missing ldflags), cosign-signed image, native pull for the host architecture (catches missing arm64 manifest), and SBOM + SLSA provenance attestations on the image. Exits 1 on the first failure with a clear message.
+- `CONTRIBUTING.md` "Release Process" section documents the new step: `VERSION=vX.Y.Z .github/scripts/verify-release.sh` before announcing any release.
+
+### Why a patch instead of a minor
+
+Both bugs are infrastructural — they predate `v0.14.0` and slipped past the CI green check because no acceptance test ran against the actually-distributed artifact. There are no functional changes to the binary, library API, or rules. Existing consumers see the image's `version` command suddenly start reporting the right thing and the image start pulling on ARM. Neither is a behavior change anyone would script against.
+
 ## [0.14.0] — 2026-04-17
 
 Supply-chain hardening release. Every release artifact and the container image are now cryptographically signed with Cosign keyless via GitHub OIDC, ship an SPDX SBOM, and are built reproducibly with `-trimpath`. The `install.sh` script now refuses to install when integrity verification cannot be performed. Two new evasion decoders (base32, C-style octal escapes) extend pattern-layer coverage to 8 encodings.

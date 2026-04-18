@@ -118,6 +118,31 @@ go test -race -count=1 -v ./internal/engine/pattern/...
 - [ ] CHANGELOG updated
 - [ ] No breaking changes (or clearly documented)
 
+## Release Process
+
+After merging the release PR (`release/vX.Y.Z`) and tagging:
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+GoReleaser and the Docker workflow run automatically. **Do not announce the release until the acceptance script passes**:
+
+```bash
+VERSION=vX.Y.Z .github/scripts/verify-release.sh
+```
+
+The script downloads the release artifacts and the Docker image, then validates:
+
+1. The `checksums.txt` Cosign signature against the release workflow's OIDC identity.
+2. The `sha256` of the host's archive matches the signed checksums.
+3. The extracted binary reports the expected version (catches missing ldflags).
+4. The Docker image's Cosign signature against the docker workflow's OIDC identity.
+5. The Docker image pulls natively for the host architecture (catches missing `linux/arm64` manifests).
+6. The Docker image carries an SPDX SBOM and SLSA provenance attestation.
+
+If any check fails, the release is incomplete. Fix the cause, retag (`vX.Y.Z+1`), and rerun the script before announcing.
+
 ## Reporting Issues
 
 - **Bugs:** Use the [bug report template](https://github.com/garagon/aguara/issues/new?template=bug_report.yml)
