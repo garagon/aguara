@@ -129,14 +129,20 @@ cosign verify ghcr.io/garagon/aguara:${VERSION#v} \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
 
-**Inspect the SBOM**:
+**Inspect the SBOM and provenance**:
 
 ```bash
-# Release archive SBOM (SPDX)
+# Release archive SBOM (SPDX 2.3)
 curl -fsSL https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}.sbom.json | jq .
 
-# Container image SBOM attestation
-cosign download attestation ghcr.io/garagon/aguara:${VERSION#v} | jq -r '.payload' | base64 -d | jq .
+# Container image SBOM and SLSA build provenance.
+# docker/build-push-action publishes these as BuildKit attestation manifests
+# (in-toto / SLSA spec) attached to the OCI image index, not as cosign
+# attestations. Use `docker buildx imagetools inspect` to read them:
+docker buildx imagetools inspect ghcr.io/garagon/aguara:${VERSION#v} \
+  --format '{{ json .SBOM }}' | jq .
+docker buildx imagetools inspect ghcr.io/garagon/aguara:${VERSION#v} \
+  --format '{{ json .Provenance }}' | jq .
 ```
 
 `install.sh` performs SHA256 verification automatically and aborts if `sha256sum`/`shasum` is unavailable, so the curl-pipe install path is never silently downgraded.
