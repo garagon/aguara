@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.14.0 (2026-04-17). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
+Aguara v0.14.1 (2026-04-18). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -148,7 +148,7 @@ When any of these values change, update ALL references across the vault:
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.14.0)
+- Version number (currently v0.14.1)
 
 Use `Grep` to find all occurrences before updating.
 
