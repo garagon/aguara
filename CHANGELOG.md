@@ -3,6 +3,19 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.2] — 2026-04-18
+
+Patch fix caught by the new `verify-release.sh` acceptance script when running it against the freshly-published `v0.14.1`. No engine, library, or rule changes.
+
+### Fixed
+
+- **Docker image reported `aguara v0.14.1`** (with the leading `v`) while the tar.gz binaries reported `aguara 0.14.1` (without). The asymmetry came from `docker.yml` passing `VERSION=${{ github.ref_name }}` (raw tag name `v0.14.1`) while `.goreleaser.yml` uses `{{.Version}}` (which strips the prefix). Anything parsing `aguara version` output as semver would see two different strings depending on whether it ran the binary or the container.
+- Fix: `docker.yml` now passes `VERSION=${{ steps.meta.outputs.version }}`, the same `0.14.2` form `docker/metadata-action` already uses for the image tags.
+
+### Process win
+
+Caught **before** announcing the release. `verify-release.sh` check 6 (extracted binary version vs. expected) failed on `v0.14.1`, the release went on hold, this patch shipped, and the script will rerun on `v0.14.2` from arm64 before this version is treated as final.
+
 ## [0.14.1] — 2026-04-18
 
 Patch release fixing two preexisting Docker distribution bugs that were exposed only after pulling and running the published `v0.14.0` image. No engine, library, or rule changes.

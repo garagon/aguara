@@ -61,11 +61,15 @@ jobs:
           # Multi-arch image: native amd64 + arm64 (Apple Silicon, Linux ARM,
           # AWS Graviton, GitHub ARM runners) without forcing --platform.
           platforms: linux/amd64,linux/arm64
-          # Inject the release tag and commit into the binary so
+          # Inject the release version and commit into the binary so
           # `aguara version` inside the container reports the actual version
           # instead of the Dockerfile defaults (dev / none).
+          # steps.meta.outputs.version is the semver-stripped form (0.14.2),
+          # matching what GoReleaser injects into the tar.gz binaries via
+          # {{.Version}}. Using github.ref_name here would inject "v0.14.2"
+          # with the leading v and break consumers that compare versions.
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ github.sha }}
           # SBOM (SPDX) and SLSA build provenance attestations are attached
           # to the OCI image index. Read with `docker buildx imagetools inspect`.
