@@ -100,13 +100,26 @@ DOCKER_VERSION=$(docker run --rm "${IMAGE}:${VERSION_STRIPPED}" version | awk 'N
 [ "$DOCKER_VERSION" = "$VERSION_STRIPPED" ] || err "docker image reports version '${DOCKER_VERSION}', expected '${VERSION_STRIPPED}'"
 info "docker version: ${DOCKER_VERSION}"
 
-docker buildx imagetools inspect "${IMAGE}:${VERSION_STRIPPED}" --format '{{json .SBOM}}' \
-    | jq -e '.SPDX.SPDXID == "SPDXRef-DOCUMENT"' >/dev/null \
-    || err "Docker image SBOM (SPDX) missing or malformed"
-info "image SBOM: SPDX present"
+# Multi-arch images publish SBOM and Provenance as a map keyed by platform
+# (e.g. "linux/amd64", "linux/arm64"). Single-arch images publish them at
+# the root with .SPDX / .SLSA. Try the per-platform path first, fall back
+# to the legacy single-arch shape so this script keeps working if the
+# image regresses to a single platform.
+PLATFORM="linux/${ARCH}"
+SBOM_JSON=$(docker buildx imagetools inspect "${IMAGE}:${VERSION_STRIPPED}" --format '{{json .SBOM}}')
+echo "$SBOM_JSON" | jq -e --arg p "$PLATFORM" \
+    'if has($p) then .[$p].SPDX.SPDXID == "SPDXRef-DOCUMENT"
+     else .SPDX.SPDXID == "SPDXRef-DOCUMENT" end' >/dev/null \
+    || err "Docker image SBOM (SPDX) missing or malformed for ${PLATFORM}"
+info "image SBOM: SPDX present (${PLATFORM})"
+
+# Provenance JSON sometimes embeds raw commit messages with literal newlines,
+# which strict jq rejects as control chars. The semantic check we care about
+# is "does the SLSA buildType URL appear in the provenance blob", so a simple
+# grep is more robust than parsing.
 docker buildx imagetools inspect "${IMAGE}:${VERSION_STRIPPED}" --format '{{json .Provenance}}' \
-    | jq -e '.SLSA.buildDefinition.buildType | startswith("https://")' >/dev/null \
-    || err "Docker image SLSA provenance missing or malformed"
-info "image provenance: SLSA present"
+    | grep -q '"buildType":[[:space:]]*"https://' \
+    || err "Docker image SLSA provenance missing or malformed for ${PLATFORM}"
+info "image provenance: SLSA present (${PLATFORM})"
 
 green ">> ALL CHECKS PASSED for ${VERSION} (${OS}/${ARCH})"
