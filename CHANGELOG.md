@@ -3,6 +3,49 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.3] — 2026-04-21
+
+Maintenance release. Bundles one install-reliability fix, four rule calibration tweaks, a noisy update-check message, and a hardening change to the composite action. No engine changes, no rule-count change. There is no CVE, no known exploitation, and no action required beyond upgrading normally.
+
+### Fixed
+
+#### Fresh installs of v0.14.0 / v0.14.1 / v0.14.2 were failing
+
+`install.sh` extracted the expected checksum with `grep "$file" checksums.txt | awk '{print $1}'`. After v0.14.0 started shipping per-archive SBOMs, the substring grep also matched the sibling `.sbom.json` line, so `awk '{print $1}'` returned two hashes concatenated. Every install aborted with `checksum mismatch: expected <hash1><hash2>, got <hash1>`. The script was failing **closed** - no one was silently compromised - but nobody could install Aguara fresh. Fix: exact-filename match on column 2 with awk. Users who already had v0.14.x installed (via Homebrew, `go install`, or a pre-v0.14 install.sh) were unaffected.
+
+The bug slipped past CI because the Test Action workflow only triggers on `action.yml` / `test-action.yml` changes, and none landed between v0.14.0 and this release.
+
+#### Four rule false positives on real-world skill docs
+
+Detection-engineering pass over `testdata/real-skills/` (1247 files) caught four regexes firing on legitimate content without any corresponding true-positive loss:
+
+- `PROMPT_INJECTION_004` (Zero-width char obfuscation) fired on a single UTF-8 BOM at file start. Pattern 2 now requires `{2,}` like pattern 1.
+- `PROMPT_INJECTION_011` (Jailbreak template) matched `DAN` inside unrelated words - `Enable zone re` **`DAN`** `dancy`, `clippy::pe` **`DAN`** `tic`. Tokens are now anchored with `\b`.
+- `UNI_001` (RTL override) fired on U+202D (LRO), which appears in legitimate mixed-direction layout. Narrowed to U+202E (RLO, the actual Trojan Source signal).
+- `UNI_006` (Tag characters) had a range that missed U+E0000 (LANGUAGE TAG). Extended to the full Unicode Tag Characters block.
+
+All true-positive coverage preserved. `testdata/malicious/` still produces 98 findings, unchanged.
+
+#### `Update available: v0.14.2 → v0.14.2` on every invocation
+
+The ldflag-injected binary version comes in as `0.14.2` while the GitHub Releases API returns `v0.14.2`. The equality check compared them as raw strings, so up-to-date binaries kept printing an "update available" line pointing to the same version they were running. Fix: strip the leading `v` on both sides before comparing.
+
+The `tag_name` returned by the GitHub API is now also validated against `^v\d+\.\d+\.\d+$` before being displayed, so a future hijacked release page cannot surface arbitrary text in the user's terminal.
+
+### Changed
+
+#### `action.yml` no longer pulls `install.sh` from `main`
+
+The composite action previously fetched `install.sh` directly from the `main` branch on every consumer run. That's a poor supply-chain pattern - a future compromise of the repository's write access would propagate to downstream CI without a release ever being cut, bypassing the Cosign/SBOM/SLSA signing pipeline that covers the tagged path. This is a hardening change, not a response to any observed incident.
+
+The action now resolves the install ref from `inputs.install-script-ref` → `github.action_ref` → a baked-in tag default, rejecting anything that is not a semver tag (`vX.Y.Z`) or a 40-char commit SHA. `@main`, `@v1`, `@<branch>` all fall back to the pinned default and emit a GHA `::warning::`. Consumers who pin `uses: garagon/aguara@v0.14.3` (or any exact tag or SHA) see no behavior change.
+
+`DEFAULT_REF` is bumped to `v0.14.3` so consumers using non-semver refs fall back to this release's fixed `install.sh`.
+
+### Process
+
+The fixes were surfaced by a four-angle review of v0.14.2 (offensive FN hunt, detection-engineering FP calibration, supply-chain self-audit, competitive product review). The full v0.15.x technical spec - `match_mode: all` proximity, CMDEXEC_013 recalibration, YAML frontmatter analyzer, pre-commit hook, `--remote` scan - lives outside this release and will sequence in over the next weeks.
+
 ## [0.14.2] — 2026-04-18
 
 Patch fix caught by the new `verify-release.sh` acceptance script when running it against the freshly-published `v0.14.1`. No engine, library, or rule changes.
