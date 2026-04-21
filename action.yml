@@ -67,10 +67,23 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
         INSTALL_DIR: ${{ runner.temp }}/aguara-bin
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        curl -fsSL --max-time 30 https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+        # Resolve install.sh ref: prefer `with: version:`, then the action ref
+        # the consumer pinned (e.g. `uses: garagon/aguara@v0.14.3`), then a
+        # baked-in default. Reject anything that isn't a semver tag or a full
+        # 40-char SHA so we never fetch from a mutable branch like `main`.
+        DEFAULT_REF="v0.14.2"
+        INSTALL_REF="${VERSION:-${ACTION_REF:-$DEFAULT_REF}}"
+        if [[ ! "$INSTALL_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+           [[ ! "$INSTALL_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::warning::action ref '$INSTALL_REF' is not a semver tag or full SHA; falling back to $DEFAULT_REF"
+          INSTALL_REF="$DEFAULT_REF"
+        fi
+        curl -fsSL --max-time 30 --retry 3 --retry-connrefused \
+          "https://raw.githubusercontent.com/garagon/aguara/${INSTALL_REF}/install.sh" | bash
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 
     - name: Run Aguara scan
