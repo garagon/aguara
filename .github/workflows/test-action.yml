@@ -31,6 +31,12 @@ jobs:
         with:
           path: ./internal/rules/builtin/
           severity: medium
+          # Exercise the PR's own install.sh, not the baked-in default.
+          # Without this override, the action falls back to DEFAULT_REF
+          # (latest release), which for the first PR that touches action.yml
+          # after a release may be ahead of or behind the install.sh the PR
+          # introduces.
+          install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify outputs
         shell: bash
@@ -67,6 +73,8 @@ jobs:
           format: json
           output: results.json
           upload-sarif: 'false'
+          # Exercise the PR's own install.sh, not the baked-in default.
+          install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify JSON output
         run: |
@@ -88,3 +96,5 @@ jobs:
           path: ./.github/test-fixtures/clean/
           fail-on: critical
           upload-sarif: 'false'
+          # Exercise the PR's own install.sh, not the baked-in default.
+          install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
