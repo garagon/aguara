@@ -1,20 +1,22 @@
 id: UNI_001
 name: "Right-to-left override"
-description: "Detects Unicode right-to-left override characters used to disguise text"
+description: "Detects U+202E right-to-left override characters used to disguise text (Trojan Source, CVE-2021-42574)"
 severity: HIGH
 category: unicode-attack
 targets: []
 match_mode: any
-remediation: "Strip U+202E and U+202D right-to-left/left-to-right override characters from all input before processing."
+remediation: "Strip U+202E right-to-left override characters from all input before processing. See Trojan Source (CVE-2021-42574) for attack details. LRO (U+202D) coverage moved to a separate rule with context requirement."
 patterns:
   - type: regex
-    value: "[\\x{202E}\\x{202D}]"
+    value: "\\x{202E}"
 examples:
   true_positive:
     - "normal text\u202etxt.exe"
-    - "\u202dsome hidden direction"
+    - "malicious\u202efilename.pdf"
   false_positive:
     - "RTL override is used in Arabic and Hebrew text rendering"
+    - "\u202dsome LRO direction for legitimate bidi layout"
+    - "CVE-2021-42574 is the Trojan Source identifier for U+202E"
 ---
 id: UNI_002
 name: "Bidi text manipulation"
@@ -102,15 +104,15 @@ examples:
 ---
 id: UNI_006
 name: "Tag characters for hidden data"
-description: "Detects Unicode tag characters that can embed invisible data"
+description: "Detects Unicode tag characters (U+E0000-U+E007F) that can embed invisible data; see AsciiSmuggler technique"
 severity: HIGH
 category: unicode-attack
 targets: []
 match_mode: any
-remediation: "Reject or strip all Unicode tag characters (U+E0001-U+E007F) from input; they have no legitimate use in tool definitions."
+remediation: "Reject or strip all Unicode tag characters (U+E0000-U+E007F) from input; they have no legitimate use in tool definitions or AI agent content."
 patterns:
   - type: regex
-    value: "[\\x{E0001}-\\x{E007F}]"
+    value: "[\\x{E0000}-\\x{E007F}]"
 examples:
   true_positive:
     - "text\U000E0001\U000E0068\U000E0065\U000E006C\U000E006Chidden"
