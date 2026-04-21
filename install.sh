@@ -150,7 +150,12 @@ get_latest_version() {
 verify_checksum() {
     dir="$1"
     file="$2"
-    expected=$(grep "$file" "${dir}/checksums.txt" | awk '{print $1}')
+    # Exact filename match on column 2, not substring grep. Substring
+    # match picked up sibling artifacts that share a prefix - e.g.
+    # `aguara_0.14.2_linux_amd64.tar.gz` also matches
+    # `aguara_0.14.2_linux_amd64.tar.gz.sbom.json`, so `awk '{print $1}'`
+    # returned two concatenated checksums and every comparison failed.
+    expected=$(awk -v f="$file" '$2==f {print $1; exit}' "${dir}/checksums.txt")
     if [ -z "$expected" ]; then
         err "checksum not found for ${file} in checksums.txt"
     fi

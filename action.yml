@@ -44,13 +44,22 @@ inputs:
     required: false
     default: ''
   version:
-    description: 'Aguara version to install (empty = latest)'
+    description: 'Aguara version to install (empty = latest). Must be a semver release tag like v0.14.2.'
     required: false
     default: ''
   upload-sarif:
     description: 'Upload SARIF results to GitHub Code Scanning'
     required: false
     default: 'true'
+  install-script-ref:
+    description: |
+      Advanced: git ref (semver tag or 40-char SHA) to fetch install.sh from.
+      Normal consumers should leave this blank; the action automatically uses
+      its own pinned ref (e.g. v0.14.2 when you pin `uses: garagon/aguara@v0.14.2`).
+      This input exists for self-testing scenarios where the action runs from
+      `uses: ./` and needs to exercise install.sh from a specific commit.
+    required: false
+    default: ''
 
 outputs:
   findings-count:
@@ -67,19 +76,23 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        INSTALL_SCRIPT_REF: ${{ inputs.install-script-ref }}
         ACTION_REF: ${{ github.action_ref }}
         INSTALL_DIR: ${{ runner.temp }}/aguara-bin
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        # Resolve install.sh ref: prefer `with: version:`, then the action ref
-        # the consumer pinned (e.g. `uses: garagon/aguara@v0.14.3`), then a
-        # baked-in default. Reject anything that isn't a semver tag or a full
-        # 40-char SHA so we never fetch from a mutable branch like `main`.
+        # Resolve where install.sh is fetched from. Resolution order:
+        #   1. `with: install-script-ref:` (advanced / self-testing)
+        #   2. `github.action_ref` (what the consumer pinned `@` to)
+        #   3. a baked-in default tag
+        # Anything that isn't a semver tag (vX.Y.Z) or a 40-char SHA is
+        # rejected so we never fetch install.sh from a mutable branch
+        # like `main`, `v1`, or `@branch-name`.
         DEFAULT_REF="v0.14.2"
-        INSTALL_REF="${VERSION:-${ACTION_REF:-$DEFAULT_REF}}"
+        INSTALL_REF="${INSTALL_SCRIPT_REF:-${ACTION_REF:-$DEFAULT_REF}}"
         if [[ ! "$INSTALL_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
            [[ ! "$INSTALL_REF" =~ ^[0-9a-f]{40}$ ]]; then
-          echo "::warning::action ref '$INSTALL_REF' is not a semver tag or full SHA; falling back to $DEFAULT_REF"
+          echo "::warning::install-script ref '$INSTALL_REF' is not a semver tag or 40-char SHA; falling back to $DEFAULT_REF"
           INSTALL_REF="$DEFAULT_REF"
         fi
         curl -fsSL --max-time 30 --retry 3 --retry-connrefused \
