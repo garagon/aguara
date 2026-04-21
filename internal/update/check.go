@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -14,9 +16,26 @@ type Result struct {
 	UpdateURL string // "go install github.com/garagon/aguara/cmd/aguara@latest"
 }
 
-// NeedsUpdate returns true if Latest differs from Current and Current is not "dev".
+// semverTag matches a well-formed release tag like v0.14.2 or v1.2.3.
+var semverTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// normalizeVersion strips a leading "v" so comparisons tolerate the
+// ldflags-stripped binary version ("0.14.2") against the GitHub tag
+// ("v0.14.2"). Inputs that aren't plain semver are returned unchanged
+// so caller-side equality still works for edge cases like "dev".
+func normalizeVersion(s string) string {
+	return strings.TrimPrefix(s, "v")
+}
+
+// NeedsUpdate returns true if Latest and Current refer to different
+// releases. Both are normalized to strip the leading "v" so the binary's
+// ldflag-injected version (without "v") compares cleanly against the
+// GitHub tag (with "v"). Dev builds never report an update.
 func (r *Result) NeedsUpdate() bool {
-	return r.Latest != r.Current && r.Current != "dev"
+	if r.Current == "dev" {
+		return false
+	}
+	return normalizeVersion(r.Latest) != normalizeVersion(r.Current)
 }
 
 // githubRelease is the minimal JSON shape we need from the GitHub API.
@@ -56,7 +75,11 @@ func checkLatestWithBase(baseURL, currentVersion, repo string) *Result {
 		return nil
 	}
 
-	if release.TagName == "" {
+	// Validate the returned tag shape. The GitHub response is authenticated
+	// by TLS, but defense-in-depth: only accept well-formed semver tags so a
+	// typo-squatted or hijacked release can't surface arbitrary text in the
+	// user's terminal via the update notice.
+	if !semverTag.MatchString(release.TagName) {
 		return nil
 	}
 
