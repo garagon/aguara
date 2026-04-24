@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | ba
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-VERSION=v0.12.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+VERSION=v0.14.4 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 ```
 
@@ -84,7 +84,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:v0.12.0 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.14.4 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
