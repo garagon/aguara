@@ -14,6 +14,7 @@ type scanConfig struct {
 	scanProfile     ScanProfile
 	deduplicateMode DeduplicateMode
 	stateDir        string
+	redact          bool // scrub matched text from credential-leak findings
 }
 
 // Option configures a scan operation.
@@ -109,5 +110,20 @@ func WithDeduplicateMode(mode DeduplicateMode) Option {
 func WithStateDir(dir string) Option {
 	return func(c *scanConfig) {
 		c.stateDir = dir
+	}
+}
+
+// WithRedaction controls whether matched text from credential-leak findings
+// is replaced with "[REDACTED]" in the returned Finding. Enabled by default
+// so secrets detected by CRED_* rules never appear in scan output, CI logs,
+// or SARIF artifacts uploaded to GitHub Code Scanning.
+//
+// Disable only when the consumer needs the raw match to programmatically
+// verify or act on the detected secret (e.g. a remediation pipeline that
+// cross-references the leak against a credential rotation tracker).
+// Rules outside the credential-leak category are never redacted.
+func WithRedaction(enabled bool) Option {
+	return func(c *scanConfig) {
+		c.redact = enabled
 	}
 }

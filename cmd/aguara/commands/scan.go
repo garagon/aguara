@@ -22,6 +22,7 @@ import (
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/state"
+	"github.com/garagon/aguara/internal/types"
 )
 
 var (
@@ -35,6 +36,7 @@ var (
 	flagMaxFileSize string
 	flagToolName    string
 	flagProfile     string
+	flagNoRedact    bool
 )
 
 var scanCmd = &cobra.Command{
@@ -63,6 +65,7 @@ func init() {
 	scanCmd.Flags().StringVar(&flagMaxFileSize, "max-file-size", "", "Maximum file size to scan (e.g. 50MB, 100MB; default 50MB, range 1MB-500MB)")
 	scanCmd.Flags().StringVar(&flagToolName, "tool-name", "", "Tool context for false-positive reduction (e.g. Bash, Edit, WebFetch)")
 	scanCmd.Flags().StringVar(&flagProfile, "profile", "", "Scan profile: strict (default), content-aware, minimal")
+	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
 	rootCmd.AddCommand(scanCmd)
 }
 
@@ -123,6 +126,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err := store.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
 		}
+	}
+
+	if !flagNoRedact {
+		types.RedactCredentialFindings(result.Findings)
 	}
 
 	if err := writeOutput(result); err != nil {
@@ -202,6 +209,10 @@ func runAutoScan(cmd *cobra.Command) error {
 		if err := store.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
 		}
+	}
+
+	if !flagNoRedact {
+		types.RedactCredentialFindings(aggregate.Findings)
 	}
 
 	if err := writeOutput(aggregate); err != nil {

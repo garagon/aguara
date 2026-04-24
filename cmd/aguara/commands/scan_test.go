@@ -32,6 +32,7 @@ func resetFlags() {
 	flagMaxFileSize = ""
 	flagToolName = ""
 	flagProfile = ""
+	flagNoRedact = false
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.
@@ -115,6 +116,41 @@ func TestScanChangedFilesRejectsSymlink(t *testing.T) {
 		if f.FilePath == "evil.md" {
 			t.Fatalf("symlink evil.md was scanned (rule %s); expected to be skipped", f.RuleID)
 		}
+	}
+}
+
+func TestScanRedactsCredentialsByDefault(t *testing.T) {
+	// Write a file with an AWS access key (CRED_002, credential-leak category).
+	// Default scan must redact the match; the raw key must not appear in the
+	// JSON output regardless of which layer a consumer parses.
+	dir := t.TempDir()
+	const rawKey = "AKIAIOSFODNN7EXAMPLE"
+	content := "# config\naws_access_key_id = \"" + rawKey + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "leak.md"), []byte(content), 0644))
+
+	data := scanToFile(t, dir, "--format", "json")
+
+	if bytes.Contains(data, []byte(rawKey)) {
+		t.Fatalf("raw credential leaked into scan output despite default redaction")
+	}
+	if !bytes.Contains(data, []byte("[REDACTED]")) {
+		t.Fatalf("expected [REDACTED] placeholder in scan output, got: %s", data)
+	}
+}
+
+func TestScanNoRedactKeepsRawMatch(t *testing.T) {
+	// With --no-redact the raw match must flow through; this is the explicit
+	// opt-out for pipelines that need the matched text (credential rotation
+	// trackers, security review tools).
+	dir := t.TempDir()
+	const rawKey = "AKIAIOSFODNN7EXAMPLE"
+	content := "# config\naws_access_key_id = \"" + rawKey + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "leak.md"), []byte(content), 0644))
+
+	data := scanToFile(t, dir, "--format", "json", "--no-redact")
+
+	if !bytes.Contains(data, []byte(rawKey)) {
+		t.Fatalf("--no-redact did not preserve raw match; output was: %s", data)
 	}
 }
 
