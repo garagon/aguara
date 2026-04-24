@@ -3,6 +3,57 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.4] — 2026-04-24
+
+Patch release. Bundles one high-severity engine bug that silently dropped true positives since v0.14.0, plus Docker image hardening surfaced during a post-release audit. No API changes, no rule-count change. Consumers of the Go library (`aguara-mcp`, `oktsec`) should upgrade to recover dropped detections; the public API is identical.
+
+### Fixed
+
+#### Keyword prefilter silently dropped rule candidates on overlapping literals
+
+The Aho-Corasick keyword prefilter introduced in v0.14.0 (commit `191f51b`) used `FindAll` for candidate lookup. `FindAll` returns non-overlapping matches, so when a shorter keyword was a prefix of a longer keyword at the same content offset, only the shorter one was emitted and every rule keyed on the longer literal was silently dropped from the candidate set. The regex layer never saw those rules, so true positives vanished without any signal that the rule had been skipped.
+
+EXTDL_005 ("Shell profile modification for persistence") was the first observed production victim: content like `cat payload >> ~/.bashrc` matched the rule's regex in isolation but returned zero findings through the full engine because the prefilter collapsed `"bash"` (4 chars, keyword of many other rules) with `"bashrc"` (6 chars, keyword of EXTDL_005) at the same offset, and EXTDL_005 lost the race. The `zshrc` variant of the same content was detected correctly because `"zshrc"` had no short-prefix collision.
+
+Fix: switch `candidateRules` to `IterOverlapping`, which reports every keyword match at every position. `StandardMatch` is already the configured match kind, which is the precondition the library requires for overlapping iteration.
+
+Impact measured on `testdata/malicious/` (19 files): 98 -> 102 findings, zero lost. The four recovered are legitimate detections the prefilter had been hiding:
+
+- `CRED_007` in `combined-attack/install.sh:4` (hardcoded password).
+- `CRED_007` in `credential-leak/helper.py:6` (hardcoded password).
+- `SSRF_002` in `ssrf-metadata/helper.sh:5` and `:14` (internal IP SSRF).
+
+Surfaced by the `oktsec` team while triaging a custom inter-agent rule (`MEM-006`, npm/pip lifecycle hooks with filesystem writes). The likely breadth of affected rules is anywhere a keyword shares a short prefix with a commonly-used literal (`bash`, `curl`, `http`, `user`, `post`, etc.), but the observed production cases concentrate on shell-profile persistence rules. No known exploitation.
+
+Performance: scanner end-to-end bench is unchanged within noise (28.3M ns/op post-fix vs. 29.1M baseline). Pattern-matcher micro-bench shows a +29% regression in isolation (202M -> 261M ns/op), but regex execution dominates real scans so it does not surface at the macro level. Still ~3x faster than the no-AC path (777M ns/op).
+
+Regression test `TestPrefilterOverlappingKeywords` locks both directions: the longer keyword's rules must route when content has only the longer literal, and the shorter keyword's rules must NOT route when content has only the shorter literal.
+
+#### Docker image ran as root
+
+The published `ghcr.io/garagon/aguara` container image had no `USER` directive, so `aguara scan` ran as `uid=0(root)` inside the container. Combined with a writable `/` and BusyBox's `wget`/`nc` applets in the Alpine base, a container escape or arbitrary-file-write bug would have had unnecessarily broad blast radius on the scanning host.
+
+Fix: add a dedicated `aguara` user (UID 10001) and switch to it before `ENTRYPOINT`. `/usr/local/bin/aguara` and `/` become non-writable; `/tmp` and user-mounted volumes work as before.
+
+On macOS Docker Desktop the transition is transparent. On Linux, users writing output (`-o`) to a mounted host directory may need to `chown` the mount to UID 10001 or pass `--user $(id -u):$(id -g)` to match the host UID.
+
+#### Docker base images used floating tags
+
+`FROM golang:1.25-alpine` and `FROM alpine:3.21` without digest pins meant two rebuilds of the same commit could produce different layers, and a compromised upstream tag would flow straight into the next `docker build` without a signal. Both stages are now pinned to their current multi-arch index digests:
+
+- `golang:1.25-alpine@sha256:5caaf1cca9dc351e13deafbc3879fd4754801acba8653fa9540cea125d01a71f`
+- `alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d`
+
+When upgrading the tag (e.g. `alpine` 3.22), bump both the tag and the digest in the same commit.
+
+### Library API
+
+No public API changes. `aguara.Scan`, `aguara.ScanContent`, `aguara.NewScanner`, options, and re-exported types are unchanged. Library consumers (`aguara-mcp`, `oktsec`) need no migration code; recompile against v0.14.4 and dropped true positives return automatically.
+
+### Process
+
+The prefilter bug was caught by `oktsec` integration triage after v0.14.3 was already out. The Docker findings came from a routine post-release inspection of the published image. Both fixes shipped with regression coverage to prevent recurrence in Tier 1 of v0.15.0.
+
 ## [0.14.3] — 2026-04-21
 
 Maintenance release. Bundles one install-reliability fix, four rule calibration tweaks, a noisy update-check message, and a hardening change to the composite action. No engine changes, no rule-count change. There is no CVE, no known exploitation, and no action required beyond upgrading normally.
