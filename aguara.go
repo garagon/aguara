@@ -110,6 +110,9 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 		return nil, err
 	}
 	result.RulesLoaded = len(compiled)
+	if cfg.redact {
+		redactCredentialFindings(result.Findings)
+	}
 	return result, nil
 }
 
@@ -153,6 +156,9 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 		return nil, err
 	}
 	result.RulesLoaded = len(compiled)
+	if cfg.redact {
+		redactCredentialFindings(result.Findings)
+	}
 	return result, nil
 }
 
@@ -294,6 +300,9 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 		return nil, err
 	}
 	result.RulesLoaded = len(sc.compiled)
+	if sc.cfg.redact {
+		redactCredentialFindings(result.Findings)
+	}
 	return result, nil
 }
 
@@ -308,6 +317,9 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 		return nil, err
 	}
 	result.RulesLoaded = len(sc.compiled)
+	if sc.cfg.redact {
+		redactCredentialFindings(result.Findings)
+	}
 	return result, nil
 }
 
@@ -418,11 +430,27 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 // --- internal helpers ---
 
 func applyOpts(opts []Option) *scanConfig {
-	cfg := &scanConfig{}
+	// Redaction is opt-out: by default, credential-leak findings have their
+	// matched text scrubbed before they leave the library. Callers that need
+	// the raw match must explicitly pass WithRedaction(false).
+	cfg := &scanConfig{redact: true}
 	for _, o := range opts {
 		o(cfg)
 	}
 	return cfg
+}
+
+// redactCredentialFindings scrubs matched text and context for findings in the
+// credential-leak category. Detecting a secret and then writing it verbatim to
+// terminal, JSON, SARIF, or -o output defeats the purpose of detection: the
+// finding artifact becomes a second copy of the secret, often with weaker
+// access controls than the original file (CI logs, GitHub Code Scanning,
+// Slack notifications, etc.).
+//
+// Delegates to types.RedactCredentialFindings so the CLI and library share a
+// single implementation. Only credential-leak findings are altered.
+func redactCredentialFindings(findings []Finding) {
+	types.RedactCredentialFindings(findings)
 }
 
 type compileResult struct {

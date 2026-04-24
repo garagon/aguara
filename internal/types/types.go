@@ -97,6 +97,33 @@ type Finding struct {
 	InCodeBlock bool          `json:"in_code_block,omitempty"`
 }
 
+// RedactedPlaceholder is the value that replaces matched text and matching
+// context lines for findings whose raw match would leak a secret. Kept as a
+// stable string so JSON/SARIF consumers can grep for it consistently.
+const RedactedPlaceholder = "[REDACTED]"
+
+// RedactCredentialFindings scrubs matched text and matching context lines for
+// findings in the credential-leak category so that detecting a secret does not
+// create a second copy of the secret in scan output, CI logs, or SARIF
+// artifacts uploaded to GitHub Code Scanning.
+//
+// Only findings with Category == "credential-leak" are modified. Other
+// categories are left intact because their match is typically a pattern
+// signature rather than a secret.
+func RedactCredentialFindings(findings []Finding) {
+	for i := range findings {
+		if findings[i].Category != "credential-leak" {
+			continue
+		}
+		findings[i].MatchedText = RedactedPlaceholder
+		for j := range findings[i].Context {
+			if findings[i].Context[j].IsMatch {
+				findings[i].Context[j].Content = RedactedPlaceholder
+			}
+		}
+	}
+}
+
 // DowngradeSeverity drops severity by one level, flooring at LOW.
 // INFO is left unchanged (it's a different class, not part of the severity ladder).
 func DowngradeSeverity(sev Severity) Severity {
