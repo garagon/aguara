@@ -1,0 +1,51 @@
+# .aguara.yml -- self-scan configuration for the Aguara repository.
+#
+# This file is specific to THIS repo, not a template for Aguara consumers.
+# Aguara is a security scanner, so by design its own source contains:
+#   - attack pattern signatures embedded in rule YAMLs (internal/rules/builtin/)
+#   - malicious skill fixtures used by integration tests (testdata/, sandbox/)
+#   - benchmark inputs with representative payloads (scripts/)
+#   - documentation that shows example attacks when explaining detections
+#
+# A clean `aguara scan .` against this repo without exclusions produces ~9k
+# findings dominated by that by-design content. This file scopes self-scans
+# to production code paths so contributors get a useful signal-to-noise ratio.
+# Scanning the excluded paths is still useful for research; run without a
+# config (`aguara scan internal/rules/builtin/ --rules=...`) to opt in.
+
+ignore:
+  # Rule definitions. Each rule ships its own true_positive examples so the
+  # self-test suite can assert detection; those examples are real payloads
+  # and trigger the rules that produced them.
+  - internal/rules/builtin/**
+
+  # Integration test fixtures. Malicious/benign scenarios used by
+  # `internal/scanner/integration_test.go`. Gitignored locally, but extracted
+  # into the tree when the suite runs.
+  - testdata/**
+
+  # Docker sandbox with intentionally malicious skill definitions and
+  # configs used by end-to-end test scripts.
+  - sandbox/**
+
+  # Benchmark inputs and captured outputs (JSON with finding arrays,
+  # pprof traces, etc.). Not source code.
+  - scripts/**
+
+  # Internal Obsidian vault (gitignored). Contains attack examples while
+  # drafting blog posts and distribution content.
+  - DOCS/**
+
+  # Release notes and rule docs quote attack patterns when describing what
+  # each fix or rule detects.
+  - CHANGELOG.md
+  - RULES.md
+  - README.md
+
+  # Compiled binaries produced by `make build` and `go test -c`. Aguara's
+  # built-in binary extension filter skips `.exe`/`.so`/etc. but not Go's
+  # extensionless outputs or the `.test` binaries go produces. go:embed
+  # pulls every rule YAML into the binary image, so scanning the raw bytes
+  # re-discovers every attack signature.
+  - aguara
+  - "*.test"

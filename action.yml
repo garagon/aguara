@@ -44,7 +44,7 @@ inputs:
     required: false
     default: ''
   version:
-    description: 'Aguara version to install (empty = latest). Must be a semver release tag like v0.14.2.'
+    description: 'Aguara version to install (empty = latest). Must be a semver release tag like v0.14.4.'
     required: false
     default: ''
   upload-sarif:
@@ -55,7 +55,7 @@ inputs:
     description: |
       Advanced: git ref (semver tag or 40-char SHA) to fetch install.sh from.
       Normal consumers should leave this blank; the action automatically uses
-      its own pinned ref (e.g. v0.14.2 when you pin `uses: garagon/aguara@v0.14.2`).
+      its own pinned ref (e.g. v0.14.4 when you pin `uses: garagon/aguara@v0.14.4`).
       This input exists for self-testing scenarios where the action runs from
       `uses: ./` and needs to exercise install.sh from a specific commit.
     required: false
@@ -88,7 +88,7 @@ runs:
         # Anything that isn't a semver tag (vX.Y.Z) or a 40-char SHA is
         # rejected so we never fetch install.sh from a mutable branch
         # like `main`, `v1`, or `@branch-name`.
-        DEFAULT_REF="v0.14.3"
+        DEFAULT_REF="v0.14.4"
         INSTALL_REF="${INSTALL_SCRIPT_REF:-${ACTION_REF:-$DEFAULT_REF}}"
         if [[ ! "$INSTALL_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
            [[ ! "$INSTALL_REF" =~ ^[0-9a-f]{40}$ ]]; then

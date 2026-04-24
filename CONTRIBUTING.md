@@ -40,7 +40,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Taint tracking: source -> sink flow analysis
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           177 embedded rules across 12 YAML files (go:embed)
+    builtin/           189 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
@@ -98,6 +98,30 @@ go test -race -count=1 ./internal/rules/...
 # Verbose output
 go test -race -count=1 -v ./internal/engine/pattern/...
 ```
+
+## Running Aguara on this repo
+
+Aguara is a scanner whose own source intentionally contains attack patterns: rule YAML `examples.true_positive` blocks (used by the rule self-test suite), payload fixtures under `testdata/` and `sandbox/`, benchmark inputs in `scripts/`, and documentation that cites example attacks when explaining detections. A naive `aguara scan .` against a checkout produces thousands of findings dominated by that by-design content.
+
+The repo ships a `.aguara.yml` at the root that excludes those paths so `aguara scan .` returns a manageable list of findings contributors can actually investigate. Do not copy this file into consumer projects; it is specific to scanner development.
+
+Expected behavior after a clean `make build`:
+
+```bash
+./aguara scan . --no-update-check
+# Roughly ~60 findings, all in test files that embed attack payloads as
+# unit-test fixtures. These are expected; investigate only if the file path
+# is not a `*_test.go` or similarly marked test/doc file.
+```
+
+To scan the excluded paths deliberately (e.g. when validating that rule YAMLs still self-test after a pattern change), point the scanner at the specific path and Aguara will ignore the repo-root config for that target:
+
+```bash
+./aguara scan testdata/malicious --no-update-check      # verify malicious fixtures still detected
+./aguara scan internal/rules/builtin --no-update-check  # rule examples re-scanned
+```
+
+CI currently does not gate on self-scan output; rule coverage is asserted by the Go test suite (rule self-tests against `examples.true_positive` / `false_positive`).
 
 ## Pull Request Process
 
