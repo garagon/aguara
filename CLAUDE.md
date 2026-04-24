@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.14.2 (2026-04-18). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
+Aguara v0.14.4 (2026-04-24). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
 
-Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
+Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
 GitHub: 48 stars, 6 forks. 0 open PRs, 0 open issues. 7 awesome-list PRs pending review in external repos. 7 forks on garagon account (pending cleanup after awesome-list PRs resolve).
 
-Pending improvements: pattern matcher performance (~770ms/file), WASM build (cmd/wasm/ incomplete), adoption/marketing.
+Pattern matcher already uses an Aho-Corasick keyword prefilter (active in production since v0.14.0). Real perf is ~210ms/op on the synthetic bench (was ~770ms without AC), so do not treat "pattern matcher perf" as an open backlog item unless pprof shows a concrete regression. Pending improvements: WASM build (cmd/wasm/ incomplete), adoption/marketing.
 
 Internal docs (gitignored) in `DOCS/` as an Obsidian vault. See `DOCS/Aguara/CONVENTIONS.md` for vault rules and `DOCS/Aguara/00 Dashboard.md` for the entry point.
 
@@ -68,7 +68,7 @@ All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `N
 ### Key Package Relationships
 
 - `internal/types/` - Lowest layer. `Finding`, `Severity`, `ScanResult`. No internal imports. **`Severity` is `type int`, serializes as a number in JSON (0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL), NOT a string.**
-- `internal/rules/` - YAML to CompiledRule. `builtin/` embeds 12 YAML files via `go:embed`.
+- `internal/rules/` - YAML to CompiledRule. `builtin/` embeds 13 YAML files via `go:embed`.
 - `internal/scanner/` - Orchestrator. Discovers files, spawns workers, runs analyzers, applies inline ignore filtering, aggregates results. Imports `meta/` for post-processing.
 - `internal/meta/` - Dedup, scoring, correlation. Imports `types/` only (NOT `scanner/` - this prevents import cycles).
 - `internal/output/` - Formatters (terminal, JSON, SARIF, markdown) implementing `Formatter` interface. Markdown header is `## Aguara Security Scan`, not `# Aguara Scan Report`.
@@ -82,7 +82,7 @@ All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `N
 
 ## Rules System
 
-189 rules in `internal/rules/builtin/*.yaml` across 14 files. Each rule requires:
+189 rules in `internal/rules/builtin/*.yaml` across 13 files. Each rule requires:
 
 - `id`, `name`, `severity`, `category`, `patterns` (type: `regex` or `contains`)
 - `match_mode`: `any` (OR, default) or `all` (AND)
@@ -148,7 +148,7 @@ When any of these values change, update ALL references across the vault:
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.14.2)
+- Version number (currently v0.14.4)
 
 Use `Grep` to find all occurrences before updating.
 
