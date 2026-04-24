@@ -405,7 +405,16 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 	var targets []*scanner.Target
 	for _, relPath := range changedFiles {
 		absPath := filepath.Join(targetPath, relPath)
-		if _, err := os.Stat(absPath); err != nil {
+		// Lstat instead of Stat so a symlink doesn't resolve to its target.
+		// The normal directory walk already skips symlinks (internal/scanner/target.go
+		// in the walk callback); --changed gets file paths from git and must do the
+		// same check, otherwise a malicious symlink committed to the repo would make
+		// aguara read files outside the tree and surface their contents in findings.
+		info, err := os.Lstat(absPath)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
 			continue
 		}
 		targets = append(targets, &scanner.Target{

@@ -26,3 +26,12 @@ __pycache__/
 
 # Coverage
 coverage.out
+
+# Secrets -- prophylactic. The repo has never contained these, but a misplaced
+# .env or key file is the kind of mistake a scanner's own repo really should
+# not ship.
+.env
+.env.*
+!.env.example
+*.pem
+*.key

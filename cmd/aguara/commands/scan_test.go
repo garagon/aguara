@@ -60,6 +60,64 @@ func scanToFile(t *testing.T, args ...string) []byte {
 	return data
 }
 
+func TestScanChangedFilesRejectsSymlink(t *testing.T) {
+	// --changed reads the set of modified files from git and iterates them.
+	// Regression guard: a symlink committed (or added) to the repo must NOT
+	// cause aguara to read its target and surface that target's contents as
+	// findings. The normal walk rejects symlinks; this exercises the parity
+	// fix for scanChangedFiles.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "core.symlinks", "true")
+
+	// Create a secret file OUTSIDE the repo and point a symlink at it.
+	// If --changed followed symlinks, scanning the symlink would leak
+	// the secret into findings.
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	require.NoError(t, os.WriteFile(outside,
+		[]byte("# outside\nsk-proj-1234567890abcdefghijklmnop1234567890abcd\n"), 0o600))
+
+	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "evil.md")))
+
+	// Also stage a real file so the changed-set is non-empty even if the
+	// symlink is rejected; this confirms the scan runs normally for the rest.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "ok.md"),
+		[]byte("# benign\nnothing here\n"), 0o644))
+
+	runGit("add", "-A")
+	// Stay staged (no commit): GitChangedFiles includes staged entries.
+
+	data := scanToFile(t, repo, "--changed", "--format", "json")
+	var result struct {
+		Findings []struct {
+			RuleID   string `json:"rule_id"`
+			FilePath string `json:"file_path"`
+		} `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(data, &result))
+	for _, f := range result.Findings {
+		if f.FilePath == "evil.md" {
+			t.Fatalf("symlink evil.md was scanned (rule %s); expected to be skipped", f.RuleID)
+		}
+	}
+}
+
 func TestScanBasicDirectory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "safe.md"), []byte("# Hello\nThis is a safe document."), 0644))
