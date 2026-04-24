@@ -3,6 +3,75 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.5] — 2026-04-24
+
+Patch release. Four audit items surfaced by an external review of v0.14.4: the public library used to print credentials verbatim in scan output, the bare CLI used to phone home from CI, `--changed` used to follow committed symlinks, and `.gitignore` did not cover the obvious secret file patterns. One API addition (`WithRedaction`), one new CLI flag (`--no-redact`), one behavior change that library consumers must know about (credential-leak `matched_text` is now scrubbed by default). Plus incidental docs and dev-tooling cleanup landed in the same window.
+
+### Added
+
+#### `WithRedaction` option and `--no-redact` flag
+
+Library consumers can now opt out of the new redaction default with `aguara.WithRedaction(false)`. The CLI `scan` command gained `--no-redact` with the same semantics for per-invocation opt-out. Intended for credential-rotation pipelines, detection-accuracy measurement, or other workflows that need the raw match.
+
+#### Auto-suppress update check in recognized CI environments
+
+`Execute()` in the root command now flips `flagNoUpdateCheck` automatically when `CI=true` (the de-facto standard, set by GitHub Actions, GitLab, CircleCI, Travis, Buildkite, Bitbucket Pipelines, Drone, Woodpecker, and most others), or when any of `GITHUB_ACTIONS`, `GITLAB_CI`, `CIRCLECI`, `BUILDKITE`, `JENKINS_URL`, `TEAMCITY_VERSION`, `TRAVIS` is set. `CI=false` / `CI=0` / `CI=` are correctly ignored. The existing `--no-update-check` flag and `AGUARA_NO_UPDATE_CHECK=1` env var remain as explicit opt-outs.
+
+This addresses a real gap in the offline/deterministic positioning: the GitHub Action already passed `--no-update-check`, but anyone invoking the bare binary inside a CI job (Dockerfile, Makefile, ad-hoc script) was leaking timing and user-agent metadata from supposedly-isolated environments.
+
+#### Repo-level `.aguara.yml` and `Running Aguara on this repo` docs
+
+Aguara is a scanner whose own source intentionally contains attack-pattern signatures (rule YAML `examples.true_positive` blocks, `testdata/`, `sandbox/`, documentation). A clean `aguara scan .` against the repo produced ~9,600 findings dominated by by-design content. A repo-root `.aguara.yml` now scopes contributor self-scans to production code paths (~63 findings, all in test files that embed payloads). `CONTRIBUTING.md` grew a `Running Aguara on this repo` section explaining the expectation.
+
+### Changed
+
+#### Credential-leak findings are redacted by default (library and CLI)
+
+Detecting a secret and then writing it verbatim to terminal output, JSON, SARIF, or an `-o` file creates a second copy of the secret in a location that often has weaker access controls than the original: CI logs retained for days, GitHub Code Scanning history, Slack notifications, shared `results.json` files checked into git by accident. The scan artifact becomes the leak.
+
+`Finding.MatchedText` and any `Context` lines marked `is_match=true` are now replaced with the literal string `[REDACTED]` (`types.RedactedPlaceholder`) when the finding's category is `credential-leak`. Rules in other categories are untouched because their match is typically a pattern signature (e.g. `ignore previous instructions`) rather than a secret that needs protecting.
+
+**This is a behavior change for library consumers.** Any code that was parsing `matched_text` of a CRED_* finding as the credential value itself will now see `[REDACTED]`. The known consumers:
+
+- `oktsec` already redacts credentials in its own scanner wrapper (`internal/engine/scanner.go`). Double-redacted text stays `[REDACTED]`; no code change required.
+- `aguara-mcp` returns findings to MCP clients (AI agents). Having credentials scrubbed before crossing that boundary is strictly better for most threat models; no code change required.
+
+Consumers that genuinely need the raw match must pass `aguara.WithRedaction(false)`.
+
+#### GitHub Action `DEFAULT_REF` bumped to v0.14.4
+
+The fallback ref used when a consumer pins a non-semver value (`uses: garagon/aguara@main`, which the action still rejects with a warning) now points at the previous release's `install.sh`. Version string examples in the `action.yml` input descriptions bumped accordingly. No behavior change for consumers who pin a semver tag or SHA.
+
+### Fixed
+
+#### `--changed` scan followed committed symlinks
+
+The regular directory walk in `internal/scanner/target.go` rejects symlinks via `info.Mode()&os.ModeSymlink`. `scanChangedFiles` got its paths from git and used `os.Stat`, which resolves symlinks to their target. A symlink committed to the repo pointing at `/etc/passwd` or `~/.ssh/id_rsa` would be followed on the next `--changed` CI run and the target's contents would surface in findings (and in any SARIF upload to GitHub Code Scanning).
+
+Fix: `os.Stat` is replaced with `os.Lstat` and symlinks are skipped. Regression test creates a git repo with a symlink pointing to an out-of-tree secret file and asserts the symlink is not scanned.
+
+#### `.gitignore` did not cover `.env`, `.env.*`, `*.pem`, `*.key`
+
+Prophylactic. `git log --all` confirms the repo has never contained such files, but a scanner's own repo really should not ship a misplaced credential file by accident. `.env.example` is explicitly allow-listed so templates stay trackable.
+
+#### Stale documentation drift
+
+`CLAUDE.md` and `README.md` were bumped to v0.14.4 and corrected references that had fallen behind. `CONTRIBUTING.md`'s `Project Structure` block no longer claims "177 embedded rules across 12 YAML files" (real: 189 across 13). The `action.yml` example-version strings moved from `v0.14.2` to `v0.14.4`.
+
+### Library API
+
+New: `aguara.WithRedaction(enabled bool) Option`. Enabled by default.
+
+New: `types.RedactedPlaceholder` (string constant, value `[REDACTED]`) and `types.RedactCredentialFindings([]Finding)` (exposed so consumers can apply the same redaction to findings they obtained via other code paths).
+
+Changed: `aguara.Scan`, `aguara.ScanContent`, `aguara.ScanContentAs`, `(*Scanner).Scan`, `(*Scanner).ScanContent`, `(*Scanner).ScanContentAs` now scrub credential-leak matches before returning. Apply `WithRedaction(false)` at the call site to preserve the previous behavior.
+
+No signature changes. No removed symbols. No rule-count change.
+
+### Process
+
+The audit items were surfaced by an external review (Codex) of the v0.14.4 repo on 2026-04-24. Two P2 items from the same audit are deferred to v0.15.0: rule target globs beyond the `*.ext` fast path (depends on the `match_mode` proximity work already planned as T1-01), and decoder-cap bypass via benign-padding (needs perf benchmarks before raising the cap or adding hash-based dedup).
+
 ## [0.14.4] — 2026-04-24
 
 Patch release. Bundles one high-severity engine bug that silently dropped true positives since v0.14.0, plus Docker image hardening surfaced during a post-release audit. No API changes, no rule-count change. Consumers of the Go library (`aguara-mcp`, `oktsec`) should upgrade to recover dropped detections; the public API is identical.
