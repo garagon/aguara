@@ -21,6 +21,12 @@ const minKeywordLen = 4
 //
 // Keywords are deduplicated: if multiple rules share the same keyword (e.g.
 // "ignore"), a single AC pattern maps to all of those rule IDs.
+//
+// Overlapping matches are required at query time: when one rule extracts
+// "bash" as a keyword and another extracts "bashrc", content "bashrc" must
+// route to rules keyed by both literals. Non-overlapping iteration would
+// report only one of them and silently drop the other rule set from the
+// candidate map.
 type prefilter struct {
 	ac             *ahocorasick.AhoCorasick
 	refs           [][]string      // AC pattern index -> list of rule IDs
@@ -96,7 +102,12 @@ func (p *prefilter) candidateRules(lowerContent string) map[string]bool {
 		candidates[id] = true
 	}
 	if p.ac != nil {
-		for _, m := range p.ac.FindAll(lowerContent) {
+		// IterOverlapping reports every keyword that matches at every position.
+		// FindAll would collapse overlapping hits (e.g. "bash" and "bashrc"
+		// starting at the same offset) and drop rules keyed only by the longer
+		// literal, silently hiding true positives.
+		iter := p.ac.IterOverlapping(lowerContent)
+		for m := iter.Next(); m != nil; m = iter.Next() {
 			for _, id := range p.refs[m.Pattern()] {
 				candidates[id] = true
 			}
