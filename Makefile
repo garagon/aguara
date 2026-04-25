@@ -4,13 +4,22 @@ VERSION ?= dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 LDFLAGS := -ldflags "-s -w -X $(PKG)/cmd/aguara/commands.Version=$(VERSION) -X $(PKG)/cmd/aguara/commands.Commit=$(COMMIT)"
 
-.PHONY: build test lint run clean fmt vet wasm wasm-serve
+.PHONY: build test lint run clean fmt vet wasm wasm-serve bench bench-docker
 
 build:
 	go build -trimpath $(LDFLAGS) -o $(BINARY) ./cmd/aguara
 
 test:
 	go test -race -count=1 ./...
+
+bench:
+	go test -run '^$$' -bench 'BenchmarkCached_(PlainText|StructuredMarkdown|JSONConfig|LargeContent|MixedWorkload)$$' -benchmem -count=3 .
+	go test -run '^$$' -bench 'Benchmark(NLPAnalyzer|ScannerE2E)$$' -benchmem -count=3 ./internal/engine/nlp ./internal/scanner
+
+bench-docker:
+	mkdir -p .bench
+	docker build -f benchmarks/Dockerfile -t aguara-bench:local .
+	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,nosuid,size=1g -v "$(CURDIR)/.bench:/out" aguara-bench:local
 
 lint:
 	golangci-lint run ./...

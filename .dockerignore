@@ -1,0 +1,11 @@
+.git/
+.bench/
+aguara
+scanner.test
+*.test
+*.wasm
+wasm_exec.js
+index.html
+coverage.out
+*.log
+.DS_Store

@@ -1,6 +1,8 @@
 # Build
 /aguara
 *.exe
+*.test
+/.bench/
 
 # IDE
 .idea/
