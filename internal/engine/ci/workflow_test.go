@@ -290,6 +290,52 @@ jobs:
 	}
 }
 
+func TestSafe_CacheRestoreOnly(t *testing.T) {
+	// actions/cache/restore is read-only. A pull_request_target job that
+	// only restores cache cannot poison a downstream workflow, so the
+	// cache-write primitive that GHA_CACHE_001 requires is absent.
+	wf := `
+on: pull_request_target
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache
+          key: shared-cache
+`
+	findings := analyze(t, ".github/workflows/restore.yml", wf)
+	if hasRule(findings, RuleCache) {
+		t.Errorf("actions/cache/restore should not trigger GHA_CACHE_001, got: %+v", findings)
+	}
+}
+
+func TestVuln_CacheSaveExplicit(t *testing.T) {
+	// actions/cache/save is the write half. Keep flagging it.
+	wf := `
+on: pull_request_target
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/cache/save@v4
+        with:
+          path: ~/.cache
+          key: pr-cache
+`
+	findings := analyze(t, ".github/workflows/save.yml", wf)
+	if !hasRule(findings, RuleCache) {
+		t.Errorf("actions/cache/save should trigger GHA_CACHE_001, got: %+v", findings)
+	}
+}
+
 func TestVuln_CacheWithoutCodeExecution(t *testing.T) {
 	// Untrusted checkout + cache step but no install/build/test → still HIGH
 	// because cache write can be poisoned regardless.

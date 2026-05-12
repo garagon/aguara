@@ -356,9 +356,11 @@ func classifyStep(s *step) {
 		}
 	}
 
-	// cache
-	if usesLower == "actions/cache" ||
-		strings.HasPrefix(usesLower, "actions/cache/") {
+	// cache (write only). actions/cache and actions/cache/save persist
+	// content; actions/cache/restore is read-only and cannot poison a
+	// downstream privileged workflow, so it does not satisfy the
+	// cache-write primitive that GHA_CACHE_001 requires.
+	if usesLower == "actions/cache" || usesLower == "actions/cache/save" {
 		s.Cache = true
 	}
 	// Setup actions with cache: <something> non-empty enable cache writes
