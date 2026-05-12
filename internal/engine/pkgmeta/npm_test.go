@@ -340,6 +340,51 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- OIDC false-positive guard (P2 from pass-5 review) ---
+
+func TestPublishSurface_OIDCDependencyNameDoesNotTrigger(t *testing.T) {
+	// "oidc-client-ts" is a real npm library; its mere presence as a
+	// dependency must not be read as a trusted-publishing signal. With
+	// publishConfig + build script, the rule would previously falsely
+	// upgrade purely because the substring "oidc" appeared in the
+	// dependency name.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"access": "public"},
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish"
+  },
+  "dependencies": {
+    "oidc-client-ts": "^3"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RulePublishSurface) {
+		t.Errorf("oidc-* dep name must not chain publish-surface, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_IDTokenSubstringInDepNameDoesNotTrigger(t *testing.T) {
+	// Same guard for "id-token" / "id_token" appearing as part of a real
+	// dependency name (e.g. jwt-id-token-handler).
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"access": "public"},
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish"
+  },
+  "dependencies": {
+    "jwt-id-token-handler": "^1"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RulePublishSurface) {
+		t.Errorf("id-token substring in dep name must not chain, got: %+v", findings)
+	}
+}
+
 // --- lifecycle / provenance edge cases (P2 from pass-4 review) ---
 
 func TestLifecycle_PrepublishIsInstallTime(t *testing.T) {

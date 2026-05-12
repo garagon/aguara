@@ -428,16 +428,17 @@ func manifestReferencesProvenance(pkg *manifest) bool {
 		return false
 	}
 	lower := strings.ToLower(string(pkg.raw))
-	// `--provenance` is the npm CLI flag form (e.g. in a release script).
-	// trusted-publishing / id-token / oidc are reference strings that
-	// should not appear as boolean values in practice.
+	// Only highly specific trust-surface strings count. Bare "oidc",
+	// "id-token", and "id_token" are dropped because they can appear in
+	// unrelated dependency names ("oidc-client-ts", "jwt-id-token", ...)
+	// and would false-positive an entire class of legitimate manifests.
+	// The remaining needles are either an npm CLI flag, a documented
+	// phrase, or a full GitHub Actions env var prefix — none of which
+	// occur as dependency-name substrings in practice.
 	needles := []string{
 		"--provenance",
 		"trusted-publishing",
 		"trustedpublishing",
-		"id-token",
-		"id_token",
-		"oidc",
 		"actions_id_token_request",
 	}
 	for _, n := range needles {
