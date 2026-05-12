@@ -101,6 +101,13 @@ var hexIdentifierRe = regexp.MustCompile(`_0x[0-9a-fA-F]{2,}`)
 // payloads use to route string-array lookups.
 var dispatcherCallRe = regexp.MustCompile(`_0x[0-9a-fA-F]{2,}\s*\(`)
 
+// detachedTrueRe matches `detached: true`, `"detached": true`, and the
+// single-quoted/no-space variants. Without the quote-tolerant form,
+// JSON-style spawn options ({"detached": true, ...}) miss the daemon
+// chain entirely.
+var detachedTrueRe = regexp.MustCompile(`(?i)["']?detached["']?\s*:\s*true\b`)
+
+
 // --- metrics ---
 
 // metrics holds the once-computed signals for the current file. Line
@@ -246,19 +253,12 @@ func computeMetrics(content []byte) *metrics {
 		}
 	}
 
-	// Daemonization signals.
-	if i := bytes.Index(content, []byte("detached:")); i >= 0 {
-		// Accept `detached:true`, `detached: true`, `"detached": true` etc.
-		tail := content[i+len("detached:"):]
-		// Skip whitespace.
-		j := 0
-		for j < len(tail) && (tail[j] == ' ' || tail[j] == '\t') {
-			j++
-		}
-		if j+4 <= len(tail) && bytes.Equal(tail[j:j+4], []byte("true")) {
-			m.HasSpawnDetached = true
-			m.LineDaemon = lineOf(content, i)
-		}
+	// Daemonization signals. Quote-tolerant regex catches the JSON-style
+	// `"detached": true` form that a naive substring match for
+	// `detached:` would skip.
+	if loc := detachedTrueRe.FindIndex(content); loc != nil {
+		m.HasSpawnDetached = true
+		m.LineDaemon = lineOf(content, loc[0])
 	}
 	if bytes.Contains(content, []byte(`stdio: 'ignore'`)) ||
 		bytes.Contains(content, []byte(`stdio: "ignore"`)) ||
@@ -270,11 +270,17 @@ func computeMetrics(content []byte) *metrics {
 	}
 	m.HasUnref = bytes.Contains(content, []byte(".unref()"))
 
-	// Process memory access (Linux /proc/* introspection).
-	m.HasProcMemAccess = bytes.Contains(content, []byte("/proc/"))
-	if m.HasProcMemAccess {
-		idx := bytes.Index(content, []byte("/proc/"))
-		m.LineProcMem = lineOf(content, idx)
+	// Process memory access requires both a /proc/ reference AND one of
+	// the memory-like subpaths (mem / maps / cmdline). Static /proc/stat
+	// reads do not satisfy that pair. The substring form covers both
+	// literal paths (`/proc/self/maps`) and dynamic concatenation
+	// (`'/proc/' + pid + '/mem'`) without a brittle regex.
+	if bytes.Contains(content, []byte("/proc/")) &&
+		(bytes.Contains(content, []byte("/mem")) ||
+			bytes.Contains(content, []byte("/maps")) ||
+			bytes.Contains(content, []byte("cmdline"))) {
+		m.HasProcMemAccess = true
+		m.LineProcMem = lineOf(content, bytes.Index(content, []byte("/proc/")))
 	}
 	m.HasOIDCTokenEnv = bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_TOKEN")) ||
 		bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
@@ -313,17 +319,20 @@ func lineOf(content []byte, idx int) int {
 
 // --- needle lists ---
 
-// All lower-cased; matched against bytes.ToLower(content). Each entry is
-// chosen to be unambiguous: an obvious dependency-name substring like
-// bare "oidc" or "fetch" is excluded because legitimate libraries carry
-// those tokens.
+// All lower-cased; matched against bytes.ToLower(content). Each entry
+// names a known network API. Bare method names like `.post(` / `.put(`
+// were dropped because they false-positive on any object with a method
+// of that name (in-memory caches, database clients, queue libraries),
+// turning the credential-harvest chain into a wide CI block.
 var networkSinkNeedles = []string{
 	"fetch(",
 	"axios.post",
 	"axios.put",
 	"axios.request",
-	".post(",
-	".put(",
+	"axios.get",
+	"got.post",
+	"got.put",
+	"got.get",
 	"http.request",
 	"https.request",
 	"net.connect",

@@ -331,6 +331,64 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-1 fixes: narrow network sinks, /proc memory, quoted detached ---
+
+func TestSafe_LocalClientPostNotNetworkSink(t *testing.T) {
+	// A local helper that happens to expose `.post(...)` (e.g. a
+	// pub/sub bus, an ORM, a queue client) must not by itself satisfy
+	// the network-sink half of the harvest chain.
+	body := `
+const queue = require('./local-queue');
+const tok = process.env.GITHUB_TOKEN;
+queue.post({ id: 1, payload: tok });
+`
+	findings := analyze(t, "x.js", body)
+	if hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("local .post(...) must not satisfy network sink, got: %+v", findings)
+	}
+}
+
+func TestSafe_ProcStatNotMemoryAccess(t *testing.T) {
+	// A benign /proc/stat read paired with an OIDC env reference must
+	// not trigger JS_PROC_MEM_OIDC_001: the rule targets
+	// /proc/<pid>/(mem|maps|cmdline) specifically.
+	body := `
+const fs = require('fs');
+const stat = fs.readFileSync('/proc/stat', 'utf8');
+console.log(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN ? 'yes' : 'no');
+`
+	findings := analyze(t, "stat.js", body)
+	if hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("/proc/stat alone must not trigger ProcMemOIDC, got: %+v", findings)
+	}
+}
+
+func TestVuln_Daemon_QuotedDetachedProperty(t *testing.T) {
+	// JSON-style spawn options must still chain.
+	body := `
+const cp = require('child_process');
+const child = cp.spawn('node', ['./payload.js'], {"detached": true, "stdio": "ignore"});
+child.unref();
+`
+	findings := analyze(t, "q.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("quoted \"detached\": true must trigger daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_ProcMemSelfMaps(t *testing.T) {
+	// /proc/self/maps with Runner.Worker reference is the canonical
+	// runner-pivot shape.
+	body := `
+const maps = require('fs').readFileSync('/proc/self/maps');
+if (maps.includes('Runner.Worker')) { /* found runner */ }
+`
+	findings := analyze(t, "rm.js", body)
+	if !hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("/proc/self/maps + Runner.Worker must trigger, got: %+v", findings)
+	}
+}
+
 // --- finding shape regression ---
 
 func TestFindingsHaveStableFields(t *testing.T) {
