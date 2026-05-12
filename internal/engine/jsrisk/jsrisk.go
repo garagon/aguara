@@ -101,17 +101,22 @@ var hexIdentifierRe = regexp.MustCompile(`_0x[0-9a-fA-F]{2,}`)
 // payloads use to route string-array lookups.
 var dispatcherCallRe = regexp.MustCompile(`_0x[0-9a-fA-F]{2,}\s*\(`)
 
+// propertyBoundary is the leading-context alternation used by the
+// daemon-option regexes: the property key must be preceded by start of
+// input or one of the structural characters that introduce an object
+// property. Without it, `notdetached: true` or `isStdio: 'ignore'`
+// would falsely match because `detached` / `stdio` are substrings.
+const propertyBoundary = `(?:^|[\s,{;(\[])`
+
 // detachedTrueRe matches `detached: true`, `"detached": true`, and the
-// single-quoted/no-space variants. Without the quote-tolerant form,
-// JSON-style spawn options ({"detached": true, ...}) miss the daemon
-// chain entirely.
-var detachedTrueRe = regexp.MustCompile(`(?i)["']?detached["']?\s*:\s*true\b`)
+// single-quoted/no-space variants ONLY when the key is at a property
+// boundary, so substrings like `notdetached: true` are excluded.
+var detachedTrueRe = regexp.MustCompile(`(?i)` + propertyBoundary + `["']?detached["']?\s*:\s*true\b`)
 
 // stdioIgnoredRe matches `stdio: 'ignore'` / `stdio: "ignore"` /
 // `"stdio": "ignore"` and the array forms (`stdio: ['ignore', ...]`,
-// `"stdio": ['ignore'`). Without quote tolerance the JSON-style spawn
-// options bypass the daemon-shape check.
-var stdioIgnoredRe = regexp.MustCompile(`(?i)["']?stdio["']?\s*:\s*(?:['"]ignore['"]|\[\s*['"]ignore['"])`)
+// `"stdio": ['ignore'`) at a property boundary.
+var stdioIgnoredRe = regexp.MustCompile(`(?i)` + propertyBoundary + `["']?stdio["']?\s*:\s*(?:['"]ignore['"]|\[\s*['"]ignore['"])`)
 
 
 // --- metrics ---
@@ -271,18 +276,14 @@ func computeMetrics(content []byte) *metrics {
 	}
 	m.HasUnref = bytes.Contains(content, []byte(".unref()"))
 
-	// Process memory access requires both a /proc/ reference AND one of
-	// the memory-like subpaths (mem / maps / cmdline). Static /proc/stat
-	// reads do not satisfy that pair. The substring form covers both
-	// literal paths (`/proc/self/maps`) and dynamic concatenation
-	// (`'/proc/' + pid + '/mem'`) without a brittle regex.
-	if bytes.Contains(content, []byte("/proc/")) &&
-		(bytes.Contains(content, []byte("/mem")) ||
-			bytes.Contains(content, []byte("/maps")) ||
-			bytes.Contains(content, []byte("cmdline"))) {
-		m.HasProcMemAccess = true
-		m.LineProcMem = lineOf(content, bytes.Index(content, []byte("/proc/")))
-	}
+	// Process memory access requires a /proc/ reference paired with a
+	// memory-like subpath (/mem, /maps, cmdline) in proximity. The
+	// proximity window catches both literal paths and concatenated forms
+	// like `'/proc/' + pid + '/mem'` while filtering out files that
+	// reference /proc/stat in one place and an unrelated 'cmdline'
+	// identifier elsewhere.
+	m.LineProcMem = findProcMemPair(content)
+	m.HasProcMemAccess = m.LineProcMem > 0
 	m.HasOIDCTokenEnv = bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_TOKEN")) ||
 		bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
 	m.HasRunnerWorker = bytes.Contains(content, []byte("Runner.Worker"))
@@ -316,6 +317,39 @@ func lineOf(content []byte, idx int) int {
 		return 1
 	}
 	return bytes.Count(content[:idx], []byte{'\n'}) + 1
+}
+
+// procMemPairWindow bounds how far a memory-like subpath can be from a
+// /proc/ occurrence before they stop counting as part of the same
+// access. 200 bytes is generous for any plausible source form
+// (`/proc/' + pid + '/mem'`, template literals, multi-arg function
+// calls) without spanning unrelated identifiers.
+const procMemPairWindow = 200
+
+// findProcMemPair returns the 1-based line of the first /proc/
+// occurrence followed within procMemPairWindow bytes by /mem, /maps,
+// or cmdline. Returns 0 when no such pair exists.
+func findProcMemPair(content []byte) int {
+	off := 0
+	for off < len(content) {
+		i := bytes.Index(content[off:], []byte("/proc/"))
+		if i < 0 {
+			return 0
+		}
+		procStart := off + i
+		windowEnd := procStart + procMemPairWindow
+		if windowEnd > len(content) {
+			windowEnd = len(content)
+		}
+		window := content[procStart:windowEnd]
+		if bytes.Contains(window, []byte("/mem")) ||
+			bytes.Contains(window, []byte("/maps")) ||
+			bytes.Contains(window, []byte("cmdline")) {
+			return lineOf(content, procStart)
+		}
+		off = procStart + len("/proc/")
+	}
+	return 0
 }
 
 // --- needle lists ---

@@ -331,6 +331,61 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-3 fixes: property boundary on daemon options + proximate /proc subpath ---
+
+func TestSafe_NotDetachedOption(t *testing.T) {
+	// A spawn option literally named `notdetached: true` (or
+	// `isDetached: true`) must not satisfy the detached signal.
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['x'], { notdetached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "n.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("notdetached:true must not chain daemon, got: %+v", findings)
+	}
+}
+
+func TestSafe_IsDetachedHelperVar(t *testing.T) {
+	body := `
+const cp = require('child_process');
+const isDetached = true;
+cp.spawn('node', ['x'], { stdio: 'ignore' });
+`
+	findings := analyze(t, "i.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("isDetached helper var must not chain daemon, got: %+v", findings)
+	}
+}
+
+func TestSafe_IsStdioPropertyDoesNotMatch(t *testing.T) {
+	// `isStdio: 'ignore'` must not satisfy the stdio signal.
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['x'], { detached: true, isStdio: 'ignore' });
+`
+	findings := analyze(t, "is.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("isStdio property must not chain stdio, got: %+v", findings)
+	}
+}
+
+func TestSafe_UnrelatedProcAndCmdlineFarApart(t *testing.T) {
+	// A /proc/stat read at the top of a file and an unrelated 'cmdline'
+	// identifier near the bottom must not chain as memory access.
+	body := `
+const stat = require('fs').readFileSync('/proc/stat');
+// ... many lines of code ...
+` + strings.Repeat("// padding line\n", 30) + `
+const myCmdline = 'this is just an identifier';
+const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+`
+	findings := analyze(t, "f.js", body)
+	if hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("far-apart /proc/stat + cmdline must not chain, got: %+v", findings)
+	}
+}
+
 // --- pass-2 fixes: inline require chain sinks + quoted stdio ---
 
 func TestVuln_CISecretHarvest_InlineRequireHttpsRequest(t *testing.T) {
