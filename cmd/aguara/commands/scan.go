@@ -13,6 +13,7 @@ import (
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/update"
+	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/rugpull"
@@ -366,6 +367,7 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
+	s.RegisterAnalyzer(ci.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
