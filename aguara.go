@@ -14,6 +14,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/garagon/aguara/discover"
+	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/rugpull"
@@ -408,6 +409,9 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 
 	// Reuse pre-compiled pattern matcher (the expensive part: regex + AC automaton)
 	s.RegisterAnalyzer(sc.matcher)
+	// CI trust analyzer parses workflow YAML — runs before toxicflow so its
+	// chain findings can be deduped/correlated alongside leaf signals.
+	s.RegisterAnalyzer(ci.New())
 	// NLP and ToxicFlow are stateless, cheap to instantiate
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -543,6 +547,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
+	s.RegisterAnalyzer(ci.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
