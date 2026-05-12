@@ -340,6 +340,46 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- pass-8 edge case: whitespace-tolerant anchor ---
+
+func TestFindDepLine_TolerantOfWhitespaceBeforeColon(t *testing.T) {
+	// Valid JSON allows whitespace between a key and its colon. The
+	// anchor lookup must not regress to line 0 just because the
+	// manifest is formatted with " : " instead of ":".
+	raw := []byte("{\n  \"name\": \"x\",\n  \"optionalDependencies\" : {\n    \"alpha\" : \"github:owner/alpha\",\n    \"bravo\" : \"github:owner/bravo\"\n  }\n}\n")
+	if got := findDepLine(raw, "optionalDependencies", "alpha"); got == 0 {
+		t.Errorf("findDepLine should tolerate whitespace before colon for alpha, got 0")
+	}
+	if got := findDepLine(raw, "optionalDependencies", "bravo"); got == 0 {
+		t.Errorf("findDepLine should tolerate whitespace before colon for bravo, got 0")
+	}
+}
+
+func TestOptionalGit_WhitespaceFormattedManifestKeepsDistinctLines(t *testing.T) {
+	// Valid JSON with spaces before colons must still produce one
+	// finding per optional git dep with distinct line anchors.
+	pkg := "{\n  \"name\": \"x\",\n  \"optionalDependencies\" : {\n    \"alpha\" : \"github:owner/alpha\",\n    \"bravo\" : \"github:owner/bravo\"\n  }\n}"
+	findings := analyze(t, "package.json", pkg)
+	count := 0
+	lines := map[int]string{}
+	for _, f := range findings {
+		if f.RuleID != RuleOptionalGit {
+			continue
+		}
+		count++
+		if f.Line == 0 {
+			t.Errorf("whitespace-formatted manifest dropped anchor to line 0: %s", f.MatchedText)
+		}
+		if prev, ok := lines[f.Line]; ok {
+			t.Errorf("two findings collide on line %d (also %s)", f.Line, prev)
+		}
+		lines[f.Line] = f.MatchedText
+	}
+	if count != 2 {
+		t.Errorf("expected 2 NPM_OPTIONAL_GIT_001 findings, got %d: %+v", count, findings)
+	}
+}
+
 // --- pass-7 edge cases: provenance opt-out + section-scoped anchor ---
 
 func TestHasEnabledProvenanceFlag(t *testing.T) {
@@ -960,9 +1000,9 @@ func TestFindLineOfQuotedKey(t *testing.T) {
 		{"missing", 0},
 	}
 	for _, c := range cases {
-		got := findLineOfQuotedKey(raw, c.key)
+		got := findKeyLine(raw, c.key)
 		if got != c.want {
-			t.Errorf("findLineOfQuotedKey(_, %q) = %d, want %d", c.key, got, c.want)
+			t.Errorf("findKeyLine(_, %q) = %d, want %d", c.key, got, c.want)
 		}
 	}
 }

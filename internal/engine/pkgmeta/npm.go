@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -143,44 +144,49 @@ func sanitizeGitURL(version string) string {
 	return v
 }
 
+// keyTokenRegex compiles a regex that matches `"key"` followed by any
+// JSON-allowed whitespace and then `:`. This tolerates valid manifests
+// that format keys with extra space (e.g. `"key" : value`) which a plain
+// `"key":` substring search would miss.
+func keyTokenRegex(key string) *regexp.Regexp {
+	return regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:`)
+}
+
+// findKeyLine returns the 1-based line number of the first `"key":`
+// token in raw (whitespace-tolerant), or 0 if it is not present. Used
+// to anchor findings on top-level keys such as publishConfig or scripts.
+func findKeyLine(raw []byte, key string) int {
+	if len(raw) == 0 || key == "" {
+		return 0
+	}
+	loc := keyTokenRegex(key).FindIndex(raw)
+	if loc == nil {
+		return 0
+	}
+	return bytes.Count(raw[:loc[0]], []byte{'\n'}) + 1
+}
+
 // findDepLine returns the 1-based line of the dependency entry named
 // `name` inside the JSON section `section`. Searching is scoped to the
-// section so a key that happens to match an unrelated field (the
-// package "name", a script key, etc.) does not anchor the finding to
-// the wrong line.
+// bytes after the section's `"section":` token so a key that happens to
+// match an unrelated field (the package "name", a script key, etc.)
+// does not anchor the finding to the wrong line. Both the section and
+// the dep key are matched with optional whitespace between `"key"` and
+// `:` so valid JSON formatting variants do not regress to line 0.
 func findDepLine(raw []byte, section, name string) int {
 	if len(raw) == 0 || section == "" || name == "" {
 		return 0
 	}
-	sectionMarker := []byte(`"` + section + `":`)
-	sIdx := bytes.Index(raw, sectionMarker)
-	if sIdx < 0 {
+	secLoc := keyTokenRegex(section).FindIndex(raw)
+	if secLoc == nil {
 		return 0
 	}
-	nameMarker := []byte(`"` + name + `":`)
-	rel := bytes.Index(raw[sIdx+len(sectionMarker):], nameMarker)
-	if rel < 0 {
+	rel := keyTokenRegex(name).FindIndex(raw[secLoc[1]:])
+	if rel == nil {
 		return 0
 	}
-	absIdx := sIdx + len(sectionMarker) + rel
-	return bytes.Count(raw[:absIdx], []byte{'\n'}) + 1
-}
-
-// findLineOfQuotedKey returns the 1-based line number of the first
-// occurrence of `"<key>"` in raw, or 0 if it is not present. Used to
-// anchor findings to the manifest line declaring the offending entry so
-// cross-rule findings on the same package.json get distinct line
-// numbers and survive the scanner's default dedup pass.
-func findLineOfQuotedKey(raw []byte, key string) int {
-	if len(raw) == 0 || key == "" {
-		return 0
-	}
-	needle := []byte(`"` + key + `"`)
-	idx := bytes.Index(raw, needle)
-	if idx < 0 {
-		return 0
-	}
-	return bytes.Count(raw[:idx], []byte{'\n'}) + 1
+	abs := secLoc[1] + rel[0]
+	return bytes.Count(raw[:abs], []byte{'\n'}) + 1
 }
 
 // --- classifiers ---
@@ -675,9 +681,9 @@ func detectPublishSurface(pkg *manifest) *types.Finding {
 	}
 	// Anchor at publishConfig if declared, otherwise at the scripts block
 	// where the publish command lives.
-	line := findLineOfQuotedKey(pkg.raw, "publishConfig")
+	line := findKeyLine(pkg.raw, "publishConfig")
 	if line == 0 {
-		line = findLineOfQuotedKey(pkg.raw, "scripts")
+		line = findKeyLine(pkg.raw, "scripts")
 	}
 	return &types.Finding{
 		RuleID:   RulePublishSurface,
