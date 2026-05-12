@@ -340,6 +340,80 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- shorthand edge cases (P2 from pass-6 review) ---
+
+func TestIsGitDep_LocalPathNotGit(t *testing.T) {
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"./runner", false},
+		{"../setup", false},
+		{"/abs/path/to/pkg", false},
+		{"~/path/to/pkg", false},
+		// Make sure path detection does not over-reach.
+		{"owner/repo", true},
+	}
+	for _, c := range cases {
+		got := isGitDep(c.version)
+		if got != c.want {
+			t.Errorf("isGitDep(%q) = %v, want %v", c.version, got, c.want)
+		}
+	}
+}
+
+func TestSafe_LocalPathDepNoLifecycleGit(t *testing.T) {
+	// "runner": "./runner" is a local filesystem dep, not a git source.
+	// Even with a lifecycle script and a suspicious-looking optional
+	// name, the chain must not fire.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node hook.js"},
+  "optionalDependencies": {"runner": "./runner"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("local path dep must not chain lifecycle-git, got: %+v", findings)
+	}
+	if hasRule(findings, RuleOptionalGit) {
+		t.Errorf("local path optional dep must not chain optional-git, got: %+v", findings)
+	}
+}
+
+func TestIsGitDep_SemverFragmentShorthand(t *testing.T) {
+	// npm accepts shorthands with a semver fragment, e.g.
+	// "some-lib": "owner/repo#semver:^1.2.3". The ^ lives in the fragment
+	// and must not disqualify the core.
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"owner/repo#semver:^1.2.3", true},
+		{"owner/repo#semver:~2.0.0", true},
+		{"owner/repo#v1.2.3", true},
+		// Range chars OUTSIDE a fragment still disqualify.
+		{"owner/repo^1.2.3", false},
+	}
+	for _, c := range cases {
+		got := isGitDep(c.version)
+		if got != c.want {
+			t.Errorf("isGitDep(%q) = %v, want %v", c.version, got, c.want)
+		}
+	}
+}
+
+func TestLifecycleGit_SemverFragmentShorthandChain(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node hook.js"},
+  "dependencies": {"some-lib": "owner/repo#semver:^1.2.3"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("semver-fragment shorthand should chain, got: %+v", findings)
+	}
+}
+
 // --- OIDC false-positive guard (P2 from pass-5 review) ---
 
 func TestPublishSurface_OIDCDependencyNameDoesNotTrigger(t *testing.T) {

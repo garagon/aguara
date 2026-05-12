@@ -197,31 +197,39 @@ func isGitDep(version string) bool {
 	case strings.Contains(noFrag, "://") && strings.HasSuffix(noFrag, ".git"):
 		return true
 	}
-	// owner/repo or owner/repo#ref shorthand: one slash, no protocol, no
-	// version-range characters. Guard tightly so registry-pinned versions
-	// like "^1.2.3" do not match.
-	if strings.ContainsAny(v, " \t\n") {
-		return false
-	}
-	if strings.ContainsAny(v, "^~<>=*|") {
-		return false
-	}
-	if strings.HasPrefix(v, "file:") || strings.HasPrefix(v, "link:") || strings.HasPrefix(v, "workspace:") {
-		return false
-	}
-	if strings.HasPrefix(v, "npm:") {
-		return false
-	}
-	// require exactly one slash separating owner/repo, optionally followed
-	// by a #ref. Excludes paths like "@scope/name@1.2.3".
+	// owner/repo or owner/repo#ref shorthand. Strip the #fragment first so
+	// a valid semver-fragment shorthand like "owner/repo#semver:^1.2.3"
+	// still classifies as a git dep (the ^ is inside the fragment).
 	core := v
 	if idx := strings.Index(core, "#"); idx >= 0 {
 		core = core[:idx]
+	}
+	// Reject local-path specs and non-git prefixes before the slash count.
+	// npm accepts "./runner", "../setup", "/abs/path", and "~/home/path"
+	// as filesystem dependencies; they happen to contain exactly one
+	// slash and would otherwise be misread as owner/repo shorthand.
+	if strings.HasPrefix(core, "./") || strings.HasPrefix(core, "../") ||
+		strings.HasPrefix(core, "/") || strings.HasPrefix(core, "~/") {
+		return false
+	}
+	if strings.HasPrefix(core, "file:") || strings.HasPrefix(core, "link:") ||
+		strings.HasPrefix(core, "workspace:") || strings.HasPrefix(core, "npm:") {
+		return false
+	}
+	// Whitespace and version-range characters disqualify the core (the
+	// #fragment was stripped above, so semver-style fragments do not
+	// trip this guard).
+	if strings.ContainsAny(core, " \t\n") {
+		return false
+	}
+	if strings.ContainsAny(core, "^~<>=*|") {
+		return false
 	}
 	if strings.HasPrefix(core, "@") {
 		// Scoped names use the registry, not a git shorthand.
 		return false
 	}
+	// Require exactly one slash separating owner/repo.
 	if strings.Count(core, "/") != 1 {
 		return false
 	}
