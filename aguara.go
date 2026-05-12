@@ -15,6 +15,7 @@ import (
 
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/engine/ci"
+	"github.com/garagon/aguara/internal/engine/jsrisk"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
@@ -418,6 +419,10 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	s.RegisterAnalyzer(ci.New())
 	// pkgmeta inspects package.json for npm lifecycle / git-source chains.
 	s.RegisterAnalyzer(pkgmeta.New())
+	// jsrisk scans JavaScript for obfuscation, daemonization, CI secret
+	// exfil sinks, runner-process memory access, and Claude / VS Code
+	// persistence references.
+	s.RegisterAnalyzer(jsrisk.New())
 	// NLP and ToxicFlow are stateless, cheap to instantiate
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -558,6 +563,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
 	s.RegisterAnalyzer(ci.New())
 	s.RegisterAnalyzer(pkgmeta.New())
+	s.RegisterAnalyzer(jsrisk.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
