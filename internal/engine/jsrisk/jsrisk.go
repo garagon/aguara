@@ -319,17 +319,35 @@ func lineOf(content []byte, idx int) int {
 	return bytes.Count(content[:idx], []byte{'\n'}) + 1
 }
 
-// procMemPairWindow bounds how far a memory-like subpath can be from a
-// /proc/ occurrence before they stop counting as part of the same
-// access. 200 bytes is generous for any plausible source form
-// (`/proc/' + pid + '/mem'`, template literals, multi-arg function
+// procMemPairWindow bounds how far a quote-wrapped memory subpath can
+// be from a /proc/ occurrence before they stop counting as part of the
+// same access. 200 bytes is generous for any plausible source form
+// (`'/proc/' + pid + '/mem'`, template literals, multi-arg function
 // calls) without spanning unrelated identifiers.
 const procMemPairWindow = 200
 
-// findProcMemPair returns the 1-based line of the first /proc/
-// occurrence followed within procMemPairWindow bytes by /mem, /maps,
-// or cmdline. Returns 0 when no such pair exists.
+// procMemLiteralRe matches a literal path: /proc/<pid-or-self>/<sub>
+// where <sub> is mem, maps, or cmdline and is followed by a word
+// boundary. Root-level files like /proc/meminfo and /proc/cmdline
+// (which is the kernel boot args file, not per-process) do not match
+// because they lack the intervening pid segment.
+var procMemLiteralRe = regexp.MustCompile(`/proc/(?:[0-9]+|self|thread-self)/(mem|maps|cmdline)\b`)
+
+// procMemDynamicSubRe matches the quote-wrapped subpath token used by
+// dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the
+// template-interpolation closing form `}/mem`. The leading set
+// includes `}` so template literals (`/proc/${pid}/mem`) match.
+var procMemDynamicSubRe = regexp.MustCompile("[}'\"\x60]/(mem|maps|cmdline)['\"\x60}]")
+
+// findProcMemPair returns the 1-based line of the first /proc/ access
+// that targets a memory-like subpath: either a literal
+// /proc/<pid>/<sub> match, or a /proc/ occurrence followed within
+// procMemPairWindow bytes by a quote-wrapped subpath token (the form
+// dynamic concat and template literals leave in source).
 func findProcMemPair(content []byte) int {
+	if loc := procMemLiteralRe.FindIndex(content); loc != nil {
+		return lineOf(content, loc[0])
+	}
 	off := 0
 	for off < len(content) {
 		i := bytes.Index(content[off:], []byte("/proc/"))
@@ -341,10 +359,7 @@ func findProcMemPair(content []byte) int {
 		if windowEnd > len(content) {
 			windowEnd = len(content)
 		}
-		window := content[procStart:windowEnd]
-		if bytes.Contains(window, []byte("/mem")) ||
-			bytes.Contains(window, []byte("/maps")) ||
-			bytes.Contains(window, []byte("cmdline")) {
+		if procMemDynamicSubRe.Match(content[procStart:windowEnd]) {
 			return lineOf(content, procStart)
 		}
 		off = procStart + len("/proc/")

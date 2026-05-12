@@ -331,6 +331,55 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-4 fixes: distinguish /proc/<pid>/<sub> from root /proc files ---
+
+func TestSafe_ProcMeminfoNotMemoryAccess(t *testing.T) {
+	// /proc/meminfo is a root-level file showing system memory totals.
+	// Even with an OIDC env reference in the same file, it must not
+	// trigger the runner-pivot rule.
+	body := `
+const totals = require('fs').readFileSync('/proc/meminfo', 'utf8');
+console.log(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN ? 'have' : 'no');
+`
+	findings := analyze(t, "mi.js", body)
+	if hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("/proc/meminfo must not chain ProcMemOIDC, got: %+v", findings)
+	}
+}
+
+func TestSafe_ProcCmdlineRootNotMemoryAccess(t *testing.T) {
+	// /proc/cmdline (no pid segment) shows kernel boot args; it is not
+	// a per-process pivot file.
+	body := `
+const bootArgs = require('fs').readFileSync('/proc/cmdline', 'utf8');
+const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+`
+	findings := analyze(t, "rc.js", body)
+	if hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("root-level /proc/cmdline must not chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_ProcMemTemplateLiteral(t *testing.T) {
+	// Template literal `/proc/${pid}/mem` is a real attacker form.
+	body := "const fs = require('fs');\nconst m = fs.readFileSync(`/proc/${pid}/mem`);\nif (m.includes(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {}\n"
+	findings := analyze(t, "tmpl.js", body)
+	if !hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("template literal /proc/${pid}/mem must chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_ProcMemLiteralPidNumeric(t *testing.T) {
+	body := `
+const m = require('fs').readFileSync('/proc/12345/maps');
+if (m.includes('Runner.Worker')) {}
+`
+	findings := analyze(t, "lit.js", body)
+	if !hasRule(findings, RuleProcMemOIDC) {
+		t.Errorf("literal /proc/12345/maps must chain, got: %+v", findings)
+	}
+}
+
 // --- pass-3 fixes: property boundary on daemon options + proximate /proc subpath ---
 
 func TestSafe_NotDetachedOption(t *testing.T) {
