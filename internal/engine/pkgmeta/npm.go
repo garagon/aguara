@@ -117,7 +117,12 @@ func parseManifest(content []byte) (*manifest, error) {
 // credential-leak category, so supply-chain findings that emit a raw
 // version must self-sanitize.
 func sanitizeGitURL(version string) string {
-	v := version
+	// Trim before scheme matching: isGitDep already trims, so a value
+	// like " git+https://user:token@github.com/org/repo.git " is treated
+	// as a git dep upstream. Without trimming here, the leading space
+	// breaks the HasPrefix check and the raw credential survives into
+	// Description / MatchedText.
+	v := strings.TrimSpace(version)
 	// Only URL forms can carry credentials. Match the scheme then look
 	// for an `@` that separates `userinfo` from `host`. Drop the
 	// userinfo block.
@@ -320,10 +325,45 @@ func scriptMentionsPublish(scripts map[string]string) bool {
 	return false
 }
 
+// execScriptKeys are conventional npm script names whose declared intent
+// is to install, build, lint, or test the package — regardless of the
+// command they shell out to. `"build": "tsc"`, `"test": "vitest"`, and
+// `"lint": "eslint ."` are all install-time code paths even though the
+// body strings do not contain a package-manager verb. Install-lifecycle
+// hooks are intentionally excluded; those are covered by
+// NPM_LIFECYCLE_GIT_001 and would otherwise double-cover an unrelated
+// chain in this rule.
+var execScriptKeys = map[string]bool{
+	"build":     true,
+	"prebuild":  true,
+	"postbuild": true,
+	"test":      true,
+	"pretest":   true,
+	"posttest":  true,
+	"lint":      true,
+	"prelint":   true,
+	"postlint":  true,
+	"typecheck": true,
+	"compile":   true,
+	"bundle":    true,
+}
+
 // scriptMentionsInstallOrBuild reports whether any script invokes a package
-// manager install/build/test verb. This is the install-time-code half of
-// the publish-surface chain.
+// manager install/build/test verb, or carries a conventional script key
+// (build / test / lint / ...) whose body runs project code regardless of
+// the command. This is the install-time-code half of the publish-surface
+// chain.
 func scriptMentionsInstallOrBuild(scripts map[string]string) bool {
+	// Conventional script keys count as execution paths even when the
+	// body is `tsc`, `vitest`, etc. that no package-manager-verb match
+	// would catch.
+	for key, body := range scripts {
+		if execScriptKeys[strings.ToLower(strings.TrimSpace(key))] {
+			if strings.TrimSpace(body) != "" {
+				return true
+			}
+		}
+	}
 	// Substring needles cover the common multi-word forms.
 	needles := []string{
 		"npm install", "npm i ", "npm ci", "npm run", "npm test", "npm exec",

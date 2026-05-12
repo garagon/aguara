@@ -340,6 +340,95 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- additional credential redaction / script-key coverage (P2 from pass-3 review) ---
+
+func TestSanitizeGitURL_TrimsBeforeMatching(t *testing.T) {
+	// isGitDep trims surrounding whitespace, so sanitizeGitURL must too;
+	// otherwise the leading space breaks the HasPrefix check and the
+	// credential survives into Description / MatchedText.
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{" git+https://user:token@github.com/org/repo.git ", "git+https://github.com/org/repo.git"},
+		{"\thttps://user:tok@gitlab.com/group/repo.git", "https://gitlab.com/group/repo.git"},
+	}
+	for _, c := range cases {
+		got := sanitizeGitURL(c.in)
+		if got != c.want {
+			t.Errorf("sanitizeGitURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestLifecycleGit_RedactsCredentialedWhitespaceURL(t *testing.T) {
+	// End-to-end check: a dependency value with surrounding whitespace
+	// must not leak its credential into a finding.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node hook.js"},
+  "dependencies": {"some-lib": " git+https://user:s3cret@github.com/owner/repo.git "}
+}`
+	findings := analyze(t, "package.json", pkg)
+	f := findRule(findings, RuleLifecycleGit)
+	if f == nil {
+		t.Fatalf("expected NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+	if strings.Contains(f.Description, "s3cret") || strings.Contains(f.MatchedText, "s3cret") {
+		t.Errorf("credential leaked through whitespace-padded value: desc=%q matched=%q", f.Description, f.MatchedText)
+	}
+}
+
+func TestPublishSurface_BuildScriptKeyCounts(t *testing.T) {
+	// `"build": "tsc"` is a build step even though the body contains no
+	// package-manager verb. publish surface + provenance + build script
+	// must chain.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true},
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish --provenance"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("'build: tsc' should count as install/build for publish-surface chain, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_TestScriptKeyCounts(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true},
+  "scripts": {
+    "test": "vitest",
+    "release": "npm publish --provenance"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("'test: vitest' should count for publish-surface chain, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_EmptyScriptBodyDoesNotCount(t *testing.T) {
+	// A `build` key with an empty body is not actually executable; do not
+	// upgrade publish-surface on it.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true},
+  "scripts": {
+    "build": "",
+    "release": "npm publish --provenance"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RulePublishSurface) {
+		t.Errorf("empty build body must not count as install/build, got: %+v", findings)
+	}
+}
+
 // --- lifecycle hook accuracy (P2 from pass-2 review) ---
 
 func TestLifecycle_PrepublishOnlyNotInstallTime(t *testing.T) {
