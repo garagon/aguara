@@ -561,18 +561,26 @@ func dangerousWrite(p perms) bool {
 }
 
 // findUntrustedCheckoutStep returns the first step in a job that checks out
-// a PR-controlled ref. The step's line is used as the anchor for findings.
-func findUntrustedCheckoutStep(j *job) *step {
+// a PR-controlled ref, plus its index. The step's line is used as the anchor
+// for findings; the index gates which downstream steps count as "executes
+// PR code".
+func findUntrustedCheckoutStep(j *job) (*step, int) {
 	for i := range j.Steps {
 		if j.Steps[i].CheckoutUntrustedPR {
-			return &j.Steps[i]
+			return &j.Steps[i], i
 		}
 	}
-	return nil
+	return nil, -1
 }
 
-func jobExecutesPRCode(j *job) bool {
-	for _, s := range j.Steps {
+// jobExecutesPRCodeAfter reports whether the job runs install / build /
+// test / interpreter / local-action code in any step that follows the
+// untrusted checkout. Execution that happens BEFORE the untrusted checkout
+// is operating on trusted base content (typical setup-go / setup-node
+// preludes) and does not satisfy the pwn-request chain.
+func jobExecutesPRCodeAfter(j *job, checkoutIdx int) bool {
+	for i := checkoutIdx + 1; i < len(j.Steps); i++ {
+		s := j.Steps[i]
 		if s.PackageInstall || s.PackageBuildOrTest || s.ExecutesCode {
 			return true
 		}
@@ -593,11 +601,11 @@ func detectPwnRequest(wf *workflow, j *job) *types.Finding {
 	if !wf.Events.PullRequestTarget {
 		return nil
 	}
-	ck := findUntrustedCheckoutStep(j)
+	ck, ckIdx := findUntrustedCheckoutStep(j)
 	if ck == nil {
 		return nil
 	}
-	if !jobExecutesPRCode(j) {
+	if !jobExecutesPRCodeAfter(j, ckIdx) {
 		return nil
 	}
 	sev := types.SeverityHigh
@@ -629,7 +637,8 @@ func detectCache(wf *workflow, j *job) *types.Finding {
 	if !wf.Events.PullRequestTarget {
 		return nil
 	}
-	if findUntrustedCheckoutStep(j) == nil {
+	ck, ckIdx := findUntrustedCheckoutStep(j)
+	if ck == nil {
 		return nil
 	}
 	cache := jobHasCacheStep(j)
@@ -637,7 +646,7 @@ func detectCache(wf *workflow, j *job) *types.Finding {
 		return nil
 	}
 	sev := types.SeverityHigh
-	if jobExecutesPRCode(j) {
+	if jobExecutesPRCodeAfter(j, ckIdx) {
 		sev = types.SeverityCritical
 	}
 	return &types.Finding{
@@ -707,7 +716,7 @@ func detectCheckout(wf *workflow, j *job) *types.Finding {
 	if !wf.Events.PullRequestTarget {
 		return nil
 	}
-	ck := findUntrustedCheckoutStep(j)
+	ck, _ := findUntrustedCheckoutStep(j)
 	if ck == nil {
 		return nil
 	}

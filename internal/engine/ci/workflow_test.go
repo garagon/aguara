@@ -566,6 +566,69 @@ jobs:
 	}
 }
 
+// pwn-request must execute PR-controlled code AFTER the untrusted
+// checkout. A workflow that does trusted setup (install / build)
+// BEFORE switching to the PR ref, then only does passive reads on the
+// PR content, does not satisfy the chain — the executed code is
+// base-branch code, not PR code.
+func TestSafe_ExecutionBeforeUntrustedCheckout(t *testing.T) {
+	wf := `
+on: pull_request_target
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install
+      - run: npm run build
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+      - run: grep -r 'TODO' pr/
+`
+	findings := analyze(t, ".github/workflows/scan.yml", wf)
+	if hasRule(findings, RulePwnRequest) {
+		t.Errorf("install/build BEFORE untrusted checkout should not chain, got: %+v", findings)
+	}
+}
+
+// Mirror for GHA_CACHE_001: cache write + install BEFORE the untrusted
+// checkout is base-content cache, not PR-poisoned cache. The cache
+// rule still fires (cache write in same job as untrusted checkout is
+// the cache primitive that motivates the rule) but its severity stays
+// at HIGH because the install is not executing PR code.
+func TestCache_SeverityWhenExecBeforeCheckout(t *testing.T) {
+	wf := `
+on: pull_request_target
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/save@v4
+        with:
+          path: ~/.cache
+          key: base
+      - run: npm install
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+      - run: cat pr/README.md
+`
+	findings := analyze(t, ".github/workflows/cached-scan.yml", wf)
+	cache := findRule(findings, RuleCache)
+	if cache == nil {
+		t.Fatalf("cache write + untrusted checkout should still trigger GHA_CACHE_001, got: %+v", findings)
+	}
+	if cache.Severity != types.SeverityHigh {
+		t.Errorf("execution before checkout should keep cache severity HIGH, got %v", cache.Severity)
+	}
+}
+
 // Local-action execution should count as code execution for pwn-request.
 func TestLocalActionExecutesCode(t *testing.T) {
 	wf := `
