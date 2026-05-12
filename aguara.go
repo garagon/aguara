@@ -17,6 +17,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
+	"github.com/garagon/aguara/internal/engine/pkgmeta"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rules"
@@ -415,6 +416,8 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	// CI trust analyzer parses workflow YAML — runs before toxicflow so its
 	// chain findings can be deduped/correlated alongside leaf signals.
 	s.RegisterAnalyzer(ci.New())
+	// pkgmeta inspects package.json for npm lifecycle / git-source chains.
+	s.RegisterAnalyzer(pkgmeta.New())
 	// NLP and ToxicFlow are stateless, cheap to instantiate
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -554,6 +557,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
 	s.RegisterAnalyzer(ci.New())
+	s.RegisterAnalyzer(pkgmeta.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
