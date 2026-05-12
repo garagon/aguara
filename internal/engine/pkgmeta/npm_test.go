@@ -340,6 +340,88 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- lifecycle / provenance edge cases (P2 from pass-4 review) ---
+
+func TestLifecycle_PrepublishIsInstallTime(t *testing.T) {
+	// npm still executes prepublish during install/ci (deprecated but
+	// active). Manifests that combine prepublish with a git source must
+	// still chain.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"prepublish": "node ./hook.js"},
+  "dependencies": {"some-lib": "github:owner/repo"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("prepublish runs during install and must trigger NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+}
+
+func TestLifecycle_EmptyBodyDoesNotTrigger(t *testing.T) {
+	// A placeholder lifecycle entry with an empty body does not execute
+	// project code; declaring it must not fail --ci scans.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": ""},
+  "dependencies": {"some-lib": "github:owner/repo"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("empty postinstall body must not trigger NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_ProvenanceFalseDoesNotTrigger(t *testing.T) {
+	// Explicit opt-out should not falsely upgrade the publish-surface
+	// chain just because the literal string "provenance" appears in the
+	// raw manifest text.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": false, "access": "public"},
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RulePublishSurface) {
+		t.Errorf("provenance:false must not chain, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_ProvenanceTrueTriggers(t *testing.T) {
+	// Explicit opt-in via publishConfig is the canonical enabling form.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true, "access": "public"},
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("provenance:true should chain, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_OIDCWithoutProvenanceFlagTriggers(t *testing.T) {
+	// Trust-publishing references other than provenance (id-token, OIDC
+	// env vars) still count even when provenance:false is set.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": false},
+  "scripts": {
+    "build": "tsc",
+    "release": "ACTIONS_ID_TOKEN_REQUEST_URL=$URL npm publish"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("OIDC env reference should still chain even with provenance:false, got: %+v", findings)
+	}
+}
+
 // --- additional credential redaction / script-key coverage (P2 from pass-3 review) ---
 
 func TestSanitizeGitURL_TrimsBeforeMatching(t *testing.T) {

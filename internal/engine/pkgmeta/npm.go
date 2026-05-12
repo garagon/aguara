@@ -235,23 +235,28 @@ func isGitDep(version string) bool {
 //
 // Strictly install-time per npm docs: preinstall, install, postinstall.
 // prepare and its pre/post hooks also run during install (on git
-// dependencies and when packing a local install). prepublishOnly,
-// prepack, and postpack run only on `npm publish` / `npm pack` and are
-// intentionally excluded so manifests that ship with publish-only hooks
-// do not produce false-positive HIGH/CRITICAL findings.
+// dependencies and when packing a local install). prepublish is
+// deprecated but npm still executes it during `npm install` / `npm ci`,
+// so we keep it; prepublishOnly is the explicitly publish-only variant
+// and stays excluded. prepack and postpack run only on publish/pack and
+// are also excluded so publish-only manifests do not falsely trigger.
 var lifecycleScripts = []string{
 	"preinstall",
 	"install",
 	"postinstall",
+	"prepublish",
 	"preprepare",
 	"prepare",
 	"postprepare",
 }
 
-// hasLifecycleScript reports whether scripts defines any install-time hook.
+// hasLifecycleScript reports whether scripts defines any install-time hook
+// with a non-empty body. Empty-body lifecycle entries (e.g. placeholder
+// `"postinstall": ""`) do not execute project code and would otherwise
+// false-positive on harmless manifests under --fail-on high.
 func hasLifecycleScript(scripts map[string]string) bool {
 	for _, k := range lifecycleScripts {
-		if _, ok := scripts[k]; ok {
+		if body, ok := scripts[k]; ok && strings.TrimSpace(body) != "" {
 			return true
 		}
 	}
@@ -397,17 +402,37 @@ func scriptMentionsInstallOrBuild(scripts map[string]string) bool {
 	return false
 }
 
-// manifestReferencesProvenance reports whether the package manifest, taken
-// as a whole, references a provenance / trusted-publishing / OIDC string.
-// We run this against the raw bytes so a publishConfig.provenance flag,
-// an "id-token" string in a script, or an "oidc" hint in arbitrary keys
-// all count.
-func manifestReferencesProvenance(raw []byte) bool {
-	if len(raw) == 0 {
+// manifestReferencesProvenance reports whether the manifest enables a
+// trusted-publishing / provenance / OIDC surface. The check is value-aware
+// for the provenance flag (a literal `"provenance": false` does not count)
+// and substring-based for the other trust signals, which only appear as
+// references rather than as booleans.
+func manifestReferencesProvenance(pkg *manifest) bool {
+	if pkg == nil {
 		return false
 	}
+	// Honor an explicit publishConfig.provenance boolean. Only `true`
+	// counts; missing or `false` falls through to the substring checks
+	// below, which look for other ways a trust surface might be wired.
+	if len(pkg.PublishConfig) > 0 {
+		var pc struct {
+			Provenance *bool `json:"provenance"`
+		}
+		if err := json.Unmarshal(pkg.PublishConfig, &pc); err == nil {
+			if pc.Provenance != nil && *pc.Provenance {
+				return true
+			}
+		}
+	}
+	if len(pkg.raw) == 0 {
+		return false
+	}
+	lower := strings.ToLower(string(pkg.raw))
+	// `--provenance` is the npm CLI flag form (e.g. in a release script).
+	// trusted-publishing / id-token / oidc are reference strings that
+	// should not appear as boolean values in practice.
 	needles := []string{
-		"provenance",
+		"--provenance",
 		"trusted-publishing",
 		"trustedpublishing",
 		"id-token",
@@ -415,7 +440,6 @@ func manifestReferencesProvenance(raw []byte) bool {
 		"oidc",
 		"actions_id_token_request",
 	}
-	lower := strings.ToLower(string(raw))
 	for _, n := range needles {
 		if strings.Contains(lower, n) {
 			return true
@@ -579,7 +603,7 @@ func detectPublishSurface(pkg *manifest) *types.Finding {
 	if !scriptMentionsInstallOrBuild(pkg.Scripts) {
 		return nil
 	}
-	if !manifestReferencesProvenance(pkg.raw) {
+	if !manifestReferencesProvenance(pkg) {
 		return nil
 	}
 	// Anchor at publishConfig if declared, otherwise at the scripts block
