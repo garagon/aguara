@@ -110,6 +110,34 @@ func parseManifest(content []byte) (*manifest, error) {
 	return &m, nil
 }
 
+// sanitizeGitURL strips an embedded `user:password@` (or token `@`) from
+// a dependency version string so a credentialed git spec like
+// `git+https://user:token@github.com/org/repo.git` does not show up
+// verbatim in scan output. Aguara's credential redaction only scrubs the
+// credential-leak category, so supply-chain findings that emit a raw
+// version must self-sanitize.
+func sanitizeGitURL(version string) string {
+	v := version
+	// Only URL forms can carry credentials. Match the scheme then look
+	// for an `@` that separates `userinfo` from `host`. Drop the
+	// userinfo block.
+	for _, scheme := range []string{"git+ssh://", "git+https://", "git+http://", "git+git://", "git://", "https://", "http://", "ssh://"} {
+		if !strings.HasPrefix(strings.ToLower(v), scheme) {
+			continue
+		}
+		rest := v[len(scheme):]
+		at := strings.Index(rest, "@")
+		slash := strings.Index(rest, "/")
+		// `@` must appear before the first `/` to belong to userinfo;
+		// otherwise it is part of a path (e.g. `@scope/...`).
+		if at > 0 && (slash < 0 || at < slash) {
+			return v[:len(scheme)] + rest[at+1:]
+		}
+		break
+	}
+	return v
+}
+
 // findLineOfQuotedKey returns the 1-based line number of the first
 // occurrence of `"<key>"` in raw, or 0 if it is not present. Used to
 // anchor findings to the manifest line declaring the offending entry so
@@ -287,16 +315,32 @@ func scriptMentionsPublish(scripts map[string]string) bool {
 // manager install/build/test verb. This is the install-time-code half of
 // the publish-surface chain.
 func scriptMentionsInstallOrBuild(scripts map[string]string) bool {
+	// Substring needles cover the common multi-word forms.
 	needles := []string{
 		"npm install", "npm i ", "npm ci", "npm run", "npm test", "npm exec",
 		"pnpm install", "pnpm i ", "pnpm run", "pnpm test", "pnpm exec",
 		"yarn install", "yarn run", "yarn test",
 		"bun install", "bun i ", "bun run", "bun test",
 	}
+	// Exact short forms: when a script body is just `npm i`, `pnpm i`,
+	// `yarn`, `bun i`, etc., the trailing-space needles above miss them.
+	exact := map[string]bool{
+		"npm i": true, "npm install": true, "npm ci": true,
+		"pnpm i": true, "pnpm install": true,
+		"yarn": true, "yarn install": true,
+		"bun i": true, "bun install": true,
+	}
 	for _, body := range scripts {
 		lower := strings.ToLower(body)
 		for _, n := range needles {
 			if strings.Contains(lower, n) {
+				return true
+			}
+		}
+		// Match the script body as a whole word after trimming, and also
+		// each newline-separated line for multi-line shell scripts.
+		for _, line := range strings.Split(lower, "\n") {
+			if exact[strings.TrimSpace(line)] {
 				return true
 			}
 		}
@@ -392,19 +436,20 @@ func detectLifecycleGit(pkg *manifest) []types.Finding {
 		if d.Section == "optionalDependencies" && isSuspiciousPackageName(d.Name) {
 			sev = types.SeverityCritical
 		}
+		safeVersion := sanitizeGitURL(d.Version)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleLifecycleGit,
 			RuleName: "Git dependency can execute lifecycle code during install",
 			Severity: sev,
 			Category: "supply-chain",
-			Description: "package.json pulls " + d.Name + " from a git source (" + d.Version +
+			Description: "package.json pulls " + d.Name + " from a git source (" + safeVersion +
 				") and defines an npm install-time lifecycle script. On `npm install`, " +
 				"the git ref can change between resolutions and the lifecycle script will " +
 				"execute whatever code is at the resolved ref, with the install user's " +
 				"environment.",
 			FilePath:    pkg.path,
 			Line:        findLineOfQuotedKey(pkg.raw, d.Name),
-			MatchedText: d.Section + "." + d.Name + " = " + d.Version + " + install-time script",
+			MatchedText: d.Section + "." + d.Name + " = " + safeVersion + " + install-time script",
 			Analyzer:    AnalyzerName,
 			Confidence:  0.9,
 			Remediation: "Pin npm dependencies to registry versions with lockfile integrity. " +
@@ -424,11 +469,14 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 	if len(pkg.OptionalDependencies) == 0 {
 		return nil
 	}
-	// Anchor every optional-git finding at the optionalDependencies
-	// section header. Per-dep anchoring would collide with NPM_LIFECYCLE_GIT_001
-	// (which also points at the dep line) and the scanner's default
-	// cross-rule dedup would silently drop one of the two.
-	sectionLine := findLineOfQuotedKey(pkg.raw, "optionalDependencies")
+	// When a lifecycle script is present, NPM_LIFECYCLE_GIT_001 already
+	// covers every optional git dep with higher severity and a strictly
+	// stronger description (install-time execution). Suppress the
+	// optional-git rule in that case to avoid two findings that the
+	// scanner's cross-rule dedup would silently collapse.
+	if hasLifecycleScript(pkg.Scripts) {
+		return nil
+	}
 	names := make([]string, 0, len(pkg.OptionalDependencies))
 	for k := range pkg.OptionalDependencies {
 		names = append(names, k)
@@ -444,18 +492,21 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 		if isSuspiciousPackageName(n) {
 			sev = types.SeverityHigh
 		}
+		safeVersion := sanitizeGitURL(v)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleOptionalGit,
 			RuleName: "Optional dependency resolves executable code from git",
 			Severity: sev,
 			Category: "supply-chain",
-			Description: "optionalDependencies." + n + " resolves to a git source (" + v +
+			Description: "optionalDependencies." + n + " resolves to a git source (" + safeVersion +
 				"). Optional dependencies install silently when resolution succeeds, so a " +
 				"mutable git ref here is a quieter supply-chain entry point than the same " +
 				"shape in dependencies.",
 			FilePath:    pkg.path,
-			Line:        sectionLine,
-			MatchedText: "optionalDependencies." + n + " = " + v,
+			// Per-dep line anchor: multiple optional git deps get distinct
+			// lines so the scanner's same-rule dedup keeps each one.
+			Line:        findLineOfQuotedKey(pkg.raw, n),
+			MatchedText: "optionalDependencies." + n + " = " + safeVersion,
 			Analyzer:    AnalyzerName,
 			Confidence:  0.8,
 			Remediation: "Avoid git sources in optionalDependencies. If you must use one, pin " +

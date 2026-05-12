@@ -340,6 +340,153 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- credential redaction (P1 from prior review) ---
+
+func TestSanitizeGitURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		// Strip user:token@host from URL forms.
+		{"git+https://user:token@github.com/org/repo.git", "git+https://github.com/org/repo.git"},
+		{"git+ssh://user@github.com/org/repo.git", "git+ssh://github.com/org/repo.git"},
+		{"https://abc123:x-oauth-basic@github.com/org/repo.git", "https://github.com/org/repo.git"},
+		// Preserve non-credentialed URLs.
+		{"git+https://github.com/org/repo.git", "git+https://github.com/org/repo.git"},
+		{"github:org/repo", "github:org/repo"},
+		{"org/repo#abc1234", "org/repo#abc1234"},
+		// `@` in a scoped name path must not be confused with userinfo.
+		{"https://github.com/@scope/repo.git", "https://github.com/@scope/repo.git"},
+		// Registry strings pass through unchanged.
+		{"^1.2.3", "^1.2.3"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := sanitizeGitURL(c.in)
+		if got != c.want {
+			t.Errorf("sanitizeGitURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestLifecycleGit_RedactsCredentialedURL(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node ./hook.js"},
+  "dependencies": {"some-lib": "git+https://user:s3cret@github.com/owner/repo.git"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	f := findRule(findings, RuleLifecycleGit)
+	if f == nil {
+		t.Fatalf("expected NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+	// Detector output must not echo the credentials.
+	if strings.Contains(f.Description, "s3cret") || strings.Contains(f.MatchedText, "s3cret") {
+		t.Errorf("credentials leaked through finding: desc=%q matched=%q", f.Description, f.MatchedText)
+	}
+	if strings.Contains(f.Description, "user:") || strings.Contains(f.MatchedText, "user:") {
+		t.Errorf("userinfo leaked through finding: desc=%q matched=%q", f.Description, f.MatchedText)
+	}
+}
+
+func TestOptionalGit_RedactsCredentialedURL(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "optionalDependencies": {"runner": "git+https://user:tok@github.com/owner/runner.git"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	f := findRule(findings, RuleOptionalGit)
+	if f == nil {
+		t.Fatalf("expected NPM_OPTIONAL_GIT_001, got: %+v", findings)
+	}
+	if strings.Contains(f.Description, "tok") || strings.Contains(f.MatchedText, "tok") {
+		t.Errorf("credentials leaked: desc=%q matched=%q", f.Description, f.MatchedText)
+	}
+}
+
+// --- optional-git dedup correctness (P2 from prior review) ---
+
+func TestOptionalGit_MultipleDepsKeepDistinctLines(t *testing.T) {
+	// Same-rule dedup uses (file, ruleID, line). Two NPM_OPTIONAL_GIT_001
+	// findings must anchor at distinct lines so neither is silently dropped.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "optionalDependencies": {
+    "alpha": "github:owner/alpha",
+    "bravo": "github:owner/bravo"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	count := 0
+	lines := map[int]string{}
+	for _, f := range findings {
+		if f.RuleID != RuleOptionalGit {
+			continue
+		}
+		count++
+		if prev, ok := lines[f.Line]; ok {
+			t.Errorf("two NPM_OPTIONAL_GIT_001 findings collide on line %d (also %s)", f.Line, prev)
+		}
+		lines[f.Line] = f.MatchedText
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 NPM_OPTIONAL_GIT_001 findings, got %d: %+v", count, findings)
+	}
+}
+
+func TestOptionalGit_SuppressedWhenLifecycleCovers(t *testing.T) {
+	// When a lifecycle script is present, NPM_LIFECYCLE_GIT_001 already
+	// covers every optional git dep with stronger severity. The optional
+	// rule must stay quiet to avoid a cross-rule collision the scanner's
+	// default dedup would silently resolve.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node ./hook.js"},
+  "optionalDependencies": {"setup": "github:owner/setup"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RuleOptionalGit) {
+		t.Errorf("lifecycle script should suppress NPM_OPTIONAL_GIT_001, got: %+v", findings)
+	}
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("expected NPM_LIFECYCLE_GIT_001 to fire on the same dep, got: %+v", findings)
+	}
+}
+
+// --- publish surface install shorthand (P2 from prior review) ---
+
+func TestPublishSurface_NpmInstallShorthand(t *testing.T) {
+	// "npm i" alone in a script body is a valid install step; the
+	// publish-surface chain must recognize it.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true},
+  "scripts": {
+    "setup": "npm i",
+    "release": "npm publish --provenance"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("\"npm i\" alone should count as install; expected NPM_PUBLISH_SURFACE_001, got: %+v", findings)
+	}
+}
+
+func TestPublishSurface_PnpmInstallShorthand(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "publishConfig": {"provenance": true},
+  "scripts": {
+    "setup": "pnpm i",
+    "release": "pnpm publish"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("\"pnpm i\" alone should count as install, got: %+v", findings)
+	}
+}
+
 // --- line anchors ---
 
 func TestFindLineOfQuotedKey(t *testing.T) {
@@ -364,8 +511,10 @@ func TestFindLineOfQuotedKey(t *testing.T) {
 
 func TestFindingsHaveDistinctLines(t *testing.T) {
 	// The scanner's default dedup mode drops cross-rule duplicates on the
-	// same (file, line) pair, so the three pkgmeta rules MUST anchor at
-	// distinct lines or two of them disappear from output.
+	// same (file, line) pair. With lifecycle suppression of OPTIONAL_GIT,
+	// a full-chain manifest emits LIFECYCLE_GIT (on the dep entry) and
+	// PUBLISH_SURFACE (on publishConfig). They must anchor at distinct
+	// lines so the scanner keeps both.
 	pkg := `{
   "name": "x",
   "version": "1.0.0",
@@ -380,8 +529,14 @@ func TestFindingsHaveDistinctLines(t *testing.T) {
   }
 }`
 	findings := analyze(t, "package.json", pkg)
-	if len(findings) < 3 {
-		t.Fatalf("expected three findings on full chain, got %d: %+v", len(findings), findings)
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("expected NPM_LIFECYCLE_GIT_001 on full chain, got: %+v", findings)
+	}
+	if !hasRule(findings, RulePublishSurface) {
+		t.Errorf("expected NPM_PUBLISH_SURFACE_001 on full chain, got: %+v", findings)
+	}
+	if hasRule(findings, RuleOptionalGit) {
+		t.Errorf("expected NPM_OPTIONAL_GIT_001 to be suppressed when lifecycle covers, got: %+v", findings)
 	}
 	seen := map[int]string{}
 	for _, f := range findings {
