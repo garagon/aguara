@@ -185,7 +185,11 @@ func isGitDep(version string) bool {
 		return true
 	case strings.HasPrefix(lower, "gist:"):
 		return true
-	case strings.Contains(noFrag, "github.com/") && strings.HasSuffix(noFrag, ".git"):
+	// Any HTTP(S) URL ending in .git resolves as a git dependency in npm.
+	// Covers github.com, gitlab.com, bitbucket.org, gitea instances, and
+	// self-hosted hosts. The .git suffix on a real URL is unambiguous;
+	// it does not collide with registry or filesystem specs.
+	case strings.Contains(noFrag, "://") && strings.HasSuffix(noFrag, ".git"):
 		return true
 	}
 	// owner/repo or owner/repo#ref shorthand: one slash, no protocol, no
@@ -219,19 +223,24 @@ func isGitDep(version string) bool {
 	return true
 }
 
-// lifecycleScripts are the npm script names that run automatically during
-// install or pack. A package that defines any of these AND pulls a
-// dependency from a mutable git source can execute attacker code as soon
-// as the user runs `npm install`.
+// lifecycleScripts are the npm script names that run automatically as
+// part of `npm install`. A package that defines any of these AND pulls a
+// dependency from a mutable git source can execute attacker code on the
+// install user's machine.
+//
+// Strictly install-time per npm docs: preinstall, install, postinstall.
+// prepare and its pre/post hooks also run during install (on git
+// dependencies and when packing a local install). prepublishOnly,
+// prepack, and postpack run only on `npm publish` / `npm pack` and are
+// intentionally excluded so manifests that ship with publish-only hooks
+// do not produce false-positive HIGH/CRITICAL findings.
 var lifecycleScripts = []string{
 	"preinstall",
 	"install",
 	"postinstall",
+	"preprepare",
 	"prepare",
-	"prepublish",
-	"prepublishOnly",
-	"prepack",
-	"postpack",
+	"postprepare",
 }
 
 // hasLifecycleScript reports whether scripts defines any install-time hook.

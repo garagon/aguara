@@ -340,6 +340,86 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- lifecycle hook accuracy (P2 from pass-2 review) ---
+
+func TestLifecycle_PrepublishOnlyNotInstallTime(t *testing.T) {
+	// prepublishOnly runs only on `npm publish`, not on `npm install`.
+	// A manifest with a git dep and a prepublishOnly script must not
+	// produce a HIGH/CRITICAL lifecycle-git finding; doing so creates a
+	// false positive that fails CI under --fail-on high.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"prepublishOnly": "npm run build"},
+  "dependencies": {"some-lib": "github:owner/repo"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("prepublishOnly is publish-only and must not trigger NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+}
+
+func TestLifecycle_PrepackNotInstallTime(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"prepack": "npm run build"},
+  "dependencies": {"some-lib": "github:owner/repo"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("prepack is publish-only and must not trigger NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+}
+
+func TestLifecycle_PreprepareIsInstallTime(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"preprepare": "node ./hook.js"},
+  "dependencies": {"some-lib": "github:owner/repo"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("preprepare runs during install and must trigger NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+}
+
+// --- non-GitHub git URLs (P2 from pass-2 review) ---
+
+func TestIsGitDep_NonGitHubHosts(t *testing.T) {
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"https://gitlab.com/group/pkg.git", true},
+		{"https://gitlab.com/group/pkg.git#abc1234", true},
+		{"https://bitbucket.org/team/pkg.git", true},
+		{"https://git.example.com/team/pkg.git", true},
+		{"https://git.example.com/team/pkg.git#v1", true},
+		{"ssh://git@gitlab.com/group/pkg.git", true},
+		// Non-.git HTTPS URLs are not git deps (could be tarball etc.).
+		{"https://gitlab.com/group/pkg", false},
+		// HTTPS to a registry-shaped URL is not a git dep.
+		{"https://registry.npmjs.org/some-pkg/-/some-pkg-1.0.0.tgz", false},
+	}
+	for _, c := range cases {
+		got := isGitDep(c.version)
+		if got != c.want {
+			t.Errorf("isGitDep(%q) = %v, want %v", c.version, got, c.want)
+		}
+	}
+}
+
+func TestLifecycleGit_GitLabSource(t *testing.T) {
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {"postinstall": "node ./hook.js"},
+  "dependencies": {"some-lib": "https://gitlab.com/group/some-lib.git#abc"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	if !hasRule(findings, RuleLifecycleGit) {
+		t.Errorf("gitlab .git URL should classify as git source, got: %+v", findings)
+	}
+}
+
 // --- credential redaction (P1 from prior review) ---
 
 func TestSanitizeGitURL(t *testing.T) {
