@@ -239,15 +239,11 @@ func computeMetrics(content []byte) *metrics {
 			m.HasSessionSink = true
 		}
 	}
-	// HasChildProcess requires both a child_process module reference AND
-	// a real invocation. Without the module gate `worker.spawn(...)` on
-	// an unrelated object would falsely match; without the invocation
-	// gate a bare import would suffice. The bare-form regex covers
-	// destructured imports (`const { spawn } = require('child_process')`)
-	// and the method-form regex covers `cp.spawn(...)`.
-	m.HasChildProcess = bytes.Contains(content, []byte("child_process")) &&
-		(childProcessMethodInvokeRe.Match(content) ||
-			childProcessBareInvokeRe.Match(content))
+	// HasChildProcess is true when the file contains either a
+	// receiver-bound child_process method call (require chain or known
+	// alias) or a bare invocation whose name was destructured from
+	// child_process. Used by JS_OBF_001 severity escalation only.
+	m.HasChildProcess = hasChildProcessInvocation(content)
 	m.HasProcessEnv = bytes.Contains(lower, []byte("process.env"))
 
 	// CI / cloud secret reads come in three forms: direct member access
@@ -365,54 +361,119 @@ func lineOf(content []byte, idx int) int {
 	return bytes.Count(content[:idx], []byte{'\n'}) + 1
 }
 
-// findDaemonChain walks each child_process invocation in content. For
-// each, it inspects the next daemonProximityWindow bytes (the trailing
-// options object plus a margin) and returns the invocation's line if
-// the options include detached: true AND either stdio: 'ignore' or a
-// `.unref()` call on the spawned child within the same window. The
-// per-invocation gate means an unrelated object literal carrying
-// daemon-shape options elsewhere in the file no longer satisfies the
-// rule.
+// cpCallSite records a real child_process invocation: Start is the
+// beginning of the receiver/name token, ArgsStart is the byte after
+// the opening `(`. Daemon detection extracts the call's actual args
+// (paren-balanced) starting at ArgsStart so options belonging to a
+// different nearby call do not satisfy the chain.
+type cpCallSite struct {
+	Start     int
+	ArgsStart int
+}
+
+// collectChildProcessCalls returns sites of real child_process
+// invocations: receiver-bound method calls (require chain or known
+// module alias) plus bare calls whose name was destructured from
+// child_process. Unrelated `.spawn(...)` calls and bare calls whose
+// name was never imported from the module are excluded.
+func collectChildProcessCalls(content []byte) []cpCallSite {
+	var sites []cpCallSite
+	for _, loc := range childProcessReceiverRe.FindAllIndex(content, -1) {
+		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+	}
+	// Collect destructured names: plain names and alias forms
+	// (`spawn: launch`); the source name (before `:`) is the one called.
+	destructuredNames := map[string]bool{}
+	for _, m := range childProcessDestructureRe.FindAllSubmatchIndex(content, -1) {
+		body := string(content[m[2]:m[3]])
+		for _, raw := range strings.Split(body, ",") {
+			entry := strings.TrimSpace(raw)
+			if i := strings.Index(entry, ":"); i >= 0 {
+				entry = strings.TrimSpace(entry[:i])
+			}
+			if entry != "" {
+				destructuredNames[entry] = true
+			}
+		}
+	}
+	if len(destructuredNames) > 0 {
+		for _, loc := range childProcessBareInvokeRe.FindAllSubmatchIndex(content, -1) {
+			if destructuredNames[string(content[loc[2]:loc[3]])] {
+				sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+			}
+		}
+	}
+	// Sort by Start so the earliest qualifying call is the anchor.
+	for i := 1; i < len(sites); i++ {
+		for j := i; j > 0 && sites[j-1].Start > sites[j].Start; j-- {
+			sites[j-1], sites[j] = sites[j], sites[j-1]
+		}
+	}
+	return sites
+}
+
+// hasChildProcessInvocation reports whether the file contains any
+// real child_process invocation. Used by JS_OBF_001 severity escalation.
+func hasChildProcessInvocation(content []byte) bool {
+	return len(collectChildProcessCalls(content)) > 0
+}
+
+// extractCallArgs returns the bytes between the opening `(` at
+// argsStart (inclusive) and its matching `)`, ignoring quoted string
+// literals and template literals. Nested parens balance correctly.
+// When the call is unterminated (truncated input), the remainder of
+// content is returned, which is conservative for proximity checks.
+func extractCallArgs(content []byte, argsStart int) []byte {
+	depth := 1
+	inStr := byte(0)
+	escaped := false
+	for i := argsStart; i < len(content); i++ {
+		c := content[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inStr != 0 {
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == inStr {
+				inStr = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"', '`':
+			inStr = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return content[argsStart:i]
+			}
+		}
+	}
+	return content[argsStart:]
+}
+
+// findDaemonChain returns the line of the first child_process call
+// whose own args (paren-balanced, string-aware) contain BOTH
+// `detached: true` AND `stdio: 'ignore'`. The args-extracted check
+// ties the options to the call that owns them, so daemon-shape
+// options belonging to an unrelated nearby spawn (or a different
+// trailing object literal) do not satisfy the chain.
 func findDaemonChain(content []byte) (int, bool) {
-	// Gate: the file must reference child_process somewhere. Without
-	// this, `worker.spawn(...)` on an unrelated object would trip the
-	// method-invocation regex below. The module gate is the same one
-	// HasChildProcess uses, kept inline so the daemon walk is
-	// self-contained.
-	if !bytes.Contains(content, []byte("child_process")) {
-		return 0, false
-	}
-	// Collect the indices of every method-form and bare-form invocation.
-	var idxs []int
-	for _, loc := range childProcessMethodInvokeRe.FindAllIndex(content, -1) {
-		idxs = append(idxs, loc[0])
-	}
-	for _, loc := range childProcessBareInvokeRe.FindAllIndex(content, -1) {
-		idxs = append(idxs, loc[0])
-	}
-	if len(idxs) == 0 {
-		return 0, false
-	}
-	// Stable sort by index so we anchor at the earliest qualifying call.
-	// A simple insertion sort suffices (low cardinality in practice).
-	for i := 1; i < len(idxs); i++ {
-		for j := i; j > 0 && idxs[j-1] > idxs[j]; j-- {
-			idxs[j-1], idxs[j] = idxs[j], idxs[j-1]
-		}
-	}
-	for _, start := range idxs {
-		end := start + daemonProximityWindow
-		if end > len(content) {
-			end = len(content)
-		}
-		win := content[start:end]
-		if !detachedTrueRe.Match(win) {
+	for _, site := range collectChildProcessCalls(content) {
+		args := extractCallArgs(content, site.ArgsStart)
+		if !detachedTrueRe.Match(args) {
 			continue
 		}
-		if !stdioIgnoredRe.Match(win) && !bytes.Contains(win, []byte(".unref()")) {
+		if !stdioIgnoredRe.Match(args) {
 			continue
 		}
-		return lineOf(content, start), true
+		return lineOf(content, site.Start), true
 	}
 	return 0, false
 }
@@ -431,18 +492,35 @@ const procMemPairWindow = 200
 // because they lack the intervening pid segment.
 var procMemLiteralRe = regexp.MustCompile(`/proc/(?:[0-9]+|self|thread-self)/(mem|maps|cmdline)\b`)
 
-// childProcessMethodInvokeRe matches a child_process method call:
-// `cp.spawn(...)`, `child_process.fork(...)`, etc. The leading `.`
-// ensures the name is a method, not an unrelated function.
-var childProcessMethodInvokeRe = regexp.MustCompile(`\.(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+// childProcessReceiverRe matches a child_process method call whose
+// receiver is either an inline require chain or a conventional alias
+// for the imported module. Restricting to these receivers prevents
+// `worker.spawn(...)` on an unrelated object from satisfying the
+// daemon chain just because `child_process` appears elsewhere in the
+// file. The conventional aliases (cp, childProcess, child_process,
+// ChildProcess) cover the bindings real-world code uses; obscure
+// renames are intentionally out of reach without AST parsing.
+var childProcessReceiverRe = regexp.MustCompile(
+	`(?:require\s*\(\s*['"](?:node:)?child_process['"]\s*\)|\b(?:cp|childProcess|child_process|ChildProcess|_cp)\b)` +
+		`\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
+)
 
 // childProcessBareInvokeRe matches a bare invocation: `spawn(...)`,
 // `fork(...)`, `exec(...)`, etc., used after `const { spawn } =
 // require('child_process')`. Word boundary on the left avoids
-// matching `myspawn(`. The bare form is only treated as a child
-// process invocation when the file also references child_process
-// (see hasChildProcess gating below).
-var childProcessBareInvokeRe = regexp.MustCompile(`\b(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+// matching `myspawn(`. Bare-form invocations are only credited when
+// the file also contains a destructured import that names the same
+// method from child_process (see findDaemonChain).
+var childProcessBareInvokeRe = regexp.MustCompile(`\b(spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+
+// childProcessDestructureRe matches `const { spawn, fork } =
+// require('child_process')` and its var/let variants. Submatch 1 is
+// the name list inside the braces; the daemon chain compares each
+// trimmed entry (alias-stripped on `:`) against the bare-form name
+// before crediting the corresponding invocation.
+var childProcessDestructureRe = regexp.MustCompile(
+	`(?:const|let|var)\s*\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
+)
 
 // envReadRe captures direct env-variable reads:
 // `process.env.<NAME>`, `process.env['<NAME>']`, or
@@ -460,11 +538,6 @@ var envReadRe = regexp.MustCompile(`process\.env\s*(?:\.|\[\s*['"])([A-Z][A-Z0-9
 // take the substring before `:` (if present) as the source name.
 var envDestructureRe = regexp.MustCompile(`\{\s*([^}]+?)\s*\}\s*=\s*process\.env\b`)
 
-// daemonProximityWindow bounds how far the daemonization options can
-// appear after a child_process invocation before they stop counting
-// as part of that call's options. 500 bytes covers a multi-line
-// options object passed as the trailing argument.
-const daemonProximityWindow = 500
 
 // procMemDynamicSubRe matches the quote-wrapped subpath token used by
 // dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the

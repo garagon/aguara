@@ -331,6 +331,79 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-8 fixes: receiver-bound daemon match, drop .unref()-only chain ---
+
+func TestSafe_WorkerSpawnWithCPImported(t *testing.T) {
+	// File imports child_process AND has an unrelated worker.spawn(...)
+	// with daemon options. The unrelated receiver must not trip the
+	// rule even though the module is present.
+	body := `
+const cp = require('child_process');
+cp.exec('echo hello');
+const worker = makeWorker();
+worker.spawn('node', ['x'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ws.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("worker.spawn(...) with daemon opts must not chain even when cp is imported, got: %+v", findings)
+	}
+}
+
+func TestVuln_CPMethodAliasMatches(t *testing.T) {
+	// `cp` is a conventional alias; method-form invocation with daemon
+	// options must chain.
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "cp.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("cp.spawn(...) alias chain must trigger daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_RequireChainInline(t *testing.T) {
+	// require('child_process').spawn(...) inline form must chain.
+	body := `
+require('child_process').spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "rc.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("require chain inline must chain daemon, got: %+v", findings)
+	}
+}
+
+func TestSafe_UnrefAloneWithoutStdioIgnore(t *testing.T) {
+	// detached:true + .unref() on the spawn return but without
+	// stdio:'ignore' no longer chains. The rule now requires
+	// stdio:'ignore' explicitly so unrelated `.unref()` calls
+	// (setTimeout(...).unref()) cannot satisfy the chain.
+	body := `
+const cp = require('child_process');
+const child = cp.spawn('node', ['./payload.js'], { detached: true });
+child.unref();
+`
+	findings := analyze(t, "u.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("unref-only chain (no stdio:ignore) should not fire, got: %+v", findings)
+	}
+}
+
+func TestSafe_UnrelatedUnrefInWindow(t *testing.T) {
+	// A spawn with detached:true followed by setTimeout().unref()
+	// nearby must not satisfy the chain (the .unref() is not on the
+	// child). With stdio:'ignore' absent, the rule cannot fire.
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['x'], { detached: true });
+setTimeout(() => {}, 1000).unref();
+`
+	findings := analyze(t, "tu.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("unrelated .unref() with no stdio:ignore must not chain, got: %+v", findings)
+	}
+}
+
 // --- pass-7 fixes: daemon proximity, aliased destructure, whitespace in network ---
 
 func TestSafe_DaemonOptionsFarFromSpawn(t *testing.T) {
