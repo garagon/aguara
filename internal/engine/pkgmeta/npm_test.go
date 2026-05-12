@@ -340,6 +340,94 @@ func TestVuln_PublishSurface_OIDCStringInScripts(t *testing.T) {
 	}
 }
 
+// --- pass-7 edge cases: provenance opt-out + section-scoped anchor ---
+
+func TestHasEnabledProvenanceFlag(t *testing.T) {
+	cases := []struct {
+		s    string
+		want bool
+	}{
+		{"npm publish --provenance", true},
+		{"npm publish --provenance=true", true},
+		{"npm publish --provenance --tag next", true},
+		{"npm publish --provenance=false", false},
+		{"npm publish --provenance=0", false},
+		// Multiple instances: any one enabling counts.
+		{"npm publish --provenance=false && other-cmd --provenance", true},
+		// Substring without prefix dashes does not count.
+		{"npm provenance check", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		got := hasEnabledProvenanceFlag(c.s)
+		if got != c.want {
+			t.Errorf("hasEnabledProvenanceFlag(%q) = %v, want %v", c.s, got, c.want)
+		}
+	}
+}
+
+func TestPublishSurface_ProvenanceFalseFlagDoesNotTrigger(t *testing.T) {
+	// `npm publish --provenance=false` is an explicit opt-out and must
+	// not be read as a trust-publishing reference.
+	pkg := `{
+  "name": "x", "version": "1.0.0",
+  "scripts": {
+    "build": "tsc",
+    "release": "npm publish --provenance=false"
+  }
+}`
+	findings := analyze(t, "package.json", pkg)
+	if hasRule(findings, RulePublishSurface) {
+		t.Errorf("--provenance=false must not chain, got: %+v", findings)
+	}
+}
+
+func TestFindDepLine_ScopedToSection(t *testing.T) {
+	// When a string token appears multiple times in the manifest (here
+	// the package "name" matches a dep name, and a script key matches a
+	// dep name), findDepLine must point at the dependency entry inside
+	// the named section, not the first occurrence.
+	raw := []byte(`{
+  "name": "setup",
+  "version": "1.0.0",
+  "scripts": {
+    "setup": "tsc"
+  },
+  "dependencies": {
+    "setup": "github:owner/setup"
+  }
+}`)
+	got := findDepLine(raw, "dependencies", "setup")
+	// "dependencies": { is on line 7; the "setup" key inside is line 8.
+	if got != 8 {
+		t.Errorf("findDepLine(dependencies, setup) = %d, want 8", got)
+	}
+	// Lookup in a section that does not contain the dep returns 0.
+	if got := findDepLine(raw, "optionalDependencies", "setup"); got != 0 {
+		t.Errorf("findDepLine(optionalDependencies, setup) = %d, want 0", got)
+	}
+}
+
+func TestLifecycleGit_AnchorIgnoresPackageName(t *testing.T) {
+	// A package whose name matches one of its own dependency names must
+	// emit the finding on the dependency line, not on the package "name"
+	// line, so inline-ignore directives target the right entry.
+	pkg := `{
+  "name": "setup",
+  "version": "1.0.0",
+  "scripts": {"postinstall": "node hook.js"},
+  "dependencies": {"setup": "github:owner/setup"}
+}`
+	findings := analyze(t, "package.json", pkg)
+	f := findRule(findings, RuleLifecycleGit)
+	if f == nil {
+		t.Fatalf("expected NPM_LIFECYCLE_GIT_001, got: %+v", findings)
+	}
+	if f.Line != 5 {
+		t.Errorf("expected anchor on dependency entry line (5), got line %d", f.Line)
+	}
+}
+
 // --- shorthand edge cases (P2 from pass-6 review) ---
 
 func TestIsGitDep_LocalPathNotGit(t *testing.T) {

@@ -143,6 +143,29 @@ func sanitizeGitURL(version string) string {
 	return v
 }
 
+// findDepLine returns the 1-based line of the dependency entry named
+// `name` inside the JSON section `section`. Searching is scoped to the
+// section so a key that happens to match an unrelated field (the
+// package "name", a script key, etc.) does not anchor the finding to
+// the wrong line.
+func findDepLine(raw []byte, section, name string) int {
+	if len(raw) == 0 || section == "" || name == "" {
+		return 0
+	}
+	sectionMarker := []byte(`"` + section + `":`)
+	sIdx := bytes.Index(raw, sectionMarker)
+	if sIdx < 0 {
+		return 0
+	}
+	nameMarker := []byte(`"` + name + `":`)
+	rel := bytes.Index(raw[sIdx+len(sectionMarker):], nameMarker)
+	if rel < 0 {
+		return 0
+	}
+	absIdx := sIdx + len(sectionMarker) + rel
+	return bytes.Count(raw[:absIdx], []byte{'\n'}) + 1
+}
+
 // findLineOfQuotedKey returns the 1-based line number of the first
 // occurrence of `"<key>"` in raw, or 0 if it is not present. Used to
 // anchor findings to the manifest line declaring the offending entry so
@@ -436,15 +459,18 @@ func manifestReferencesProvenance(pkg *manifest) bool {
 		return false
 	}
 	lower := strings.ToLower(string(pkg.raw))
-	// Only highly specific trust-surface strings count. Bare "oidc",
-	// "id-token", and "id_token" are dropped because they can appear in
-	// unrelated dependency names ("oidc-client-ts", "jwt-id-token", ...)
-	// and would false-positive an entire class of legitimate manifests.
-	// The remaining needles are either an npm CLI flag, a documented
-	// phrase, or a full GitHub Actions env var prefix — none of which
-	// occur as dependency-name substrings in practice.
+	// `--provenance` is value-aware: a script that explicitly opts out
+	// with `--provenance=false` or `--provenance=0` does not enable the
+	// trust surface, so the substring search alone would false-positive.
+	if hasEnabledProvenanceFlag(lower) {
+		return true
+	}
+	// The remaining needles are either a documented phrase or a full
+	// GitHub Actions env var prefix; none occur as dependency-name
+	// substrings in practice. Bare "oidc", "id-token", and "id_token"
+	// are dropped because legitimate libraries (oidc-client-ts,
+	// jwt-id-token-handler) would otherwise false-positive.
 	needles := []string{
-		"--provenance",
 		"trusted-publishing",
 		"trustedpublishing",
 		"actions_id_token_request",
@@ -453,6 +479,37 @@ func manifestReferencesProvenance(pkg *manifest) bool {
 		if strings.Contains(lower, n) {
 			return true
 		}
+	}
+	return false
+}
+
+// hasEnabledProvenanceFlag reports whether the lower-cased input mentions
+// the npm `--provenance` CLI flag in a way that enables provenance. A
+// bare `--provenance` defaults to true; `--provenance=true` is explicit
+// true; `--provenance=false` and `--provenance=0` are opt-outs that must
+// not be read as a trust signal.
+func hasEnabledProvenanceFlag(s string) bool {
+	for off := 0; off < len(s); {
+		i := strings.Index(s[off:], "--provenance")
+		if i < 0 {
+			return false
+		}
+		abs := off + i + len("--provenance")
+		if abs >= len(s) || s[abs] != '=' {
+			return true
+		}
+		// `=` follows; inspect the value.
+		tail := s[abs+1:]
+		switch {
+		case strings.HasPrefix(tail, "false"):
+			// opt-out; keep scanning in case another instance enables it.
+		case strings.HasPrefix(tail, "0"):
+			// opt-out variant; keep scanning.
+		default:
+			// =true or any other value treats as enabled.
+			return true
+		}
+		off = abs + 1
 	}
 	return false
 }
@@ -530,7 +587,7 @@ func detectLifecycleGit(pkg *manifest) []types.Finding {
 				"execute whatever code is at the resolved ref, with the install user's " +
 				"environment.",
 			FilePath:    pkg.path,
-			Line:        findLineOfQuotedKey(pkg.raw, d.Name),
+			Line:        findDepLine(pkg.raw, d.Section, d.Name),
 			MatchedText: d.Section + "." + d.Name + " = " + safeVersion + " + install-time script",
 			Analyzer:    AnalyzerName,
 			Confidence:  0.9,
@@ -585,9 +642,10 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 				"mutable git ref here is a quieter supply-chain entry point than the same " +
 				"shape in dependencies.",
 			FilePath:    pkg.path,
-			// Per-dep line anchor: multiple optional git deps get distinct
-			// lines so the scanner's same-rule dedup keeps each one.
-			Line:        findLineOfQuotedKey(pkg.raw, n),
+			// Per-dep line anchor, scoped to optionalDependencies so a
+			// dep name that also appears as the package "name" or as a
+			// script key does not anchor to the wrong line.
+			Line:        findDepLine(pkg.raw, "optionalDependencies", n),
 			MatchedText: "optionalDependencies." + n + " = " + safeVersion,
 			Analyzer:    AnalyzerName,
 			Confidence:  0.8,
