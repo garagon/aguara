@@ -245,31 +245,50 @@ func computeMetrics(content []byte) *metrics {
 			m.HasSessionSink = true
 		}
 	}
-	// HasChildProcess requires an actual invocation, not just an import.
-	// A bare `require('child_process')` or `import cp from 'child_process'`
-	// is not enough; the script must call spawn / fork / exec / execFile
-	// (sync or async) for the daemon chain to apply.
-	m.HasChildProcess = childProcessInvokeRe.Match(content)
+	// HasChildProcess requires both a child_process module reference AND
+	// a real invocation. Without the module gate `worker.spawn(...)` on
+	// an unrelated object would falsely match; without the invocation
+	// gate a bare import would suffice. The bare-form regex covers
+	// destructured imports (`const { spawn } = require('child_process')`)
+	// and the method-form regex covers `cp.spawn(...)`.
+	m.HasChildProcess = bytes.Contains(content, []byte("child_process")) &&
+		(childProcessMethodInvokeRe.Match(content) ||
+			childProcessBareInvokeRe.Match(content))
 	m.HasProcessEnv = bytes.Contains(lower, []byte("process.env"))
 
-	// CI / cloud secret reads. An env var name is only a real read when
-	// it appears as `process.env.<NAME>` (or the bracket form). Pure
-	// string mentions of the name (documentation, error messages, env
-	// var names in unrelated arrays) do not count as a read.
-	for _, match := range envReadRe.FindAllSubmatchIndex(content, -1) {
-		name := string(content[match[2]:match[3]])
+	// CI / cloud secret reads come in three forms: direct member access
+	// (process.env.NAME), bracket access (process.env['NAME']), and
+	// destructuring ({NAME} = process.env). Pure string mentions do not
+	// count as a read.
+	checkSecretName := func(name string, idx int) {
 		for _, n := range ciSecretEnvVars {
-			if name == n {
+			if name == n && !m.HasCISecretRead {
 				m.HasCISecretRead = true
-				if m.LineCISecret == 0 {
-					m.LineCISecret = lineOf(content, match[0])
-					m.CISecretMatched = n
-				}
-				break
+				m.LineCISecret = lineOf(content, idx)
+				m.CISecretMatched = n
+				return
 			}
 		}
+	}
+	for _, match := range envReadRe.FindAllSubmatchIndex(content, -1) {
 		if m.HasCISecretRead {
 			break
+		}
+		checkSecretName(string(content[match[2]:match[3]]), match[0])
+	}
+	if !m.HasCISecretRead {
+		for _, match := range envDestructureRe.FindAllSubmatchIndex(content, -1) {
+			if m.HasCISecretRead {
+				break
+			}
+			nameList := string(content[match[2]:match[3]])
+			for _, raw := range strings.Split(nameList, ",") {
+				name := strings.TrimSpace(raw)
+				checkSecretName(name, match[0])
+				if m.HasCISecretRead {
+					break
+				}
+			}
 		}
 	}
 	// Cloud metadata endpoints and on-disk credential paths are
@@ -309,22 +328,32 @@ func computeMetrics(content []byte) *metrics {
 		bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
 	m.HasRunnerWorker = bytes.Contains(content, []byte("Runner.Worker"))
 
-	// Agent persistence references. Each path is a known incident
-	// fingerprint root; the analyzer keeps the first match as the
-	// anchor line.
+	// Agent persistence references. Path-only needles fire on their
+	// own; the runOn:folderOpen token only counts as persistence when
+	// the file also references .vscode/tasks.json (manually-runnable
+	// tasks files alone are not persistence).
 	for _, n := range agentPersistenceNeedles {
 		if i := bytes.Index(content, []byte(n)); i >= 0 {
-			switch {
-			case strings.HasPrefix(n, ".claude/"):
+			if strings.HasPrefix(n, ".claude/") {
 				m.HasClaudePersistence = true
-			case strings.HasPrefix(n, ".vscode/"):
+			} else {
 				m.HasVSCodePersistence = true
-			default:
-				m.HasClaudePersistence = true
 			}
 			if m.LineAgentPath == 0 {
 				m.LineAgentPath = lineOf(content, i)
 				m.AgentPathMatched = n
+			}
+		}
+	}
+	if bytes.Contains(content, []byte(".vscode/tasks.json")) {
+		for _, n := range runOnFolderOpenNeedles {
+			if i := bytes.Index(content, []byte(n)); i >= 0 {
+				m.HasVSCodePersistence = true
+				if m.LineAgentPath == 0 {
+					m.LineAgentPath = lineOf(content, i)
+					m.AgentPathMatched = ".vscode/tasks.json + " + n
+				}
+				break
 			}
 		}
 	}
@@ -354,20 +383,29 @@ const procMemPairWindow = 200
 // because they lack the intervening pid segment.
 var procMemLiteralRe = regexp.MustCompile(`/proc/(?:[0-9]+|self|thread-self)/(mem|maps|cmdline)\b`)
 
-// childProcessInvokeRe matches an actual child_process invocation
-// (spawn, spawnSync, fork, exec, execSync, execFile, execFileSync).
-// This is stricter than checking for the bare `child_process` import,
-// because a script can import the module without ever calling it and
-// daemon-option literals elsewhere in the file should not chain on
-// import alone.
-var childProcessInvokeRe = regexp.MustCompile(`\.(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+// childProcessMethodInvokeRe matches a child_process method call:
+// `cp.spawn(...)`, `child_process.fork(...)`, etc. The leading `.`
+// ensures the name is a method, not an unrelated function.
+var childProcessMethodInvokeRe = regexp.MustCompile(`\.(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
 
-// envReadRe captures real env-variable reads: `process.env.<NAME>`,
-// `process.env['<NAME>']`, or `process.env["<NAME>"]`. A string that
-// merely names an env var (a documentation message, a UI label, an
-// error string) does not satisfy this and so does not satisfy the
-// secret-harvest chain on its own.
+// childProcessBareInvokeRe matches a bare invocation: `spawn(...)`,
+// `fork(...)`, `exec(...)`, etc., used after `const { spawn } =
+// require('child_process')`. Word boundary on the left avoids
+// matching `myspawn(`. The bare form is only treated as a child
+// process invocation when the file also references child_process
+// (see hasChildProcess gating below).
+var childProcessBareInvokeRe = regexp.MustCompile(`\b(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+
+// envReadRe captures direct env-variable reads:
+// `process.env.<NAME>`, `process.env['<NAME>']`, or
+// `process.env["<NAME>"]`.
 var envReadRe = regexp.MustCompile(`process\.env\s*(?:\.|\[\s*['"])([A-Z][A-Z0-9_]+)`)
+
+// envDestructureRe captures destructured env reads:
+// `const { GITHUB_TOKEN } = process.env`,
+// `const { FOO, BAR } = process.env`. Submatch 1 is the comma-
+// separated name list; callers split it and check each name.
+var envDestructureRe = regexp.MustCompile(`\{\s*([A-Z][A-Z0-9_]+(?:\s*,\s*[A-Z][A-Z0-9_]+)*)\s*\}\s*=\s*process\.env\b`)
 
 // procMemDynamicSubRe matches the quote-wrapped subpath token used by
 // dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the
@@ -479,18 +517,23 @@ var ciSecretLiteralNeedles = []string{
 	"169.254.170.2",
 }
 
-// agentPersistenceNeedles are paths or config tokens that cause an
-// editor to auto-execute code on workspace open. .vscode/tasks.json is
-// intentionally excluded: VS Code only auto-runs a task when its
-// runOptions.runOn is folderOpen, and that condition is captured
-// separately by the runOn needles below. A package that merely writes
-// a manually-runnable .vscode/tasks.json is not by itself persistence.
+// agentPersistenceNeedles are paths whose presence alone is sufficient
+// evidence of editor-automation persistence. Each names a file that
+// either holds auto-running config (.claude/settings.json hooks) or is
+// itself auto-executed (.vscode/setup.mjs) on workspace open.
 var agentPersistenceNeedles = []string{
 	".claude/settings.json",
 	".claude/router_runtime.js",
 	".claude/setup.mjs",
 	".claude/hooks/",
 	".vscode/setup.mjs",
+}
+
+// runOnFolderOpenNeedles capture the VS Code task trigger that turns
+// a tasks.json entry into an auto-run on workspace open. These do not
+// fire on their own; persistence requires the file ALSO references
+// .vscode/tasks.json (see detection below).
+var runOnFolderOpenNeedles = []string{
 	`runOn": "folderOpen`,
 	`runOn":"folderOpen`,
 	`runOn: "folderOpen`,
