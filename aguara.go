@@ -403,6 +403,9 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	if len(sc.toolScoped) > 0 {
 		s.SetToolScopedRules(sc.toolScoped)
 	}
+	if len(sc.cfg.disabledRules) > 0 {
+		s.SetDisabledRules(sc.cfg.disabledRules)
+	}
 	if sc.cfg.deduplicateMode != 0 {
 		s.SetDeduplicateMode(sc.cfg.deduplicateMode)
 	}
@@ -541,6 +544,9 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	}
 	if len(cr.toolScopedRules) > 0 {
 		s.SetToolScopedRules(cr.toolScopedRules)
+	}
+	if len(cfg.disabledRules) > 0 {
+		s.SetDisabledRules(cfg.disabledRules)
 	}
 	if cfg.deduplicateMode != 0 {
 		s.SetDeduplicateMode(cfg.deduplicateMode)

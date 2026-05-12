@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,6 +36,7 @@ type Scanner struct {
 	toolName             string
 	scanProfile          ScanProfile
 	toolScopedRules      map[string]ToolScopedRule
+	disabledRules        map[string]bool
 	deduplicateMode      DeduplicateMode
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
@@ -92,6 +94,32 @@ func (s *Scanner) SetScanProfile(profile ScanProfile) {
 // SetToolScopedRules sets per-rule tool filtering from user configuration.
 func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
 	s.toolScopedRules = rules
+}
+
+// SetDisabledRules suppresses findings whose RuleID is present in ids. This
+// covers both pattern rules (which already get filtered out of the compiled
+// rule list upstream) and analyzer-emitted IDs that the compiled-list filter
+// never sees: ci-trust (GHA_*), toxicflow (TOXIC_*), rugpull (RUGPULL_001),
+// NLP injection, and any cross-file finding. The filter runs in postProcess
+// before tool exemptions and dedup so disabled findings cost nothing
+// downstream.
+func (s *Scanner) SetDisabledRules(ids []string) {
+	if len(ids) == 0 {
+		s.disabledRules = nil
+		return
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			m[id] = true
+		}
+	}
+	if len(m) == 0 {
+		s.disabledRules = nil
+		return
+	}
+	s.disabledRules = m
 }
 
 // SetDeduplicateMode sets how findings on the same line are deduplicated.
@@ -252,6 +280,23 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 func (s *Scanner) postProcess(findings []Finding) []Finding {
 	if len(findings) == 0 {
 		return nil
+	}
+
+	// Disabled-rule filter runs first: it is the cheapest definitive drop
+	// (user explicitly silenced these IDs) and ensures analyzer-emitted IDs
+	// (GHA_*, TOXIC_*, RUGPULL_001, etc.) receive the same suppression the
+	// compiled rule list already gives pattern rules.
+	if len(s.disabledRules) > 0 {
+		kept := findings[:0]
+		for _, f := range findings {
+			if !s.disabledRules[f.RuleID] {
+				kept = append(kept, f)
+			}
+		}
+		findings = kept
+		if len(findings) == 0 {
+			return nil
+		}
 	}
 
 	// Apply tool exemptions before dedup/scoring (removes definite false positives)

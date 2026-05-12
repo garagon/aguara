@@ -48,6 +48,52 @@ func TestScannerOrchestrator(t *testing.T) {
 	require.Equal(t, "R1", result.Findings[0].RuleID)
 }
 
+func TestScannerDisabledRules(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))
+
+	s := scanner.New(1)
+	s.SetDisabledRules([]string{"GHA_PWN_REQUEST_001", "  TOXIC_001  ", "", "MISSING_ID"})
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			// Suppressed: analyzer-emitted ID, exactly disabled
+			{RuleID: "GHA_PWN_REQUEST_001", Severity: types.SeverityHigh, Line: 1},
+			// Suppressed: whitespace around ID in disable list is trimmed
+			{RuleID: "TOXIC_001", Severity: types.SeverityCritical, Line: 2},
+			// Kept: not in the disable list
+			{RuleID: "GHA_CHECKOUT_001", Severity: types.SeverityHigh, Line: 3},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+	require.Equal(t, "GHA_CHECKOUT_001", result.Findings[0].RuleID)
+}
+
+func TestScannerDisabledRulesEmpty(t *testing.T) {
+	// Empty input must not stick a non-nil map on the scanner: passing an
+	// empty list is the documented "disable nothing" path used when the
+	// user has neither --disable-rule nor disable_rules: in .aguara.yml.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))
+
+	s := scanner.New(1)
+	s.SetDisabledRules(nil)
+	s.SetDisabledRules([]string{"   ", ""}) // whitespace-only list also no-ops
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			{RuleID: "GHA_PWN_REQUEST_001", Severity: types.SeverityHigh, Line: 1},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+}
+
 func TestScannerSeverityFilter(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))

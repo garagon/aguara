@@ -315,11 +315,10 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 		}
 	}
 
-	disableList := append(cfg.DisableRules, flagDisableRules...)
-	if len(disableList) > 0 {
+	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
 		disabled := make(map[string]bool)
 		for _, id := range disableList {
-			disabled[strings.TrimSpace(id)] = true
+			disabled[id] = true
 		}
 		compiled = rules.FilterByIDs(compiled, disabled)
 	}
@@ -327,9 +326,33 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 	return compiled, nil
 }
 
+// collectDisabledRules merges the config file's disable_rules with the
+// --disable-rule flag, trims whitespace, and drops empties. Returned once so
+// both the pattern-rule filter and the scanner-pipeline filter see the same
+// canonical list — analyzer-emitted rule IDs (GHA_*, TOXIC_*, etc.) need the
+// pipeline-level filter because they never appear in the compiled rule list.
+func collectDisabledRules(cfg config.Config) []string {
+	raw := append([]string{}, cfg.DisableRules...)
+	raw = append(raw, flagDisableRules...)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity) (*scanner.Scanner, *state.Store) {
 	s := scanner.New(flagWorkers)
 	s.SetMinSeverity(minSev)
+	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
+		s.SetDisabledRules(disableList)
+	}
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
