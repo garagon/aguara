@@ -107,6 +107,12 @@ var dispatcherCallRe = regexp.MustCompile(`_0x[0-9a-fA-F]{2,}\s*\(`)
 // chain entirely.
 var detachedTrueRe = regexp.MustCompile(`(?i)["']?detached["']?\s*:\s*true\b`)
 
+// stdioIgnoredRe matches `stdio: 'ignore'` / `stdio: "ignore"` /
+// `"stdio": "ignore"` and the array forms (`stdio: ['ignore', ...]`,
+// `"stdio": ['ignore'`). Without quote tolerance the JSON-style spawn
+// options bypass the daemon-shape check.
+var stdioIgnoredRe = regexp.MustCompile(`(?i)["']?stdio["']?\s*:\s*(?:['"]ignore['"]|\[\s*['"]ignore['"])`)
+
 
 // --- metrics ---
 
@@ -260,12 +266,7 @@ func computeMetrics(content []byte) *metrics {
 		m.HasSpawnDetached = true
 		m.LineDaemon = lineOf(content, loc[0])
 	}
-	if bytes.Contains(content, []byte(`stdio: 'ignore'`)) ||
-		bytes.Contains(content, []byte(`stdio: "ignore"`)) ||
-		bytes.Contains(content, []byte(`stdio:'ignore'`)) ||
-		bytes.Contains(content, []byte(`stdio:"ignore"`)) ||
-		bytes.Contains(content, []byte(`stdio: ['ignore'`)) ||
-		bytes.Contains(content, []byte(`stdio:['ignore'`)) {
+	if stdioIgnoredRe.Match(content) {
 		m.HasStdioIgnored = true
 	}
 	m.HasUnref = bytes.Contains(content, []byte(".unref()"))
@@ -335,6 +336,17 @@ var networkSinkNeedles = []string{
 	"got.get",
 	"http.request",
 	"https.request",
+	// Node inline forms: require('https').request(...) and the node:
+	// scheme variant. Both are common in compact exfil payloads where
+	// the module is never bound to a local variable.
+	"require('https').request",
+	`require("https").request`,
+	"require('http').request",
+	`require("http").request`,
+	"require('node:https').request",
+	`require("node:https").request`,
+	"require('node:http').request",
+	`require("node:http").request`,
 	"net.connect",
 	"net.createconnection",
 	"xmlhttprequest",

