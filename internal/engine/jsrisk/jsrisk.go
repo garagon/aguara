@@ -245,16 +245,37 @@ func computeMetrics(content []byte) *metrics {
 			m.HasSessionSink = true
 		}
 	}
-	m.HasChildProcess = bytes.Contains(lower, []byte("child_process")) ||
-		bytes.Contains(lower, []byte("require('child_process')")) ||
-		bytes.Contains(lower, []byte(`require("child_process")`))
+	// HasChildProcess requires an actual invocation, not just an import.
+	// A bare `require('child_process')` or `import cp from 'child_process'`
+	// is not enough; the script must call spawn / fork / exec / execFile
+	// (sync or async) for the daemon chain to apply.
+	m.HasChildProcess = childProcessInvokeRe.Match(content)
 	m.HasProcessEnv = bytes.Contains(lower, []byte("process.env"))
 
-	// CI / cloud secret reads. The list is short and unambiguous; each
-	// entry is either an env var name (uppercase / underscored, so it
-	// will not appear as a registry package name) or a well-known cloud
-	// metadata IP / path.
-	for _, n := range ciSecretReadNeedles {
+	// CI / cloud secret reads. An env var name is only a real read when
+	// it appears as `process.env.<NAME>` (or the bracket form). Pure
+	// string mentions of the name (documentation, error messages, env
+	// var names in unrelated arrays) do not count as a read.
+	for _, match := range envReadRe.FindAllSubmatchIndex(content, -1) {
+		name := string(content[match[2]:match[3]])
+		for _, n := range ciSecretEnvVars {
+			if name == n {
+				m.HasCISecretRead = true
+				if m.LineCISecret == 0 {
+					m.LineCISecret = lineOf(content, match[0])
+					m.CISecretMatched = n
+				}
+				break
+			}
+		}
+		if m.HasCISecretRead {
+			break
+		}
+	}
+	// Cloud metadata endpoints and on-disk credential paths are
+	// identified by literal-string presence; they are unambiguous IPs /
+	// filesystem paths that do not appear as env var names.
+	for _, n := range ciSecretLiteralNeedles {
 		if i := bytes.Index(content, []byte(n)); i >= 0 {
 			m.HasCISecretRead = true
 			if m.LineCISecret == 0 {
@@ -332,6 +353,21 @@ const procMemPairWindow = 200
 // (which is the kernel boot args file, not per-process) do not match
 // because they lack the intervening pid segment.
 var procMemLiteralRe = regexp.MustCompile(`/proc/(?:[0-9]+|self|thread-self)/(mem|maps|cmdline)\b`)
+
+// childProcessInvokeRe matches an actual child_process invocation
+// (spawn, spawnSync, fork, exec, execSync, execFile, execFileSync).
+// This is stricter than checking for the bare `child_process` import,
+// because a script can import the module without ever calling it and
+// daemon-option literals elsewhere in the file should not chain on
+// import alone.
+var childProcessInvokeRe = regexp.MustCompile(`\.(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+
+// envReadRe captures real env-variable reads: `process.env.<NAME>`,
+// `process.env['<NAME>']`, or `process.env["<NAME>"]`. A string that
+// merely names an env var (a documentation message, a UI label, an
+// error string) does not satisfy this and so does not satisfy the
+// secret-harvest chain on its own.
+var envReadRe = regexp.MustCompile(`process\.env\s*(?:\.|\[\s*['"])([A-Z][A-Z0-9_]+)`)
 
 // procMemDynamicSubRe matches the quote-wrapped subpath token used by
 // dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the
@@ -419,9 +455,10 @@ var sessionSinkNeedles = []string{
 	"seed3.getsession.org",
 }
 
-// ciSecretReadNeedles are case-sensitive on purpose: GHA / cloud envs
-// are uppercase and would not appear as part of a dependency name.
-var ciSecretReadNeedles = []string{
+// ciSecretEnvVars are GHA / cloud env var names whose value is the
+// secret. A real read goes through process.env (see envReadRe); the
+// bare string is not enough on its own.
+var ciSecretEnvVars = []string{
 	"GITHUB_TOKEN",
 	"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
 	"ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -431,20 +468,34 @@ var ciSecretReadNeedles = []string{
 	"AWS_WEB_IDENTITY_TOKEN_FILE",
 	"VAULT_TOKEN",
 	"KUBERNETES_SERVICE_HOST",
+}
+
+// ciSecretLiteralNeedles are cloud-metadata IPs and on-disk credential
+// paths. These are unambiguous strings; their literal presence in a
+// JavaScript file is sufficient evidence of secret access.
+var ciSecretLiteralNeedles = []string{
 	"/var/run/secrets/kubernetes.io/serviceaccount",
 	"169.254.169.254",
 	"169.254.170.2",
 }
 
+// agentPersistenceNeedles are paths or config tokens that cause an
+// editor to auto-execute code on workspace open. .vscode/tasks.json is
+// intentionally excluded: VS Code only auto-runs a task when its
+// runOptions.runOn is folderOpen, and that condition is captured
+// separately by the runOn needles below. A package that merely writes
+// a manually-runnable .vscode/tasks.json is not by itself persistence.
 var agentPersistenceNeedles = []string{
 	".claude/settings.json",
 	".claude/router_runtime.js",
 	".claude/setup.mjs",
 	".claude/hooks/",
-	".vscode/tasks.json",
 	".vscode/setup.mjs",
 	`runOn": "folderOpen`,
 	`runOn":"folderOpen`,
+	`runOn: "folderOpen`,
+	`runOn: 'folderOpen`,
+	`runOn:'folderOpen`,
 }
 
 // --- detection ---

