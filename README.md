@@ -360,7 +360,7 @@ Supported directives:
 
 ## Rules
 
-193 built-in rules across 13 categories:
+193 built-in rules across 13 pattern-rule categories (what `aguara list-rules` enumerates) plus the toxic-flow chain analyzer with its own emit-time category. The table groups coverage by emit-time category for readability:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
