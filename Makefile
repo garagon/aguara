@@ -33,7 +33,8 @@ SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 
 .PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
 	bench-docker-image race-docker-image \
-	bench-docker smoke-docker test-race-docker verify-docker
+	bench-docker smoke-docker test-race-docker verify-docker \
+	test-install-sh-docker
 
 build:
 	go build -trimpath $(LDFLAGS) -o $(BINARY) ./cmd/aguara
@@ -85,6 +86,23 @@ smoke-docker: bench-docker-image
 
 verify-docker: bench-docker test-race-docker smoke-docker
 	@echo "verify-docker: all Docker validation targets passed"
+
+# Reproduces the install.sh extraction failure mode under
+# `--cap-drop ALL`. Requires network access (install.sh pulls the
+# archive + checksums from github.com), so this target is intentionally
+# NOT folded into `verify-docker` which runs offline.
+# Override INSTALL_SH_TEST_VERSION to pin to a different release.
+INSTALL_SH_TEST_VERSION ?= v0.15.0
+INSTALL_SH_TEST_IMAGE   ?= aguara-install-test:cap-drop
+
+test-install-sh-docker:
+	docker build -f benchmarks/Dockerfile.install-sh-cap \
+		-t $(INSTALL_SH_TEST_IMAGE) .
+	docker run --rm \
+		--cap-drop ALL \
+		--security-opt no-new-privileges \
+		-e VERSION=$(INSTALL_SH_TEST_VERSION) \
+		$(INSTALL_SH_TEST_IMAGE)
 
 lint:
 	golangci-lint run ./...

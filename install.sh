@@ -44,8 +44,12 @@ main() {
     download "$checksums_url" "${tmpdir}/checksums.txt"
     verify_checksum "$tmpdir" "$archive"
 
-    # Extract binary
-    tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
+    # Extract binary. `-o` instructs tar not to restore archive
+    # ownership; without it, hardened containers running with
+    # `--cap-drop ALL` (no CAP_CHOWN) fail on `Cannot change ownership`
+    # when the archive records a uid/gid the runtime cannot apply.
+    # `-o` is POSIX-portable across GNU, BSD, and BusyBox tar.
+    tar -xzof "${tmpdir}/${archive}" -C "$tmpdir"
 
     if [ ! -f "${tmpdir}/${BINARY}" ]; then
         err "binary not found in archive"

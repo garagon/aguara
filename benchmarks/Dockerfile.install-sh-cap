@@ -1,0 +1,20 @@
+# Minimal image for the install.sh cap-drop acceptance test.
+#
+# The image only needs the tooling install.sh itself requires
+# (curl, tar, a sha256 implementation), plus the install.sh script
+# under test. Network is required at runtime because install.sh
+# pulls the archive + checksums from github.com; the harness wraps
+# this with `--cap-drop ALL --security-opt no-new-privileges` so the
+# test reproduces the original failure mode without granting CAP_CHOWN.
+FROM alpine:3.20
+
+RUN apk add --no-cache curl tar coreutils ca-certificates
+
+WORKDIR /work
+
+COPY install.sh /work/install.sh
+COPY benchmarks/test-install-sh-cap-drop.sh /work/test-install-sh-cap-drop.sh
+
+RUN chmod +x /work/install.sh /work/test-install-sh-cap-drop.sh
+
+ENTRYPOINT ["/work/test-install-sh-cap-drop.sh"]
