@@ -1,0 +1,31 @@
+# Race-detector image for Aguara.
+#
+# Built from the same Go base + digest pin as benchmarks/Dockerfile so
+# results from `make test-race-docker` are reproducible across the
+# project's two validation images. Adds build-base because the race
+# detector needs cgo, which on Alpine pulls in musl-gcc.
+FROM golang:1.25-alpine@sha256:5caaf1cca9dc351e13deafbc3879fd4754801acba8653fa9540cea125d01a71f
+
+RUN apk add --no-cache git ca-certificates build-base
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN adduser -D -u 10001 race && chown -R race:race /src /go
+USER race
+
+ARG AGUARA_VERSION=dev
+ARG AGUARA_COMMIT=none
+
+ENV AGUARA_NO_UPDATE_CHECK=1 \
+    NO_COLOR=1 \
+    CGO_ENABLED=1 \
+    GOCACHE=/tmp/go-build \
+    GOTMPDIR=/tmp/go-tmp \
+    BENCH_OUT=/out \
+    AGUARA_VERSION=$AGUARA_VERSION \
+    AGUARA_COMMIT=$AGUARA_COMMIT
+
+ENTRYPOINT ["/src/benchmarks/race.sh"]

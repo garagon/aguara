@@ -45,10 +45,40 @@ run_capture "microbenchmarks: engines" "$OUT/go-bench-engines.txt" go test -run 
   -count "$COUNT" \
   ./internal/engine/nlp ./internal/scanner
 
+run_capture "microbenchmarks: analyzers" "$OUT/go-bench-analyzers.txt" go test -run '^$' \
+  -bench 'Benchmark(CITrustAnalyzer|PkgMetaAnalyzer|JSRiskAnalyzer|IncidentNPMCheck)$' \
+  -benchmem \
+  -benchtime "$BENCHTIME" \
+  -count "$COUNT" \
+  ./internal/engine/ci ./internal/engine/pkgmeta ./internal/engine/jsrisk ./internal/incident
+
 echo "== build aguara =="
-go build -trimpath -o /tmp/aguara ./cmd/aguara
+# Inject the same ldflags release builds use so the binary reports a
+# real (Version, Commit) instead of the package defaults. AGUARA_VERSION
+# and AGUARA_COMMIT come from the Dockerfile ARG/ENV pair populated by
+# `make bench-docker` via `docker build --build-arg`.
+PKG="github.com/garagon/aguara/cmd/aguara/commands"
+LDFLAGS="-s -w -X ${PKG}.Version=${AGUARA_VERSION:-dev} -X ${PKG}.Commit=${AGUARA_COMMIT:-none}"
+go build -trimpath -ldflags "$LDFLAGS" -o /tmp/aguara ./cmd/aguara
 /tmp/aguara version > "$OUT/aguara-version.txt"
 cat "$OUT/aguara-version.txt"
+echo
+
+# Emit a provenance record so downstream consumers (the maintainer or
+# a CI gate) can verify the binary, image, and toolchain that produced
+# the bench artifacts. Stays offline; no API calls.
+{
+  echo '{'
+  printf '  "aguara_version": "%s",\n' "${AGUARA_VERSION:-dev}"
+  printf '  "aguara_commit": "%s",\n' "${AGUARA_COMMIT:-none}"
+  printf '  "go_version": "%s",\n' "$(go version | awk '{print $3}')"
+  printf '  "docker_image": "%s",\n' "${DOCKER_IMAGE:-aguara-bench:local}"
+  printf '  "timestamp_utc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '  "command": "%s"\n' "${BENCH_COMMAND:-benchmarks/run.sh}"
+  echo '}'
+} > "$OUT/provenance.json"
+echo "wrote $OUT/provenance.json"
+cat "$OUT/provenance.json"
 echo
 
 if [ -d testdata/real-skills ]; then
