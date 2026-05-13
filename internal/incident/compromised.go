@@ -102,12 +102,15 @@ var KnownCompromised = []CompromisedPackage{
 	},
 }
 
-// IsCompromised checks if a package name+version is in the known-bad
-// list. The legacy two-argument signature stays for backward
-// compatibility; it matches across all ecosystems and is sufficient
-// for the existing Python checker which only ever inspected PyPI.
+// IsCompromised checks if a package name+version is in the PyPI
+// section of the known-bad list. The legacy two-argument signature
+// pre-dates the Ecosystem field; it stays scoped to PyPI so a Python
+// package that happens to share a name with an npm advisory (e.g.
+// `rc`, `event-stream`) is not falsely flagged by the Python
+// checker. Callers that want a cross-ecosystem or npm-only lookup
+// should use IsCompromisedIn explicitly.
 func IsCompromised(name, version string) *CompromisedPackage {
-	return findCompromised("", name, version)
+	return findCompromised(EcosystemPyPI, name, version)
 }
 
 // IsCompromisedIn restricts the lookup to a specific ecosystem. Use

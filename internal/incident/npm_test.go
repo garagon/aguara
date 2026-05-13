@@ -44,13 +44,17 @@ func TestIsCompromisedIn_NPMMiss(t *testing.T) {
 	}
 }
 
-func TestIsCompromised_LegacyTwoArg_StillMatchesAcrossEcosystems(t *testing.T) {
-	// The legacy IsCompromised(name, version) signature must continue
-	// to match npm entries; existing callers (the Python checker)
-	// only ever inspected PyPI packages so the cross-ecosystem match
-	// is benign there.
-	if cp := incident.IsCompromised("event-stream", "3.3.6"); cp == nil {
-		t.Errorf("legacy IsCompromised should still find npm event-stream 3.3.6")
+func TestIsCompromised_LegacyTwoArg_ScopedToPyPI(t *testing.T) {
+	// The legacy two-arg signature pre-dates the Ecosystem field
+	// and is scoped to PyPI. A Python package whose metadata
+	// name+version matches an npm advisory must not be falsely
+	// flagged by the Python checker.
+	if cp := incident.IsCompromised("event-stream", "3.3.6"); cp != nil {
+		t.Errorf("legacy IsCompromised must not match npm event-stream from a Python lookup, got: %+v", cp)
+	}
+	// PyPI entries still match.
+	if cp := incident.IsCompromised("litellm", "1.82.7"); cp == nil {
+		t.Errorf("legacy IsCompromised should still find PyPI litellm 1.82.7")
 	}
 }
 
