@@ -524,7 +524,7 @@ name: "GitHub Actions OIDC token request variables in executable code"
 description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. The targets include package.json so install-time npm scripts (preinstall, postinstall, prepare) are scanned."
 severity: HIGH
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.py", "*.sh", "*.yml", "*.yaml", "package.json"]
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.yml", "*.yaml", "package.json"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
@@ -582,6 +582,10 @@ patterns:
     value: ".claude/setup.mjs"
   - type: contains
     value: ".claude/hooks/"
+  - type: contains
+    value: ".vscode/tasks.json"
+  - type: contains
+    value: ".vscode/setup.mjs"
   - type: regex
     value: "runOn[\"']?\\s*:\\s*[\"']folderOpen"
 examples:
@@ -590,6 +594,8 @@ examples:
     - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
     - "cp .claude/setup.mjs $HOME/.claude/"
     - "Hook installed at .claude/hooks/postinstall.sh"
+    - "fs.writeFileSync('.vscode/tasks.json', JSON.stringify(tasks));"
+    - "Pre-populates .vscode/setup.mjs on install"
     - "{ \"runOn\": \"folderOpen\" }"
     - "tasks: [{label:'init', runOn: 'folderOpen'}]"
   false_positive:
