@@ -397,17 +397,17 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 		aliases[string(content[m[2]:m[3]])] = true
 	}
 	if len(aliases) > 0 {
-		// Compile one alternation per scan so the receiver match is
-		// scoped exactly to the names that were imported.
-		var parts []string
-		for name := range aliases {
-			parts = append(parts, regexp.QuoteMeta(name))
-		}
-		aliasRe := regexp.MustCompile(
-			`\b(?:` + strings.Join(parts, "|") + `)\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
-		)
-		for _, loc := range aliasRe.FindAllIndex(content, -1) {
-			sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+		// Generic identifier-method matcher; filter to imported names.
+		// jsIdentBoundary handles `$`-prefixed aliases that a literal
+		// `\b` would skip.
+		for _, m := range identifierCPMethodCallRe.FindAllSubmatchIndex(content, -1) {
+			if aliases[string(content[m[2]:m[3]])] {
+				// Submatch 0 spans the boundary char + alias + .method(.
+				// The actual identifier starts at m[2]; that is the
+				// anchor we want for the finding's Line. ArgsStart is
+				// m[1] (one past the opening paren).
+				sites = append(sites, cpCallSite{Start: m[2], ArgsStart: m[1]})
+			}
 		}
 	}
 
@@ -477,16 +477,10 @@ func findNetworkAliasSink(content []byte) int {
 	if len(aliases) == 0 {
 		return 0
 	}
-	var nameParts []string
-	for n := range aliases {
-		nameParts = append(nameParts, regexp.QuoteMeta(n))
-	}
-	methodPart := strings.Join(httpAliasMethods, "|")
-	re := regexp.MustCompile(
-		`\b(?:` + strings.Join(nameParts, "|") + `)\s*\.\s*(?:` + methodPart + `)\s*\(`,
-	)
-	if loc := re.FindIndex(content); loc != nil {
-		return lineOf(content, loc[0])
+	for _, m := range identifierHTTPMethodCallRe.FindAllSubmatchIndex(content, -1) {
+		if aliases[string(content[m[2]:m[3]])] {
+			return lineOf(content, m[2])
+		}
 	}
 	return 0
 }
@@ -631,10 +625,38 @@ var cpMethodNames = map[string]bool{
 	"execFile": true, "execFileSync": true,
 }
 
-// envReadRe captures direct env-variable reads:
-// `process.env.<NAME>`, `process.env['<NAME>']`, or
-// `process.env["<NAME>"]`.
-var envReadRe = regexp.MustCompile(`process\.env\s*(?:\.|\[\s*['"])([A-Z][A-Z0-9_]+)`)
+// identifierCPMethodCallRe captures `<identifier>.<cp-method>(` for
+// any JS identifier, including ones beginning with `$`. The caller
+// filters submatch 1 (the identifier) through the discovered alias
+// set so unrelated objects do not satisfy the receiver match.
+var identifierCPMethodCallRe = regexp.MustCompile(
+	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
+)
+
+// identifierHTTPMethodCallRe captures `<identifier>.<method>(` for
+// the http / https / net family. Caller filters submatch 1 through
+// the discovered alias set.
+var identifierHTTPMethodCallRe = regexp.MustCompile(
+	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*(?:request|get|post|put|connect|createConnection)\s*\(`,
+)
+
+// envReadRe captures direct env-variable reads in all the forms a
+// real payload uses:
+//
+//	process.env.NAME
+//	process.env?.NAME           (optional chaining)
+//	process.env['NAME']         (string key)
+//	process.env["NAME"]
+//	process.env[`NAME`]         (template-literal key)
+var envReadRe = regexp.MustCompile("process\\.env\\s*(?:\\??\\.|\\[\\s*['\"\x60])([A-Z][A-Z0-9_]+)")
+
+// jsIdentBoundary is the leading-context fragment used for runtime
+// alias regexes. JavaScript identifiers include `$`, so a literal
+// regex `\b` does not establish a boundary before `$cp` (`$` is
+// non-word in RE2's `\b` definition). Matching an explicit
+// non-identifier character (or start-of-input) captures the
+// boundary without requiring a lookbehind.
+const jsIdentBoundary = `(?:^|[^A-Za-z0-9_$.])`
 
 // envDestructureRe captures destructured env reads with or without
 // aliases:
@@ -723,11 +745,6 @@ var httpModuleAliasESMRe = regexp.MustCompile(
 	`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?(?:http|https|net)['"]`,
 )
 
-// httpAliasMethods is the set of methods that count as a network sink
-// when invoked on an aliased http / https / net module: an attacker
-// calling `h.request(...)` against an imported https alias is the
-// classic compact-exfil shape.
-var httpAliasMethods = []string{"request", "get", "post", "put", "connect", "createConnection"}
 
 var publishSinkNeedles = []string{
 	"registry.npmjs.org",

