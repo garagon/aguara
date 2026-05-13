@@ -595,10 +595,12 @@ patterns:
   # `filepath.Join(".claude", "settings.json")` (path APIs use
   # comma separators), and `'.claude' + '/settings.json'` (string
   # concat uses `+` and may carry a leading slash on the second
-  # literal). The trailing segment limits matches to the known
-  # persistence files.
+  # literal). The first segment must be the literal `.claude`
+  # (the bare `claude` directory is not the hidden Claude Code
+  # surface); the trailing segment must be followed by a closing
+  # quote so unrelated suffixes like `hookspad` do not match.
   - type: regex
-    value: "['\"]\\.?claude['\"][\\s,+]+['\"]/?(settings\\.json|hooks|router_runtime\\.js|setup\\.mjs)"
+    value: "['\"]\\.claude['\"][\\s,+]+['\"]/?(settings\\.json|router_runtime\\.js|setup\\.mjs|hooks(?:/[^'\"]*)?)['\"]"
 examples:
   true_positive:
     - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
@@ -613,3 +615,5 @@ examples:
   false_positive:
     - "{ \"runOn\": \"folderOpen\" } # VS Code schema example, unrelated"
     - "Tasks list with run options"
+    - "const dir = path.join('claude', 'settings.json'); // not the hidden dir"
+    - "path.join('.claude', 'hookspad') // typo, not the hooks/ path"
