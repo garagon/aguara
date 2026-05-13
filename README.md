@@ -37,14 +37,14 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
 - **193 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
-- **4-layer analysis engine** — pattern matching, NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
+- **7 scan analyzers** — pattern matching, GitHub Actions trust-chain detection (ci-trust), npm package metadata (pkgmeta), JavaScript payload risk (jsrisk), NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss. A separate `aguara check --ecosystem {python,npm}` command flags installed package trees against known-compromised version sets.
 - **8 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, and C-style octal escapes. Obfuscated payloads are decoded and re-scanned automatically.
 - **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
 - **Cross-file toxic flow analysis** — detects dangerous capability combinations split across files in the same MCP server directory (e.g., one tool reads credentials, another sends to a webhook).
 - **Aggregate risk score** — 0-100 score with diminishing returns across findings. Available in JSON, SARIF, and terminal output.
 - **Context-aware scanning** — pass the tool name (`--tool-name Edit`) and the scanner automatically skips rules that are always false positives for that tool. Built-in exemptions for Edit, Write, WebFetch, Bash, and more.
 - **Scan profiles** — `strict` (default), `content-aware`, or `minimal` enforcement. Findings are always preserved for audit; only the verdict (clean/flag/block) changes.
-- **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 6 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
+- **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 8 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
 - **Dynamic confidence scoring** — every finding carries a confidence level (0.50-0.95) that reflects signal quality: pattern hit ratio, classifier score, and code-block awareness.
 - **Remediation guidance** — all 193 rules include actionable fix suggestions, shown in every output format.
 - **Deterministic** — same input, same output. Every scan is reproducible.
@@ -564,7 +564,7 @@ cmd/aguara/            CLI entry point (Cobra)
 cmd/wasm/              WASM build for browser-based scanning
 internal/
   engine/
-    pattern/           Layer 1: Aho-Corasick + regex, 6 decoders (base64/hex/URL/Unicode/HTML/hex-escape)
+    pattern/           Layer 1: Aho-Corasick + regex, 8 decoders (base64, hex, URL, Unicode, HTML, hex-escape, base32, octal-escape)
     nlp/               Layer 2: markdown AST + JSON/YAML string extraction, proximity-weighted classifier
     toxicflow/         Layer 3: single-file taint tracking + cross-file correlation across directories
     rugpull/           Layer 4: SHA256 change detection (CLI --monitor, library WithStateDir)

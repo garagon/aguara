@@ -98,7 +98,7 @@ Both `aguara scan --format json` and `aguara check --format json` emit `"finding
 ### Internal
 
 - 7 PRs (#70 - #78) drove the round; 1 follow-up chore (#79) cleaned the GoReleaser deprecation warnings.
-- 193 detection rules (up from 189), 13 categories, 4 analysis layers, ~750 tests.
+- 193 detection rules (up from 189), 13 categories, 7 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, NLP, toxicflow, rugpull) up from 4, ~750 tests.
 - The `--disable-rule` analyzer-wide filter, `findings: []` JSON normalization, and Docker harness are durable infrastructure available to every future PR.
 
 ## [0.14.5] — 2026-04-24

@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-Aguara ships with **148+ built-in rules** across 13 categories, plus NLP-based and toxic-flow analyzers.
+Aguara ships with **193 built-in pattern rules** across 13 categories, plus four chain-aware scan analyzers (ci-trust, pkgmeta, jsrisk, toxicflow) and a rug-pull detector. Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
@@ -108,7 +108,9 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
 | MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
 
-## Supply Chain (15 rules)
+## Supply Chain
+
+Highlighted SUPPLY_* rules. The full list is available via `aguara list-rules --category supply-chain`; SUPPLY_015 through SUPPLY_023 and SUPPLY_025 land alongside the chain-aware analyzers introduced in v0.15.0 and are not enumerated row-by-row here.
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -126,6 +128,17 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | SUPPLY_012 | MEDIUM | Git clone and execute chain |
 | SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
 | SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
+| SUPPLY_020 | HIGH | GitHub Actions untrusted input injection |
+| SUPPLY_021 | MEDIUM | GitHub Actions overly broad permissions |
+| SUPPLY_022 | HIGH | GitHub Actions OIDC token request variables in executable code |
+| SUPPLY_023 | CRITICAL | GitHub Actions runner process memory access |
+| SUPPLY_025 | HIGH | Claude Code workspace persistence path |
+
+## Supply Chain Exfil
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| SUPPLY_024 | HIGH | Session-Network exfil endpoint (Mini Shai-Hulud IOC set) |
 
 ## External Download (17 rules)
 
