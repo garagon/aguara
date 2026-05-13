@@ -259,3 +259,28 @@ examples:
   false_positive:
     - "/usr/local/lib/python3.12/site-packages"
     - "import _virtualenv"
+---
+id: SUPPLY_024
+name: "Session-Network exfil endpoint"
+description: "Detects references to the Session network endpoints used as exfil sinks in the Mini Shai-Hulud npm supply-chain incident. Legitimate packages do not contact these hosts."
+severity: HIGH
+category: supply-chain-exfil
+match_mode: any
+remediation: "Treat any reference to these endpoints as evidence of compromise. Audit the surrounding code and rotate any tokens the runner has held."
+patterns:
+  - type: contains
+    value: "filev2.getsession.org"
+  - type: contains
+    value: "seed1.getsession.org"
+  - type: contains
+    value: "seed2.getsession.org"
+  - type: contains
+    value: "seed3.getsession.org"
+examples:
+  true_positive:
+    - "fetch('https://filev2.getsession.org/upload', {method:'POST'})"
+    - "POST /upload to filev2.getsession.org"
+    - "bootstrap seed1.getsession.org"
+  false_positive:
+    - "session timeout: 30 minutes"
+    - "seed the random number generator"

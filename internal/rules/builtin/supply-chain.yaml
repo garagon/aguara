@@ -518,3 +518,82 @@ examples:
   false_positive:
     - "permissions: contents: read"
     - "permissions: issues: write"
+---
+id: SUPPLY_022
+name: "GitHub Actions OIDC token request variables in executable code"
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token."
+severity: HIGH
+category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.py", "*.sh", "*.yml", "*.yaml"]
+match_mode: any
+remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
+patterns:
+  - type: contains
+    value: "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+  - type: contains
+    value: "ACTIONS_ID_TOKEN_REQUEST_URL"
+exclude_patterns:
+  - type: regex
+    value: "^\\s*(#|//)"
+examples:
+  true_positive:
+    - "const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;"
+    - "curl -H \"Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN\" $ACTIONS_ID_TOKEN_REQUEST_URL"
+    - "  - run: echo $ACTIONS_ID_TOKEN_REQUEST_URL"
+    - "token = os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']"
+  false_positive:
+    - "# ACTIONS_ID_TOKEN_REQUEST_TOKEN is provided by the runner"
+    - "// note: ACTIONS_ID_TOKEN_REQUEST_URL is set automatically"
+---
+id: SUPPLY_023
+name: "GitHub Actions runner process memory access"
+description: "Detects code that references /proc/, the Runner.Worker process name or ACTIONS_ID_TOKEN env, AND a memory-like subpath (/mem, /maps, cmdline). Reading another process's memory to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
+severity: CRITICAL
+category: supply-chain
+match_mode: all
+remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
+patterns:
+  - type: contains
+    value: "/proc/"
+  - type: regex
+    value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
+  - type: regex
+    value: "/mem|/maps|cmdline"
+examples:
+  true_positive:
+    - "fs.readFileSync('/proc/'+pid+'/maps') if Runner.Worker found with ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+    - "Walk /proc/ looking for Runner.Worker, then read /proc/<pid>/mem and extract ACTIONS_ID_TOKEN_REQUEST_URL"
+    - "open('/proc/self/cmdline') Runner.Worker ACTIONS_ID_TOKEN"
+  false_positive:
+    - "Read /proc/stat to compute CPU usage"
+    - "Standard worker pool. No proc access."
+---
+id: SUPPLY_025
+name: "Claude Code or VS Code workspace persistence path"
+description: "Detects references to Claude Code or VS Code workspace files that auto-execute on workspace open. A package writing to .claude/settings.json, .claude/router_runtime.js, .claude/setup.mjs, .claude/hooks/, or shipping a tasks.json with runOn:folderOpen installs persistence that survives reinstall and is invisible outside the specific editor."
+severity: HIGH
+category: supply-chain
+match_mode: any
+remediation: "Editor automation files belong to the user, not to package code. Audit the change in a clean clone, remove any package-emitted automation, and pin the source package to a known-clean version."
+patterns:
+  - type: contains
+    value: ".claude/settings.json"
+  - type: contains
+    value: ".claude/router_runtime.js"
+  - type: contains
+    value: ".claude/setup.mjs"
+  - type: contains
+    value: ".claude/hooks/"
+  - type: regex
+    value: "runOn[\"']?\\s*:\\s*[\"']folderOpen"
+examples:
+  true_positive:
+    - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
+    - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
+    - "cp .claude/setup.mjs $HOME/.claude/"
+    - "Hook installed at .claude/hooks/postinstall.sh"
+    - "{ \"runOn\": \"folderOpen\" }"
+    - "tasks: [{label:'init', runOn: 'folderOpen'}]"
+  false_positive:
+    - "no automation in this project"
+    - "Tasks can opt in with manual run options"
