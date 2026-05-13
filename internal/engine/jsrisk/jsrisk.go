@@ -381,23 +381,35 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 	for _, loc := range childProcessReceiverRe.FindAllIndex(content, -1) {
 		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 	}
-	// Collect destructured names: plain names and alias forms
-	// (`spawn: launch`); the source name (before `:`) is the one called.
+	// Collect destructured local names. For each entry the source
+	// (left of `:` in CJS, left of ` as ` in ESM) must be a real
+	// child_process method; the local binding (right side, or the
+	// entry itself when not aliased) is what shows up in a bare call.
 	destructuredNames := map[string]bool{}
-	for _, m := range childProcessDestructureRe.FindAllSubmatchIndex(content, -1) {
-		body := string(content[m[2]:m[3]])
+	addDestructure := func(body string, aliasSep string) {
 		for _, raw := range strings.Split(body, ",") {
 			entry := strings.TrimSpace(raw)
-			if i := strings.Index(entry, ":"); i >= 0 {
-				entry = strings.TrimSpace(entry[:i])
+			if entry == "" {
+				continue
 			}
-			if entry != "" {
-				destructuredNames[entry] = true
+			source, local := entry, entry
+			if i := strings.Index(entry, aliasSep); i >= 0 {
+				source = strings.TrimSpace(entry[:i])
+				local = strings.TrimSpace(entry[i+len(aliasSep):])
+			}
+			if cpMethodNames[source] && local != "" {
+				destructuredNames[local] = true
 			}
 		}
 	}
+	for _, m := range childProcessDestructureRe.FindAllSubmatchIndex(content, -1) {
+		addDestructure(string(content[m[2]:m[3]]), ":")
+	}
+	for _, m := range childProcessESMDestructureRe.FindAllSubmatchIndex(content, -1) {
+		addDestructure(string(content[m[2]:m[3]]), " as ")
+	}
 	if len(destructuredNames) > 0 {
-		for _, loc := range childProcessBareInvokeRe.FindAllSubmatchIndex(content, -1) {
+		for _, loc := range anyBareInvokeRe.FindAllSubmatchIndex(content, -1) {
 			if destructuredNames[string(content[loc[2]:loc[3]])] {
 				sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 			}
@@ -505,22 +517,39 @@ var childProcessReceiverRe = regexp.MustCompile(
 		`\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
 )
 
-// childProcessBareInvokeRe matches a bare invocation: `spawn(...)`,
-// `fork(...)`, `exec(...)`, etc., used after `const { spawn } =
-// require('child_process')`. Word boundary on the left avoids
-// matching `myspawn(`. Bare-form invocations are only credited when
-// the file also contains a destructured import that names the same
-// method from child_process (see findDaemonChain).
-var childProcessBareInvokeRe = regexp.MustCompile(`\b(spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`)
+// anyBareInvokeRe captures the name and call site of any bare
+// identifier invocation in the file. Used together with the
+// destructured-name set: only invocations whose name was destructured
+// from child_process (CJS or ESM) and originally bound to a real cp
+// method are credited as a child_process call.
+var anyBareInvokeRe = regexp.MustCompile(`\b([A-Za-z_$][\w$]*)\s*\(`)
 
 // childProcessDestructureRe matches `const { spawn, fork } =
 // require('child_process')` and its var/let variants. Submatch 1 is
-// the name list inside the braces; the daemon chain compares each
-// trimmed entry (alias-stripped on `:`) against the bare-form name
-// before crediting the corresponding invocation.
+// the brace body; callers parse each entry for the local binding
+// (after `:` if aliased, the entry itself otherwise).
 var childProcessDestructureRe = regexp.MustCompile(
 	`(?:const|let|var)\s*\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
 )
+
+// childProcessESMDestructureRe matches the ESM equivalent:
+// `import { spawn } from 'child_process'` /
+// `import { spawn as launch } from 'node:child_process'`. The .mjs /
+// .cjs scan targets need this form for parity with CommonJS code.
+var childProcessESMDestructureRe = regexp.MustCompile(
+	`import\s*\{\s*([^}]+)\s*\}\s*from\s*['"](?:node:)?child_process['"]`,
+)
+
+// cpMethodNames is the set of child_process methods whose call is
+// considered an invocation for daemon detection. The bare-form
+// callable (after destructure aliasing) must originate from one of
+// these names.
+var cpMethodNames = map[string]bool{
+	"spawn": true, "spawnSync": true,
+	"fork":    true,
+	"exec":    true, "execSync": true,
+	"execFile": true, "execFileSync": true,
+}
 
 // envReadRe captures direct env-variable reads:
 // `process.env.<NAME>`, `process.env['<NAME>']`, or

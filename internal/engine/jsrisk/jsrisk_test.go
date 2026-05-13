@@ -331,6 +331,54 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-9 fixes: aliased destructure binding, ESM imports ---
+
+func TestVuln_AliasedDestructureCJS(t *testing.T) {
+	body := `
+const { spawn: launch } = require('child_process');
+launch('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ac.js", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("aliased CJS destructure (spawn:launch) must chain daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_ESMDestructureImport(t *testing.T) {
+	body := `
+import { spawn } from 'node:child_process';
+spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "esm.mjs", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("ESM import { spawn } from child_process must chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_ESMAliasedImport(t *testing.T) {
+	body := `
+import { spawn as launch } from 'child_process';
+launch('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "esma.mjs", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("ESM aliased import (spawn as launch) must chain, got: %+v", findings)
+	}
+}
+
+func TestSafe_BareCallNamedSpawnNotImported(t *testing.T) {
+	// A function literally named `spawn` that has no child_process
+	// origin must not chain even if it carries daemon-shape options.
+	body := `
+function spawn(opts) { return opts; }
+spawn('node', ['x'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ns.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("locally-defined spawn must not chain daemon, got: %+v", findings)
+	}
+}
+
 // --- pass-8 fixes: receiver-bound daemon match, drop .unref()-only chain ---
 
 func TestSafe_WorkerSpawnWithCPImported(t *testing.T) {
