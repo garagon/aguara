@@ -5,13 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.15.0] - 2026-05-13
 
-Minor release. Supply-chain trust analysis round: four new chain-aware analyzers (ci-trust, pkgmeta, jsrisk, plus an npm ecosystem check), four new pattern rules, and a hardened Docker validation harness. Detection coverage grows from 189 to 193 rules. JSON output shape stabilized so machine consumers see `findings: []` instead of `findings: null` on clean scans.
+Minor release. Supply-chain trust analysis round: three new chain-aware scan analyzers (ci-trust, pkgmeta, jsrisk), an npm ecosystem check added to `aguara check`, four new pattern rules, and a hardened Docker validation harness. Detection coverage grows from 189 to 193 rules. JSON output shape stabilized so machine consumers see `findings: []` instead of `findings: null` on clean scans.
 
 ### Added
 
-#### Chain-aware analyzers
+#### Chain-aware scan analyzers
 
-Four new `supply-chain` category analyzers detect attack shapes that require multiple aligned signals at the same call site or syntactic structure. Single weak signals never fire.
+Three new `supply-chain` category analyzers run as part of `aguara scan` and detect attack shapes that require multiple aligned signals at the same call site or syntactic structure. Single weak signals never fire.
 
 `ci-trust` (`internal/engine/ci/`) inspects `.github/workflows/*.yml`:
 

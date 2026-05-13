@@ -366,7 +366,7 @@ Supported directives:
 |----------|-------|-----------------|
 | Credential Leak | 22 | API keys (OpenAI, AWS, GCP, Stripe, ...), private keys, DB strings, HMAC secrets |
 | Prompt Injection | 18 + NLP | Instruction overrides, role switching, delimiter injection, jailbreaks, event injection |
-| Supply Chain | 21 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation |
+| Supply Chain | 24 | Download-and-execute, reverse shells, sandbox escape, symlink attacks, privilege escalation, OIDC token vars, runner-pivot memory, Claude Code persistence path |
 | External Download | 16 | Binary downloads, curl-pipe-shell, auto-installs, profile persistence |
 | MCP Attack | 16 | Tool injection, name shadowing, canonicalization bypass, capability escalation |
 | Data Exfiltration | 16 + NLP | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
@@ -376,7 +376,7 @@ Supported directives:
 | SSRF & Cloud | 11 | Cloud metadata, IMDS, Docker socket, internal IPs, redirect following |
 | Third-Party Content | 10 | eval with external data, unsafe deserialization, missing SRI, HTTP downgrade |
 | Unicode Attack | 10 | RTL override, bidi, homoglyphs, zero-width sequences, normalization bypass |
-| Supply Chain Exfil | 10 | Credential file reads, .pth executable code, bulk env collection, K8s secrets access, systemd persistence, archive+POST exfil |
+| Supply Chain Exfil | 11 | Credential file reads, .pth executable code, bulk env collection, K8s secrets access, systemd persistence, archive+POST exfil, Session-Network endpoints |
 | Toxic Flow | 3 + cross-file | Single-file taint tracking plus cross-file correlation across MCP server directories |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
