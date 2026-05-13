@@ -219,10 +219,19 @@ func computeMetrics(content []byte) *metrics {
 	// Network / publish / GitHub / session sinks. The network regex is
 	// whitespace-tolerant (so `fetch (...)` matches) and case-insensitive.
 	// Publish / GitHub / session sinks are unambiguous literal strings.
+	// Aliased http/https/net imports are discovered separately so a
+	// payload like `const h = require('https'); h.request(...)` still
+	// counts as a network sink.
 	lower := bytes.ToLower(content)
 	if loc := networkSinkRe.FindIndex(content); loc != nil {
 		m.HasNetworkSink = true
 		m.LineNetworkSink = lineOf(content, loc[0])
+	}
+	if !m.HasNetworkSink {
+		if line := findNetworkAliasSink(content); line > 0 {
+			m.HasNetworkSink = true
+			m.LineNetworkSink = line
+		}
 	}
 	for _, n := range publishSinkNeedles {
 		if bytes.Contains(lower, []byte(n)) {
@@ -320,17 +329,13 @@ func computeMetrics(content []byte) *metrics {
 		bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
 	m.HasRunnerWorker = bytes.Contains(content, []byte("Runner.Worker"))
 
-	// Agent persistence references. Path-only needles fire on their
-	// own; the runOn:folderOpen token only counts as persistence when
-	// the file also references .vscode/tasks.json (manually-runnable
-	// tasks files alone are not persistence).
+	// Agent persistence references. The standalone needles are all
+	// inside .claude/ and each fire on their own (Claude Code's
+	// auto-execution surface). VS Code persistence is gated on the
+	// pair below: tasks.json + runOn:folderOpen.
 	for _, n := range agentPersistenceNeedles {
 		if i := bytes.Index(content, []byte(n)); i >= 0 {
-			if strings.HasPrefix(n, ".claude/") {
-				m.HasClaudePersistence = true
-			} else {
-				m.HasVSCodePersistence = true
-			}
+			m.HasClaudePersistence = true
 			if m.LineAgentPath == 0 {
 				m.LineAgentPath = lineOf(content, i)
 				m.AgentPathMatched = n
@@ -453,6 +458,37 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 // real child_process invocation. Used by JS_OBF_001 severity escalation.
 func hasChildProcessInvocation(content []byte) bool {
 	return len(collectChildProcessCalls(content)) > 0
+}
+
+// findNetworkAliasSink walks imports of http/https/net and reports
+// the line of the first <alias>.<method>(...) call against any of
+// the imported aliases. The alias set is built from real require/
+// import statements so an unrelated object named `h` does not trip
+// the rule. Returns 0 when no alias has been imported or no aliased
+// call appears.
+func findNetworkAliasSink(content []byte) int {
+	aliases := map[string]bool{}
+	for _, m := range httpModuleAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+		aliases[string(content[m[2]:m[3]])] = true
+	}
+	for _, m := range httpModuleAliasESMRe.FindAllSubmatchIndex(content, -1) {
+		aliases[string(content[m[2]:m[3]])] = true
+	}
+	if len(aliases) == 0 {
+		return 0
+	}
+	var nameParts []string
+	for n := range aliases {
+		nameParts = append(nameParts, regexp.QuoteMeta(n))
+	}
+	methodPart := strings.Join(httpAliasMethods, "|")
+	re := regexp.MustCompile(
+		`\b(?:` + strings.Join(nameParts, "|") + `)\s*\.\s*(?:` + methodPart + `)\s*\(`,
+	)
+	if loc := re.FindIndex(content); loc != nil {
+		return lineOf(content, loc[0])
+	}
+	return 0
 }
 
 // extractCallArgs returns the bytes between the opening `(` at
@@ -654,12 +690,11 @@ func findProcMemPair(content []byte) int {
 // of that name (in-memory caches, database clients, queue libraries),
 // turning the credential-harvest chain into a wide CI block.
 // networkSinkRe matches JavaScript expressions that perform an HTTP /
-// socket call to an external endpoint. JavaScript permits whitespace
-// between the callee and `(`, so the regex tolerates it; this catches
-// `fetch (...)` exfil payloads that a literal `fetch(` substring
-// would miss. Each alternation names a specific API rather than a
-// bare method like `.post(` so unrelated objects with same-named
-// methods do not falsely trigger.
+// socket call to an external endpoint via a fixed name (fetch, axios,
+// got, http/https/net used as the literal module identifier, or the
+// inline require chain). Aliased forms (`const h = require('https'); h.request(...)`)
+// are handled separately by collectNetworkAliasSinks so the analyzer
+// follows the same alias-discovery approach used for child_process.
 var networkSinkRe = regexp.MustCompile(
 	`(?i)\b(?:` +
 		`fetch|` +
@@ -673,6 +708,26 @@ var networkSinkRe = regexp.MustCompile(
 		// node: scheme. Single and double-quoted module names.
 		`|require\s*\(\s*['"](?:node:)?https?['"]\s*\)\s*\.\s*request\s*\(`,
 )
+
+// httpModuleAliasAssignRe captures local names bound to the http,
+// https, or net modules via require, e.g.
+// `const h = require('https')`, `let net = require('node:net')`.
+// Submatch 1 is the local name.
+var httpModuleAliasAssignRe = regexp.MustCompile(
+	`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?(?:http|https|net)['"]\s*\)`,
+)
+
+// httpModuleAliasESMRe captures ESM default and namespace imports of
+// http / https / net.
+var httpModuleAliasESMRe = regexp.MustCompile(
+	`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?(?:http|https|net)['"]`,
+)
+
+// httpAliasMethods is the set of methods that count as a network sink
+// when invoked on an aliased http / https / net module: an attacker
+// calling `h.request(...)` against an imported https alias is the
+// classic compact-exfil shape.
+var httpAliasMethods = []string{"request", "get", "post", "put", "connect", "createConnection"}
 
 var publishSinkNeedles = []string{
 	"registry.npmjs.org",
@@ -716,16 +771,20 @@ var ciSecretLiteralNeedles = []string{
 	"169.254.170.2",
 }
 
-// agentPersistenceNeedles are paths whose presence alone is sufficient
-// evidence of editor-automation persistence. Each names a file that
-// either holds auto-running config (.claude/settings.json hooks) or is
-// itself auto-executed (.vscode/setup.mjs) on workspace open.
+// agentPersistenceNeedles are paths whose presence alone is
+// sufficient evidence of editor-automation persistence. Each lives
+// inside .claude/ and is a known surface that Claude Code reads or
+// executes on workspace open (settings.json hooks, the router
+// runtime, the setup hook, the hooks directory). VS Code paths are
+// intentionally excluded from the standalone list: VS Code does
+// not auto-execute arbitrary files under .vscode/, so VS Code
+// persistence requires a tasks.json + runOn:folderOpen pair (see
+// detection below).
 var agentPersistenceNeedles = []string{
 	".claude/settings.json",
 	".claude/router_runtime.js",
 	".claude/setup.mjs",
 	".claude/hooks/",
-	".vscode/setup.mjs",
 }
 
 // runOnFolderOpenRe captures the VS Code task trigger that turns a
