@@ -8,7 +8,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 ---
 
-## Prompt Injection (17 rules + NLP)
+## Prompt Injection (18 rules + NLP)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -57,7 +57,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXFIL_016 | MEDIUM | Git history or diff access with transmission |
 | NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
 
-## Credential Leak (19 rules)
+## Credential Leak (22 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -79,7 +79,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CRED_016 | MEDIUM | SSH private key in command |
 | CRED_017 | LOW | Docker environment credentials |
 
-## MCP Attack (12 rules)
+## MCP Attack (16 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -95,7 +95,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCP_010 | HIGH | Prompt cache poisoning |
 | MCP_011 | HIGH | Arbitrary MCP server execution |
 
-## MCP Config (8 rules)
+## MCP Config (13 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -140,7 +140,7 @@ Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped bef
 |------|----------|-------------|
 | SUPPLY_024 | HIGH | Session-Network exfil endpoint (Mini Shai-Hulud IOC set) |
 
-## External Download (17 rules)
+## External Download (16 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -179,7 +179,7 @@ Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped bef
 | CMDEXEC_012 | LOW | Chained shell command execution |
 | CMDEXEC_013 | LOW | Shell script file execution |
 
-## Indirect Injection (6 rules)
+## Indirect Injection (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -191,7 +191,7 @@ Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped bef
 | INDIRECT_009 | MEDIUM | External API response drives agent behavior |
 | INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 
-## Third-Party Content (5 rules)
+## Third-Party Content (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -200,7 +200,7 @@ Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped bef
 | THIRDPARTY_004 | LOW | External API response used without validation |
 | THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
 
-## SSRF & Cloud (10 rules)
+## SSRF & Cloud (11 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -213,7 +213,7 @@ Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped bef
 | SSRF_007 | CRITICAL | Cloud credential endpoint |
 | SSRF_008 | MEDIUM | DNS rebinding setup |
 
-## Unicode Attack (7 rules)
+## Unicode Attack (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|

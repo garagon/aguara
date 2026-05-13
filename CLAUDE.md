@@ -147,7 +147,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 
 When any of these values change, update ALL references across the vault:
 - Rule count (currently 193)
-- Test count (currently ~630)
+- Test count (currently ~750)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
