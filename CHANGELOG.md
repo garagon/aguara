@@ -3,6 +3,16 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- `install.sh` extraction now passes `-o` to tar so the install succeeds under hardened container runtimes that drop `CAP_CHOWN` (`--cap-drop ALL`, rootless containers). Without the flag, tar attempted to restore the archive's recorded `uid/gid 1001` and failed with `Cannot change ownership`. POSIX-portable across GNU, BSD, and BusyBox tar.
+
+### Added
+
+- `make test-install-sh-docker` acceptance target. Builds an Alpine image with the tooling `install.sh` itself requires and runs the full install path under `--cap-drop ALL --security-opt no-new-privileges`, asserting the installed binary reports the expected version. Kept out of `verify-docker` because it requires network access (downloads the published release archive).
+
 ## [0.15.0] - 2026-05-13
 
 Minor release. Supply-chain trust analysis round: three new chain-aware scan analyzers (ci-trust, pkgmeta, jsrisk), an npm ecosystem check added to `aguara check`, four new pattern rules, and a hardened Docker validation harness. Detection coverage grows from 189 to 193 rules. JSON output shape stabilized so machine consumers see `findings: []` instead of `findings: null` on clean scans.
