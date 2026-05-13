@@ -266,6 +266,15 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	riskScore := meta.ComputeRiskScore(findings)
 
+	// Normalize the empty-result shape so the JSON output reads
+	// `"findings": []` instead of `"findings": null` on a clean scan.
+	// postProcess returns nil on several happy paths (no input, all
+	// filtered out by --disable-rule, all dropped by min-severity);
+	// downstream JSON consumers expect the array shape regardless.
+	if findings == nil {
+		findings = []Finding{}
+	}
+
 	return &ScanResult{
 		Findings:     findings,
 		FilesScanned: len(targets),

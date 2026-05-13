@@ -116,5 +116,17 @@ for rule in $must_fire; do
 done
 ok "clean fixture chained none of the required rules"
 
+# Clean scan must emit findings: [] (NOT null). Stable shape for
+# downstream JSON consumers; mirrors the aguara check fix.
+if grep -Eq '"findings":[[:space:]]*null' "$clean_json"; then
+  cat "$clean_json"
+  fail "clean scan emitted findings: null"
+fi
+if ! grep -Eq '"findings":[[:space:]]*\[\]' "$clean_json"; then
+  cat "$clean_json"
+  fail "clean scan missing findings: []"
+fi
+ok "clean scan produced findings: []"
+
 echo
 echo "all supply-chain smokes passed"
