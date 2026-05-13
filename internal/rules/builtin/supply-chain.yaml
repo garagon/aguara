@@ -521,10 +521,10 @@ examples:
 ---
 id: SUPPLY_022
 name: "GitHub Actions OIDC token request variables in executable code"
-description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token."
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. The targets include package.json so install-time npm scripts (preinstall, postinstall, prepare) are scanned."
 severity: HIGH
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.py", "*.sh", "*.yml", "*.yaml"]
+targets: ["*.js", "*.mjs", "*.cjs", "*.py", "*.sh", "*.yml", "*.yaml", "package.json"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
@@ -532,18 +532,16 @@ patterns:
     value: "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
   - type: contains
     value: "ACTIONS_ID_TOKEN_REQUEST_URL"
-exclude_patterns:
-  - type: regex
-    value: "^\\s*(#|//)"
 examples:
   true_positive:
     - "const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;"
     - "curl -H \"Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN\" $ACTIONS_ID_TOKEN_REQUEST_URL"
     - "  - run: echo $ACTIONS_ID_TOKEN_REQUEST_URL"
     - "token = os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']"
+    - "\"postinstall\": \"node -e 'console.log(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)'\""
   false_positive:
-    - "# ACTIONS_ID_TOKEN_REQUEST_TOKEN is provided by the runner"
-    - "// note: ACTIONS_ID_TOKEN_REQUEST_URL is set automatically"
+    - "process.env.ACTIONS_ID_TOKEN is unrelated"
+    - "Use trusted publishing via OIDC; no env var name leaks here."
 ---
 id: SUPPLY_023
 name: "GitHub Actions runner process memory access"
