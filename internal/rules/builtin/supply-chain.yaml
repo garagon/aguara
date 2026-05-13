@@ -545,14 +545,14 @@ examples:
 ---
 id: SUPPLY_023
 name: "GitHub Actions runner process memory access"
-description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Reading another process's memory to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
+description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline|environ) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Reading another process's memory or environment to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
 severity: CRITICAL
 category: supply-chain
 match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
   - type: regex
-    value: "/proc/(self|thread-self|[0-9]+|\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*)/(mem|maps|cmdline)"
+    value: "/proc/(self|thread-self|[0-9]+|\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*)/(mem|maps|cmdline|environ)"
   - type: regex
     value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
 examples:
@@ -561,6 +561,7 @@ examples:
     - "Walk /proc/12345/mem and extract ACTIONS_ID_TOKEN_REQUEST_URL"
     - "open('/proc/self/cmdline') Runner.Worker"
     - "for pid in $(pgrep Runner.Worker); do cat /proc/$pid/mem; done # ACTIONS_ID_TOKEN"
+    - "Dump /proc/$pid/environ for the Runner.Worker process to read ACTIONS_ID_TOKEN_REQUEST_TOKEN"
   false_positive:
     - "Read /proc/stat to compute CPU usage; ACTIONS_ID_TOKEN_REQUEST_TOKEN is unrelated"
     - "Parse /proc/meminfo for memory totals; Runner.Worker is the goroutine name"
