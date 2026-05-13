@@ -521,10 +521,9 @@ examples:
 ---
 id: SUPPLY_022
 name: "GitHub Actions OIDC token request variables in executable code"
-description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. The targets include package.json so install-time npm scripts (preinstall, postinstall, prepare) are scanned."
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. No target filter so extensionless lifecycle scripts (./install, scripts/build, bin/postinstall) are scanned alongside the usual JS/TS/Python/shell/YAML/JSON forms."
 severity: HIGH
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.yml", "*.yaml", "package.json"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
@@ -552,7 +551,7 @@ match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
   - type: regex
-    value: "/proc/(self|thread-self|[0-9]+|\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*)/(mem|maps|cmdline|environ)"
+    value: "/proc/[^/\\s]+/(mem|maps|cmdline|environ)"
   - type: regex
     value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
 examples:
@@ -562,6 +561,7 @@ examples:
     - "open('/proc/self/cmdline') Runner.Worker"
     - "for pid in $(pgrep Runner.Worker); do cat /proc/$pid/mem; done # ACTIONS_ID_TOKEN"
     - "Dump /proc/$pid/environ for the Runner.Worker process to read ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+    - "grep ACTIONS_ID_TOKEN_REQUEST_TOKEN /proc/*/environ # walks all runner PIDs"
   false_positive:
     - "Read /proc/stat to compute CPU usage; ACTIONS_ID_TOKEN_REQUEST_TOKEN is unrelated"
     - "Parse /proc/meminfo for memory totals; Runner.Worker is the goroutine name"
