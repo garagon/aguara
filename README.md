@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
 AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
 
-- **189 detection rules across 14 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
+- **193 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
 - **4-layer analysis engine** — pattern matching, NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss.
 - **8 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, and C-style octal escapes. Obfuscated payloads are decoded and re-scanned automatically.
 - **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
@@ -46,7 +46,7 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 - **Scan profiles** — `strict` (default), `content-aware`, or `minimal` enforcement. Findings are always preserved for audit; only the verdict (clean/flag/block) changes.
 - **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 6 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
 - **Dynamic confidence scoring** — every finding carries a confidence level (0.50-0.95) that reflects signal quality: pattern hit ratio, classifier score, and code-block awareness.
-- **Remediation guidance** — all 189 rules include actionable fix suggestions, shown in every output format.
+- **Remediation guidance** — all 193 rules include actionable fix suggestions, shown in every output format.
 - **Deterministic** — same input, same output. Every scan is reproducible.
 - **CI-ready** — JSON, SARIF, and Markdown output. GitHub Action. `--fail-on` threshold. `--changed` for incremental scans.
 - **17 MCP clients supported** — auto-discover and scan configs from Claude Desktop, Cursor, VS Code, Windsurf, and 13 more.
@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | ba
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-VERSION=v0.14.4 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+VERSION=v0.15.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
 ```
 
@@ -84,7 +84,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.14.4 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.15.0 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -180,14 +180,19 @@ aguara clean
 
 ## How It Works
 
-Aguara runs 4 analysis layers sequentially on every file. Each layer catches different attack patterns:
+Aguara runs 7 scan analyzers sequentially on every file. Each catches a different class of attack:
 
-| Layer | Engine | What it catches |
-|-------|--------|-----------------|
-| **Pattern Matcher** | Regex + Aho-Corasick matching | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern search. 6 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes) decode obfuscated payloads and re-scan. Code-block severity downgrade. Dynamic confidence based on pattern hit ratio. |
-| **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting - clustered keywords score higher, sparse keywords in long text get penalized. |
-| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations within a single file and across files in the same directory. Detects credential reads paired with webhook sends, env vars flowing to shell execution, and destructive + exec combos across MCP server tools. |
+| Analyzer | Engine | What it catches |
+|----------|--------|-----------------|
+| **Pattern Matcher** | Regex + Aho-Corasick matching | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern search. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, octal escapes) decode obfuscated payloads and re-scan. Code-block severity downgrade. Dynamic confidence based on pattern hit ratio. |
+| **CI Trust** | GitHub Actions YAML parser | `pull_request_target` chains, cache poisoning across fork boundaries, OIDC token surface paired with install/build/test, persisted-credentials checkouts on PR head refs. |
+| **PkgMeta** | `package.json` JSON parser | npm install-time lifecycle scripts plus git-sourced dependencies, optional-git deps with suspicious names, publish surfaces paired with trusted-publishing references. |
+| **JSRisk** | JavaScript single-pass scanner | Obfuscator-shape payloads, install-time daemonization via `child_process`, CI secret harvesting through real `process.env` reads plus network/registry sinks, runner-process memory pivots to extract OIDC tokens, Claude Code / VS Code workspace persistence. |
+| **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting; clustered keywords score higher, sparse keywords in long text get penalized. |
+| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations within a single file and across files in the same directory. Detects credential reads paired with webhook sends, env vars flowing to shell execution, destructive plus exec combos across MCP server tools. |
 | **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans. CLI: `--monitor` flag. Library: `WithStateDir()` for persistent consumers. |
+
+A separate `aguara check --ecosystem {python,npm}` command inspects installed package trees (`site-packages` for Python, `node_modules` for npm including the pnpm `.pnpm` store) for known-compromised package versions.
 
 All content is NFKC-normalized before scanning to prevent Unicode evasion attacks. All layers report findings with severity, dynamic confidence score (0.50-0.95), matched text, file location with context lines, and remediation guidance. An aggregate risk score (0-100) summarizes overall threat level.
 
@@ -355,7 +360,7 @@ Supported directives:
 
 ## Rules
 
-189 built-in rules across 14 categories:
+193 built-in rules across 13 categories:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
@@ -378,7 +383,7 @@ See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity lev
 
 ### Remediation Guidance
 
-All 189 rules include remediation text. It appears in every output format:
+All 193 rules include remediation text. It appears in every output format:
 
 - **Terminal**: always shown for CRITICAL findings, shown for all severities with `--verbose`
 - **JSON**: included in every finding object
@@ -564,7 +569,7 @@ internal/
     toxicflow/         Layer 3: single-file taint tracking + cross-file correlation across directories
     rugpull/           Layer 4: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           189 embedded rules across 13 YAML files (go:embed)
+    builtin/           193 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
     exemptions.go      Tool exemptions, scan profiles, verdict computation
   meta/                Post-processing: configurable dedup, scoring, risk score, correlation, confidence

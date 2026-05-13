@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.14.4 (2026-04-24). 189 rules, 13 categories, 4 analysis layers, ~630 tests, 0 lint issues.
+Aguara v0.15.0 (2026-05-13). 193 rules, 13 categories, 7 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, NLP, toxicflow, rugpull) plus the `aguara check --ecosystem {python,npm}` incident command, ~750 tests, 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -56,14 +56,17 @@ Aguara is a deterministic static security scanner for AI agent skills and MCP se
 
 Root package re-exports types from `internal/types` and exposes: `Scan()`, `ScanContent()`, `ListRules()`, `ExplainRule()`, `Discover()`. Used by external consumers like `aguara-mcp`. Functional options pattern (`WithMinSeverity()`, `WithWorkers()`, etc.).
 
-### Analysis Pipeline (4 layers, run sequentially per file)
+### Analysis Pipeline (7 analyzers, run sequentially per file)
 
 1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
-2. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
-3. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file taint tracking + cross-file correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
-4. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
+2. **CI Trust** (`internal/engine/ci/`) - YAML parser for `.github/workflows/*.yml`. Detects `pull_request_target` pwn-request chains, cache poisoning, OIDC token surface, and persisted-credentials checkouts. Emits `GHA_PWN_REQUEST_001` / `GHA_CACHE_001` / `GHA_OIDC_001` / `GHA_CHECKOUT_001`.
+3. **PkgMeta** (`internal/engine/pkgmeta/`) - JSON parser for `package.json`. Detects npm install-time lifecycle scripts paired with git-sourced dependencies, optional-git deps, and publish-surface chains. Emits `NPM_LIFECYCLE_GIT_001` / `NPM_OPTIONAL_GIT_001` / `NPM_PUBLISH_SURFACE_001`.
+4. **JSRisk** (`internal/engine/jsrisk/`) - Single-pass JavaScript scanner for `.js`/`.mjs`/`.cjs`. Detects obfuscator-shape payloads, install-time daemonization, CI secret harvesting, runner process-memory pivots, and Claude Code/VS Code persistence. Emits `JS_OBF_001` / `JS_DAEMON_001` / `JS_CI_SECRET_HARVEST_001` / `JS_PROC_MEM_OIDC_001` / `AGENT_PERSISTENCE_001`.
+5. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
+6. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file taint tracking + cross-file correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
+7. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
-All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`.
+All seven implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. `aguara check --ecosystem npm` (`internal/incident/npm.go`) is a separate command-line entry point, not part of the scan pipeline.
 
 ### Key Package Relationships
 
@@ -82,11 +85,11 @@ All four implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `N
 
 ## Rules System
 
-189 rules in `internal/rules/builtin/*.yaml` across 13 files. Each rule requires:
+193 rules in `internal/rules/builtin/*.yaml` across 13 files. Each rule requires:
 
 - `id`, `name`, `severity`, `category`, `patterns` (type: `regex` or `contains`)
 - `match_mode`: `any` (OR, default) or `all` (AND)
-- `remediation`: actionable fix guidance (all 189 rules have this)
+- `remediation`: actionable fix guidance (all 193 rules have this)
 - `examples.true_positive` and `examples.false_positive` - **self-tested automatically by `make test`**
 - Optional: `targets` (file globs), `exclude_patterns` (context-based suppression)
 
@@ -143,12 +146,12 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 189)
+- Rule count (currently 193)
 - Test count (currently ~630)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.14.4)
+- Version number (currently v0.15.0)
 
 Use `Grep` to find all occurrences before updating.
 
