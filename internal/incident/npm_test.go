@@ -1,8 +1,10 @@
 package incident_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/incident"
@@ -133,6 +135,31 @@ func TestCheckNPM_CleanTree(t *testing.T) {
 	}
 	if len(result.Findings) != 0 {
 		t.Errorf("clean tree must produce no findings, got: %+v", result.Findings)
+	}
+}
+
+func TestCheckNPM_CleanTreeJSONEmitsEmptyArrays(t *testing.T) {
+	// JSON consumers expect a stable `findings: []` shape on a clean
+	// tree. nil slices would marshal as `null`, breaking pipelines
+	// that .length or .map() over the result.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "express", "4.18.2")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM error: %v", err)
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	js := string(out)
+	if strings.Contains(js, `"findings":null`) || strings.Contains(js, `"credentials":null`) {
+		t.Errorf("clean tree must emit empty arrays, got: %s", js)
+	}
+	if !strings.Contains(js, `"findings":[]`) {
+		t.Errorf("expected findings:[] in JSON output, got: %s", js)
 	}
 }
 

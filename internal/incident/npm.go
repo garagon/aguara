@@ -36,7 +36,16 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		return nil, err
 	}
 
-	result := &CheckResult{Environment: root}
+	// Initialize the result with non-nil slices so the JSON output is
+	// the stable `[]` shape (not `null`) when nothing is found.
+	// Credentials is still empty here because npm has no equivalent of
+	// the Python credential-files map; we keep the field empty rather
+	// than nil for schema stability.
+	result := &CheckResult{
+		Environment: root,
+		Findings:    []Finding{},
+		Credentials: []CredentialFile{},
+	}
 
 	packages := readInstalledNPMPackages(root)
 	result.PackagesRead = len(packages)
