@@ -200,8 +200,17 @@ type ScanResult struct {
 	Target       string        `json:"-"`
 }
 
-// MarshalJSON implements custom JSON marshaling so Duration serializes as milliseconds.
+// MarshalJSON implements custom JSON marshaling so Duration serializes
+// as milliseconds, and normalizes the empty-results shape so consumers
+// always see `"findings": []` instead of `"findings": null` on clean
+// scans. The normalization covers every ScanResult producer (the
+// Scanner, the CLI's aggregate runAutoScan, library callers that
+// construct results directly) without each one needing to remember
+// the contract.
 func (r ScanResult) MarshalJSON() ([]byte, error) {
+	if r.Findings == nil {
+		r.Findings = []Finding{}
+	}
 	type Alias ScanResult
 	return json.Marshal(struct {
 		Alias
