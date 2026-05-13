@@ -84,7 +84,7 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 		if filepath.Base(path) != "package.json" {
 			return nil
 		}
-		if !isInstalledPackageManifest(path) {
+		if !isInstalledPackageManifest(path, root) {
 			return nil
 		}
 		pkg := parseNPMPackage(path)
@@ -96,24 +96,49 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 	return pkgs
 }
 
-// isInstalledPackageManifest returns true if the manifest at path lives
-// at a real npm install boundary: either node_modules/<name>/package.json
-// or node_modules/@scope/<name>/package.json. Manifests nested in
-// examples / fixtures / test trees do not satisfy this and so are
-// excluded from the installed-package walk.
-func isInstalledPackageManifest(path string) bool {
-	dir := filepath.Dir(path)
-	parent := filepath.Dir(dir)
-	if filepath.Base(parent) == "node_modules" {
-		return true
+// isInstalledPackageManifest returns true when path is reachable from
+// root via a canonical npm install layout: each level must be either
+// a package name (`<name>` or `@scope/<name>`) directly under the
+// scan root, or a nested `node_modules/<name>/` pair underneath the
+// previous package. Any other intermediate segment (`examples/`,
+// `test/`, `fixtures/`, `dist/`, etc.) means the manifest is bundled
+// test data rather than an installed dependency.
+func isInstalledPackageManifest(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
 	}
-	// Scoped layout: node_modules/@scope/<name>/package.json.
-	// parent here is the @scope directory; its parent is node_modules.
-	if strings.HasPrefix(filepath.Base(parent), "@") &&
-		filepath.Base(filepath.Dir(parent)) == "node_modules" {
-		return true
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 2 || parts[len(parts)-1] != "package.json" {
+		return false
 	}
-	return false
+	// Walk segments preceding the manifest filename. The valid
+	// alternation is: <name> [ /node_modules/<name> ]* with an
+	// optional @scope prefix on each <name> position.
+	const (
+		expectName        = iota // start; expect a package or @scope token
+		expectScopedName         // after an @scope token, expect the leaf name
+		expectNodeOrEnd          // after a name, expect /node_modules or end
+	)
+	state := expectName
+	for _, seg := range parts[:len(parts)-1] {
+		switch state {
+		case expectName:
+			if strings.HasPrefix(seg, "@") {
+				state = expectScopedName
+				continue
+			}
+			state = expectNodeOrEnd
+		case expectScopedName:
+			state = expectNodeOrEnd
+		case expectNodeOrEnd:
+			if seg != "node_modules" {
+				return false
+			}
+			state = expectName
+		}
+	}
+	return state == expectNodeOrEnd
 }
 
 // parseNPMPackage reads a package.json and extracts the name and

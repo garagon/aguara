@@ -142,6 +142,39 @@ func TestCheckNPM_NonExistentPath(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_IgnoresFixtureNodeModules(t *testing.T) {
+	// A build-tool style fixture: an installed package ships a
+	// test fixture that itself has a node_modules tree
+	// (node_modules/build-tool/examples/some-app/node_modules/x/package.json).
+	// The state-machine path check must reject the nested node_modules
+	// because of the `examples/some-app` intermediate segments.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "build-tool", "1.0.0")
+	deep := filepath.Join(nm, "build-tool", "examples", "some-app", "node_modules")
+	if err := os.MkdirAll(filepath.Join(deep, "event-stream"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(deep, "event-stream", "package.json"),
+		[]byte(`{"name":"event-stream","version":"3.3.6"}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if result.PackagesRead != 1 {
+		t.Errorf("expected only 1 installed package (build-tool), got %d", result.PackagesRead)
+	}
+	if len(result.Findings) != 0 {
+		t.Errorf("fixture node_modules must not chain, got: %+v", result.Findings)
+	}
+}
+
 func TestCheckNPM_IgnoresFixtureManifests(t *testing.T) {
 	// A package may ship its own examples / test fixtures that contain
 	// a `package.json` (e.g. fixture for a transpiler). Those are not
