@@ -524,7 +524,7 @@ name: "GitHub Actions OIDC token request variables in executable code"
 description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL in package code. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. Workflow YAML is intentionally out of scope here because the ci-trust analyzer (GHA_OIDC_001) already gates id-token: write on the chain shape; flagging every legitimate trusted-publishing workflow would block CI on its intended use. Targets cover common executable file types plus extensionless lifecycle script basenames (install, postinstall, preinstall, prepare, prepublish)."
 severity: HIGH
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish", "action.yml", "action.yaml"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
