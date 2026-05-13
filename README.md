@@ -564,10 +564,13 @@ cmd/aguara/            CLI entry point (Cobra)
 cmd/wasm/              WASM build for browser-based scanning
 internal/
   engine/
-    pattern/           Layer 1: Aho-Corasick + regex, 8 decoders (base64, hex, URL, Unicode, HTML, hex-escape, base32, octal-escape)
-    nlp/               Layer 2: markdown AST + JSON/YAML string extraction, proximity-weighted classifier
-    toxicflow/         Layer 3: single-file taint tracking + cross-file correlation across directories
-    rugpull/           Layer 4: SHA256 change detection (CLI --monitor, library WithStateDir)
+    pattern/           Pattern matcher: Aho-Corasick + regex, 8 decoders (base64, hex, URL, Unicode, HTML, hex-escape, base32, octal-escape)
+    ci/                CI Trust: .github/workflows/ YAML parser, pwn-request / cache / OIDC / persisted-credentials chains
+    pkgmeta/           PkgMeta: package.json parser, npm lifecycle / git source / publish-surface chains
+    jsrisk/            JSRisk: .js / .mjs / .cjs scanner, obfuscation / daemonization / CI-secret-harvest / runner-pivot / agent-persistence
+    nlp/               NLP: markdown AST + JSON/YAML string extraction, proximity-weighted classifier
+    toxicflow/         Taint: single-file taint tracking + cross-file correlation across directories
+    rugpull/           Rug-pull: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           193 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation

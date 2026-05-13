@@ -110,7 +110,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 ## Supply Chain
 
-Highlighted SUPPLY_* rules. The full list is available via `aguara list-rules --category supply-chain`; SUPPLY_015 through SUPPLY_023 and SUPPLY_025 land alongside the chain-aware analyzers introduced in v0.15.0 and are not enumerated row-by-row here.
+Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped before v0.15.0) plus SUPPLY_020-025 (the workflow / pwn-request / OIDC / runner-pivot / agent-persistence series that landed with the supply-chain trust round). SUPPLY_015-019 are tracked via `aguara list-rules --category supply-chain` and `aguara explain <RULE_ID>`; they cover narrower IOC and lockfile checks that are kept current via the live catalog rather than this static table.
 
 | Rule | Severity | Description |
 |------|----------|-------------|
