@@ -11,7 +11,12 @@
 set -eu
 
 OUT="${BENCH_OUT:-/out}"
-mkdir -p "$OUT"
+# Pre-create Go's cache and temp dirs. The bench image sets
+# GOCACHE=/tmp/go-build and GOTMPDIR=/tmp/go-tmp, and the container
+# runs with --read-only + a fresh /tmp tmpfs, so the `go build` below
+# fails without these directories. Matches the prelude in run.sh and
+# race.sh so all three entrypoints share the same shape.
+mkdir -p /tmp/go-build /tmp/go-tmp "$OUT"
 FIX_ROOT="/tmp/smoke-npm"
 rm -rf "$FIX_ROOT"
 mkdir -p "$FIX_ROOT"
