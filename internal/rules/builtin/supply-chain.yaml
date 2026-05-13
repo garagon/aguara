@@ -544,9 +544,10 @@ examples:
 ---
 id: SUPPLY_023
 name: "GitHub Actions runner process memory access"
-description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline|environ) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Reading another process's memory or environment to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
+description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline|environ) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Targets are scoped to executable file types because match_mode: all evaluates file-wide; documentation/spec files (.md, .rst, .txt) that mention both signals in different sections are intentionally out of scope. Reading another process's memory or environment to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
 severity: CRITICAL
 category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json"]
 match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
