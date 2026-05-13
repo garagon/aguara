@@ -18,6 +18,19 @@ DOCKER_RUN_FLAGS := --rm --network none --cap-drop ALL \
 	--security-opt no-new-privileges --read-only \
 	--tmpfs /tmp:rw,exec,nosuid,size=1g
 
+# Per-target artifact lists. Each Docker validation target removes its
+# own outputs before running so a stale artifact from a prior run on
+# a different revision cannot pretend to be part of the current run.
+# Targets do not touch each other's artifacts, so `make verify-docker`
+# accumulates the union without clobbering.
+BENCH_ARTIFACTS := aguara-version.txt provenance.json go-test.txt \
+	go-bench-api.txt go-bench-engines.txt go-bench-analyzers.txt \
+	real-skills.json real-skills-summary.txt
+RACE_ARTIFACTS := go-test-race.txt provenance-race.json
+SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
+	smoke-npm-fixture.json smoke-npm-bare.txt \
+	smoke-supply-chain.json smoke-supply-chain-clean.json
+
 .PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
 	bench-docker-image race-docker-image \
 	bench-docker smoke-docker test-race-docker verify-docker
@@ -46,6 +59,7 @@ race-docker-image:
 
 bench-docker: bench-docker-image
 	mkdir -p .bench
+	@cd .bench && rm -f $(BENCH_ARTIFACTS)
 	docker run $(DOCKER_RUN_FLAGS) \
 		-e DOCKER_IMAGE=$(DOCKER_BENCH_IMAGE) \
 		-e BENCH_COMMAND="make bench-docker" \
@@ -53,6 +67,7 @@ bench-docker: bench-docker-image
 
 test-race-docker: race-docker-image
 	mkdir -p .bench
+	@cd .bench && rm -f $(RACE_ARTIFACTS)
 	docker run $(DOCKER_RUN_FLAGS) \
 		-e DOCKER_IMAGE=$(DOCKER_RACE_IMAGE) \
 		-e BENCH_COMMAND="make test-race-docker" \
@@ -60,6 +75,7 @@ test-race-docker: race-docker-image
 
 smoke-docker: bench-docker-image
 	mkdir -p .bench
+	@cd .bench && rm -f $(SMOKE_ARTIFACTS)
 	docker run $(DOCKER_RUN_FLAGS) \
 		--entrypoint /src/benchmarks/smoke-npm-incident.sh \
 		-v "$(CURDIR)/.bench:/out" $(DOCKER_BENCH_IMAGE)
