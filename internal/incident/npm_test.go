@@ -141,3 +141,36 @@ func TestCheckNPM_NonExistentPath(t *testing.T) {
 		t.Errorf("expected error for nonexistent path")
 	}
 }
+
+func TestCheckNPM_IgnoresFixtureManifests(t *testing.T) {
+	// A package may ship its own examples / test fixtures that contain
+	// a `package.json` (e.g. fixture for a transpiler). Those are not
+	// installed dependencies and must not be parsed as such.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "real-pkg", "1.0.0")
+	// A fixture manifest with a known-compromised tuple deep inside
+	// real-pkg/examples/.
+	fixDir := filepath.Join(nm, "real-pkg", "examples", "scenario")
+	if err := os.MkdirAll(fixDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(fixDir, "package.json"),
+		[]byte(`{"name":"event-stream","version":"3.3.6"}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if result.PackagesRead != 1 {
+		t.Errorf("expected only 1 installed package, got %d", result.PackagesRead)
+	}
+	if len(result.Findings) != 0 {
+		t.Errorf("fixture manifests must not produce findings, got: %+v", result.Findings)
+	}
+}

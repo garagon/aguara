@@ -65,6 +65,13 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 // and parses each package.json it finds. Scoped packages (@scope/name)
 // resolve correctly because the scope directory contains the package
 // directory which contains package.json.
+//
+// Manifests are only counted when their package directory's parent is
+// a node_modules directory (directly for unscoped packages, or via a
+// @scope directory whose parent is node_modules). A package's own
+// examples/ or fixtures/ subtree may contain a stray package.json
+// that npm does not treat as an installed dependency; those are
+// skipped so they cannot trigger a false-positive compromise finding.
 func readInstalledNPMPackages(root string) []NPMPackage {
 	var pkgs []NPMPackage
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -77,17 +84,7 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 		if filepath.Base(path) != "package.json" {
 			return nil
 		}
-		// Only count package.json files whose nearest ancestor directory
-		// looks like an installed package (under a node_modules tree).
-		// A repository's top-level package.json sits next to a sibling
-		// node_modules dir, not inside it; skipping those keeps the
-		// check from reporting on the package being audited.
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		if !strings.Contains(filepath.ToSlash(rel), "/") {
-			// top-level entry, not an installed dep
+		if !isInstalledPackageManifest(path) {
 			return nil
 		}
 		pkg := parseNPMPackage(path)
@@ -97,6 +94,26 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 		return nil
 	})
 	return pkgs
+}
+
+// isInstalledPackageManifest returns true if the manifest at path lives
+// at a real npm install boundary: either node_modules/<name>/package.json
+// or node_modules/@scope/<name>/package.json. Manifests nested in
+// examples / fixtures / test trees do not satisfy this and so are
+// excluded from the installed-package walk.
+func isInstalledPackageManifest(path string) bool {
+	dir := filepath.Dir(path)
+	parent := filepath.Dir(dir)
+	if filepath.Base(parent) == "node_modules" {
+		return true
+	}
+	// Scoped layout: node_modules/@scope/<name>/package.json.
+	// parent here is the @scope directory; its parent is node_modules.
+	if strings.HasPrefix(filepath.Base(parent), "@") &&
+		filepath.Base(filepath.Dir(parent)) == "node_modules" {
+		return true
+	}
+	return false
 }
 
 // parseNPMPackage reads a package.json and extracts the name and
