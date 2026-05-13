@@ -142,6 +142,29 @@ func TestCheckNPM_NonExistentPath(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_PnpmStoreLayout(t *testing.T) {
+	// pnpm exposes top-level packages as symlinks into a virtual
+	// store under node_modules/.pnpm. The real manifests live at
+	// node_modules/.pnpm/<spec>/node_modules/<name>/package.json
+	// and must be parsed as installed dependencies.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, filepath.Join(nm, ".pnpm", "event-stream@3.3.6", "node_modules"), "event-stream", "3.3.6")
+	// A scoped variant.
+	writeNPMPackage(t, filepath.Join(nm, ".pnpm", "@scope+name@1.0.0", "node_modules"), "@scope/name", "1.0.0")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if result.PackagesRead != 2 {
+		t.Errorf("expected 2 packages in pnpm store, got %d", result.PackagesRead)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Title == "" {
+		t.Fatalf("expected one event-stream finding, got: %+v", result.Findings)
+	}
+}
+
 func TestCheckNPM_IgnoresFixtureNodeModules(t *testing.T) {
 	// A build-tool style fixture: an installed package ships a
 	// test fixture that itself has a node_modules tree

@@ -97,12 +97,19 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 }
 
 // isInstalledPackageManifest returns true when path is reachable from
-// root via a canonical npm install layout: each level must be either
-// a package name (`<name>` or `@scope/<name>`) directly under the
-// scan root, or a nested `node_modules/<name>/` pair underneath the
-// previous package. Any other intermediate segment (`examples/`,
-// `test/`, `fixtures/`, `dist/`, etc.) means the manifest is bundled
-// test data rather than an installed dependency.
+// root via a canonical install layout. Two layouts are accepted:
+//
+//	npm:   <name>[/node_modules/<name>]*         (optional @scope at each name)
+//	pnpm:  .pnpm/<spec>/node_modules/<name>      (the virtual store)
+//
+// Top-level npm entries are <name> or @scope/<name>. pnpm exposes
+// top-level packages as symlinks pointing into the .pnpm virtual
+// store; filepath.WalkDir does not follow those symlinks, so the
+// real manifests are reached via the .pnpm/<spec>/node_modules/...
+// path and need to be admitted here. Any other intermediate
+// segment (examples/, test/, fixtures/, dist/, etc.) means the
+// manifest is bundled test data rather than an installed
+// dependency.
 func isInstalledPackageManifest(path, root string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -112,18 +119,21 @@ func isInstalledPackageManifest(path, root string) bool {
 	if len(parts) < 2 || parts[len(parts)-1] != "package.json" {
 		return false
 	}
-	// Walk segments preceding the manifest filename. The valid
-	// alternation is: <name> [ /node_modules/<name> ]* with an
-	// optional @scope prefix on each <name> position.
 	const (
-		expectName        = iota // start; expect a package or @scope token
-		expectScopedName         // after an @scope token, expect the leaf name
-		expectNodeOrEnd          // after a name, expect /node_modules or end
+		expectName            = iota // start; <name>, @scope, or .pnpm
+		expectScopedName             // after @scope, expect the leaf name
+		expectNodeOrEnd              // after a name, expect /node_modules or end
+		expectPnpmSpec               // after .pnpm, expect a spec token
+		expectPnpmNodeModules        // after the spec, expect /node_modules
 	)
 	state := expectName
 	for _, seg := range parts[:len(parts)-1] {
 		switch state {
 		case expectName:
+			if seg == ".pnpm" {
+				state = expectPnpmSpec
+				continue
+			}
 			if strings.HasPrefix(seg, "@") {
 				state = expectScopedName
 				continue
@@ -132,6 +142,18 @@ func isInstalledPackageManifest(path, root string) bool {
 		case expectScopedName:
 			state = expectNodeOrEnd
 		case expectNodeOrEnd:
+			if seg != "node_modules" {
+				return false
+			}
+			state = expectName
+		case expectPnpmSpec:
+			// Any non-empty token works as the pnpm spec (e.g.
+			// event-stream@3.3.6, @scope+name@1.2.3).
+			if seg == "" {
+				return false
+			}
+			state = expectPnpmNodeModules
+		case expectPnpmNodeModules:
 			if seg != "node_modules" {
 				return false
 			}
