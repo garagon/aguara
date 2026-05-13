@@ -518,3 +518,102 @@ examples:
   false_positive:
     - "permissions: contents: read"
     - "permissions: issues: write"
+---
+id: SUPPLY_022
+name: "GitHub Actions OIDC token request variables in executable code"
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL in package code. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. Workflow YAML is intentionally out of scope here because the ci-trust analyzer (GHA_OIDC_001) already gates id-token: write on the chain shape; flagging every legitimate trusted-publishing workflow would block CI on its intended use. Targets cover common executable file types plus extensionless lifecycle script basenames (install, postinstall, preinstall, prepare, prepublish)."
+severity: HIGH
+category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish", "action.yml", "action.yaml"]
+match_mode: any
+remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
+patterns:
+  - type: contains
+    value: "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+  - type: contains
+    value: "ACTIONS_ID_TOKEN_REQUEST_URL"
+examples:
+  true_positive:
+    - "const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;"
+    - "curl -H \"Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN\" $ACTIONS_ID_TOKEN_REQUEST_URL"
+    - "token = os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']"
+    - "\"postinstall\": \"node -e 'console.log(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)'\""
+  false_positive:
+    - "process.env.ACTIONS_ID_TOKEN is unrelated"
+    - "Use trusted publishing via OIDC; no env var name leaks here."
+---
+id: SUPPLY_023
+name: "GitHub Actions runner process memory access"
+description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline|environ) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Targets are scoped to executable file types because match_mode: all evaluates file-wide; documentation/spec files (.md, .rst, .txt) that mention both signals in different sections are intentionally out of scope. Reading another process's memory or environment to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
+severity: CRITICAL
+category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
+match_mode: all
+remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
+patterns:
+  - type: regex
+    value: "/proc/[^/]{1,80}/(mem|maps|cmdline|environ)"
+  - type: regex
+    value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
+examples:
+  true_positive:
+    - "fs.readFileSync('/proc/self/maps') if Runner.Worker found with ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+    - "Walk /proc/12345/mem and extract ACTIONS_ID_TOKEN_REQUEST_URL"
+    - "open('/proc/self/cmdline') Runner.Worker"
+    - "for pid in $(pgrep Runner.Worker); do cat /proc/$pid/mem; done # ACTIONS_ID_TOKEN"
+    - "Dump /proc/$pid/environ for the Runner.Worker process to read ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+    - "grep ACTIONS_ID_TOKEN_REQUEST_TOKEN /proc/*/environ # walks all runner PIDs"
+    - "open('/proc/' + str(pid) + '/environ') Runner.Worker"
+  false_positive:
+    - "Read /proc/stat to compute CPU usage; ACTIONS_ID_TOKEN_REQUEST_TOKEN is unrelated"
+    - "Parse /proc/meminfo for memory totals; Runner.Worker is the goroutine name"
+    - "Inspect /proc/cmdline for boot args; mentions ACTIONS_ID_TOKEN"
+---
+id: SUPPLY_025
+name: "Claude Code workspace persistence path"
+description: "Detects references to Claude Code workspace files that auto-execute on workspace open: settings.json hooks, router_runtime.js, setup.mjs, and the .claude/hooks/ directory. A package writing to any of these installs persistence that survives reinstall and is invisible outside the editor. Targets are scoped to executable file types and extensionless lifecycle scripts so a README or runbook describing the .claude/ surface is not treated as a finding. VS Code persistence is handled by the jsrisk chain analyzer, which precisely gates on the tasks.json + runOn:folderOpen pair."
+severity: HIGH
+category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
+match_mode: any
+remediation: "Editor automation files belong to the user, not to package code. Audit the change in a clean clone, remove any package-emitted automation, and pin the source package to a known-clean version."
+patterns:
+  - type: contains
+    value: ".claude/settings.json"
+  - type: contains
+    value: ".claude/router_runtime.js"
+  - type: contains
+    value: ".claude/setup.mjs"
+  # `.claude/hooks` with or without a trailing slash. The word
+  # boundary covers `.claude/hooks` (mkdirSync target),
+  # `.claude/hooks/`, `.claude/hooks/postinstall.sh`, and quoted
+  # variants; it rejects `.claude/hookspad` and similar typos.
+  - type: regex
+    value: "\\.claude/hooks\\b"
+  # Path-join and string-concat construction. Covers
+  # `path.join('.claude', 'hooks', ...)`,
+  # `filepath.Join(".claude", "settings.json")` (path APIs use
+  # comma separators), and `'.claude' + '/settings.json'` (string
+  # concat uses `+` and may carry a leading slash on the second
+  # literal). The first segment must be the literal `.claude`
+  # (the bare `claude` directory is not the hidden Claude Code
+  # surface); the trailing segment must be followed by a closing
+  # quote so unrelated suffixes like `hookspad` do not match.
+  - type: regex
+    value: "['\"]\\.claude['\"][\\s,+]+['\"]/?(settings\\.json|router_runtime\\.js|setup\\.mjs|hooks(?:/[^'\"]*)?)['\"]"
+examples:
+  true_positive:
+    - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
+    - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
+    - "cp .claude/setup.mjs $HOME/.claude/"
+    - "Hook installed at .claude/hooks/postinstall.sh"
+    - "fs.mkdirSync('.claude/hooks', { recursive: true });"
+    - "path.join('.claude', 'hooks', 'postinstall.sh')"
+    - "filepath.Join(\".claude\", \"settings.json\")"
+    - "os.path.join('.claude', 'router_runtime.js')"
+    - "const cfg = '.claude' + '/settings.json';"
+  false_positive:
+    - "{ \"runOn\": \"folderOpen\" } # VS Code schema example, unrelated"
+    - "Tasks list with run options"
+    - "const dir = path.join('claude', 'settings.json'); // not the hidden dir"
+    - "path.join('.claude', 'hookspad') // typo, not the hooks/ path"
