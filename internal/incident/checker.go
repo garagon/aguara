@@ -380,9 +380,18 @@ func checkCaches() []Finding {
 				return filepath.SkipDir
 			}
 
-			// Filename-based check for cache artifacts
+			// Filename-based check for cache artifacts. The cache scan
+			// is part of the Python check path, so only PyPI entries
+			// apply here; npm rows live in a separate scan.
 			base := strings.ToLower(name)
 			for _, cp := range KnownCompromised {
+				entryEco := cp.Ecosystem
+				if entryEco == "" {
+					entryEco = EcosystemPyPI
+				}
+				if entryEco != EcosystemPyPI {
+					continue
+				}
 				if strings.Contains(base, cp.Name) {
 					for _, v := range cp.Versions {
 						if strings.Contains(base, v) && !seen[path] {

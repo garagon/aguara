@@ -11,26 +11,40 @@ import (
 )
 
 var (
-	flagCheckPath string
+	flagCheckPath      string
+	flagCheckEcosystem string
 )
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
-	Short: "Check for compromised Python packages and persistence artifacts",
-	Long: `Scan installed Python packages for known compromised versions, malicious .pth
-files, persistence backdoors, and pip/uv/npx caches. Reports which credential files are at risk.`,
+	Short: "Check for compromised packages and persistence artifacts",
+	Long: `Scan an installed package tree for known compromised versions and
+persistence artifacts. Defaults to Python (auto-discovers site-packages); pass
+--ecosystem npm with --path pointing at a node_modules directory to check
+npm packages instead. The known-bad list ships embedded with the binary.`,
 	RunE: runCheck,
 }
 
 func init() {
-	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to site-packages directory (default: auto-discover)")
+	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to the package tree (Python: site-packages; npm: node_modules)")
+	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "python", "Package ecosystem to check: python or npm")
 	rootCmd.AddCommand(checkCmd)
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
-	result, err := incident.Check(incident.CheckOptions{
-		Path: flagCheckPath,
-	})
+	opts := incident.CheckOptions{Path: flagCheckPath}
+	var (
+		result *incident.CheckResult
+		err    error
+	)
+	switch flagCheckEcosystem {
+	case "", "python", "pypi":
+		result, err = incident.Check(opts)
+	case "npm":
+		result, err = incident.CheckNPM(opts)
+	default:
+		return fmt.Errorf("unsupported ecosystem %q: choose python or npm", flagCheckEcosystem)
+	}
 	if err != nil {
 		return err
 	}
@@ -38,7 +52,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if flagFormat == "json" {
 		return writeCheckJSON(result)
 	}
-	return writeCheckTerminal(result)
+	return writeCheckTerminal(result, flagCheckEcosystem)
 }
 
 func writeCheckJSON(result *incident.CheckResult) error {
@@ -56,9 +70,17 @@ func writeCheckJSON(result *incident.CheckResult) error {
 	return enc.Encode(result)
 }
 
-func writeCheckTerminal(result *incident.CheckResult) error {
-	fmt.Printf("\nScanning Python environment: %s\n", result.Environment)
-	fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
+func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
+	envLabel := "Python environment"
+	if ecosystem == "npm" {
+		envLabel = "npm node_modules tree"
+	}
+	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
+	if ecosystem == "npm" {
+		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
+	} else {
+		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
+	}
 
 	if len(result.Findings) == 0 {
 		green := "\033[32m"
@@ -123,11 +145,18 @@ func writeCheckTerminal(result *incident.CheckResult) error {
 		fmt.Println()
 	}
 
-	// Action guidance
+	// Action guidance is ecosystem-specific because `aguara clean`
+	// only knows how to remove the Python compromise artifacts.
 	fmt.Printf("%sAction required:%s\n", bold, reset)
-	fmt.Println("  1. Run 'aguara clean' to remove malicious files")
-	fmt.Println("  2. Rotate ALL credentials listed above")
-	fmt.Println("  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+	if ecosystem == "npm" {
+		fmt.Println("  1. Remove the affected packages with the package manager (`npm uninstall <name>`)")
+		fmt.Println("  2. Rotate ALL credentials reachable from runs that included the compromised version")
+		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
+	} else {
+		fmt.Println("  1. Run 'aguara clean' to remove malicious files")
+		fmt.Println("  2. Rotate ALL credentials listed above")
+		fmt.Println("  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+	}
 
 	// Build summary line
 	critCount := 0
