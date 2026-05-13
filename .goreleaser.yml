@@ -20,11 +20,15 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  # GoReleaser v2.x: `format`/`format_overrides.format` (singular) is
+  # deprecated in favor of `formats`/`format_overrides.formats` (plural
+  # array). The output artifacts are identical; this only updates the
+  # config schema so `goreleaser check` stays clean for future versions.
+  - formats: [tar.gz]
     name_template: "aguara_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: "checksums.txt"
@@ -51,6 +55,12 @@ signs:
 sboms:
   - artifacts: archive
 
+# GoReleaser v2.x: `brews` is being phased out in favor of
+# `homebrew_casks`. The migration is intentionally NOT done here
+# because it is user-facing: the tap layout moves from
+# `Formula/aguara.rb` to `Casks/aguara.rb`, and `brew install
+# garagon/tap/aguara` becomes a cask install. Tracked for a
+# dedicated migration PR with a deprecation window for tap users.
 brews:
   - repository:
       owner: garagon
