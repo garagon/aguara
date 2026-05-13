@@ -180,7 +180,7 @@ aguara clean
 
 ## How It Works
 
-Aguara runs 7 scan analyzers sequentially on every file. Each catches a different class of attack:
+Aguara runs 6 scan analyzers sequentially on every file by default; a 7th (Rug-Pull) joins when `--monitor` is enabled and a state store is configured. Each catches a different class of attack:
 
 | Analyzer | Engine | What it catches |
 |----------|--------|-----------------|

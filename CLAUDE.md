@@ -56,7 +56,7 @@ Aguara is a deterministic static security scanner for AI agent skills and MCP se
 
 Root package re-exports types from `internal/types` and exposes: `Scan()`, `ScanContent()`, `ListRules()`, `ExplainRule()`, `Discover()`. Used by external consumers like `aguara-mcp`. Functional options pattern (`WithMinSeverity()`, `WithWorkers()`, etc.).
 
-### Analysis Pipeline (7 analyzers, run sequentially per file)
+### Analysis Pipeline (6 default analyzers + rug-pull when --monitor is set, run sequentially per file)
 
 1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
 2. **CI Trust** (`internal/engine/ci/`) - YAML parser for `.github/workflows/*.yml`. Detects `pull_request_target` pwn-request chains, cache poisoning, OIDC token surface, and persisted-credentials checkouts. Emits `GHA_PWN_REQUEST_001` / `GHA_CACHE_001` / `GHA_OIDC_001` / `GHA_CHECKOUT_001`.
@@ -66,7 +66,7 @@ Root package re-exports types from `internal/types` and exposes: `Scan()`, `Scan
 6. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file taint tracking + cross-file correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
 7. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
-All seven implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. `aguara check --ecosystem npm` (`internal/incident/npm.go`) is a separate command-line entry point, not part of the scan pipeline.
+All seven implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first six run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check --ecosystem npm` (`internal/incident/npm.go`) is a separate command-line entry point, not part of the scan pipeline.
 
 ### Key Package Relationships
 
