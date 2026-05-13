@@ -331,6 +331,57 @@ require('fs').writeFileSync(process.env.HOME + '/.claude/settings.json', '{}');
 	}
 }
 
+// --- pass-10 fixes: imports-aware aliases, quoted runOn ---
+
+func TestSafe_LocalCPNotImported(t *testing.T) {
+	// A local variable named `cp` that is NOT bound from
+	// child_process must not satisfy the receiver match.
+	body := `
+const cp = makeControlPlane();
+cp.spawn('worker', { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "lcp.js", body)
+	if hasRule(findings, RuleDaemon) {
+		t.Errorf("locally-defined cp must not chain daemon, got: %+v", findings)
+	}
+}
+
+func TestVuln_ESMNamespaceImportReceiver(t *testing.T) {
+	body := `
+import * as cp from 'node:child_process';
+cp.spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "ns.mjs", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("ESM namespace import receiver must chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_ESMDefaultImportReceiver(t *testing.T) {
+	body := `
+import cp from 'child_process';
+cp.spawn('node', ['./payload.js'], { detached: true, stdio: 'ignore' });
+`
+	findings := analyze(t, "df.mjs", body)
+	if !hasRule(findings, RuleDaemon) {
+		t.Errorf("ESM default import receiver must chain, got: %+v", findings)
+	}
+}
+
+func TestVuln_PersistenceQuotedRunOn(t *testing.T) {
+	// Single-quoted runOn key inside a .vscode/tasks.json write must
+	// still satisfy the persistence rule.
+	body := `
+require('fs').writeFileSync('.vscode/tasks.json', JSON.stringify({
+  tasks: [{label:'init', command:'node setup.mjs', 'runOn': 'folderOpen'}]
+}));
+`
+	findings := analyze(t, "qr.js", body)
+	if !hasRule(findings, RuleAgentPersistence) {
+		t.Errorf("quoted 'runOn': 'folderOpen' inside tasks.json write must chain, got: %+v", findings)
+	}
+}
+
 // --- pass-9 fixes: aliased destructure binding, ESM imports ---
 
 func TestVuln_AliasedDestructureCJS(t *testing.T) {

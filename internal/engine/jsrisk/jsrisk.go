@@ -338,14 +338,11 @@ func computeMetrics(content []byte) *metrics {
 		}
 	}
 	if bytes.Contains(content, []byte(".vscode/tasks.json")) {
-		for _, n := range runOnFolderOpenNeedles {
-			if i := bytes.Index(content, []byte(n)); i >= 0 {
-				m.HasVSCodePersistence = true
-				if m.LineAgentPath == 0 {
-					m.LineAgentPath = lineOf(content, i)
-					m.AgentPathMatched = ".vscode/tasks.json + " + n
-				}
-				break
+		if loc := runOnFolderOpenRe.FindIndex(content); loc != nil {
+			m.HasVSCodePersistence = true
+			if m.LineAgentPath == 0 {
+				m.LineAgentPath = lineOf(content, loc[0])
+				m.AgentPathMatched = ".vscode/tasks.json + runOn: folderOpen"
 			}
 		}
 	}
@@ -378,9 +375,37 @@ type cpCallSite struct {
 // name was never imported from the module are excluded.
 func collectChildProcessCalls(content []byte) []cpCallSite {
 	var sites []cpCallSite
-	for _, loc := range childProcessReceiverRe.FindAllIndex(content, -1) {
+
+	// Inline require chain: require('child_process').spawn(...)
+	for _, loc := range inlineRequireReceiverRe.FindAllIndex(content, -1) {
 		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 	}
+
+	// Aliases bound via CJS require or ESM default/namespace import.
+	// Only names that are ACTUALLY bound from child_process count as
+	// receivers; an unrelated local variable called `cp` does not.
+	aliases := map[string]bool{}
+	for _, m := range childProcessAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+		aliases[string(content[m[2]:m[3]])] = true
+	}
+	for _, m := range childProcessAliasESMRe.FindAllSubmatchIndex(content, -1) {
+		aliases[string(content[m[2]:m[3]])] = true
+	}
+	if len(aliases) > 0 {
+		// Compile one alternation per scan so the receiver match is
+		// scoped exactly to the names that were imported.
+		var parts []string
+		for name := range aliases {
+			parts = append(parts, regexp.QuoteMeta(name))
+		}
+		aliasRe := regexp.MustCompile(
+			`\b(?:` + strings.Join(parts, "|") + `)\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
+		)
+		for _, loc := range aliasRe.FindAllIndex(content, -1) {
+			sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+		}
+	}
+
 	// Collect destructured local names. For each entry the source
 	// (left of `:` in CJS, left of ` as ` in ESM) must be a real
 	// child_process method; the local binding (right side, or the
@@ -504,17 +529,36 @@ const procMemPairWindow = 200
 // because they lack the intervening pid segment.
 var procMemLiteralRe = regexp.MustCompile(`/proc/(?:[0-9]+|self|thread-self)/(mem|maps|cmdline)\b`)
 
-// childProcessReceiverRe matches a child_process method call whose
-// receiver is either an inline require chain or a conventional alias
-// for the imported module. Restricting to these receivers prevents
-// `worker.spawn(...)` on an unrelated object from satisfying the
-// daemon chain just because `child_process` appears elsewhere in the
-// file. The conventional aliases (cp, childProcess, child_process,
-// ChildProcess) cover the bindings real-world code uses; obscure
-// renames are intentionally out of reach without AST parsing.
-var childProcessReceiverRe = regexp.MustCompile(
-	`(?:require\s*\(\s*['"](?:node:)?child_process['"]\s*\)|\b(?:cp|childProcess|child_process|ChildProcess|_cp)\b)` +
+// inlineRequireReceiverRe matches a child_process method call whose
+// receiver is the inline require chain itself, so the binding is
+// unambiguous. Aliases bound via `const cp = require(...)` are
+// discovered dynamically (see collectChildProcessAliases) and
+// matched separately.
+var inlineRequireReceiverRe = regexp.MustCompile(
+	`require\s*\(\s*['"](?:node:)?child_process['"]\s*\)` +
 		`\s*\.\s*(?:spawn|spawnSync|fork|exec|execSync|execFile|execFileSync)\s*\(`,
+)
+
+// childProcessAliasAssignRe captures the local variable that gets
+// bound to the imported child_process module via require:
+//
+//	const cp = require('child_process')
+//	let _cp = require("node:child_process")
+//
+// Submatch 1 is the local name.
+var childProcessAliasAssignRe = regexp.MustCompile(
+	`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
+)
+
+// childProcessAliasESMRe captures the local variable bound via an
+// ESM default or namespace import:
+//
+//	import cp from 'child_process'
+//	import * as cp from 'node:child_process'
+//
+// Submatch 1 is the local name.
+var childProcessAliasESMRe = regexp.MustCompile(
+	`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?child_process['"]`,
 )
 
 // anyBareInvokeRe captures the name and call site of any bare
@@ -684,17 +728,13 @@ var agentPersistenceNeedles = []string{
 	".vscode/setup.mjs",
 }
 
-// runOnFolderOpenNeedles capture the VS Code task trigger that turns
-// a tasks.json entry into an auto-run on workspace open. These do not
-// fire on their own; persistence requires the file ALSO references
-// .vscode/tasks.json (see detection below).
-var runOnFolderOpenNeedles = []string{
-	`runOn": "folderOpen`,
-	`runOn":"folderOpen`,
-	`runOn: "folderOpen`,
-	`runOn: 'folderOpen`,
-	`runOn:'folderOpen`,
-}
+// runOnFolderOpenRe captures the VS Code task trigger that turns a
+// tasks.json entry into an auto-run on workspace open. Tolerates
+// optional quotes around the key (`'runOn'`, `"runOn"`, bare runOn),
+// whitespace, and either quote style around the `folderOpen` value.
+// Persistence requires the file ALSO references .vscode/tasks.json
+// (see detection below); this token does not fire on its own.
+var runOnFolderOpenRe = regexp.MustCompile(`(?i)["']?runOn["']?\s*:\s*["']folderOpen["']`)
 
 // --- detection ---
 
