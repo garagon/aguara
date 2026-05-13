@@ -547,7 +547,7 @@ name: "GitHub Actions runner process memory access"
 description: "Detects code that reads /proc/<pid>/(mem|maps|cmdline|environ) and references the Runner.Worker process name or an ACTIONS_ID_TOKEN env var. The path regex requires an explicit per-process segment, so benign root-level files like /proc/meminfo, /proc/cmdline, /proc/stat, and /proc/cpuinfo do not satisfy the rule. Targets are scoped to executable file types because match_mode: all evaluates file-wide; documentation/spec files (.md, .rst, .txt) that mention both signals in different sections are intentionally out of scope. Reading another process's memory or environment to steal an OIDC token is a runner-pivot shape with no legitimate use in normal package code."
 severity: CRITICAL
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json"]
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
 match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
@@ -569,8 +569,8 @@ examples:
     - "Inspect /proc/cmdline for boot args; mentions ACTIONS_ID_TOKEN"
 ---
 id: SUPPLY_025
-name: "Editor workspace auto-execution path"
-description: "Detects references to editor workspace files that auto-execute on workspace open: Claude Code's settings.json hooks, router_runtime.js, setup.mjs, and the .claude/hooks/ directory, plus the VS Code runOn:folderOpen task trigger that turns a tasks.json entry into an auto-run. Standalone .vscode/setup.mjs and .vscode/tasks.json references are not included because they do not auto-execute on their own; the chain analyzer (jsrisk) gates VS Code persistence on the tasks.json + folderOpen pair."
+name: "Claude Code workspace persistence path"
+description: "Detects references to Claude Code workspace files that auto-execute on workspace open: settings.json hooks, router_runtime.js, setup.mjs, and the .claude/hooks/ directory. A package writing to any of these installs persistence that survives reinstall and is invisible outside the editor. VS Code persistence is handled by the jsrisk chain analyzer, which precisely gates on the tasks.json + runOn:folderOpen pair — a standalone runOn:folderOpen token is intentionally not flagged by this leaf-level rule because it appears in unrelated VS Code schemas and extension defaults."
 severity: HIGH
 category: supply-chain
 match_mode: any
@@ -584,16 +584,12 @@ patterns:
     value: ".claude/setup.mjs"
   - type: contains
     value: ".claude/hooks/"
-  - type: regex
-    value: "runOn[\"']?\\s*:\\s*[\"']folderOpen"
 examples:
   true_positive:
     - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
     - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
     - "cp .claude/setup.mjs $HOME/.claude/"
     - "Hook installed at .claude/hooks/postinstall.sh"
-    - "{ \"runOn\": \"folderOpen\" }"
-    - "tasks: [{label:'init', runOn: 'folderOpen'}]"
   false_positive:
-    - "Manual tasks list with run options"
-    - "Ships an example .vscode/tasks.json template; users opt in manually"
+    - "{ \"runOn\": \"folderOpen\" } # VS Code schema example, unrelated"
+    - "Tasks list with run options"
