@@ -552,7 +552,7 @@ match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
   - type: regex
-    value: "/proc/[^/\\s]+/(mem|maps|cmdline|environ)"
+    value: "/proc/[^/]{1,80}/(mem|maps|cmdline|environ)"
   - type: regex
     value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
 examples:
@@ -563,6 +563,7 @@ examples:
     - "for pid in $(pgrep Runner.Worker); do cat /proc/$pid/mem; done # ACTIONS_ID_TOKEN"
     - "Dump /proc/$pid/environ for the Runner.Worker process to read ACTIONS_ID_TOKEN_REQUEST_TOKEN"
     - "grep ACTIONS_ID_TOKEN_REQUEST_TOKEN /proc/*/environ # walks all runner PIDs"
+    - "open('/proc/' + str(pid) + '/environ') Runner.Worker"
   false_positive:
     - "Read /proc/stat to compute CPU usage; ACTIONS_ID_TOKEN_REQUEST_TOKEN is unrelated"
     - "Parse /proc/meminfo for memory totals; Runner.Worker is the goroutine name"
@@ -589,13 +590,15 @@ patterns:
   # variants; it rejects `.claude/hookspad` and similar typos.
   - type: regex
     value: "\\.claude/hooks\\b"
-  # Path-join construction: `path.join('.claude', 'hooks', ...)`,
-  # `filepath.Join(".claude", "settings.json")`, etc. The
-  # in-between separator covers the quote/comma/space sequence
-  # path APIs emit; the trailing segment limits matches to the
-  # known persistence files.
+  # Path-join and string-concat construction. Covers
+  # `path.join('.claude', 'hooks', ...)`,
+  # `filepath.Join(".claude", "settings.json")` (path APIs use
+  # comma separators), and `'.claude' + '/settings.json'` (string
+  # concat uses `+` and may carry a leading slash on the second
+  # literal). The trailing segment limits matches to the known
+  # persistence files.
   - type: regex
-    value: "['\"]\\.?claude['\"][\\s,]+['\"](settings\\.json|hooks|router_runtime\\.js|setup\\.mjs)"
+    value: "['\"]\\.?claude['\"][\\s,+]+['\"]/?(settings\\.json|hooks|router_runtime\\.js|setup\\.mjs)"
 examples:
   true_positive:
     - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
@@ -606,6 +609,7 @@ examples:
     - "path.join('.claude', 'hooks', 'postinstall.sh')"
     - "filepath.Join(\".claude\", \"settings.json\")"
     - "os.path.join('.claude', 'router_runtime.js')"
+    - "const cfg = '.claude' + '/settings.json';"
   false_positive:
     - "{ \"runOn\": \"folderOpen\" } # VS Code schema example, unrelated"
     - "Tasks list with run options"
