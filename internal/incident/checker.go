@@ -65,7 +65,13 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		return nil, fmt.Errorf("no Python site-packages directory found (use --path to specify)")
 	}
 
-	result := &CheckResult{Environment: siteDir}
+	// Initialize the result with non-nil slices so the JSON output is
+	// the stable `[]` shape (not `null`) when nothing is found.
+	result := &CheckResult{
+		Environment: siteDir,
+		Findings:    []Finding{},
+		Credentials: []CredentialFile{},
+	}
 
 	// 1. Read installed packages and check against known-bad list
 	packages := readInstalledPackages(siteDir)
