@@ -583,8 +583,12 @@ patterns:
     value: ".claude/router_runtime.js"
   - type: contains
     value: ".claude/setup.mjs"
-  - type: contains
-    value: ".claude/hooks/"
+  # `.claude/hooks` with or without a trailing slash. The word
+  # boundary covers `.claude/hooks` (mkdirSync target),
+  # `.claude/hooks/`, `.claude/hooks/postinstall.sh`, and quoted
+  # variants; it rejects `.claude/hookspad` and similar typos.
+  - type: regex
+    value: "\\.claude/hooks\\b"
   # Path-join construction: `path.join('.claude', 'hooks', ...)`,
   # `filepath.Join(".claude", "settings.json")`, etc. The
   # in-between separator covers the quote/comma/space sequence
@@ -598,6 +602,7 @@ examples:
     - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
     - "cp .claude/setup.mjs $HOME/.claude/"
     - "Hook installed at .claude/hooks/postinstall.sh"
+    - "fs.mkdirSync('.claude/hooks', { recursive: true });"
     - "path.join('.claude', 'hooks', 'postinstall.sh')"
     - "filepath.Join(\".claude\", \"settings.json\")"
     - "os.path.join('.claude', 'router_runtime.js')"
