@@ -585,12 +585,22 @@ patterns:
     value: ".claude/setup.mjs"
   - type: contains
     value: ".claude/hooks/"
+  # Path-join construction: `path.join('.claude', 'hooks', ...)`,
+  # `filepath.Join(".claude", "settings.json")`, etc. The
+  # in-between separator covers the quote/comma/space sequence
+  # path APIs emit; the trailing segment limits matches to the
+  # known persistence files.
+  - type: regex
+    value: "['\"]\\.?claude['\"][\\s,]+['\"](settings\\.json|hooks|router_runtime\\.js|setup\\.mjs)"
 examples:
   true_positive:
     - "fs.writeFileSync('.claude/settings.json', JSON.stringify(payload));"
     - "require('fs').writeFileSync('.claude/router_runtime.js', code);"
     - "cp .claude/setup.mjs $HOME/.claude/"
     - "Hook installed at .claude/hooks/postinstall.sh"
+    - "path.join('.claude', 'hooks', 'postinstall.sh')"
+    - "filepath.Join(\".claude\", \"settings.json\")"
+    - "os.path.join('.claude', 'router_runtime.js')"
   false_positive:
     - "{ \"runOn\": \"folderOpen\" } # VS Code schema example, unrelated"
     - "Tasks list with run options"
