@@ -142,6 +142,37 @@ func TestCheckNPM_NonExistentPath(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_AcceptsProjectRoot(t *testing.T) {
+	// `--path .` (project root with a sibling node_modules) is the
+	// most user-friendly invocation. The checker normalizes it to
+	// the node_modules child instead of silently reporting zero
+	// packages.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "event-stream", "3.3.6")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: dir})
+	if err != nil {
+		t.Fatalf("CheckNPM should accept project root, got: %v", err)
+	}
+	if result.PackagesRead != 1 {
+		t.Errorf("expected 1 package, got %d", result.PackagesRead)
+	}
+	if len(result.Findings) != 1 {
+		t.Errorf("project-root scan should still detect compromised dep, got: %+v", result.Findings)
+	}
+}
+
+func TestCheckNPM_RejectsBareDirWithoutNodeModules(t *testing.T) {
+	// A directory that is neither node_modules nor a project with
+	// one must error rather than report a clean (and misleading)
+	// zero-finding result.
+	dir := t.TempDir()
+	if _, err := incident.CheckNPM(incident.CheckOptions{Path: dir}); err == nil {
+		t.Errorf("expected error on directory without node_modules child")
+	}
+}
+
 func TestCheckNPM_PnpmStoreLayout(t *testing.T) {
 	// pnpm exposes top-level packages as symlinks into a virtual
 	// store under node_modules/.pnpm. The real manifests live at

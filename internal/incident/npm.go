@@ -29,19 +29,16 @@ type NPMPackage struct {
 // silently scanning the wrong tree would mislead the operator.
 func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	if opts.Path == "" {
-		return nil, fmt.Errorf("npm check requires --path pointing at a node_modules directory")
+		return nil, fmt.Errorf("npm check requires --path pointing at a node_modules directory or a project root that contains one")
 	}
-	info, err := os.Stat(opts.Path)
+	root, err := resolveNPMRoot(opts.Path)
 	if err != nil {
-		return nil, fmt.Errorf("npm check: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("npm check: %s is not a directory", opts.Path)
+		return nil, err
 	}
 
-	result := &CheckResult{Environment: opts.Path}
+	result := &CheckResult{Environment: root}
 
-	packages := readInstalledNPMPackages(opts.Path)
+	packages := readInstalledNPMPackages(root)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
 		cp := IsCompromisedIn(EcosystemNPM, pkg.Name, pkg.Version)
@@ -58,6 +55,31 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	}
 
 	return result, nil
+}
+
+// resolveNPMRoot turns the user-supplied path into the actual
+// node_modules directory to walk. The supplied path may already be a
+// node_modules tree, in which case it is returned unchanged; or it
+// may be a project root whose child node_modules holds the install
+// graph. Any other shape returns an error so the operator does not
+// silently get a clean report for a path the checker cannot
+// interpret.
+func resolveNPMRoot(p string) (string, error) {
+	info, err := os.Stat(p)
+	if err != nil {
+		return "", fmt.Errorf("npm check: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("npm check: %s is not a directory", p)
+	}
+	if filepath.Base(p) == "node_modules" {
+		return p, nil
+	}
+	candidate := filepath.Join(p, "node_modules")
+	if cinfo, cerr := os.Stat(candidate); cerr == nil && cinfo.IsDir() {
+		return candidate, nil
+	}
+	return "", fmt.Errorf("npm check: %s is not a node_modules directory and contains no node_modules subdirectory; pass the path to a node_modules tree or its parent project", p)
 }
 
 // readInstalledNPMPackages walks node_modules recursively (since npm
