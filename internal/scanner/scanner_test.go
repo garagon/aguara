@@ -2,6 +2,7 @@ package scanner_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +28,28 @@ func (m *mockAnalyzer) Analyze(_ context.Context, target *scanner.Target) ([]typ
 		result = append(result, f)
 	}
 	return result, nil
+}
+
+func TestScannerCleanScanFindingsJSONEmitsEmptyArray(t *testing.T) {
+	// JSON consumers (CI, observatory, integrations) expect a stable
+	// `findings: []` shape on a clean scan. nil findings marshal as
+	// `null`, which breaks .length / .map() over the field.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.md"), []byte("# hello\n"), 0644))
+
+	s := scanner.New(1)
+	// No analyzers registered: result must still serialize with an
+	// empty findings array.
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+
+	out, err := json.Marshal(result)
+	require.NoError(t, err)
+	js := string(out)
+	require.NotContains(t, js, `"findings":null`,
+		"clean scan must not emit findings: null, got: %s", js)
+	require.Contains(t, js, `"findings":[]`,
+		"expected findings: [] in clean scan output, got: %s", js)
 }
 
 func TestScannerOrchestrator(t *testing.T) {

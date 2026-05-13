@@ -1,11 +1,32 @@
 package types_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestScanResultMarshalJSON_NilFindingsEmitsEmptyArray(t *testing.T) {
+	// Any ScanResult producer that leaves Findings nil (the aggregate
+	// path in runAutoScan, a library consumer constructing a result
+	// directly) must still serialize as `"findings": []` so machine
+	// consumers do not have to handle null specially.
+	r := types.ScanResult{
+		FilesScanned: 0,
+		RulesLoaded:  189,
+	}
+	out, err := json.Marshal(r)
+	require.NoError(t, err)
+	js := string(out)
+	require.NotContains(t, js, `"findings":null`,
+		"nil Findings must not serialize as null, got: %s", js)
+	require.True(t,
+		strings.Contains(js, `"findings":[]`),
+		"expected findings: [] in marshaled output, got: %s", js)
+}
 
 func TestSeverityString(t *testing.T) {
 	tests := []struct {
