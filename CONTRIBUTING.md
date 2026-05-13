@@ -40,7 +40,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Taint tracking: source -> sink flow analysis
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           189 embedded rules across 13 YAML files (go:embed)
+    builtin/           193 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown

@@ -3,6 +3,104 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.15.0] - 2026-05-13
+
+Minor release. Supply-chain trust analysis round: three new chain-aware scan analyzers (ci-trust, pkgmeta, jsrisk), an npm ecosystem check added to `aguara check`, four new pattern rules, and a hardened Docker validation harness. Detection coverage grows from 189 to 193 rules. JSON output shape stabilized so machine consumers see `findings: []` instead of `findings: null` on clean scans.
+
+### Added
+
+#### Chain-aware scan analyzers
+
+Three new `supply-chain` category analyzers run as part of `aguara scan` and detect attack shapes that require multiple aligned signals at the same call site or syntactic structure. Single weak signals never fire.
+
+`ci-trust` (`internal/engine/ci/`) inspects `.github/workflows/*.yml`:
+
+- `GHA_PWN_REQUEST_001` (HIGH; CRITICAL with write perms): `pull_request_target` with PR-controlled checkout running install/build/test/interpreter code in the same job.
+- `GHA_CACHE_001` (HIGH; CRITICAL with code execution): same chain plus a cache write (`actions/cache`, `actions/cache/save`).
+- `GHA_OIDC_001` (HIGH; CRITICAL with publish): `id-token: write` granted on a job that also runs install/build/test. Suppressed for publish-only jobs (intended OIDC use).
+- `GHA_CHECKOUT_001` (HIGH): `pull_request_target` checkout of PR head ref without `persist-credentials: false`.
+
+`pkgmeta` (`internal/engine/pkgmeta/`) inspects `package.json`:
+
+- `NPM_LIFECYCLE_GIT_001` (HIGH; CRITICAL on `optionalDependencies` + suspicious name): git-sourced dependency plus install-time lifecycle script (`preinstall`, `install`, `postinstall`, `prepublish`, `preprepare`, `prepare`, `postprepare`).
+- `NPM_OPTIONAL_GIT_001` (MEDIUM; HIGH on suspicious name): git-sourced `optionalDependency` on its own. Suppressed when `NPM_LIFECYCLE_GIT_001` covers the same dep.
+- `NPM_PUBLISH_SURFACE_001` (HIGH): `publishConfig` or publish script plus install/build/test script plus a value-aware reference to trusted publishing.
+
+`jsrisk` (`internal/engine/jsrisk/`) inspects `.js` / `.mjs` / `.cjs`:
+
+- `JS_OBF_001` (MEDIUM; HIGH with env/cp/network): obfuscator-shape payload (hex identifier density, dispatcher calls, `while(!![])`, plus a size or line-length signal).
+- `JS_DAEMON_001` (HIGH; CRITICAL with secret/sink): real `child_process` invocation with `detached: true` AND `stdio: 'ignore'` in its own arguments.
+- `JS_CI_SECRET_HARVEST_001` (CRITICAL): real `process.env` read of a CI/cloud secret (direct, bracket, optional-chaining, template-bracket, destructured forms including aliases and ESM imports) plus a network, npm registry, GitHub GraphQL, or session-exfil sink.
+- `JS_PROC_MEM_OIDC_001` (CRITICAL): `/proc/<pid>/(mem|maps|cmdline|environ)` access plus `ACTIONS_ID_TOKEN_REQUEST_*` or `Runner.Worker` reference.
+- `AGENT_PERSISTENCE_001` (HIGH; CRITICAL with harvest or daemonization): reference to a Claude Code automation file (`.claude/settings.json`, `.claude/router_runtime.js`, `.claude/setup.mjs`, `.claude/hooks/`) OR the pair `.vscode/tasks.json` plus `runOn: folderOpen`.
+
+#### Pattern rules
+
+Four targeted YAML rules complement the chain analyzers, covering shell/Python/Ruby/Perl/Go/Rust + workflow YAML + `action.yml` composite manifests:
+
+- `SUPPLY_022` (HIGH): `ACTIONS_ID_TOKEN_REQUEST_TOKEN` / `_URL` in executable code (excludes workflow YAML, owned by `ci-trust`).
+- `SUPPLY_023` (CRITICAL, match-all): `/proc/<pid>/(mem|maps|cmdline|environ)` plus `Runner.Worker` or `ACTIONS_ID_TOKEN` env in the same file.
+- `SUPPLY_024` (HIGH, category `supply-chain-exfil`): Session-Network exfil endpoints (`*.getsession.org`) used in the Mini Shai-Hulud incident.
+- `SUPPLY_025` (HIGH): Claude Code workspace persistence path (`.claude/settings.json`, `.claude/router_runtime.js`, `.claude/setup.mjs`, `.claude/hooks/`). VS Code persistence is handled by `jsrisk` with the precise `tasks.json` + `runOn:folderOpen` pair.
+
+#### `aguara check --ecosystem npm`
+
+The incident checker grows an npm branch. `aguara check --ecosystem npm --path <node_modules>` (or a project root with a `node_modules` child) walks the install graph, supports npm classic and pnpm's `.pnpm` virtual store, handles scoped packages and nested installs, and rejects fixture trees inside packages. Five historical npm advisories ship in the embedded list:
+
+| Name | Versions | Advisory |
+|---|---|---|
+| `event-stream` | 3.3.6 | GHSA-mh6f-8j2x-4483 |
+| `flatmap-stream` | 0.1.1 | GHSA-mh6f-8j2x-4483 |
+| `ua-parser-js` | 0.7.29, 0.8.0, 1.0.0 | GHSA-pjwm-rvh2-c87w |
+| `coa` | 2.0.3, 2.0.4, 2.1.1, 2.1.3, 3.0.1, 3.1.3 | GHSA-73qr-pfmq-6rp8 |
+| `rc` | 1.2.9, 1.3.9, 2.3.9 | GHSA-g2q5-5433-rhrf |
+
+The Python `aguara check` path is unchanged and continues to auto-discover site-packages.
+
+#### Docker validation harness
+
+New `make` targets give reproducible offline validation that any maintainer or agent can run:
+
+- `make bench-docker`: existing target, now passes `AGUARA_VERSION` / `AGUARA_COMMIT` build args so the in-image binary reports the real revision instead of `dev` / `none`.
+- `make test-race-docker`: `go test -race -count=1 ./...` inside a hardened Docker image (same Go base + digest pin, `build-base` for cgo).
+- `make smoke-docker`: behavioral smokes for the npm incident check (compromised / clean / fixture-nested / bare-dir cases) and the supply-chain chain rules (pwn-request workflow + lifecycle-git package + CI-secret-exfil payload).
+- `make verify-docker`: meta-target chaining bench, race, and smokes.
+
+All Docker invocations share the existing hardened runtime: `--network none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only`, `/tmp` tmpfs. New artifacts: `.bench/provenance.json` and `.bench/provenance-race.json` record `aguara_version`, `aguara_commit`, `go_version`, `docker_image`, `timestamp_utc`, and command for each run. Per-target artifact cleanup at the start of each Docker target prevents stale outputs from mixing with fresh runs.
+
+#### Analyzer micro-benchmarks
+
+`BenchmarkCITrustAnalyzer`, `BenchmarkPkgMetaAnalyzer`, `BenchmarkJSRiskAnalyzer`, `BenchmarkIncidentNPMCheck`. No thresholds; the runs land in `.bench/go-bench-analyzers.txt` so per-analyzer cost is observable across releases.
+
+### Changed
+
+#### `--disable-rule` now suppresses analyzer-emitted findings
+
+The flag previously filtered only the compiled pattern rule list, so analyzer-emitted IDs (`GHA_*`, `NPM_*`, `JS_*`, `AGENT_PERSISTENCE_001`, `TOXIC_*`, `RUGPULL_001`, NLP injection IDs) bypassed it. The filter now runs inside the scanner pipeline before tool exemptions, dedup, scoring, and min-severity filtering, so every analyzer sees the same suppression. `.aguara.yml disable_rules` benefits the same way. No flag or schema change; behavior expansion only.
+
+#### JSON output stability: `findings: []` on clean results
+
+Both `aguara scan --format json` and `aguara check --format json` emit `"findings": []` (and `"credentials": []` for `check`) on clean results instead of `null`. `ScanResult.MarshalJSON` normalizes at the serialization boundary, covering every producer including the CLI's auto-discover aggregate path. `CheckResult` is initialized with empty slices at construction in both `Check` and `CheckNPM`. Public schema unchanged; only the empty-list representation flips from `null` to `[]`.
+
+#### `goreleaser` archives schema modernized
+
+`archives[].format` / `format_overrides[].format` updated to the plural `formats: [...]` array form. Output artifacts unchanged. `brews` to `homebrew_casks` migration is intentionally deferred to a follow-up release because it changes the Homebrew tap layout from `Formula/aguara.rb` to `Casks/aguara.rb` and is user-facing.
+
+### Fixed
+
+- `IsCompromised(name, version)` (the legacy two-argument helper) now scopes to PyPI, so a Python package whose metadata name+version coincides with a newly-shipped npm advisory (`rc`, `event-stream`) is not falsely flagged by the Python checker.
+- `/proc/<pid>/<sub>` detection correctly excludes root-level files (`/proc/meminfo`, `/proc/cmdline`, `/proc/stat`, `/proc/cpuinfo`).
+- VS Code persistence detection requires the actual auto-execution primitive (`.vscode/tasks.json` plus `runOn: folderOpen`) rather than firing on either alone.
+- `actions/cache/restore` no longer triggers `GHA_CACHE_001` (the action is read-only and cannot poison a downstream privileged workflow).
+- `GHA_PWN_REQUEST_001` requires code execution AFTER the untrusted checkout, not anywhere in the job, so trusted setup before the PR checkout no longer creates a false chain.
+- npm metadata: credentialed git URLs (`git+https://user:token@host/...`) are stripped of credentials before being emitted in finding text.
+
+### Internal
+
+- 7 PRs (#70 - #78) drove the round; 1 follow-up chore (#79) cleaned the GoReleaser deprecation warnings.
+- 193 detection rules (up from 189), 13 categories, 7 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, NLP, toxicflow, rugpull) up from 4, ~750 tests.
+- The `--disable-rule` analyzer-wide filter, `findings: []` JSON normalization, and Docker harness are durable infrastructure available to every future PR.
+
 ## [0.14.5] — 2026-04-24
 
 Patch release. Four audit items surfaced by an external review of v0.14.4: the public library used to print credentials verbatim in scan output, the bare CLI used to phone home from CI, `--changed` used to follow committed symlinks, and `.gitignore` did not cover the obvious secret file patterns. One API addition (`WithRedaction`), one new CLI flag (`--no-redact`), one behavior change that library consumers must know about (credential-leak `matched_text` is now scrubbed by default). Plus incidental docs and dev-tooling cleanup landed in the same window.

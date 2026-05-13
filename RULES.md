@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-Aguara ships with **148+ built-in rules** across 13 categories, plus NLP-based and toxic-flow analyzers.
+Aguara ships with **193 built-in pattern rules** across 13 categories, plus four chain-aware scan analyzers (ci-trust, pkgmeta, jsrisk, toxicflow) and a rug-pull detector. Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
@@ -8,7 +8,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 ---
 
-## Prompt Injection (17 rules + NLP)
+## Prompt Injection (18 rules + NLP)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -57,7 +57,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | EXFIL_016 | MEDIUM | Git history or diff access with transmission |
 | NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
 
-## Credential Leak (19 rules)
+## Credential Leak (22 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -79,7 +79,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CRED_016 | MEDIUM | SSH private key in command |
 | CRED_017 | LOW | Docker environment credentials |
 
-## MCP Attack (12 rules)
+## MCP Attack (16 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -95,7 +95,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCP_010 | HIGH | Prompt cache poisoning |
 | MCP_011 | HIGH | Arbitrary MCP server execution |
 
-## MCP Config (8 rules)
+## MCP Config (13 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -108,7 +108,9 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
 | MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
 
-## Supply Chain (15 rules)
+## Supply Chain
+
+Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped before v0.15.0) plus SUPPLY_020-025 (the workflow / pwn-request / OIDC / runner-pivot / agent-persistence series that landed with the supply-chain trust round). SUPPLY_015-019 are tracked via `aguara list-rules --category supply-chain` and `aguara explain <RULE_ID>`; they cover narrower IOC and lockfile checks that are kept current via the live catalog rather than this static table.
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -126,8 +128,19 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | SUPPLY_012 | MEDIUM | Git clone and execute chain |
 | SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
 | SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
+| SUPPLY_020 | HIGH | GitHub Actions untrusted input injection |
+| SUPPLY_021 | MEDIUM | GitHub Actions overly broad permissions |
+| SUPPLY_022 | HIGH | GitHub Actions OIDC token request variables in executable code |
+| SUPPLY_023 | CRITICAL | GitHub Actions runner process memory access |
+| SUPPLY_025 | HIGH | Claude Code workspace persistence path |
 
-## External Download (17 rules)
+## Supply Chain Exfil
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| SUPPLY_024 | HIGH | Session-Network exfil endpoint (Mini Shai-Hulud IOC set) |
+
+## External Download (16 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -166,7 +179,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | CMDEXEC_012 | LOW | Chained shell command execution |
 | CMDEXEC_013 | LOW | Shell script file execution |
 
-## Indirect Injection (6 rules)
+## Indirect Injection (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -178,7 +191,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | INDIRECT_009 | MEDIUM | External API response drives agent behavior |
 | INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
 
-## Third-Party Content (5 rules)
+## Third-Party Content (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -187,7 +200,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | THIRDPARTY_004 | LOW | External API response used without validation |
 | THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
 
-## SSRF & Cloud (10 rules)
+## SSRF & Cloud (11 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
@@ -200,7 +213,7 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 | SSRF_007 | CRITICAL | Cloud credential endpoint |
 | SSRF_008 | MEDIUM | DNS rebinding setup |
 
-## Unicode Attack (7 rules)
+## Unicode Attack (10 rules)
 
 | Rule | Severity | Description |
 |------|----------|-------------|
