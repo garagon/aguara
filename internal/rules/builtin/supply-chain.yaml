@@ -521,10 +521,10 @@ examples:
 ---
 id: SUPPLY_022
 name: "GitHub Actions OIDC token request variables in executable code"
-description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. Targets cover common executable file types plus extensionless lifecycle script basenames (install, postinstall, preinstall, prepare, prepublish); documentation extensions (.md, .rst, .txt) are intentionally out of scope to avoid HIGH findings on trusted-publishing prose."
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL in package code. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. Workflow YAML is intentionally out of scope here because the ci-trust analyzer (GHA_OIDC_001) already gates id-token: write on the chain shape; flagging every legitimate trusted-publishing workflow would block CI on its intended use. Targets cover common executable file types plus extensionless lifecycle script basenames (install, postinstall, preinstall, prepare, prepublish)."
 severity: HIGH
 category: supply-chain
-targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
@@ -536,7 +536,6 @@ examples:
   true_positive:
     - "const t = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;"
     - "curl -H \"Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN\" $ACTIONS_ID_TOKEN_REQUEST_URL"
-    - "  - run: echo $ACTIONS_ID_TOKEN_REQUEST_URL"
     - "token = os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']"
     - "\"postinstall\": \"node -e 'console.log(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)'\""
   false_positive:
@@ -571,9 +570,10 @@ examples:
 ---
 id: SUPPLY_025
 name: "Claude Code workspace persistence path"
-description: "Detects references to Claude Code workspace files that auto-execute on workspace open: settings.json hooks, router_runtime.js, setup.mjs, and the .claude/hooks/ directory. A package writing to any of these installs persistence that survives reinstall and is invisible outside the editor. VS Code persistence is handled by the jsrisk chain analyzer, which precisely gates on the tasks.json + runOn:folderOpen pair — a standalone runOn:folderOpen token is intentionally not flagged by this leaf-level rule because it appears in unrelated VS Code schemas and extension defaults."
+description: "Detects references to Claude Code workspace files that auto-execute on workspace open: settings.json hooks, router_runtime.js, setup.mjs, and the .claude/hooks/ directory. A package writing to any of these installs persistence that survives reinstall and is invisible outside the editor. Targets are scoped to executable file types and extensionless lifecycle scripts so a README or runbook describing the .claude/ surface is not treated as a finding. VS Code persistence is handled by the jsrisk chain analyzer, which precisely gates on the tasks.json + runOn:folderOpen pair."
 severity: HIGH
 category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
 match_mode: any
 remediation: "Editor automation files belong to the user, not to package code. Audit the change in a clean clone, remove any package-emitted automation, and pin the source package to a known-clean version."
 patterns:
