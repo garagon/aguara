@@ -552,7 +552,7 @@ match_mode: all
 remediation: "Treat the file as malicious. Rotate any tokens reachable from the affected runner and audit recent CI runs for unexpected publishes."
 patterns:
   - type: regex
-    value: "/proc/(self|thread-self|[0-9]+|\\$\\{[^}]+\\})/(mem|maps|cmdline)"
+    value: "/proc/(self|thread-self|[0-9]+|\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*)/(mem|maps|cmdline)"
   - type: regex
     value: "Runner\\.Worker|ACTIONS_ID_TOKEN"
 examples:
@@ -560,6 +560,7 @@ examples:
     - "fs.readFileSync('/proc/self/maps') if Runner.Worker found with ACTIONS_ID_TOKEN_REQUEST_TOKEN"
     - "Walk /proc/12345/mem and extract ACTIONS_ID_TOKEN_REQUEST_URL"
     - "open('/proc/self/cmdline') Runner.Worker"
+    - "for pid in $(pgrep Runner.Worker); do cat /proc/$pid/mem; done # ACTIONS_ID_TOKEN"
   false_positive:
     - "Read /proc/stat to compute CPU usage; ACTIONS_ID_TOKEN_REQUEST_TOKEN is unrelated"
     - "Parse /proc/meminfo for memory totals; Runner.Worker is the goroutine name"
