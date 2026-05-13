@@ -521,9 +521,10 @@ examples:
 ---
 id: SUPPLY_022
 name: "GitHub Actions OIDC token request variables in executable code"
-description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. No target filter so extensionless lifecycle scripts (./install, scripts/build, bin/postinstall) are scanned alongside the usual JS/TS/Python/shell/YAML/JSON forms."
+description: "Detects references to ACTIONS_ID_TOKEN_REQUEST_TOKEN or ACTIONS_ID_TOKEN_REQUEST_URL. These env vars are normally set by the runner only for the publish step; reading them from arbitrary install-time or build-time code lets a compromised dependency mint a trusted-publishing token. Targets cover common executable file types plus extensionless lifecycle script basenames (install, postinstall, preinstall, prepare, prepublish); documentation extensions (.md, .rst, .txt) are intentionally out of scope to avoid HIGH findings on trusted-publishing prose."
 severity: HIGH
 category: supply-chain
+targets: ["*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.py", "*.sh", "*.bash", "*.zsh", "*.rb", "*.pl", "*.go", "*.rs", "*.yml", "*.yaml", "package.json", "install", "postinstall", "preinstall", "prepare", "prepublish"]
 match_mode: any
 remediation: "Restrict OIDC token access to the publish job. Never read ACTIONS_ID_TOKEN_REQUEST_* from install-time or build-time scripts."
 patterns:
