@@ -8,10 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 
 - `install.sh` extraction now passes `-o` to tar so the install succeeds under hardened container runtimes that drop `CAP_CHOWN` (`--cap-drop ALL`, rootless containers). Without the flag, tar attempted to restore the archive's recorded `uid/gid 1001` and failed with `Cannot change ownership`. POSIX-portable across GNU, BSD, and BusyBox tar.
+- README install snippets had env vars on the wrong side of the pipe (`VERSION=v0.15.0 curl ... | bash`). Bash applies environment assignments to the simple command immediately following them, so `VERSION` reached `curl` (where it is unused), not `sh`. Corrected to `curl ... | VERSION=v0.15.0 sh`.
+- README and CI snippets now pipe the installer into `sh` rather than `bash`, matching the script's own `#!/bin/sh` shebang. Avoids breakage on systems without bash (Alpine, BusyBox).
+- `action.yml` `DEFAULT_REF` bumped from `v0.14.4` to `v0.15.0` so consumers who do not pin a tag (or who reference a non-semver ref that gets rejected by the action's validation) fetch the current release's `install.sh`.
 
 ### Added
 
 - `make test-install-sh-docker` acceptance target. Builds an Alpine image with the tooling `install.sh` itself requires and runs the full install path under `--cap-drop ALL --security-opt no-new-privileges`, asserting the installed binary reports the expected version. Kept out of `verify-docker` because it requires network access (downloads the published release archive).
+- README "How to update" section explaining that re-running the installer downloads the selected release archive, verifies `checksums.txt`, and replaces the binary in place.
 
 ## [0.15.0] - 2026-05-13
 

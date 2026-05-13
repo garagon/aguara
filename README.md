@@ -56,14 +56,24 @@ AI agents and MCP servers run code on your behalf. A single malicious skill file
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 ```
 
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-VERSION=v0.15.0 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
-INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.15.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+```
+
+To update an existing install, rerun the installer. It downloads the selected release archive, verifies `checksums.txt`, and replaces the binary:
+
+```bash
+# Update to latest
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
+
+# Update/pin to a specific release
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.15.0 sh
 ```
 
 ### Alternative methods
@@ -294,7 +304,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitHub Actions (without the action)
 - name: Scan skills for security issues
   run: |
-    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
     aguara scan .claude/skills/ --ci
 ```
 
@@ -302,7 +312,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitLab CI
 security-scan:
   script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | bash
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
     - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
