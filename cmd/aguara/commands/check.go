@@ -136,12 +136,18 @@ func autoDetectCheckTarget(path string) (string, string, error) {
 		if abs, err := filepath.Abs(probe); err == nil {
 			resolved = abs
 		}
+		// On the npm-detected branches, return the resolved path so
+		// incident.CheckNPM -> resolveNPMRoot does not have to repeat
+		// the same dot-aware basename trick. Passing a literal "."
+		// through here breaks the npm walker because
+		// filepath.Base(".") == "." and the path has no
+		// `./node_modules` child.
 		if filepath.Base(resolved) == "node_modules" {
-			return ecoNPM, probe, nil
+			return ecoNPM, resolved, nil
 		}
-		nm := filepath.Join(probe, "node_modules")
+		nm := filepath.Join(resolved, "node_modules")
 		if nmInfo, err := os.Stat(nm); err == nil && nmInfo.IsDir() {
-			return ecoNPM, probe, nil
+			return ecoNPM, resolved, nil
 		}
 	}
 	// Fall back to Python. Preserve the caller's original (possibly

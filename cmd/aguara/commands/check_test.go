@@ -340,26 +340,32 @@ func TestResolveCheckTargetExplicitFlags(t *testing.T) {
 func TestResolveCheckTargetAutoDetectFromInsideNodeModules(t *testing.T) {
 	// Regression for codex P2 (PR review, 2026-05-15): when the
 	// probe is "." -- e.g. the user runs `aguara check` from inside
-	// a node_modules directory -- filepath.Base(".") is ".", which
-	// previously caused the auto-detector to fall through to Python
-	// even though cwd was already an npm tree. We now resolve to an
-	// absolute path before the basename check, so the npm signal is
-	// preserved and the npm checker runs.
+	// a node_modules directory -- filepath.Base(".") is ".". The
+	// auto-detector must (a) recognise the npm signal anyway and
+	// (b) return a path that resolveNPMRoot can walk, since
+	// filepath.Base(".") and `./node_modules` both fail under
+	// resolveNPMRoot. We resolve to an absolute path before the
+	// basename check AND return that resolved path so the npm
+	// walker sees a usable input.
 	nm := filepath.Join(t.TempDir(), "node_modules")
 	require.NoError(t, os.MkdirAll(nm, 0o755))
 	t.Chdir(nm)
 
+	resolvedNM, err := filepath.Abs(".")
+	require.NoError(t, err)
+
 	eco, path, err := resolveCheckTarget("", ".")
 	require.NoError(t, err)
 	require.Equal(t, ecoNPM, eco)
-	require.Equal(t, ".", path, "auto-detect must keep the caller's original path so the npm walker sees the same input")
+	require.Equal(t, resolvedNM, path, "auto-detect must hand the npm walker a resolved path so resolveNPMRoot can find node_modules")
 
 	// Same shape, but with no --path flag (empty string) -- the
 	// dispatcher uses "." as a probe internally and must still
-	// detect npm.
-	eco, _, err = resolveCheckTarget("", "")
+	// detect npm with a resolved path.
+	eco, path, err = resolveCheckTarget("", "")
 	require.NoError(t, err)
 	require.Equal(t, ecoNPM, eco)
+	require.Equal(t, resolvedNM, path)
 }
 
 func TestResolveCheckTargetAutoDetect(t *testing.T) {
