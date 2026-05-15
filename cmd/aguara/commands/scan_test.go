@@ -42,6 +42,7 @@ func resetFlags() {
 	flagCheckAllowStale = false
 	flagUpdateTimeout = intel.DefaultHTTPTimeout
 	flagUpdateEcosystems = nil
+	flagUpdateAllowEmpty = false
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.

@@ -261,6 +261,57 @@ func TestUpdateRecordsStableOrder(t *testing.T) {
 	require.Equal(t, "z", res.Snapshot.Records[1].Name)
 }
 
+func TestUpdateCanonicalisesEcosystemAlias(t *testing.T) {
+	// Codex P2 (PR 4 review): a user typing `--ecosystem pypi`
+	// (lowercase) previously got a 404 because OSV's bucket key
+	// is case-sensitive (`PyPI/all.zip`). Canonicalise before
+	// building the URL so the alias resolves to the right path.
+	body := buildEcosystemZip(t)
+	var seenURLs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenURLs = append(seenURLs, r.URL.Path)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	_, err := intel.Update(context.Background(), intel.UpdateOptions{
+		Ecosystems:  []string{"pypi", "python"},
+		URLTemplate: srv.URL + "/%s/all.zip",
+		HTTPClient:  srv.Client(),
+		Importer: importerStub(t, map[string]intel.Snapshot{
+			intel.EcosystemPyPI: {},
+		}),
+	})
+	require.NoError(t, err)
+	require.Len(t, seenURLs, 2)
+	for _, u := range seenURLs {
+		require.Equal(t, "/PyPI/all.zip", u, "alias must canonicalise to OSV's case-sensitive bucket key")
+	}
+}
+
+func TestUpdateRejectsUnsupportedEcosystemEarly(t *testing.T) {
+	// An unsupported ecosystem must fail BEFORE any HTTP request
+	// goes out. Otherwise a typo in `--ecosystem` (e.g. `npmm`)
+	// would hit OSV with a bad URL just to discover the input
+	// was wrong.
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte("nope"))
+	}))
+	defer srv.Close()
+
+	_, err := intel.Update(context.Background(), intel.UpdateOptions{
+		Ecosystems:  []string{"npmm"},
+		URLTemplate: srv.URL + "/%s/all.zip",
+		HTTPClient:  srv.Client(),
+		Importer:    importerStub(t, map[string]intel.Snapshot{}),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported ecosystem")
+	require.False(t, called, "no HTTP request should fire for an unsupported ecosystem")
+}
+
 // TestUpdateSendsUserAgent locks the User-Agent header so OSV.dev
 // can attribute traffic to Aguara. Helps with rate-limit triage if
 // someone abuses the public dump. Marshalling via json so the

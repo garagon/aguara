@@ -118,6 +118,20 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if len(ecosystems) == 0 {
 		ecosystems = []string{EcosystemNPM, EcosystemPyPI}
 	}
+	// Canonicalise before building URLs. OSV's GCS bucket keys
+	// are case-sensitive (`PyPI/all.zip`, not `pypi/all.zip`),
+	// so a user passing `--ecosystem pypi` would otherwise hit a
+	// 404 before the importer's canonicaliser had a chance to
+	// normalise the value.
+	canonical := make([]string, 0, len(ecosystems))
+	for _, raw := range ecosystems {
+		c := canonicaliseEcosystemForUpdate(raw)
+		if c == "" {
+			return nil, fmt.Errorf("intel update: unsupported ecosystem %q (supported: npm, PyPI)", raw)
+		}
+		canonical = append(canonical, c)
+	}
+	ecosystems = canonical
 	urlTmpl := opts.URLTemplate
 	if urlTmpl == "" {
 		urlTmpl = DefaultOSVURLTemplate
@@ -199,6 +213,25 @@ func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem
 		return Snapshot{}, 0, fmt.Errorf("import: %w", err)
 	}
 	return snap, int64(len(data)), nil
+}
+
+// canonicaliseEcosystemForUpdate maps aliases ("pypi", "Python")
+// onto the canonical OSV bucket key (EcosystemPyPI = "PyPI",
+// EcosystemNPM = "npm"). Returns "" for unsupported inputs so
+// Update can fail loud rather than 404 on a wrongly-cased URL.
+//
+// This duplicates osvimport.canonicaliseEcosystem on purpose:
+// importing osvimport here would create a cycle (intel <-
+// osvimport <- intel), and the function is two switch-arms.
+func canonicaliseEcosystemForUpdate(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "npm":
+		return EcosystemNPM
+	case "pypi", "python":
+		return EcosystemPyPI
+	default:
+		return ""
+	}
 }
 
 // dedupeSources collapses the merged Sources slice to one entry

@@ -15,6 +15,7 @@ import (
 var (
 	flagUpdateTimeout    time.Duration
 	flagUpdateEcosystems []string
+	flagUpdateAllowEmpty bool
 )
 
 var updateCmd = &cobra.Command{
@@ -36,6 +37,7 @@ This command updates THREAT INTEL only. It does not update the Aguara binary.`,
 func init() {
 	updateCmd.Flags().DurationVar(&flagUpdateTimeout, "timeout", intel.DefaultHTTPTimeout, "Overall HTTP timeout for the refresh")
 	updateCmd.Flags().StringSliceVar(&flagUpdateEcosystems, "ecosystem", nil, "Ecosystems to refresh (default: npm, PyPI)")
+	updateCmd.Flags().BoolVar(&flagUpdateAllowEmpty, "allow-empty", false, "Save a 0-record snapshot anyway (defaults to error so an upstream outage cannot wipe cached intel)")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -63,6 +65,19 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("aguara update: %w", err)
+	}
+
+	// Refuse to overwrite the local cache with an empty snapshot.
+	// Zero records here usually means OSV served a syntactically
+	// valid but empty/malformed dump, or an upstream schema shift
+	// made the importer drop every record. Saving in that
+	// scenario silently wipes whatever intel the user had cached;
+	// preserving the previous snapshot until the next successful
+	// refresh is the safer default. --allow-empty exists for the
+	// initial bootstrap case where the maintainer explicitly
+	// wants the empty file written.
+	if len(res.Snapshot.Records) == 0 && !flagUpdateAllowEmpty {
+		return fmt.Errorf("aguara update: refresh produced 0 records; refusing to overwrite cached intel (pass --allow-empty to save anyway)")
 	}
 
 	if err := store.Save(res.Snapshot); err != nil {
