@@ -1,21 +1,29 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/intel/osvimport"
 	"github.com/spf13/cobra"
 )
 
 var (
-	flagCheckPath      string
-	flagCheckEcosystem string
-	flagCheckFailOn    string
-	flagCheckCI        bool
+	flagCheckPath       string
+	flagCheckEcosystem  string
+	flagCheckFailOn     string
+	flagCheckCI         bool
+	flagCheckFresh      bool
+	flagCheckAllowStale bool
 )
 
 const (
@@ -39,6 +47,8 @@ func init() {
 	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python or npm")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
+	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
+	checkCmd.Flags().BoolVar(&flagCheckAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
 	rootCmd.AddCommand(checkCmd)
 }
 
@@ -50,7 +60,12 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	opts := incident.CheckOptions{Path: path}
+	override, err := resolveCheckIntel(cmd.Context())
+	if err != nil {
+		return err
+	}
+
+	opts := incident.CheckOptions{Path: path, Intel: override}
 	var result *incident.CheckResult
 	switch eco {
 	case ecoPython:
@@ -279,6 +294,100 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 	fmt.Printf("\n%s\n", strings.Join(parts, " · "))
 
 	return nil
+}
+
+// resolveCheckIntel builds the IntelOverride the check pipeline
+// should consume. The logic is:
+//
+//  1. If --fresh was passed, run intel.Update; on success save to
+//     local Store and override with [embedded..., refreshed].
+//     IntelSummary.Mode = "online", Snapshot = "remote-fresh".
+//  2. If --fresh failed AND --allow-stale was passed, fall back
+//     to a local-only or embedded-only override and continue.
+//  3. If --fresh was NOT passed AND a local snapshot exists, layer
+//     it over the embedded snapshots. Mode stays "offline";
+//     Snapshot = "local".
+//  4. Otherwise, return nil so the check uses the cached embedded
+//     matcher (the legacy default path).
+//
+// This is the only place the CLI touches the network for `check`.
+// Returning nil keeps the default-check contract intact: no flags,
+// no network.
+func resolveCheckIntel(ctx context.Context) (*incident.IntelOverride, error) {
+	store, storeErr := intel.DefaultStore()
+	if storeErr != nil {
+		// A missing $HOME is exotic; fall through to the
+		// embedded-only path rather than blocking the check.
+		store = nil
+	}
+
+	if flagCheckFresh {
+		ctx, cancel := context.WithTimeout(ctx, intel.DefaultHTTPTimeout)
+		defer cancel()
+
+		res, err := intel.Update(ctx, intel.UpdateOptions{
+			Importer: osvUpdateAdapter,
+			Stderr:   os.Stderr,
+		})
+		if err != nil {
+			if !flagCheckAllowStale {
+				return nil, fmt.Errorf("--fresh refresh failed: %w (pass --allow-stale to fall back to cached intel)", err)
+			}
+			fmt.Fprintf(os.Stderr, "warning: --fresh refresh failed (%v); falling back to cached intel\n", err)
+			return localOrEmbeddedOverride(store), nil
+		}
+		if store != nil {
+			if saveErr := store.Save(res.Snapshot); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: --fresh: save snapshot failed: %v\n", saveErr)
+			}
+		}
+		snaps := append([]intel.Snapshot{}, incident.EmbeddedSnapshots()...)
+		snaps = append(snaps, res.Snapshot)
+		return &incident.IntelOverride{
+			Snapshots:     snaps,
+			Mode:          "online",
+			SnapshotLabel: "remote-fresh",
+		}, nil
+	}
+
+	return localOrEmbeddedOverride(store), nil
+}
+
+// localOrEmbeddedOverride returns an override layered over the
+// embedded snapshots when a local snapshot exists, or nil when no
+// local snapshot is found. Returning nil for the no-local case
+// keeps the cached default matcher in play -- no per-check
+// allocation, no behavioural change for the default `aguara check`
+// invocation.
+func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
+	if store == nil {
+		return nil
+	}
+	snap, err := store.Load()
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "warning: local intel snapshot unreadable: %v\n", err)
+		}
+		return nil
+	}
+	snaps := append([]intel.Snapshot{}, incident.EmbeddedSnapshots()...)
+	snaps = append(snaps, *snap)
+	return &incident.IntelOverride{
+		Snapshots:     snaps,
+		Mode:          "offline",
+		SnapshotLabel: "local",
+	}
+}
+
+// osvUpdateAdapter is the production wiring of intel.UpdateOptions.Importer
+// to osvimport.ImportFromZip. Mirrors the adapter in update.go so the
+// two CLI surfaces (`aguara update` and `aguara check --fresh`) share
+// one importer hook.
+func osvUpdateAdapter(r io.ReaderAt, size int64, ecosystems []string, generatedAt time.Time) (intel.Snapshot, error) {
+	return osvimport.ImportFromZip(r, size, osvimport.Options{
+		Ecosystems:  ecosystems,
+		GeneratedAt: generatedAt,
+	})
 }
 
 // checkSeverityRank orders Finding.Severity strings against the

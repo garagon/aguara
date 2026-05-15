@@ -85,6 +85,24 @@ type InstalledPackage struct {
 type CheckOptions struct {
 	Path          string // explicit site-packages path, empty = auto-discover
 	IncludeCaches bool
+	// Intel overrides the embedded snapshots and IntelSummary that
+	// the check pipeline uses. Nil means "use EmbeddedSnapshots()
+	// and the offline/embedded IntelSummary" (the default for
+	// every legacy caller). The CLI sets this when --fresh just
+	// refreshed the local cache or when a local snapshot is
+	// available, so IntelSummary reflects what actually matched.
+	Intel *IntelOverride
+}
+
+// IntelOverride lets the CLI swap in a different snapshot set
+// (e.g. embedded + local cache, or freshly downloaded) for one
+// check run without mutating package-level state. Mode and
+// SnapshotLabel populate the corresponding IntelSummary fields so
+// downstream consumers see the truthful provenance.
+type IntelOverride struct {
+	Snapshots     []intel.Snapshot
+	Mode          string // "offline" | "online"
+	SnapshotLabel string // "embedded" | "local" | "remote-fresh"
 }
 
 // Check scans a Python environment for compromised packages and artifacts.
@@ -103,17 +121,15 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		Environment: siteDir,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
-		Intel:       embeddedIntelSummary(),
+		Intel:       intelSummaryFor(opts),
 	}
 
-	// 1. Read installed packages and check against the embedded
-	// intel matcher (manual KnownCompromised + OSV-derived stub
-	// from generated_intel.go). Going through the matcher rather
-	// than the legacy IsCompromised slice scan means any OSV
-	// record the maintainer regenerates is automatically picked
-	// up here -- otherwise the IntelSummary would advertise "osv"
-	// as a source the check pipeline never consults.
-	matcher := defaultIntelMatcher()
+	// 1. Read installed packages and check against the intel matcher.
+	// matcherFor honours an explicit opts.Intel override (e.g. the
+	// CLI passing a refreshed local snapshot) and falls back to the
+	// cached default matcher built from EmbeddedSnapshots() when no
+	// override is present.
+	matcher := matcherFor(opts)
 	packages := readInstalledPackages(siteDir)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
@@ -150,7 +166,7 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 	result.Credentials = checkCredentialFiles()
 
 	// 5. Always check pip/uv/npx caches for compromised packages
-	result.Findings = append(result.Findings, checkCaches()...)
+	result.Findings = append(result.Findings, checkCaches(opts)...)
 
 	return result, nil
 }
@@ -378,7 +394,7 @@ func checkCredentialFiles() []CredentialFile {
 }
 
 // checkCaches looks for compromised packages and malicious files in pip/uv/npx cache dirs.
-func checkCaches() []Finding {
+func checkCaches(opts CheckOptions) []Finding {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -393,7 +409,8 @@ func checkCaches() []Finding {
 		filepath.Join(home, "Library/Caches/pip"), // macOS
 	}
 
-	matcher := defaultIntelMatcher()
+	matcher := matcherFor(opts)
+	snaps := snapshotsFor(opts)
 	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -449,12 +466,12 @@ func checkCaches() []Finding {
 			// Filename-based check for cache artifacts. The cache
 			// scan is part of the Python check path, so only PyPI
 			// entries apply here; npm rows live in a separate scan.
-			// Iterating the embedded snapshots (manual + OSV) lets
-			// OSV-only entries trip this path too -- previously
-			// only KnownCompromised would, so an OSV-only PyPI
-			// malicious package cached as a wheel would be missed.
+			// snapshotsFor(opts) honours an explicit override (e.g.
+			// embedded + local cache) so a freshly-refreshed PyPI
+			// advisory trips the heuristic without having to wait
+			// for the next release.
 			base := strings.ToLower(name)
-			for _, snap := range EmbeddedSnapshots() {
+			for _, snap := range snaps {
 				for _, rec := range snap.Records {
 					if rec.Ecosystem != intel.EcosystemPyPI {
 						continue
