@@ -104,10 +104,18 @@ func TestCheckResultIntelSummaryPopulated(t *testing.T) {
 	require.False(t, result.Intel.GeneratedAt.IsZero(),
 		"IntelSummary.GeneratedAt must be set from the embedded snapshot")
 	require.NotEmpty(t, result.Intel.Sources)
+	// The manual source must always be present; the generated OSV
+	// snapshot may or may not be (empty stub vs regenerated dump),
+	// so we assert manual-is-there rather than the prior
+	// only-manual contract which broke once real OSV records
+	// shipped in v0.16.
+	var sawManual bool
 	for _, src := range result.Intel.Sources {
-		require.Truef(t, strings.EqualFold(src, "manual"),
-			"embedded snapshot must carry only manual source, got %q", src)
+		if strings.EqualFold(src, "manual") {
+			sawManual = true
+		}
 	}
+	require.True(t, sawManual, "embedded IntelSummary must always list the manual source")
 }
 
 func TestCheckResultIntelSummaryPopulatedForPython(t *testing.T) {

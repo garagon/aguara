@@ -411,6 +411,16 @@ func checkCaches(opts CheckOptions) []Finding {
 
 	matcher := matcherFor(opts)
 	snaps := snapshotsFor(opts)
+	// Precompute the PyPI filename-heuristic index ONCE outside
+	// the per-file WalkDir loop. Before this, every cache file
+	// re-iterated all snapshots' records and ran a fresh
+	// strings.ToLower on each rec.Name. With v0.16's regenerated
+	// OSV stub carrying ~1,400 PyPI records, a host with active
+	// pip/uv caches (40k+ files is common) saw aguara check spike
+	// to 30s+ scanning caches. The precompute moves the lower-case
+	// and ecosystem filter out of the hot loop so per-file cost
+	// scales with the substring matcher, not the snapshot size.
+	pypiIndex := buildPyPIFilenameIndex(snaps)
 	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -471,27 +481,39 @@ func checkCaches(opts CheckOptions) []Finding {
 			// advisory trips the heuristic without having to wait
 			// for the next release.
 			base := strings.ToLower(name)
-			for _, snap := range snaps {
-				for _, rec := range snap.Records {
-					if rec.Ecosystem != intel.EcosystemPyPI {
-						continue
-					}
-					if rec.Withdrawn {
-						continue
-					}
-					if !strings.Contains(base, strings.ToLower(rec.Name)) {
-						continue
-					}
-					for _, v := range rec.Versions {
-						if strings.Contains(base, v) && !seen[path] {
-							seen[path] = true
-							findings = append(findings, Finding{
-								Severity:    SevWarning,
-								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", rec.Name, v, rec.ID),
-								Path:        path,
-								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
-							})
-						}
+			candidateName, rest := parsePyPIWheelName(base)
+			if candidateName == "" {
+				// Filename is not a wheel/sdist shape (pip's
+				// content-hash cache entries fall here). Skip
+				// rather than substring-scan, which v0.15
+				// false-positived on hex hashes that happened
+				// to contain a record name.
+				return nil
+			}
+			entries, ok := pypiIndex[intel.PEP503Normalize(candidateName)]
+			if !ok {
+				return nil
+			}
+			for _, entry := range entries {
+				if seen[path] {
+					break
+				}
+				for _, v := range entry.versions {
+					// Require version to appear in the suffix
+					// after the name. Without that constraint
+					// `numpy-1.26.4.whl` could spuriously match
+					// a record whose version string lives only
+					// inside `numpy` itself (1-digit versions
+					// like "1" would explode otherwise).
+					if strings.Contains(rest, v) {
+						seen[path] = true
+						findings = append(findings, Finding{
+							Severity:    SevWarning,
+							Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
+							Path:        path,
+							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+						})
+						break
 					}
 				}
 			}
@@ -499,4 +521,77 @@ func checkCaches(opts CheckOptions) []Finding {
 		})
 	}
 	return findings
+}
+
+// pypiFilenameEntry is one row in the precomputed PyPI filename-
+// heuristic index. displayName preserves the original casing for
+// the finding title; id is the OSV/manual advisory ID.
+type pypiFilenameEntry struct {
+	displayName string
+	id          string
+	versions    []string
+}
+
+// pypiFilenameIndex maps a PEP 503-normalised package name to the
+// list of (id, displayName, versions) entries for that name. The
+// per-file matcher parses the wheel/sdist filename, extracts the
+// `<name>-<version>` prefix, normalises the name, and does an
+// O(1) map lookup. This avoids the v0.15-era substring scan that
+// false-positived on hash filenames (`...4123932...` matching a
+// MAL record named "4123") and on typosquat prefixes ("nump"
+// matching "numpy-1.26.4.whl"); both were observed regressions
+// once the OSV stub started carrying real records.
+type pypiFilenameIndex map[string][]pypiFilenameEntry
+
+// buildPyPIFilenameIndex builds the precomputed heuristic index
+// once per check run. Filters out withdrawn records, anything not
+// tagged PyPI, and records with no Versions (filename heuristic
+// needs at least one version to anchor a cache finding). Names
+// are normalised via intel.PEP503Normalize so the lookup matches
+// the canonical wheel-filename casing.
+func buildPyPIFilenameIndex(snaps []intel.Snapshot) pypiFilenameIndex {
+	idx := make(pypiFilenameIndex)
+	for _, snap := range snaps {
+		for _, rec := range snap.Records {
+			if rec.Ecosystem != intel.EcosystemPyPI {
+				continue
+			}
+			if rec.Withdrawn {
+				continue
+			}
+			if len(rec.Versions) == 0 {
+				continue
+			}
+			key := intel.PEP503Normalize(rec.Name)
+			if key == "" {
+				continue
+			}
+			idx[key] = append(idx[key], pypiFilenameEntry{
+				displayName: rec.Name,
+				id:          rec.ID,
+				versions:    rec.Versions,
+			})
+		}
+	}
+	return idx
+}
+
+// parsePyPIWheelName extracts the (name, rest) pair from a PyPI
+// cache filename. Returns ("", "") for filenames that do not
+// match a wheel/sdist shape (e.g. pip's content-hash cache entries
+// in http-v2/) so the caller can skip them cleanly.
+//
+// Wheel: `<name>-<version>-<python>-<abi>-<platform>.whl`
+// Sdist: `<name>-<version>.tar.gz` (or .zip)
+//
+// Both forms put the name first, followed by `-`. We do not
+// require any specific suffix because pip caches sometimes drop
+// the extension; the lookup-by-version step below catches false
+// hits anyway.
+func parsePyPIWheelName(base string) (name, rest string) {
+	idx := strings.IndexByte(base, '-')
+	if idx <= 0 {
+		return "", ""
+	}
+	return base[:idx], base[idx+1:]
 }

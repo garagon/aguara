@@ -195,6 +195,13 @@ func TestCheckNPM_DetectsNodeIPC2026Compromise(t *testing.T) {
 	// versions 9.1.6, 9.2.3, and 12.0.1 published an obfuscated
 	// CommonJS payload. Each must surface as CRITICAL with the
 	// SOCKET-2026-05-14 advisory.
+	//
+	// Since v0.16 the embedded OSV snapshot may carry an additional
+	// MAL- record for the same version, in which case BOTH advisories
+	// surface (distinct advisory IDs at the same tuple are kept
+	// separate by design -- see TestMatcherDistinctIDsAtSameTuple).
+	// The contract we lock is: at least one finding, CRITICAL, and
+	// the manual SOCKET advisory MUST be among them.
 	for _, ver := range []string{"9.1.6", "9.2.3", "12.0.1"} {
 		ver := ver
 		t.Run(ver, func(t *testing.T) {
@@ -206,15 +213,20 @@ func TestCheckNPM_DetectsNodeIPC2026Compromise(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CheckNPM error: %v", err)
 			}
-			if len(result.Findings) != 1 {
-				t.Fatalf("expected 1 finding for node-ipc %s, got %d: %+v", ver, len(result.Findings), result.Findings)
+			if len(result.Findings) == 0 {
+				t.Fatalf("expected at least one finding for node-ipc %s, got none", ver)
 			}
-			f := result.Findings[0]
-			if f.Severity != incident.SevCritical {
-				t.Errorf("expected CRITICAL, got %q", f.Severity)
+			var sawSocket bool
+			for _, f := range result.Findings {
+				if f.Severity != incident.SevCritical {
+					t.Errorf("expected CRITICAL, got %q", f.Severity)
+				}
+				if strings.Contains(f.Title+f.Detail, "SOCKET-2026-05-14-node-ipc") {
+					sawSocket = true
+				}
 			}
-			if !strings.Contains(f.Title+f.Detail, "SOCKET-2026-05-14-node-ipc") {
-				t.Errorf("expected SOCKET-2026-05-14-node-ipc advisory reference, got title=%q detail=%q", f.Title, f.Detail)
+			if !sawSocket {
+				t.Errorf("expected SOCKET-2026-05-14-node-ipc advisory among findings for %s, got: %+v", ver, result.Findings)
 			}
 		})
 	}
