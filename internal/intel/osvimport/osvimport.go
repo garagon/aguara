@@ -192,7 +192,10 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 
 	// A withdrawn-in-OSV record passes through as a withdrawn
 	// intel.Record so the matcher's tombstone path retracts any
-	// earlier live copy from another source.
+	// earlier live copy from another source. The tombstone keys
+	// off (ecosystem, name, ID) only, so a withdrawn record does
+	// not need to satisfy the empty-versions or signal/keyword
+	// gates that live records do.
 	withdrawn := osv.Withdrawn != ""
 
 	signal := hasHighConfidenceSignal(osv)
@@ -209,18 +212,26 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 				continue
 			}
 		}
-		if len(aff.Versions) == 0 {
-			// Runtime matcher consults exact Versions only; a
-			// ranges-only record is unreachable. Skip rather
-			// than emit dead data.
-			continue
-		}
 
-		// Filter: keep when there is a high-confidence source
-		// signal, OR a keyword hit on the free-form text. The
-		// "exact versions present" check above gates both paths.
-		if !signal && !keywordHit {
-			continue
+		// Withdrawn records bypass both the empty-versions skip
+		// and the signal/keyword gate. They exist purely so the
+		// matcher can tombstone an earlier live copy with the
+		// same advisory ID; if we filter them out here, the live
+		// copy keeps matching forever after the retraction.
+		if !withdrawn {
+			if len(aff.Versions) == 0 {
+				// Runtime matcher consults exact Versions only;
+				// a ranges-only live record is unreachable.
+				// Skip rather than emit dead data.
+				continue
+			}
+			// Filter: keep when there is a high-confidence
+			// source signal, OR a keyword hit on the free-form
+			// text. The "exact versions present" check above
+			// gates both paths.
+			if !signal && !keywordHit {
+				continue
+			}
 		}
 
 		out = append(out, intel.Record{

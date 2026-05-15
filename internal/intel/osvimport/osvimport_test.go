@@ -235,6 +235,31 @@ func TestImportEcosystemFilter(t *testing.T) {
 	require.Equal(t, intel.EcosystemNPM, snap.Records[0].Ecosystem)
 }
 
+func TestImportPassesWithdrawnEvenWithoutVersions(t *testing.T) {
+	// Codex P2 regression (PR 3 review, round 4): a withdrawn
+	// advisory with no exact Versions (ranges-only) must still
+	// pass through so the matcher's tombstone path can retract
+	// an earlier live copy with the same ID. Without this, a
+	// retraction in a fresh OSV refresh would silently not apply
+	// and the manual / earlier copy would keep matching.
+	rec := osvRecordFixture{
+		ID:        "MAL-2024-retract-ranges-only",
+		Withdrawn: "2024-02-01T00:00:00Z",
+		Affected: []affectedFixture{{
+			Package: packageFixture{Name: "evil-pkg", Ecosystem: "npm"},
+			// No Versions field -- ranges-only retraction.
+		}},
+	}
+	snap, err := osvimport.Import(
+		[][]byte{mustMarshal(t, rec)},
+		osvimport.Options{Ecosystems: []string{"npm"}, GeneratedAt: time.Unix(0, 0)},
+	)
+	require.NoError(t, err)
+	require.Len(t, snap.Records, 1, "withdrawn record without exact versions must still pass through")
+	require.True(t, snap.Records[0].Withdrawn)
+	require.Empty(t, snap.Records[0].Versions, "ranges-only withdrawn record carries no Versions")
+}
+
 func TestImportPassesWithdrawn(t *testing.T) {
 	// A withdrawn OSV advisory must be passed through with
 	// Withdrawn=true so the runtime matcher's tombstone path
