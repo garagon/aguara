@@ -46,6 +46,7 @@ func main() {
 		packageName string
 		varName     string
 		genTime     string
+		allowEmpty  bool
 	)
 
 	fs := flag.NewFlagSet("update-intel", flag.ContinueOnError)
@@ -55,6 +56,7 @@ func main() {
 	fs.StringVar(&packageName, "package", "incident", "Go package the generated file declares")
 	fs.StringVar(&varName, "var", "EmbeddedIntelSnapshot", "Exported variable name in the generated file")
 	fs.StringVar(&genTime, "generated-at", "", "Override the snapshot timestamp (RFC3339; defaults to now). Use this for reproducible builds.")
+	fs.BoolVar(&allowEmpty, "allow-empty", false, "Allow an ecosystem to produce zero records (default: error). Use only for initial bootstrap.")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
@@ -92,6 +94,21 @@ func main() {
 		snap, err := importOne(zipPath, []string{eco}, generatedAt)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "update-intel: import %s (%s): %v\n", zipPath, eco, err)
+			os.Exit(1)
+		}
+		// Zero records for an ecosystem usually means the zip was
+		// paired with the wrong --ecosystem (e.g. the PyPI zip
+		// tagged as npm) or the zip is empty/malformed. Either
+		// way, silently overwriting generated_intel.go with empty
+		// intel for that ecosystem is the wrong release outcome.
+		// --allow-empty exists for the one legitimate case --
+		// bootstrapping a brand-new generated file where the
+		// maintainer wants the empty stub committed.
+		if len(snap.Records) == 0 && !allowEmpty {
+			fmt.Fprintf(os.Stderr,
+				"update-intel: %s (%s) produced 0 records. The zip may be paired with the wrong --ecosystem or have no malicious entries.\n"+
+					"             Pass --allow-empty to commit an empty snapshot anyway.\n",
+				zipPath, eco)
 			os.Exit(1)
 		}
 		if merged.GeneratedAt.IsZero() {
