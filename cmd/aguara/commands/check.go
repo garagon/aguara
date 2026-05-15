@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/garagon/aguara/internal/incident"
@@ -13,46 +14,128 @@ import (
 var (
 	flagCheckPath      string
 	flagCheckEcosystem string
+	flagCheckFailOn    string
+	flagCheckCI        bool
+)
+
+const (
+	ecoPython = "python"
+	ecoNPM    = "npm"
 )
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check for compromised packages and persistence artifacts",
 	Long: `Scan an installed package tree for known compromised versions and
-persistence artifacts. Defaults to Python (auto-discovers site-packages); pass
---ecosystem npm with --path pointing at a node_modules directory to check
-npm packages instead. The known-bad list ships embedded with the binary.`,
+persistence artifacts. With no flags, auto-detects an npm project (any
+directory containing node_modules) and otherwise falls back to Python
+site-packages discovery. Pass --ecosystem to force a specific check.
+The known-bad list ships embedded with the binary.`,
 	RunE: runCheck,
 }
 
 func init() {
-	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to the package tree (Python: site-packages; npm: node_modules)")
-	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "python", "Package ecosystem to check: python or npm")
+	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
+	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python or npm")
+	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
+	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	rootCmd.AddCommand(checkCmd)
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
-	opts := incident.CheckOptions{Path: flagCheckPath}
-	var (
-		result *incident.CheckResult
-		err    error
-	)
-	switch flagCheckEcosystem {
-	case "", "python", "pypi":
+	applyCheckCIDefaults()
+
+	eco, path, err := resolveCheckTarget(flagCheckEcosystem, flagCheckPath)
+	if err != nil {
+		return err
+	}
+
+	opts := incident.CheckOptions{Path: path}
+	var result *incident.CheckResult
+	switch eco {
+	case ecoPython:
 		result, err = incident.Check(opts)
-	case "npm":
+	case ecoNPM:
 		result, err = incident.CheckNPM(opts)
 	default:
-		return fmt.Errorf("unsupported ecosystem %q: choose python or npm", flagCheckEcosystem)
+		return fmt.Errorf("internal error: unresolved ecosystem %q", eco)
 	}
 	if err != nil {
 		return err
 	}
 
 	if flagFormat == "json" {
-		return writeCheckJSON(result)
+		if err := writeCheckJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := writeCheckTerminal(result, eco); err != nil {
+			return err
+		}
 	}
-	return writeCheckTerminal(result, flagCheckEcosystem)
+
+	return checkIncidentFailOnThreshold(result, flagCheckFailOn)
+}
+
+// applyCheckCIDefaults wires --ci to the equivalent explicit flags.
+// --ci sets --fail-on critical (unless the user already set --fail-on
+// explicitly) and disables color. NO_COLOR also disables color so the
+// flag interacts cleanly with CI runners that set it by convention.
+func applyCheckCIDefaults() {
+	if flagCheckCI {
+		if flagCheckFailOn == "" {
+			flagCheckFailOn = "critical"
+		}
+		flagNoColor = true
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		flagNoColor = true
+	}
+}
+
+// resolveCheckTarget turns the user-supplied --ecosystem / --path pair
+// into a (resolved-ecosystem, path) tuple the runner can dispatch on.
+//
+// Explicit --ecosystem values short-circuit auto-detection; only when
+// --ecosystem is empty does auto-detection run. An empty --path remains
+// empty for Python (so the legacy site-packages auto-discovery still
+// works) and resolves to "." for npm probing only.
+func resolveCheckTarget(eco, path string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(eco)) {
+	case "python", "pypi":
+		return ecoPython, path, nil
+	case "npm":
+		return ecoNPM, path, nil
+	case "":
+		return autoDetectCheckTarget(path)
+	default:
+		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python or npm", eco)
+	}
+}
+
+// autoDetectCheckTarget chooses an ecosystem from the filesystem shape
+// at path. The rules are deliberately narrow so the default
+// `aguara check` does not silently switch ecosystems on directories
+// that merely happen to share a name with one. npm wins only when
+// there is a real node_modules directory; otherwise the call falls
+// back to the historical Python check path.
+func autoDetectCheckTarget(path string) (string, string, error) {
+	probe := path
+	if probe == "" {
+		probe = "."
+	}
+	if info, err := os.Stat(probe); err == nil && info.IsDir() {
+		if filepath.Base(probe) == "node_modules" {
+			return ecoNPM, probe, nil
+		}
+		nm := filepath.Join(probe, "node_modules")
+		if nmInfo, err := os.Stat(nm); err == nil && nmInfo.IsDir() {
+			return ecoNPM, probe, nil
+		}
+	}
+	// Fall back to Python. Preserve the caller's original (possibly
+	// empty) path so discoverSitePackages() can still kick in.
+	return ecoPython, path, nil
 }
 
 func writeCheckJSON(result *incident.CheckResult) error {
@@ -72,11 +155,11 @@ func writeCheckJSON(result *incident.CheckResult) error {
 
 func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 	envLabel := "Python environment"
-	if ecosystem == "npm" {
+	if ecosystem == ecoNPM {
 		envLabel = "npm node_modules tree"
 	}
 	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
-	if ecosystem == "npm" {
+	if ecosystem == ecoNPM {
 		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
 	} else {
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
@@ -89,7 +172,7 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 			green = ""
 			reset = ""
 		}
-		fmt.Printf("  %s\u2714 No compromised packages or artifacts found.%s\n\n", green, reset)
+		fmt.Printf("  %s✔ No compromised packages or artifacts found.%s\n\n", green, reset)
 		return nil
 	}
 
@@ -148,7 +231,7 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 	// Action guidance is ecosystem-specific because `aguara clean`
 	// only knows how to remove the Python compromise artifacts.
 	fmt.Printf("%sAction required:%s\n", bold, reset)
-	if ecosystem == "npm" {
+	if ecosystem == ecoNPM {
 		fmt.Println("  1. Remove the affected packages with the package manager (`npm uninstall <name>`)")
 		fmt.Println("  2. Rotate ALL credentials reachable from runs that included the compromised version")
 		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
@@ -176,7 +259,45 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 	if warnCount > 0 {
 		parts = append(parts, fmt.Sprintf("%s%d warning%s", yellow, warnCount, reset))
 	}
-	fmt.Printf("\n%s\n", strings.Join(parts, " \u00b7 "))
+	fmt.Printf("\n%s\n", strings.Join(parts, " · "))
 
+	return nil
+}
+
+// checkSeverityRank orders Finding.Severity strings against the
+// --fail-on threshold. Unknown severities (defensive: future entries
+// the runtime predates) sort below INFO so they cannot trip the gate.
+var checkSeverityRank = map[string]int{
+	incident.SevInfo:     0,
+	incident.SevWarning:  1,
+	incident.SevCritical: 2,
+}
+
+// checkIncidentFailOnThreshold returns ErrThresholdExceeded when any
+// finding in result meets or exceeds the configured severity threshold.
+// An empty threshold disables the gate (return nil).
+//
+// Kept separate from scan's checkFailOnThreshold because the check
+// pipeline uses string severities (CRITICAL/WARNING/INFO) rather than
+// scan's numeric Severity enum. Both gates fail with the same
+// sentinel so main.go's exit-code logic stays uniform.
+func checkIncidentFailOnThreshold(result *incident.CheckResult, threshold string) error {
+	if threshold == "" {
+		return nil
+	}
+	thrKey := strings.ToUpper(strings.TrimSpace(threshold))
+	thr, ok := checkSeverityRank[thrKey]
+	if !ok {
+		return fmt.Errorf("invalid --fail-on %q: choose critical, warning, or info", threshold)
+	}
+	for _, f := range result.Findings {
+		rank, ok := checkSeverityRank[strings.ToUpper(f.Severity)]
+		if !ok {
+			continue
+		}
+		if rank >= thr {
+			return ErrThresholdExceeded
+		}
+	}
 	return nil
 }

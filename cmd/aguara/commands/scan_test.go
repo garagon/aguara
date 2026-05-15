@@ -33,6 +33,10 @@ func resetFlags() {
 	flagToolName = ""
 	flagProfile = ""
 	flagNoRedact = false
+	flagCheckPath = ""
+	flagCheckEcosystem = ""
+	flagCheckFailOn = ""
+	flagCheckCI = false
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.

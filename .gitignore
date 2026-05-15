@@ -22,6 +22,7 @@ Thumbs.db
 /testdata/
 /scripts/
 /DOCS/
+/architecture/
 /sandbox/
 __pycache__/
 *.pyc
