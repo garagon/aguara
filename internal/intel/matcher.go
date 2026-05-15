@@ -67,6 +67,29 @@ type Matcher struct {
 // both surface so cross-source correlation works.
 func NewMatcher(snapshots ...Snapshot) *Matcher {
 	m := &Matcher{byKey: make(map[string][]*Record)}
+
+	// First pass: collect tombstones. Any (ecosystem, name, ID)
+	// tuple that has a Withdrawn record in any snapshot is dead --
+	// even if an earlier snapshot ships the same ID as live, a
+	// later "we retracted this advisory" record must override.
+	// The two-pass walk means the tombstone fires regardless of
+	// the order snapshots are passed to NewMatcher; a single-pass
+	// "remove from byID/byKey on encounter" would only work if
+	// the withdrawn record came strictly after the live one.
+	tombstones := make(map[string]struct{})
+	for _, snap := range snapshots {
+		for _, rec := range snap.Records {
+			if !rec.Withdrawn {
+				continue
+			}
+			key := indexKey(rec.Ecosystem, rec.Name)
+			if key == "" {
+				continue
+			}
+			tombstones[key+"\x00"+rec.ID] = struct{}{}
+		}
+	}
+
 	byID := make(map[string]*Record)
 	for _, snap := range snapshots {
 		for _, rec := range snap.Records {
@@ -78,6 +101,9 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 				continue
 			}
 			idKey := key + "\x00" + rec.ID
+			if _, dead := tombstones[idKey]; dead {
+				continue
+			}
 			if existing, ok := byID[idKey]; ok {
 				existing.Versions = unionVersions(existing.Versions, rec.Versions)
 				continue

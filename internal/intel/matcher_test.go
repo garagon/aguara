@@ -89,6 +89,50 @@ func TestMatcherDoesNotCrossEcosystems(t *testing.T) {
 	require.Empty(t, miss)
 }
 
+func TestMatcherWithdrawnTombstonesEarlierLiveRecord(t *testing.T) {
+	// Codex P2 regression (PR 2 review, round 4): a refreshed
+	// snapshot that marks an advisory as Withdrawn must override
+	// any earlier non-withdrawn copy with the same (ecosystem,
+	// name, ID). Without this, an advisory the upstream source
+	// has retracted keeps producing matches indefinitely after
+	// the user runs `aguara update`.
+	live := intel.Record{
+		ID:        "ADV-RETRACT",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "ghost-pkg",
+		Kind:      intel.KindCompromised,
+		Versions:  []string{"1.0.0"},
+	}
+	retracted := live
+	retracted.Withdrawn = true
+
+	// Live first, withdrawn second (the realistic refresh order):
+	m := intel.NewMatcher(
+		intel.Snapshot{Records: []intel.Record{live}},
+		intel.Snapshot{Records: []intel.Record{retracted}},
+	)
+	hits := m.MatchPackage(intel.MatchInput{
+		Ecosystem: "npm",
+		Name:      "ghost-pkg",
+		Version:   "1.0.0",
+	})
+	require.Empty(t, hits, "later withdrawn record must tombstone earlier live copy")
+
+	// Reverse order also tombstones -- order-independence is
+	// part of the contract so callers do not have to reason
+	// about snapshot load order.
+	m = intel.NewMatcher(
+		intel.Snapshot{Records: []intel.Record{retracted}},
+		intel.Snapshot{Records: []intel.Record{live}},
+	)
+	hits = m.MatchPackage(intel.MatchInput{
+		Ecosystem: "npm",
+		Name:      "ghost-pkg",
+		Version:   "1.0.0",
+	})
+	require.Empty(t, hits, "withdrawn before live must still tombstone")
+}
+
 func TestMatcherIgnoresWithdrawn(t *testing.T) {
 	// Withdrawn records must be excluded at index time so they
 	// never appear in MatchPackage output -- even though the
