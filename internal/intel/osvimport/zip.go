@@ -10,16 +10,22 @@ import (
 	"github.com/garagon/aguara/internal/intel"
 )
 
-// MaxZipBytes caps the size of any OSV zip Import accepts. OSV
-// dumps are large (npm all.zip is ~hundreds of MiB), but the
-// importer ingests them entirely in memory and we want a hard
-// ceiling before the process gets killed by the OOM watchdog.
+// MaxZipBytes caps the COMPRESSED size of any OSV zip the importer
+// accepts. OSV dumps are large (npm all.zip is ~hundreds of MiB);
+// the cap protects against a hostile or oversized download.
 const MaxZipBytes int64 = 256 * 1024 * 1024
 
 // MaxZipEntryBytes caps a single decompressed entry. OSV records
 // are small (a few KiB each); anything beyond this is either a
 // degenerate record or a zip bomb.
 const MaxZipEntryBytes int64 = 4 * 1024 * 1024
+
+// MaxZipTotalDecompressedBytes caps the CUMULATIVE decompressed
+// size across all entries. A zip with many small entries can each
+// fit under MaxZipEntryBytes while the sum (and the importer's
+// in-memory record slice) balloons past the ~250 MiB ceiling the
+// compressed cap suggests. The cumulative cap is the hard wall.
+const MaxZipTotalDecompressedBytes int64 = 1024 * 1024 * 1024 // 1 GiB
 
 // ImportFromZip reads an OSV all.zip dump and feeds each contained
 // JSON file to Import. The reader must support seeking because the
@@ -49,6 +55,7 @@ func ImportFromZip(r io.ReaderAt, size int64, opts Options) (intel.Snapshot, err
 	}
 
 	var raw [][]byte
+	var totalBytes int64
 	for _, entry := range zr.File {
 		if !looksLikeOSVRecord(entry.Name) {
 			continue
@@ -57,9 +64,27 @@ func ImportFromZip(r io.ReaderAt, size int64, opts Options) (intel.Snapshot, err
 			return intel.Snapshot{}, fmt.Errorf("osvimport: entry %q is %d bytes, exceeds entry cap %d",
 				entry.Name, entry.UncompressedSize64, MaxZipEntryBytes)
 		}
+		// Refuse before we read: the entry's declared uncompressed
+		// size is enforced by the zip header, but we trust it only
+		// up to the cumulative ceiling. readEntry below caps the
+		// actual bytes too (defense in depth against a header that
+		// understates the payload).
+		if totalBytes+int64(entry.UncompressedSize64) > MaxZipTotalDecompressedBytes {
+			return intel.Snapshot{}, fmt.Errorf(
+				"osvimport: cumulative decompressed size would exceed %d bytes (cap); refusing to read entry %q",
+				MaxZipTotalDecompressedBytes, entry.Name,
+			)
+		}
 		data, err := readEntry(entry)
 		if err != nil {
 			return intel.Snapshot{}, fmt.Errorf("osvimport: read entry %q: %w", entry.Name, err)
+		}
+		totalBytes += int64(len(data))
+		if totalBytes > MaxZipTotalDecompressedBytes {
+			return intel.Snapshot{}, fmt.Errorf(
+				"osvimport: cumulative decompressed size exceeded %d bytes after entry %q (cap); zip bomb suspected",
+				MaxZipTotalDecompressedBytes, entry.Name,
+			)
 		}
 		raw = append(raw, data)
 	}

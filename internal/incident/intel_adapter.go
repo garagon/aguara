@@ -1,10 +1,39 @@
 package incident
 
 import (
+	"sync"
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
 )
+
+// defaultIntelMatcherOnce + defaultIntelMatcherCache lazily build
+// the package-level matcher from EmbeddedSnapshots(). Lazy because
+// KnownCompromisedSnapshot() walks the manual list every call;
+// caching the matcher avoids re-walking on every check.
+//
+// The matcher is read-only after construction, so concurrent
+// MatchPackage calls from the check pipeline are safe without
+// further synchronisation.
+var (
+	defaultIntelMatcherOnce  sync.Once
+	defaultIntelMatcherCache *intel.Matcher
+)
+
+// defaultIntelMatcher returns the singleton matcher built from
+// the binary's embedded snapshots (manual + generated OSV stub).
+// Both check entry points (Check / CheckNPM) consult it.
+//
+// Exposing this as a package-private helper rather than a public
+// variable means callers can not accidentally mutate the cached
+// matcher, and tests in this package can still reach it for
+// assertions through the same path.
+func defaultIntelMatcher() *intel.Matcher {
+	defaultIntelMatcherOnce.Do(func() {
+		defaultIntelMatcherCache = intel.NewMatcher(EmbeddedSnapshots()...)
+	})
+	return defaultIntelMatcherCache
+}
 
 // KnownCompromisedSnapshot converts the hand-curated KnownCompromised
 // list into an intel.Snapshot so it can be matched alongside future

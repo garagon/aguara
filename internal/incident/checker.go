@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/garagon/aguara/internal/intel"
 )
 
 // Severity levels for check findings.
@@ -104,15 +106,28 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		Intel:       embeddedIntelSummary(),
 	}
 
-	// 1. Read installed packages and check against known-bad list
+	// 1. Read installed packages and check against the embedded
+	// intel matcher (manual KnownCompromised + OSV-derived stub
+	// from generated_intel.go). Going through the matcher rather
+	// than the legacy IsCompromised slice scan means any OSV
+	// record the maintainer regenerates is automatically picked
+	// up here -- otherwise the IntelSummary would advertise "osv"
+	// as a source the check pipeline never consults.
+	matcher := defaultIntelMatcher()
 	packages := readInstalledPackages(siteDir)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
-		if cp := IsCompromised(pkg.Name, pkg.Version); cp != nil {
+		hits := matcher.MatchPackage(intel.MatchInput{
+			Ecosystem: intel.EcosystemPyPI,
+			Name:      pkg.Name,
+			Version:   pkg.Version,
+			Path:      pkg.Dir,
+		})
+		for _, hit := range hits {
 			result.Findings = append(result.Findings, Finding{
 				Severity:    SevCritical,
-				Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, cp.Advisory),
-				Detail:      cp.Summary,
+				Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+				Detail:      hit.Record.Summary,
 				Path:        pkg.Dir,
 				Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
 			})
