@@ -366,6 +366,29 @@ func TestImportFromZip(t *testing.T) {
 	require.Equal(t, "MAL-2026-zip", snap.Records[0].ID)
 }
 
+func TestImportRejectsUnsupportedEcosystem(t *testing.T) {
+	// Codex P2 regression (PR 3 review, round 3): a typo in
+	// --ecosystem (e.g. "npmm") previously produced an empty
+	// filter and a 0-record snapshot rather than surfacing the
+	// typo. A release on that path would ship a silently-empty
+	// snapshot for the affected ecosystem. Verify the importer
+	// fails loud.
+	rec := osvRecordFixture{
+		ID:      "MAL-2026-typo",
+		Summary: "Malicious",
+		Affected: []affectedFixture{{
+			Package:  packageFixture{Name: "evil-pkg", Ecosystem: "npm"},
+			Versions: []string{"1.0.0"},
+		}},
+	}
+	_, err := osvimport.Import(
+		[][]byte{mustMarshal(t, rec)},
+		osvimport.Options{Ecosystems: []string{"npmm"}, GeneratedAt: time.Unix(0, 0)},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported ecosystem")
+}
+
 func TestImportFromZipRejectsCumulativeOversize(t *testing.T) {
 	// Codex P2 regression (PR 3 review): a zip whose entries each
 	// fit under MaxZipEntryBytes but sum past

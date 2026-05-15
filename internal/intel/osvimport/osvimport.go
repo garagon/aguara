@@ -16,6 +16,7 @@ package osvimport
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -119,7 +120,10 @@ var highConfidenceKeywords = []string{
 // out of a zip / HTTP body without materialising them as Go structs
 // twice. The function parses each record once.
 func Import(raw [][]byte, opts Options) (intel.Snapshot, error) {
-	ecoFilter := buildEcosystemFilter(opts.Ecosystems)
+	ecoFilter, err := buildEcosystemFilter(opts.Ecosystems)
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
 
 	snap := intel.Snapshot{
 		SchemaVersion: intel.CurrentSchemaVersion,
@@ -240,18 +244,26 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 // buildEcosystemFilter returns a set keyed by the canonical
 // ecosystem identifier (matcher.go conventions). A nil return means
 // "do not filter".
-func buildEcosystemFilter(allowed []string) map[string]struct{} {
+//
+// Unsupported / mistyped ecosystems are an error rather than a
+// silent drop. A typo like `--ecosystem npmm` previously produced an
+// empty filter that swallowed every record; releasing on that path
+// would ship a 0-record snapshot for the affected ecosystem and the
+// CLI would still exit successfully. Errors here surface to the
+// importer and the CLI's exit code.
+func buildEcosystemFilter(allowed []string) (map[string]struct{}, error) {
 	if len(allowed) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]struct{}, len(allowed))
 	for _, e := range allowed {
 		canon := canonicaliseEcosystem(e)
-		if canon != "" {
-			out[canon] = struct{}{}
+		if canon == "" {
+			return nil, fmt.Errorf("osvimport: unsupported ecosystem %q (supported: npm, PyPI)", e)
 		}
+		out[canon] = struct{}{}
 	}
-	return out
+	return out, nil
 }
 
 // canonicaliseEcosystem maps the assorted spellings OSV uses (and
