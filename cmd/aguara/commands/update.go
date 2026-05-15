@@ -38,6 +38,10 @@ func init() {
 	updateCmd.Flags().DurationVar(&flagUpdateTimeout, "timeout", intel.DefaultHTTPTimeout, "Overall HTTP timeout for the refresh")
 	updateCmd.Flags().StringSliceVar(&flagUpdateEcosystems, "ecosystem", nil, "Ecosystems to refresh (default: npm, PyPI)")
 	updateCmd.Flags().BoolVar(&flagUpdateAllowEmpty, "allow-empty", false, "Save a 0-record snapshot anyway (defaults to error so an upstream outage cannot wipe cached intel)")
+	// Runtime errors (HTTP failures, OSV outage producing 0
+	// records) should not trigger Cobra's flag-usage block. Same
+	// rationale as scan / check / audit.
+	updateCmd.SilenceUsage = true
 	rootCmd.AddCommand(updateCmd)
 }
 

@@ -64,13 +64,22 @@ ok "aguara check auto-detected node_modules and flagged event-stream@3.3.6"
 # --- Case 2: aguara check --ci exits non-zero on compromised --------
 # The README's CI usage promises `--ci` returns a non-zero exit code
 # when a compromised package is present. Same fixture as Case 1.
+# Also asserts the Cobra usage block does NOT print: a CI log that
+# reads "Error: findings exceed severity threshold" followed by a
+# full --help dump looks like command misuse to non-technical
+# readers. SilenceUsage on the checkCmd is the load-bearing setting;
+# this assertion locks the regression.
 case2_json="$OUT/smoke-v016-ci.json"
 if /tmp/aguara --no-update-check check --path "$case1" --ci \
      --format json > "$case2_json" 2>&1; then
   cat "$case2_json"
   fail "aguara check --ci must exit non-zero when a compromised package is present"
 fi
-ok "aguara check --ci exited non-zero on compromised package"
+if grep -Eq '^Usage:|^Flags:|^Global Flags:' "$case2_json"; then
+  cat "$case2_json"
+  fail "aguara check --ci printed Cobra Usage block on runtime threshold error"
+fi
+ok "aguara check --ci exited non-zero on compromised package, no Usage noise"
 
 # --- Case 3: aguara check --ci on a clean tree exits zero ----------
 # Symmetric assertion: --ci must NOT trip on a clean project, or
@@ -120,10 +129,16 @@ ok "aguara status produced the expected offline disclosure block"
 # check_criticals must be > 0. JSON shape stable so dashboards can
 # parse it.
 audit_json="$OUT/smoke-v016-audit.json"
+audit_stderr="$OUT/smoke-v016-audit.stderr.txt"
 if /tmp/aguara --no-update-check audit "$case1" --ci \
-     --format json -o "$audit_json"; then
+     --format json -o "$audit_json" 2> "$audit_stderr"; then
   cat "$audit_json"
+  cat "$audit_stderr"
   fail "aguara audit --ci must exit non-zero on a compromised package"
+fi
+if grep -Eq '^Usage:|^Flags:|^Global Flags:' "$audit_stderr"; then
+  cat "$audit_stderr"
+  fail "aguara audit --ci printed Cobra Usage block on runtime threshold error"
 fi
 if ! grep -Eq '"status":[[:space:]]*"fail"' "$audit_json"; then
   cat "$audit_json"

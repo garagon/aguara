@@ -49,6 +49,13 @@ func init() {
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
 	checkCmd.Flags().BoolVar(&flagCheckAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
+	// Runtime errors (ErrThresholdExceeded after --ci, --fresh
+	// network failures) should not trigger Cobra's flag-usage
+	// block: a CI log that prints "Error: findings exceed severity
+	// threshold" then dumps the full --help reads as command
+	// misuse to non-technical readers. See scan.go for the same
+	// rationale.
+	checkCmd.SilenceUsage = true
 	rootCmd.AddCommand(checkCmd)
 }
 

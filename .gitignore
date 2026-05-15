@@ -38,3 +38,4 @@ coverage.out
 !.env.example
 *.pem
 *.key
+/.nanostack/
