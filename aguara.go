@@ -181,13 +181,17 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 
 // ListRules returns all available detection rules. Includes BOTH
 // YAML-driven pattern rules AND analyzer-emitted rules (ci-trust,
-// pkgmeta, jsrisk, nlp, toxicflow), so a finding's RuleID always
-// resolves through this function. Use WithCategory to filter.
+// pkgmeta, jsrisk, nlp, toxicflow, rugpull), so a finding's
+// RuleID always resolves through this function. WithCategory
+// filters; WithDisabledRules removes IDs from the listing so a
+// policy UI built on top of ListRules sees the same set the
+// scanner will consult.
 func ListRules(opts ...Option) []RuleInfo {
 	cfg := applyOpts(opts)
 	cat, err := rulecatalog.Build(rulecatalog.Options{
 		CustomRulesDir: cfg.customRulesDir,
 		Category:       cfg.category,
+		DisableRuleIDs: cfg.disabledRules,
 	})
 	if err != nil {
 		return nil

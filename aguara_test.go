@@ -125,6 +125,91 @@ func TestListRules(t *testing.T) {
 	}
 }
 
+func TestListRulesIncludesAnalyzerRules(t *testing.T) {
+	// QA + codex regression: external library consumers (e.g.
+	// aguara-mcp) call aguara.ListRules to populate policy UIs.
+	// The list must include analyzer-emitted rule IDs alongside
+	// YAML rules; before the rulecatalog consolidation only YAML
+	// rules surfaced, so a finding from jsrisk / ci-trust / etc.
+	// had no listing for the UI to render.
+	rules := aguara.ListRules()
+	ids := make(map[string]string, len(rules))
+	for _, r := range rules {
+		ids[r.ID] = r.Analyzer
+	}
+	want := map[string]string{
+		"JS_DNS_TXT_EXFIL_001":  "jsrisk",
+		"GHA_PWN_REQUEST_001":   "ci-trust",
+		"NPM_LIFECYCLE_GIT_001": "pkgmeta",
+		"TOXIC_001":             "toxicflow",
+		"NLP_HIDDEN_INSTRUCTION": "nlp",
+		"RUGPULL_001":           "rugpull",
+	}
+	for id, analyzer := range want {
+		got, ok := ids[id]
+		if !ok {
+			t.Errorf("ListRules must include analyzer rule %s", id)
+			continue
+		}
+		if got != analyzer {
+			t.Errorf("ListRules %s: analyzer = %q, want %q", id, got, analyzer)
+		}
+	}
+}
+
+func TestListRulesHonoursDisabledRules(t *testing.T) {
+	// Codex P2: WithDisabledRules must filter the catalog the
+	// same way it filters the scanner. A policy UI built on top
+	// of ListRules has to agree with what the scanner actually
+	// runs; otherwise the UI shows rules that will never fire.
+	all := aguara.ListRules()
+	require := func(cond bool, msg string) {
+		if !cond {
+			t.Helper()
+			t.Fatal(msg)
+		}
+	}
+
+	target := "JS_DNS_TXT_EXFIL_001"
+	hasTarget := false
+	for _, r := range all {
+		if r.ID == target {
+			hasTarget = true
+			break
+		}
+	}
+	require(hasTarget, target+" must be in the unfiltered list")
+
+	filtered := aguara.ListRules(aguara.WithDisabledRules(target))
+	for _, r := range filtered {
+		if r.ID == target {
+			t.Errorf("WithDisabledRules(%s) must remove the rule from ListRules output", target)
+		}
+	}
+	if len(filtered) >= len(all) {
+		t.Errorf("WithDisabledRules did not reduce the list (filtered=%d, all=%d)", len(filtered), len(all))
+	}
+}
+
+func TestExplainRuleResolvesAnalyzerRule(t *testing.T) {
+	// QA regression: ExplainRule must resolve analyzer-emitted
+	// IDs the same way it resolves YAML IDs. The Analyzer field
+	// is set so the consumer can branch on engine origin.
+	d, err := aguara.ExplainRule("JS_DNS_TXT_EXFIL_001")
+	if err != nil {
+		t.Fatalf("ExplainRule(JS_DNS_TXT_EXFIL_001) failed: %v", err)
+	}
+	if d.Analyzer != "jsrisk" {
+		t.Errorf("ExplainRule: analyzer = %q, want jsrisk", d.Analyzer)
+	}
+	if d.Category != "supply-chain" {
+		t.Errorf("ExplainRule: category = %q, want supply-chain", d.Category)
+	}
+	if d.Remediation == "" {
+		t.Errorf("ExplainRule: analyzer rule must carry a non-empty remediation string")
+	}
+}
+
 func TestListRulesWithCategory(t *testing.T) {
 	all := aguara.ListRules()
 	pi := aguara.ListRules(aguara.WithCategory("prompt-injection"))
