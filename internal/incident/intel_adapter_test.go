@@ -1,6 +1,8 @@
 package incident_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,26 +82,59 @@ func TestKnownCompromisedSnapshotReproducible(t *testing.T) {
 }
 
 func TestCheckResultIntelSummaryPopulated(t *testing.T) {
-	// Both check entry points must populate IntelSummary. We do
-	// not exercise the full Python/npm pipelines here -- those
-	// have their own tests -- but we verify the result-shape
-	// invariant by constructing the same default helper the
-	// production code uses. If the field is missing or
-	// inconsistent, downstream callers cannot trust it.
-	result, err := incident.CheckNPM(incident.CheckOptions{Path: t.TempDir() + "/missing"})
-	if err != nil {
-		// CheckNPM errors out when the path is not a
-		// node_modules tree; that's the expected fast path for
-		// this test and means we can't assert on the populated
-		// result. Skip rather than fabricate one.
-		require.Contains(t, err.Error(), "npm check")
-		return
-	}
+	// Both check entry points must populate IntelSummary on every
+	// run. Build a real node_modules fixture so CheckNPM reaches
+	// the result-construction path; without this the codex P3
+	// regression fires -- a missing path returns early and the
+	// test never asserts the IntelSummary fields it's there to
+	// protect.
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	require.NoError(t, os.MkdirAll(filepath.Join(nm, "lodash"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(nm, "lodash", "package.json"),
+		[]byte(`{"name":"lodash","version":"4.17.21"}`),
+		0o644,
+	))
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	require.NoError(t, err)
+	require.NotNil(t, result)
 	require.Equal(t, "offline", result.Intel.Mode)
 	require.Equal(t, "embedded", result.Intel.Snapshot)
-	require.False(t, result.Intel.GeneratedAt.IsZero())
+	require.False(t, result.Intel.GeneratedAt.IsZero(),
+		"IntelSummary.GeneratedAt must be set from the embedded snapshot")
+	require.NotEmpty(t, result.Intel.Sources)
 	for _, src := range result.Intel.Sources {
 		require.Truef(t, strings.EqualFold(src, "manual"),
 			"embedded snapshot must carry only manual source, got %q", src)
+	}
+}
+
+func TestCheckResultIntelSummaryPopulatedForPython(t *testing.T) {
+	// Parity assertion for the Python check entry point. We give
+	// Check a path that is a real (empty) directory so it does not
+	// error out, then assert the same Intel fields.
+	siteDir := t.TempDir()
+	result, err := incident.Check(incident.CheckOptions{Path: siteDir})
+	require.NoError(t, err)
+	require.Equal(t, "offline", result.Intel.Mode)
+	require.Equal(t, "embedded", result.Intel.Snapshot)
+	require.False(t, result.Intel.GeneratedAt.IsZero())
+	require.NotEmpty(t, result.Intel.Sources)
+}
+
+func TestKnownCompromisedSnapshotKindCompromised(t *testing.T) {
+	// Codex P2 regression: every entry in KnownCompromised is a
+	// legitimate package whose specific versions were hijacked,
+	// not a malicious typosquat. The summary text often mentions
+	// "malicious payload" / "malicious dependency"; that must not
+	// flip the record to KindMalicious because consumers use
+	// RecordKind for remediation messaging ("remove forever" vs
+	// "pin to a fixed version").
+	snap := incident.KnownCompromisedSnapshot()
+	for _, rec := range snap.Records {
+		require.Equalf(t, intel.KindCompromised, rec.Kind,
+			"manual entry %q (%s) must be KindCompromised, got %q",
+			rec.ID, rec.Name, rec.Kind)
 	}
 }

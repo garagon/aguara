@@ -34,11 +34,22 @@ func KnownCompromisedSnapshot() intel.Snapshot {
 			ID:        cp.Advisory,
 			Ecosystem: eco,
 			Name:      cp.Name,
-			Kind:      classifyKind(cp),
-			Severity:  "critical",
-			Summary:   cp.Summary,
-			Versions:  append([]string(nil), cp.Versions...),
-			IOCs:      convertIOCs(cp.IOCs),
+			// Every entry in KnownCompromised describes a
+			// legitimate package whose specific versions were
+			// hijacked (event-stream 3.3.6, litellm 1.82.7/.8,
+			// node-ipc historical/2026 releases). The summary text
+			// often mentions "malicious payload" or "malicious
+			// dependency" -- that describes the payload, not the
+			// package origin, so a keyword classifier would
+			// mis-label these as KindMalicious. Pure malicious
+			// typosquats do not belong on this manual list; if they
+			// land later the entry should carry an explicit Kind
+			// field rather than rely on summary heuristics.
+			Kind:     intel.KindCompromised,
+			Severity: "critical",
+			Summary:  cp.Summary,
+			Versions: append([]string(nil), cp.Versions...),
+			IOCs:     convertIOCs(cp.IOCs),
 		})
 	}
 	return intel.Snapshot{
@@ -72,53 +83,6 @@ func normalizeEcosystemForIntel(eco string) string {
 	default:
 		return ""
 	}
-}
-
-// classifyKind picks KindMalicious vs KindCompromised heuristically
-// from the advisory text. Entries that explicitly describe a
-// "malicious" package are tagged malicious; everything else is
-// treated as compromised. Imperfect, but a useful default until the
-// manual list grows a Kind field of its own.
-func classifyKind(cp CompromisedPackage) intel.RecordKind {
-	for _, needle := range []string{"malicious", "typosquat"} {
-		if containsCaseInsensitive(cp.Summary, needle) {
-			return intel.KindMalicious
-		}
-	}
-	return intel.KindCompromised
-}
-
-// containsCaseInsensitive is a small helper that avoids depending
-// on strings just for ToLower+Contains.
-func containsCaseInsensitive(haystack, needle string) bool {
-	if len(needle) == 0 || len(haystack) < len(needle) {
-		return false
-	}
-	// Manual lower-case rather than strings.ToLower to avoid the
-	// extra allocation on every record. The cost is two extra
-	// comparisons per byte, which is negligible for the size of
-	// summary strings the manual list carries.
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		match := true
-		for j := 0; j < len(needle); j++ {
-			a := haystack[i+j]
-			b := needle[j]
-			if a >= 'A' && a <= 'Z' {
-				a += 'a' - 'A'
-			}
-			if b >= 'A' && b <= 'Z' {
-				b += 'a' - 'A'
-			}
-			if a != b {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
 }
 
 // embeddedIntelSummary returns the IntelSummary that describes the
