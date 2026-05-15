@@ -21,6 +21,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
+	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
@@ -81,19 +82,32 @@ type RuleOverride struct {
 }
 
 // RuleInfo provides summary metadata about a detection rule.
+//
+// Analyzer is empty for pattern-matcher rules driven by YAML and
+// set to the analyzer name for analyzer-emitted rules (ci-trust,
+// pkgmeta, jsrisk, nlp, toxicflow). The omitempty tag keeps JSON
+// output compact for the common case.
 type RuleInfo struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Severity string `json:"severity"`
 	Category string `json:"category"`
+	Analyzer string `json:"analyzer,omitempty"`
 }
 
 // RuleDetail provides full information about a rule, including patterns and examples.
+//
+// Analyzer is empty for pattern-matcher rules driven by YAML and
+// set to the analyzer name for analyzer-emitted rules. Patterns,
+// TruePositives, and FalsePositives are typically empty for
+// analyzer-emitted rules because the analyzer logic itself is the
+// pattern.
 type RuleDetail struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`
 	Severity       string   `json:"severity"`
 	Category       string   `json:"category"`
+	Analyzer       string   `json:"analyzer,omitempty"`
 	Description    string   `json:"description"`
 	Remediation    string   `json:"remediation,omitempty"`
 	Patterns       []string `json:"patterns"`
@@ -165,83 +179,81 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	return result, nil
 }
 
-// ListRules returns all available detection rules.
-// Use WithCategory to filter by category.
-func ListRules(opts ...Option) []RuleInfo {
-	cfg := applyOpts(opts)
-	cr, _ := loadAndCompile(cfg)
-	if cr == nil {
+// catalogOverridesFromCfg projects the public RuleOverride map
+// onto the catalog's narrower Override shape. Tool-scoping fields
+// (ApplyToTools / ExemptTools) are not relevant to list-rules /
+// explain output, so the projection drops them; the scanner still
+// sees them via the existing rule-overrides pipeline.
+func catalogOverridesFromCfg(in map[string]RuleOverride) map[string]rulecatalog.Override {
+	if len(in) == 0 {
 		return nil
 	}
-	compiled := cr.compiled
-
-	sort.Slice(compiled, func(i, j int) bool {
-		return compiled[i].ID < compiled[j].ID
-	})
-
-	if cfg.category != "" {
-		var filtered []*rules.CompiledRule
-		for _, r := range compiled {
-			if strings.EqualFold(r.Category, cfg.category) {
-				filtered = append(filtered, r)
-			}
+	out := make(map[string]rulecatalog.Override, len(in))
+	for id, o := range in {
+		out[id] = rulecatalog.Override{
+			Severity: o.Severity,
+			Disabled: o.Disabled,
 		}
-		compiled = filtered
 	}
+	return out
+}
 
-	infos := make([]RuleInfo, len(compiled))
-	for i, r := range compiled {
+// ListRules returns all available detection rules. Includes BOTH
+// YAML-driven pattern rules AND analyzer-emitted rules (ci-trust,
+// pkgmeta, jsrisk, nlp, toxicflow, rugpull), so a finding's
+// RuleID always resolves through this function. WithCategory
+// filters; WithDisabledRules and WithRuleOverrides drop / mutate
+// rules so a policy UI built on top of ListRules sees the same
+// set the scanner will consult.
+func ListRules(opts ...Option) []RuleInfo {
+	cfg := applyOpts(opts)
+	cat, err := rulecatalog.Build(rulecatalog.Options{
+		CustomRulesDir: cfg.customRulesDir,
+		Category:       cfg.category,
+		DisableRuleIDs: cfg.disabledRules,
+		Overrides:      catalogOverridesFromCfg(cfg.ruleOverrides),
+	})
+	if err != nil {
+		return nil
+	}
+	infos := make([]RuleInfo, len(cat))
+	for i, r := range cat {
 		infos[i] = RuleInfo{
 			ID:       r.ID,
 			Name:     r.Name,
-			Severity: r.Severity.String(),
+			Severity: r.Severity,
 			Category: r.Category,
+			Analyzer: r.Analyzer,
 		}
 	}
 	return infos
 }
 
 // ExplainRule returns detailed information about a specific rule.
+// Resolves both YAML rules and analyzer-emitted rules (a finding
+// with RuleID "JS_DNS_TXT_EXFIL_001" or "GHA_PWN_REQUEST_001"
+// can be explained the same way as a pattern rule).
 func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 	id = strings.ToUpper(strings.TrimSpace(id))
 	cfg := applyOpts(opts)
-	cr, _ := loadAndCompile(cfg)
-	if cr == nil {
-		return nil, fmt.Errorf("rule %q not found (rules failed to load)", id)
-	}
-	compiled := cr.compiled
-
-	var found *rules.CompiledRule
-	for _, r := range compiled {
-		if r.ID == id {
-			found = r
-			break
-		}
-	}
-	if found == nil {
+	r, err := rulecatalog.FindByID(rulecatalog.Options{
+		CustomRulesDir: cfg.customRulesDir,
+	}, id)
+	if err != nil {
 		return nil, fmt.Errorf("rule %q not found", id)
 	}
 
-	patterns := make([]string, len(found.Patterns))
-	for i, p := range found.Patterns {
-		switch p.Type {
-		case rules.PatternRegex:
-			patterns[i] = fmt.Sprintf("[regex] %s", p.Regex.String())
-		case rules.PatternContains:
-			patterns[i] = fmt.Sprintf("[contains] %s", p.Value)
-		}
-	}
-
 	return &RuleDetail{
-		ID:             found.ID,
-		Name:           found.Name,
-		Severity:       found.Severity.String(),
-		Category:       found.Category,
-		Description:    found.Description,
-		Remediation:    found.Remediation,
-		Patterns:       patterns,
-		TruePositives:  found.Examples.TruePositive,
-		FalsePositives: found.Examples.FalsePositive,
+		ID:             r.ID,
+		Name:           r.Name,
+		Severity:       r.Severity,
+		Category:       r.Category,
+		Analyzer:       r.Analyzer,
+		Description:    r.Description,
+		Remediation:    r.Remediation,
+		Patterns:       r.Patterns,
+		TruePositives:  r.TruePositives,
+		FalsePositives: r.FalsePositives,
 	}, nil
 }
 

@@ -3,14 +3,12 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
-	"github.com/garagon/aguara/internal/rules"
-	"github.com/garagon/aguara/internal/rules/builtin"
+	"github.com/garagon/aguara/internal/rulecatalog"
 )
 
 var flagCategory string
@@ -26,85 +24,45 @@ func init() {
 	rootCmd.AddCommand(listRulesCmd)
 }
 
-type ruleInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Severity string `json:"severity"`
-	Category string `json:"category"`
-}
-
 func runListRules(cmd *cobra.Command, args []string) error {
-	// Load built-in rules
-	rawRules, err := rules.LoadFromFS(builtin.FS())
-	if err != nil {
-		return fmt.Errorf("loading built-in rules: %w", err)
-	}
-
-	// Load custom rules if specified
-	if flagRules != "" {
-		customRules, err := rules.LoadFromDir(flagRules)
-		if err != nil {
-			return fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
-		}
-		rawRules = append(rawRules, customRules...)
-	}
-
-	// Compile rules
-	compiled, compileErrs := rules.CompileAll(rawRules)
-	for _, e := range compileErrs {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", e)
-	}
-
-	// Apply --disable-rule flag
-	if len(flagDisableRules) > 0 {
-		disabled := make(map[string]bool)
-		for _, id := range flagDisableRules {
-			disabled[strings.TrimSpace(id)] = true
-		}
-		compiled = rules.FilterByIDs(compiled, disabled)
-	}
-
-	// Sort by rule ID
-	sort.Slice(compiled, func(i, j int) bool {
-		return compiled[i].ID < compiled[j].ID
+	// The catalog merges YAML-compiled pattern rules, custom rules
+	// from --rules, and every analyzer's RuleMetadata() into one
+	// sorted slice. Before this consolidation `list-rules` only
+	// surfaced YAML rules, so analyzer-emitted rules like
+	// JS_DNS_TXT_EXFIL_001 or GHA_PWN_REQUEST_001 appeared in
+	// findings but could not be listed or explained.
+	cat, err := rulecatalog.Build(rulecatalog.Options{
+		CustomRulesDir: flagRules,
+		DisableRuleIDs: flagDisableRules,
+		Category:       flagCategory,
+		Warn: func(format string, a ...any) {
+			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
+		},
 	})
-
-	// Filter by category
-	if flagCategory != "" {
-		var filtered []*rules.CompiledRule
-		for _, r := range compiled {
-			if strings.EqualFold(r.Category, flagCategory) {
-				filtered = append(filtered, r)
-			}
-		}
-		compiled = filtered
+	if err != nil {
+		return err
 	}
 
 	w := cmd.OutOrStdout()
 
 	if strings.ToLower(flagFormat) == "json" {
-		infos := make([]ruleInfo, len(compiled))
-		for i, r := range compiled {
-			infos[i] = ruleInfo{
-				ID:       r.ID,
-				Name:     r.Name,
-				Severity: r.Severity.String(),
-				Category: r.Category,
-			}
-		}
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(infos)
+		return enc.Encode(cat)
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tCATEGORY\n")
-	fmt.Fprintf(tw, "--\t----\t--------\t--------\n")
-	for _, r := range compiled {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Severity.String(), r.Category)
+	fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tCATEGORY\tANALYZER\n")
+	fmt.Fprintf(tw, "--\t----\t--------\t--------\t--------\n")
+	for _, r := range cat {
+		analyzer := r.Analyzer
+		if analyzer == "" {
+			analyzer = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Severity, r.Category, analyzer)
 	}
 	_ = tw.Flush()
-	fmt.Fprintf(w, "\n%d rules loaded\n", len(compiled))
+	fmt.Fprintf(w, "\n%d rules loaded\n", len(cat))
 
 	return nil
 }
