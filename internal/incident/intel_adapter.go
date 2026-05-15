@@ -22,7 +22,8 @@ var (
 
 // defaultIntelMatcher returns the singleton matcher built from
 // the binary's embedded snapshots (manual + generated OSV stub).
-// Both check entry points (Check / CheckNPM) consult it.
+// Both check entry points (Check / CheckNPM) consult it when no
+// IntelOverride was passed.
 //
 // Exposing this as a package-private helper rather than a public
 // variable means callers can not accidentally mutate the cached
@@ -33,6 +34,75 @@ func defaultIntelMatcher() *intel.Matcher {
 		defaultIntelMatcherCache = intel.NewMatcher(EmbeddedSnapshots()...)
 	})
 	return defaultIntelMatcherCache
+}
+
+// matcherFor returns the matcher to use for a given CheckOptions.
+// Nil Intel -> the cached default matcher; non-nil -> a fresh
+// matcher built from the override's Snapshots. We deliberately
+// do NOT cache override-built matchers because the override is a
+// per-run construction (e.g. embedded + local cache) and the
+// caching wins are negligible vs the simplicity cost.
+func matcherFor(opts CheckOptions) *intel.Matcher {
+	if opts.Intel == nil || len(opts.Intel.Snapshots) == 0 {
+		return defaultIntelMatcher()
+	}
+	return intel.NewMatcher(opts.Intel.Snapshots...)
+}
+
+// snapshotsFor returns the snapshot slice the check pipeline
+// should iterate for non-matcher heuristics (e.g. the cache
+// filename heuristic). Mirrors matcherFor so override callers
+// have a consistent view of "what intel is in play this run".
+func snapshotsFor(opts CheckOptions) []intel.Snapshot {
+	if opts.Intel == nil || len(opts.Intel.Snapshots) == 0 {
+		return EmbeddedSnapshots()
+	}
+	return opts.Intel.Snapshots
+}
+
+// intelSummaryFor returns the IntelSummary describing whichever
+// snapshots the check actually consulted. Override Mode and
+// SnapshotLabel win when set; everything else (GeneratedAt,
+// Sources, Stale) is derived from the snapshots themselves so the
+// summary cannot drift from the data.
+func intelSummaryFor(opts CheckOptions) IntelSummary {
+	mode := "offline"
+	label := "embedded"
+	if opts.Intel != nil {
+		if opts.Intel.Mode != "" {
+			mode = opts.Intel.Mode
+		}
+		if opts.Intel.SnapshotLabel != "" {
+			label = opts.Intel.SnapshotLabel
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var sources []string
+	var generatedAt time.Time
+	for _, snap := range snapshotsFor(opts) {
+		if snap.GeneratedAt.After(generatedAt) {
+			generatedAt = snap.GeneratedAt
+		}
+		for _, src := range snap.Sources {
+			kind := string(src.Kind)
+			if kind == "" {
+				continue
+			}
+			if _, ok := seen[kind]; ok {
+				continue
+			}
+			seen[kind] = struct{}{}
+			sources = append(sources, kind)
+		}
+	}
+	return IntelSummary{
+		Mode:        mode,
+		Snapshot:    label,
+		GeneratedAt: generatedAt,
+		Sources:     sources,
+		Stale:       false,
+	}
 }
 
 // KnownCompromisedSnapshot converts the hand-curated KnownCompromised
@@ -130,51 +200,6 @@ func EmbeddedSnapshots() []intel.Snapshot {
 	return []intel.Snapshot{
 		KnownCompromisedSnapshot(),
 		EmbeddedIntelSnapshot,
-	}
-}
-
-// embeddedIntelSummary returns the IntelSummary that describes the
-// snapshots baked into the binary. Used by Check and CheckNPM so
-// every CheckResult carries provenance even when no runtime intel
-// store has been wired in yet.
-//
-// Mode stays "offline" because no network path exists yet; the
-// runtime-update PR will flip Mode to "online" when --fresh
-// produced the snapshot used. Snapshot stays "embedded" because
-// the local on-disk cache is not consulted here yet.
-//
-// GeneratedAt picks the LATER of the two source timestamps so the
-// user sees the freshest data the binary actually carries -- a
-// recent OSV regeneration shows through even if the manual list
-// has not changed. Sources is deduplicated by kind so the terminal
-// can read "Sources: manual, osv" without listing each source
-// entry separately.
-func embeddedIntelSummary() IntelSummary {
-	seen := make(map[string]struct{})
-	var sources []string
-	var generatedAt time.Time
-	for _, snap := range EmbeddedSnapshots() {
-		if snap.GeneratedAt.After(generatedAt) {
-			generatedAt = snap.GeneratedAt
-		}
-		for _, src := range snap.Sources {
-			kind := string(src.Kind)
-			if kind == "" {
-				continue
-			}
-			if _, ok := seen[kind]; ok {
-				continue
-			}
-			seen[kind] = struct{}{}
-			sources = append(sources, kind)
-		}
-	}
-	return IntelSummary{
-		Mode:        "offline",
-		Snapshot:    "embedded",
-		GeneratedAt: generatedAt,
-		Sources:     sources,
-		Stale:       false,
 	}
 }
 

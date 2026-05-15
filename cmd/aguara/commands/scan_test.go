@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/garagon/aguara/internal/intel"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +38,10 @@ func resetFlags() {
 	flagCheckEcosystem = ""
 	flagCheckFailOn = ""
 	flagCheckCI = false
+	flagCheckFresh = false
+	flagCheckAllowStale = false
+	flagUpdateTimeout = intel.DefaultHTTPTimeout
+	flagUpdateEcosystems = nil
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.

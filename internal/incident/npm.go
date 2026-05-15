@@ -47,17 +47,15 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		Environment: root,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
-		Intel:       embeddedIntelSummary(),
+		Intel:       intelSummaryFor(opts),
 	}
 
 	// Same wiring as the Python check path: route through the
-	// embedded intel matcher (manual + OSV) so any OSV record the
-	// maintainer regenerates participates in the match. The
-	// legacy IsCompromisedIn is still exported for external
-	// callers, but the check pipeline no longer goes through it
-	// because that would advertise "osv" in the IntelSummary
-	// without actually consulting OSV records.
-	matcher := defaultIntelMatcher()
+	// intel matcher so any OSV record (embedded or refreshed)
+	// participates in the match. matcherFor honours opts.Intel
+	// so the CLI can pass a refreshed local snapshot without
+	// touching package-level state.
+	matcher := matcherFor(opts)
 	packages := readInstalledNPMPackages(root)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
