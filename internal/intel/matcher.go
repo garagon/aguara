@@ -32,31 +32,42 @@ type Match struct {
 // half-correct semver parser never produces a wrong answer. The
 // OSV importer must populate Versions for every record it ships
 // or drop the record.
+//
+// Records are stored as pointers so the version-merge path in
+// NewMatcher can extend the affected-version list of an already-
+// indexed advisory without having to rebuild the index. The
+// pointers are never mutated after NewMatcher returns; MatchPackage
+// reads them concurrently and is safe to call from multiple
+// goroutines.
 type Matcher struct {
 	// byKey indexes records by `ecosystem + "\x00" + normName`.
 	// A separator that can never appear in a package name keeps
 	// the key collision-free without a real composite-key type.
-	byKey map[string][]Record
+	byKey map[string][]*Record
 }
 
-// NewMatcher builds a Matcher from the given snapshots. Records
-// from later snapshots do not override earlier ones; all records
-// are indexed and returned. Withdrawn records are excluded at
-// index time so MatchPackage never has to filter them.
+// NewMatcher builds a Matcher from the given snapshots. Withdrawn
+// records are excluded at index time so MatchPackage never has to
+// filter them.
 //
-// Duplicate records are collapsed by (ecosystem, name, record.ID):
-// when the same advisory appears in two snapshots (the documented
-// manual + OSV case) only the first occurrence is indexed. We use
-// (ecosystem, name, ID) rather than (ecosystem, name, version, ID)
-// because two snapshots that share an advisory ID are expected to
-// agree on the affected version set; merging on ID is simpler and
-// removes the worst-case where one snapshot's stale version list
-// shadows the other's fresh one. If we ever need to merge version
-// sets across sources, that lives in the importer, not the runtime
-// matcher.
+// Duplicate-advisory merge: when the same advisory ID appears for
+// the same (ecosystem, name) tuple in more than one snapshot (the
+// documented manual + OSV refresh case), the affected-version set
+// is unioned across snapshots and surfaced as a single Match. We
+// keep the FIRST occurrence's other metadata (Summary, Severity,
+// References, IOCs, Kind) so manual emergency advisories retain
+// their display priority over later sources -- callers that load
+// manual snapshots before OSV get the manual phrasing in the
+// terminal output while still benefiting from any new affected
+// versions OSV reports.
+//
+// Distinct advisory IDs at the same (ecosystem, name, version)
+// tuple are kept separate: two records that share a compromise
+// are useful provenance (e.g. one OSV ID, one Socket ID) and must
+// both surface so cross-source correlation works.
 func NewMatcher(snapshots ...Snapshot) *Matcher {
-	m := &Matcher{byKey: make(map[string][]Record)}
-	seen := make(map[string]struct{})
+	m := &Matcher{byKey: make(map[string][]*Record)}
+	byID := make(map[string]*Record)
 	for _, snap := range snapshots {
 		for _, rec := range snap.Records {
 			if rec.Withdrawn {
@@ -66,15 +77,48 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 			if key == "" {
 				continue
 			}
-			dedupKey := key + "\x00" + rec.ID
-			if _, ok := seen[dedupKey]; ok {
+			idKey := key + "\x00" + rec.ID
+			if existing, ok := byID[idKey]; ok {
+				existing.Versions = unionVersions(existing.Versions, rec.Versions)
 				continue
 			}
-			seen[dedupKey] = struct{}{}
-			m.byKey[key] = append(m.byKey[key], rec)
+			// First occurrence: take a defensive copy so a later
+			// merge cannot mutate the caller's snapshot slice. The
+			// pointer is shared between byID and byKey so a merge
+			// here is visible to MatchPackage without an index
+			// rebuild.
+			recCopy := rec
+			recCopy.Versions = append([]string(nil), rec.Versions...)
+			byID[idKey] = &recCopy
+			m.byKey[key] = append(m.byKey[key], &recCopy)
 		}
 	}
 	return m
+}
+
+// unionVersions returns a + b with duplicates removed. Order is
+// preserved (a's elements first, then any new b elements) so the
+// list a caller sees on a refresh is the manual list with any
+// fresh OSV versions appended -- predictable for testing and
+// terminal output.
+func unionVersions(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, v := range a {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range b {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 // MatchPackage returns every Record that affects the given
@@ -108,10 +152,10 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 	}
 	var out []Match
 	for _, rec := range candidates {
-		if !versionMatches(rec, in.Version) {
+		if rec == nil || !versionMatches(*rec, in.Version) {
 			continue
 		}
-		out = append(out, Match{Record: rec, Path: in.Path})
+		out = append(out, Match{Record: *rec, Path: in.Path})
 	}
 	return out
 }

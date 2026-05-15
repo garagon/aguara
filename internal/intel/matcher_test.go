@@ -224,6 +224,46 @@ func TestMatcherDedupAcrossSnapshots(t *testing.T) {
 	require.Equal(t, "DUP-1", hits[0].Record.ID)
 }
 
+func TestMatcherMergesVersionsAcrossSnapshots(t *testing.T) {
+	// Codex P2 regression (PR 2 review): when the same advisory ID
+	// appears in two snapshots with DIFFERENT version coverage --
+	// the realistic "manual ships old versions, OSV refresh adds a
+	// fresh one" case -- the matcher must union the version lists.
+	// Dropping the later record entirely would silently miss a
+	// compromised version the user just refreshed intel for.
+	manual := intel.Record{
+		ID:        "ADV-1",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "node-ipc",
+		Kind:      intel.KindCompromised,
+		Summary:   "manual: original advisory text",
+		Versions:  []string{"12.0.1"},
+	}
+	osv := intel.Record{
+		ID:        "ADV-1",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "node-ipc",
+		Kind:      intel.KindCompromised,
+		Summary:   "OSV: refreshed advisory text (should NOT override)",
+		Versions:  []string{"12.0.2"},
+	}
+	m := intel.NewMatcher(
+		intel.Snapshot{Records: []intel.Record{manual}},
+		intel.Snapshot{Records: []intel.Record{osv}},
+	)
+	// Looking up the manual-only version hits.
+	hits := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "node-ipc", Version: "12.0.1"})
+	require.Len(t, hits, 1)
+	// Looking up the OSV-only version also hits -- this is the
+	// regression: without the merge, the second snapshot was
+	// dropped and 12.0.2 reported as clean.
+	hits = m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "node-ipc", Version: "12.0.2"})
+	require.Len(t, hits, 1, "version-only-in-second-snapshot must surface via merge")
+	// And the first-occurrence metadata wins, because manual
+	// advisories must keep their display priority.
+	require.Contains(t, hits[0].Record.Summary, "manual")
+}
+
 func TestMatcherDistinctIDsAtSameTupleStaySeparate(t *testing.T) {
 	// Two records that share (ecosystem, name, version) but carry
 	// different advisory IDs are distinct intel entries (e.g. an
