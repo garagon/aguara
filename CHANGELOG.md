@@ -5,7 +5,98 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Added
+### Native threat-intel round (v0.16-track)
+
+`aguara check` grows from a niche incident-response command into the
+project's offline supply-chain pipeline. Five stacked PRs (#85-#89)
+land the UX, the in-memory snapshot core, the OSV importer + CLI, the
+runtime refresh path, and a single-verdict audit aggregator. The
+embedded snapshot in this release carries 21,518 high-confidence
+malicious-package records (20,703 `MAL-*` from the OpenSSF Malicious
+Packages namespace, plus selected `GHSA-` / `PYSEC-` / `OSV-`
+records) sourced from osv.dev dumps generated 2026-05-15.
+
+Sources used for the embedded OSV snapshot (paste to reproduce):
+
+```
+osv-npm.zip   sha256: 3d5a8e00d69c170a4ba138cde35cfa4f6c21258e7d9227b5b300998f6e91b9cb
+osv-pypi.zip  sha256: 1156159eac3ae589a7cc95c12fc99e022df653dc727dfd85a210227782b9360b
+```
+
+#### New commands and flags
+
+- `aguara check` auto-detects npm vs Python from the current directory
+  (a `node_modules` child wins; otherwise Python site-packages
+  discovery falls through). Explicit `--ecosystem python` /
+  `--ecosystem npm` still wins when passed.
+- `aguara check --ci` shorthand for `--fail-on critical --no-color`;
+  matches the convention `aguara scan --ci` already uses. Does not
+  clobber an explicit `--fail-on`.
+- `aguara check --fail-on critical|warning|info` returns exit code 1
+  via the same `ErrThresholdExceeded` sentinel `scan` uses.
+- `aguara check --fresh` refreshes threat intel from OSV before
+  checking. The only check mode that uses the network.
+  `--allow-stale` lets the run fall back to cached/embedded intel
+  on refresh failure.
+- `aguara update` — new top-level command. Refreshes the local
+  threat-intel cache at `~/.aguara/intel/snapshot.json`. Subsequent
+  offline checks layer the local cache over the embedded snapshot
+  automatically.
+- `aguara status` — new. Prints binary version, embedded snapshot
+  age and record count, and local cache state. No network.
+- `aguara audit` — new. Runs the supply-chain check plus the content
+  scan in one shot and produces a single verdict (per-section
+  severity counts plus a threshold-exceeded flag). JSON output
+  carries both sub-results.
+
+#### Library API
+
+- `internal/intel/` package: `Snapshot`, `Record`, `SourceMeta`,
+  `IOC`, `Matcher`, `Store`. `intel.NewMatcher(snapshots...)` gives
+  O(1)-per-package lookup keyed by ecosystem + normalised name (npm
+  case-sensitive scope-preserving, PyPI PEP 503), with cross-snapshot
+  version merge for the same advisory ID and order-independent
+  withdrawn-record tombstone. `intel.Store` writes the local cache
+  atomically (temp file + fsync + rename) with a 64 MiB size cap,
+  schema-version gate, and 0600 file perms.
+- `incident.CheckResult` grows an `Intel IntelSummary` field
+  describing the snapshot the run consulted (`mode = offline|online`,
+  `snapshot = embedded|local|remote-fresh`, sources, generated-at).
+  Always populated by `Check` and `CheckNPM`.
+- `incident.CheckOptions.Intel *IntelOverride` lets external callers
+  inject a custom snapshot set (e.g. embedded + local cache) without
+  mutating package-level state. The CLI uses this to surface
+  refreshed intel without rebuilding the cached default matcher.
+
+#### Generator
+
+- `tools/update-intel` CLI: produces
+  `internal/incident/generated_intel.go` from local OSV `all.zip`
+  dumps. Accepts repeated `--from-zip` / `--ecosystem` pairs in
+  lockstep, `--generated-at` for reproducible builds,
+  `--allow-empty` for the bootstrap stub. Refuses zero-record
+  imports by default so a mistagged ecosystem cannot silently ship
+  empty intel.
+- High-confidence filter only: MAL-* IDs, OpenSSF
+  `malicious-packages-origins` records, or keyword-qualified records
+  ("malicious package", "credential exfiltration", "typosquat
+  malware", ...) that carry at least one exact affected version.
+  Generic CVE / DoS entries are dropped at import time so the
+  snapshot stays focused on malicious packages, not general SCA.
+
+#### Performance
+
+- `checkCaches` filename heuristic rebuilt from a per-file
+  substring scan (O(files × records)) to a precomputed name index
+  with structural wheel/sdist parsing (`<name>-<version>-...`). On a
+  host with active pip/uv caches (~40k+ files is common), this
+  drops the cache phase from 30s+ to under a second once the
+  embedded OSV snapshot started carrying real records. Also removes
+  the substring false-positive class where short record names
+  ("4123", typosquat prefixes) matched hex hash filenames or
+  legitimate package prefixes.
+
+### Other v0.16-track changes carried over from the prior round
 
 - `aguara check --ecosystem npm` now flags the May 2026 node-ipc compromise (versions 9.1.6, 9.2.3, 12.0.1; advisory `SOCKET-2026-05-14-node-ipc`). The package-metadata check catches the compromised versions by name and version against an installed `node_modules` tree (which is what `check --ecosystem npm` walks; `scan` itself ignores `node_modules` by default). The historical 2022 RIAEvangelist / "peacenotwar" versions (10.1.1, 10.1.2, 11.0.0, 11.1.0) are tracked as a separate `SOCKET-node-ipc-historical-malicious` entry so the two incidents stay legible.
 - New `jsrisk` rule `JS_DNS_TXT_EXFIL_001`. Detects credential exfiltration via DNS TXT queries. The detector requires a real `resolveTxt` invocation (inline `require('dns').resolveTxt`, a discovered `dns` / `dns/promises` module alias, a `new dns.Resolver()` instance, or a destructured `{ resolveTxt }` import) and at least one further chain signal: CI/cloud secret read, on-disk `envs.txt` credential stage, tar.gz archive staged under `os.tmpdir()`, install-time daemonization, or a known IOC string from the 2026 node-ipc compromise (`bt.node.js`, `sh.azurestaticprovider.net`, `__ntw`, `__ntRun`). Fires HIGH on a single partner; CRITICAL on three-plus partners or a known IOC.
