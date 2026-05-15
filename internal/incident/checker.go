@@ -411,6 +411,16 @@ func checkCaches(opts CheckOptions) []Finding {
 
 	matcher := matcherFor(opts)
 	snaps := snapshotsFor(opts)
+	// Precompute the PyPI filename-heuristic index ONCE outside
+	// the per-file WalkDir loop. Before this, every cache file
+	// re-iterated all snapshots' records and ran a fresh
+	// strings.ToLower on each rec.Name. With v0.16's regenerated
+	// OSV stub carrying ~1,400 PyPI records, a host with active
+	// pip/uv caches (40k+ files is common) saw aguara check spike
+	// to 30s+ scanning caches. The precompute moves the lower-case
+	// and ecosystem filter out of the hot loop so per-file cost
+	// scales with the substring matcher, not the snapshot size.
+	pypiIndex := buildPyPIFilenameIndex(snaps)
 	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -471,26 +481,49 @@ func checkCaches(opts CheckOptions) []Finding {
 			// advisory trips the heuristic without having to wait
 			// for the next release.
 			base := strings.ToLower(name)
-			for _, snap := range snaps {
-				for _, rec := range snap.Records {
-					if rec.Ecosystem != intel.EcosystemPyPI {
-						continue
+			candidates := parsePyPIWheelName(base)
+			if len(candidates) == 0 {
+				// Filename is not a wheel/sdist shape (pip's
+				// content-hash cache entries fall here). Skip
+				// rather than substring-scan, which v0.15
+				// false-positived on hex hashes that happened
+				// to contain a record name.
+				return nil
+			}
+			// Try every (name, rest) split. Hyphenated sdist names
+			// (e.g. `233-misc-0.0.3.tar.gz`) have multiple
+			// candidate boundaries; we accept the FIRST that hits
+			// the index. The intel index is PEP 503 normalised so
+			// we normalise the candidate before lookup.
+			for _, cand := range candidates {
+				if seen[path] {
+					break
+				}
+				entries, ok := pypiIndex[intel.PEP503Normalize(cand.name)]
+				if !ok {
+					continue
+				}
+				for _, entry := range entries {
+					if seen[path] {
+						break
 					}
-					if rec.Withdrawn {
-						continue
-					}
-					if !strings.Contains(base, strings.ToLower(rec.Name)) {
-						continue
-					}
-					for _, v := range rec.Versions {
-						if strings.Contains(base, v) && !seen[path] {
+					for _, v := range entry.versions {
+						// Version must appear in the suffix
+						// after the name. Without that constraint
+						// `numpy-1.26.4.whl` could spuriously
+						// match a record whose version string
+						// lives only inside `numpy` itself
+						// (1-digit versions like "1" would
+						// explode otherwise).
+						if strings.Contains(cand.rest, v) {
 							seen[path] = true
 							findings = append(findings, Finding{
 								Severity:    SevWarning,
-								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", rec.Name, v, rec.ID),
+								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
 								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 							})
+							break
 						}
 					}
 				}
@@ -499,4 +532,106 @@ func checkCaches(opts CheckOptions) []Finding {
 		})
 	}
 	return findings
+}
+
+// pypiFilenameEntry is one row in the precomputed PyPI filename-
+// heuristic index. displayName preserves the original casing for
+// the finding title; id is the OSV/manual advisory ID.
+type pypiFilenameEntry struct {
+	displayName string
+	id          string
+	versions    []string
+}
+
+// pypiFilenameIndex maps a PEP 503-normalised package name to the
+// list of (id, displayName, versions) entries for that name. The
+// per-file matcher parses the wheel/sdist filename, extracts the
+// `<name>-<version>` prefix, normalises the name, and does an
+// O(1) map lookup. This avoids the v0.15-era substring scan that
+// false-positived on hash filenames (`...4123932...` matching a
+// MAL record named "4123") and on typosquat prefixes ("nump"
+// matching "numpy-1.26.4.whl"); both were observed regressions
+// once the OSV stub started carrying real records.
+type pypiFilenameIndex map[string][]pypiFilenameEntry
+
+// buildPyPIFilenameIndex builds the precomputed heuristic index
+// once per check run. Filters out withdrawn records, anything not
+// tagged PyPI, and records with no Versions (filename heuristic
+// needs at least one version to anchor a cache finding). Names
+// are normalised via intel.PEP503Normalize so the lookup matches
+// the canonical wheel-filename casing.
+func buildPyPIFilenameIndex(snaps []intel.Snapshot) pypiFilenameIndex {
+	idx := make(pypiFilenameIndex)
+	for _, snap := range snaps {
+		for _, rec := range snap.Records {
+			if rec.Ecosystem != intel.EcosystemPyPI {
+				continue
+			}
+			if rec.Withdrawn {
+				continue
+			}
+			if len(rec.Versions) == 0 {
+				continue
+			}
+			key := intel.PEP503Normalize(rec.Name)
+			if key == "" {
+				continue
+			}
+			idx[key] = append(idx[key], pypiFilenameEntry{
+				displayName: rec.Name,
+				id:          rec.ID,
+				versions:    rec.Versions,
+			})
+		}
+	}
+	return idx
+}
+
+// parsePyPIWheelName extracts (name, rest) candidates from a PyPI
+// cache filename. Returns the EMPTY slice for filenames that do
+// not match a wheel/sdist shape (e.g. pip's content-hash cache
+// entries in http-v2/) so the caller can skip them cleanly.
+//
+// Wheel: `<name>-<version>-<python>-<abi>-<platform>.whl`
+//   - PEP 491: non-alphanumeric chars in name are normalised to `_`
+//     in wheel filenames, so the wheel name never contains `-`.
+//
+// Sdist: `<name>-<version>.tar.gz` (or .zip)
+//   - Name may contain `-` (e.g. `233-misc-0.0.3.tar.gz` has name
+//     `233-misc`, version `0.0.3`).
+//
+// We resolve the ambiguity by emitting a candidate at every `-`
+// position whose next byte is a digit (PEP 440 versions always
+// start with a digit, possibly preceded by an epoch which itself
+// starts with a digit). Callers try each candidate in order; the
+// first that resolves in the intel index wins. For wheels there
+// is exactly one such boundary; for hyphenated sdists there are
+// typically two (the inner ones don't match the index but the
+// last one does).
+func parsePyPIWheelName(base string) []nameCandidate {
+	var out []nameCandidate
+	for i := 0; i < len(base); i++ {
+		if base[i] != '-' {
+			continue
+		}
+		if i+1 >= len(base) {
+			break
+		}
+		if base[i+1] < '0' || base[i+1] > '9' {
+			continue
+		}
+		if i == 0 {
+			continue // leading '-' has no name part
+		}
+		out = append(out, nameCandidate{name: base[:i], rest: base[i+1:]})
+	}
+	return out
+}
+
+// nameCandidate is one possible (name, rest) split of a PyPI cache
+// filename. parsePyPIWheelName returns all candidates; the caller
+// tries each against the intel index until one resolves.
+type nameCandidate struct {
+	name string
+	rest string
 }
