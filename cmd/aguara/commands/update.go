@@ -54,6 +54,19 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("aguara update: %w", err)
 	}
 
+	// Guard: -o must not point at the snapshot path the store
+	// is about to write. The Save happens BEFORE the output
+	// writer runs, so without this check `aguara update -o
+	// ~/.aguara/intel/snapshot.json` would first write the real
+	// refreshed snapshot and then truncate the same file to a
+	// terminal/JSON summary -- silently corrupting the cache.
+	// Future offline checks would then fail to Load the snapshot
+	// and fall back to the embedded data without telling the
+	// user the refresh effectively disappeared.
+	if err := assertOutputNotShadowingStore(flagOutput, store.Dir); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(cmd.Context(), flagUpdateTimeout)
 	defer cancel()
 
@@ -173,6 +186,35 @@ func writeUpdateTerminal(res *intel.UpdateResult, snapshotPath string) error {
 		fmt.Fprintf(w, "  %-8s -> %d records\n", eco.Ecosystem, eco.RecordsKept)
 	}
 	fmt.Fprintf(w, "  Written: %s\n", snapshotPath)
+	return nil
+}
+
+// assertOutputNotShadowingStore returns an error if flagOutput
+// would resolve to the same on-disk file the intel.Store writes
+// the snapshot to. Compared by canonical absolute path so a
+// relative -o (or one with redundant separators) is caught too.
+// Symlink shenanigans across the two paths are out of scope: if
+// the user has set up a symlink farm pointing -o at the snapshot,
+// they have asked for trouble.
+//
+// Returns nil for the common case (no -o, or -o pointing
+// anywhere other than the snapshot path) so the rest of the
+// happy path stays untouched.
+func assertOutputNotShadowingStore(out, storeDir string) error {
+	if out == "" {
+		return nil
+	}
+	outAbs, err := filepath.Abs(out)
+	if err != nil {
+		return nil // can't normalise; let the open() below fail with a real message
+	}
+	storeAbs, err := filepath.Abs(filepath.Join(storeDir, "snapshot.json"))
+	if err != nil {
+		return nil
+	}
+	if filepath.Clean(outAbs) == filepath.Clean(storeAbs) {
+		return fmt.Errorf("aguara update: --output %s would overwrite the threat-intel snapshot the command just wrote; pick a different path (the snapshot already lives there)", out)
+	}
 	return nil
 }
 

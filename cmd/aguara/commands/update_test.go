@@ -167,6 +167,43 @@ func TestWriteUpdateTerminalDefault(t *testing.T) {
 		"terminal default must not start like JSON; got: %s", s)
 }
 
+func TestAssertOutputNotShadowingStore(t *testing.T) {
+	// Codex P2 (PR 3): `aguara update -o ~/.aguara/intel/snapshot.json`
+	// would first write the real refreshed snapshot via store.Save,
+	// then truncate the same file to a terminal/JSON summary,
+	// silently corrupting the cache. The guard catches the path
+	// collision BEFORE any I/O happens.
+	storeDir := t.TempDir()
+	snapshotPath := filepath.Join(storeDir, "snapshot.json")
+
+	// Exact match -> rejected.
+	err := assertOutputNotShadowingStore(snapshotPath, storeDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "would overwrite")
+	require.Contains(t, err.Error(), snapshotPath)
+
+	// Trailing slash redundancy still collides under
+	// filepath.Clean normalisation.
+	err = assertOutputNotShadowingStore(snapshotPath+"/./.", storeDir)
+	require.Error(t, err)
+
+	// Empty -o -> nil (the common case).
+	err = assertOutputNotShadowingStore("", storeDir)
+	require.NoError(t, err)
+
+	// Different path -> nil.
+	err = assertOutputNotShadowingStore(filepath.Join(storeDir, "summary.json"), storeDir)
+	require.NoError(t, err)
+
+	// Relative path that resolves to the snapshot still
+	// collides (filepath.Abs normalises).
+	// Set up: chdir into storeDir, pass `snapshot.json` as -o.
+	t.Chdir(storeDir)
+	err = assertOutputNotShadowingStore("snapshot.json", storeDir)
+	require.Error(t, err,
+		"a relative -o resolving to the snapshot path must collide too")
+}
+
 func TestWriteUpdateTerminalRespectsOutputFile(t *testing.T) {
 	// -o without --format puts the terminal text in the file
 	// (same legacy semantics as scan / check), so users who
