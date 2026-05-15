@@ -157,6 +157,41 @@ func TestListRulesIncludesAnalyzerRules(t *testing.T) {
 	}
 }
 
+func TestListRulesHonoursRuleOverrides(t *testing.T) {
+	// Codex P2 round 2: WithRuleOverrides on ListRules must apply
+	// both the Disabled flag and the Severity remap, so a policy
+	// UI built on top of the catalog never disagrees with what the
+	// scanner actually runs. Two scenarios:
+	//
+	//  - Disabled:true drops the rule from the list.
+	//  - Severity:"low" remaps the rule's severity in the output.
+	target := "PROMPT_INJECTION_001"
+	overrides := map[string]aguara.RuleOverride{
+		target: {Disabled: true},
+	}
+	filtered := aguara.ListRules(aguara.WithRuleOverrides(overrides))
+	for _, r := range filtered {
+		if r.ID == target {
+			t.Errorf("WithRuleOverrides Disabled=true did not drop %s", target)
+		}
+	}
+
+	overrides = map[string]aguara.RuleOverride{
+		target: {Severity: "LOW"},
+	}
+	withSev := aguara.ListRules(aguara.WithRuleOverrides(overrides))
+	var got string
+	for _, r := range withSev {
+		if r.ID == target {
+			got = r.Severity
+			break
+		}
+	}
+	if got != "LOW" {
+		t.Errorf("WithRuleOverrides Severity remap: %s = %q, want LOW", target, got)
+	}
+}
+
 func TestListRulesHonoursDisabledRules(t *testing.T) {
 	// Codex P2: WithDisabledRules must filter the catalog the
 	// same way it filters the scanner. A policy UI built on top

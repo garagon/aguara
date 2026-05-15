@@ -179,19 +179,39 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	return result, nil
 }
 
+// catalogOverridesFromCfg projects the public RuleOverride map
+// onto the catalog's narrower Override shape. Tool-scoping fields
+// (ApplyToTools / ExemptTools) are not relevant to list-rules /
+// explain output, so the projection drops them; the scanner still
+// sees them via the existing rule-overrides pipeline.
+func catalogOverridesFromCfg(in map[string]RuleOverride) map[string]rulecatalog.Override {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]rulecatalog.Override, len(in))
+	for id, o := range in {
+		out[id] = rulecatalog.Override{
+			Severity: o.Severity,
+			Disabled: o.Disabled,
+		}
+	}
+	return out
+}
+
 // ListRules returns all available detection rules. Includes BOTH
 // YAML-driven pattern rules AND analyzer-emitted rules (ci-trust,
 // pkgmeta, jsrisk, nlp, toxicflow, rugpull), so a finding's
 // RuleID always resolves through this function. WithCategory
-// filters; WithDisabledRules removes IDs from the listing so a
-// policy UI built on top of ListRules sees the same set the
-// scanner will consult.
+// filters; WithDisabledRules and WithRuleOverrides drop / mutate
+// rules so a policy UI built on top of ListRules sees the same
+// set the scanner will consult.
 func ListRules(opts ...Option) []RuleInfo {
 	cfg := applyOpts(opts)
 	cat, err := rulecatalog.Build(rulecatalog.Options{
 		CustomRulesDir: cfg.customRulesDir,
 		Category:       cfg.category,
 		DisableRuleIDs: cfg.disabledRules,
+		Overrides:      catalogOverridesFromCfg(cfg.ruleOverrides),
 	})
 	if err != nil {
 		return nil

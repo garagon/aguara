@@ -40,6 +40,14 @@ type Options struct {
 	// Matches the --disable-rule CLI flag and the config-file
 	// disable_rules list.
 	DisableRuleIDs []string
+	// Overrides apply per-rule severity changes and disables, the
+	// same surface aguara.WithRuleOverrides exposes. Keyed by
+	// rule ID (case-insensitive). An entry with Disabled=true
+	// drops the rule; an entry with a non-empty Severity replaces
+	// the metadata's severity in the output. Mirrors the
+	// scanner's RuleOverride path so a policy UI built on Build
+	// agrees with what the scanner actually runs.
+	Overrides map[string]Override
 	// Category, when non-empty, filters the result to rules whose
 	// Category matches case-insensitively.
 	Category string
@@ -47,6 +55,17 @@ type Options struct {
 	// loader. nil discards them; the CLI wires this to stderr so
 	// the user sees rule-author issues during `list-rules`.
 	Warn func(format string, args ...any)
+}
+
+// Override is the catalog-side projection of aguara.RuleOverride.
+// Kept here so the catalog package does not import the public
+// aguara API (which would create a cycle). The fields are a
+// strict subset: tool-scoping (ApplyToTools / ExemptTools) is a
+// scanner concern and does not change what list-rules / explain
+// show, so it is intentionally omitted from this struct.
+type Override struct {
+	Severity string // empty -> keep the catalog metadata severity
+	Disabled bool   // true  -> drop the rule from list-rules output
 }
 
 // Build returns the merged catalog. Errors come from the
@@ -119,7 +138,35 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 6. --category filter. Case-insensitive on the Category
+	// 6. Per-rule overrides: drop disabled rules and apply
+	// severity overrides. Same surface aguara.WithRuleOverrides
+	// exposes -- without this, a policy UI built on ListRules
+	// disagrees with what scan runs (the scanner sees the
+	// override, list-rules did not).
+	if len(opts.Overrides) > 0 {
+		normalised := make(map[string]Override, len(opts.Overrides))
+		for id, o := range opts.Overrides {
+			normalised[strings.ToUpper(strings.TrimSpace(id))] = o
+		}
+		filtered := out[:0]
+		for _, r := range out {
+			ovr, ok := normalised[strings.ToUpper(r.ID)]
+			if !ok {
+				filtered = append(filtered, r)
+				continue
+			}
+			if ovr.Disabled {
+				continue
+			}
+			if ovr.Severity != "" {
+				r.Severity = strings.ToUpper(ovr.Severity)
+			}
+			filtered = append(filtered, r)
+		}
+		out = filtered
+	}
+
+	// 7. --category filter. Case-insensitive on the Category
 	// string; same UX as the legacy YAML-only list-rules.
 	if opts.Category != "" {
 		filtered := out[:0]
@@ -131,7 +178,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 7. Canonical order.
+	// 8. Canonical order.
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }

@@ -124,6 +124,75 @@ func TestFindByIDMissingReturnsErrNotExist(t *testing.T) {
 		"missing rule must wrap os.ErrNotExist for the CLI's error-mapping path")
 }
 
+func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
+	// Codex P2 round 2: the catalog metadata MUST match what the
+	// analyzers actually emit on Finding.Severity / Finding.Category.
+	// Without this lock, `list-rules --category X` shows rules the
+	// scanner reports under a different category, and triage
+	// agents calibrating to severity disagree with scan output.
+	//
+	// Source of truth (kept here as comments so a regression is
+	// debuggable from the test row alone):
+	//
+	//   toxicflow.go / crossfile.go append findings with
+	//     Severity = types.SeverityHigh, Category = "toxic-flow".
+	//   nlp/injection.go checkDangerousCombos:
+	//     NLP_CRED_EXFIL_COMBO -> CRITICAL + "exfiltration".
+	//   rugpull.go: RUGPULL_001 -> CRITICAL + "rug-pull".
+	type want struct {
+		Severity string
+		Category string
+	}
+	cases := map[string]want{
+		"TOXIC_001":             {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_002":             {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_003":             {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_001":       {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_002":       {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_003":       {Severity: "HIGH", Category: "toxic-flow"},
+		"NLP_CRED_EXFIL_COMBO":  {Severity: "CRITICAL", Category: "exfiltration"},
+		"RUGPULL_001":           {Severity: "CRITICAL", Category: "rug-pull"},
+	}
+	for id, w := range cases {
+		rec, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
+		require.NoErrorf(t, err, "%s must be in the catalog", id)
+		require.Equalf(t, w.Severity, rec.Severity,
+			"%s severity must match the analyzer emit-site", id)
+		require.Equalf(t, w.Category, rec.Category,
+			"%s category must match the analyzer emit-site", id)
+	}
+}
+
+func TestBuildOverridesDisableAndSeverity(t *testing.T) {
+	// Catalog-level test for the override path the aguara public
+	// API wires to. Disabled=true drops the rule; Severity remaps.
+	disabled, err := rulecatalog.Build(rulecatalog.Options{
+		Overrides: map[string]rulecatalog.Override{
+			"PROMPT_INJECTION_001": {Disabled: true},
+		},
+	})
+	require.NoError(t, err)
+	for _, r := range disabled {
+		require.NotEqual(t, "PROMPT_INJECTION_001", r.ID,
+			"Overrides{Disabled:true} must drop the rule")
+	}
+
+	remapped, err := rulecatalog.Build(rulecatalog.Options{
+		Overrides: map[string]rulecatalog.Override{
+			"PROMPT_INJECTION_001": {Severity: "low"},
+		},
+	})
+	require.NoError(t, err)
+	var got string
+	for _, r := range remapped {
+		if r.ID == "PROMPT_INJECTION_001" {
+			got = r.Severity
+			break
+		}
+	}
+	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must upper-case + apply")
+}
+
 func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 	// Belt-and-suspenders contract: the set of analyzer rule IDs
 	// that the codebase declares as constants must be a subset of
@@ -146,6 +215,8 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		// toxicflow emit sites (single-file + cross-file).
 		"TOXIC_001", "TOXIC_002", "TOXIC_003",
 		"TOXIC_CROSS_001", "TOXIC_CROSS_002", "TOXIC_CROSS_003",
+		// rug-pull analyzer (only fires with --monitor / WithStateDir).
+		"RUGPULL_001",
 	}
 	for _, id := range emitted {
 		_, err := rulecatalog.FindByID(rulecatalog.Options{}, id)

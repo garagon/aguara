@@ -64,15 +64,20 @@ func RuleMetadata() []rulemeta.Rule {
 				"Untrusted prose making authority claims is a prompt-injection vector.",
 		},
 		{
-			ID:       "NLP_CRED_EXFIL_COMBO",
-			Name:     "Credential reference + exfiltration verb in the same span",
-			Severity: "HIGH",
-			Category: "prompt-injection",
+			ID:   "NLP_CRED_EXFIL_COMBO",
+			Name: "Text combines credential access with network transmission",
+			// Emit site: checkDangerousCombos in injection.go ->
+			// SeverityCritical + category "exfiltration". The
+			// catalog mirrors that exactly so list-rules and
+			// scan output agree on triage.
+			Severity: "CRITICAL",
+			Category: "exfiltration",
 			Analyzer: rulemeta.AnalyzerNLP,
 			Description: "Same proximity window contains a credential-reference token " +
-				"(API key, token, secret, password) AND an exfiltration verb (send, post, " +
-				"upload, exfiltrate, leak). The classifier requires both signals to be " +
-				"clustered, so generic security documentation does not trip.",
+				"(API key, token, secret, password) AND a network-transmission verb " +
+				"(send, post, upload, exfiltrate, leak). The classifier requires both " +
+				"signals to be clustered, so generic security documentation does not " +
+				"trip; when they cluster, the combination is the classic exfil shape.",
 			Remediation: "Remove the imperative phrasing or relocate the credential " +
 				"discussion into a code block / quoted example so the agent reads it as " +
 				"data, not instructions.",
