@@ -43,6 +43,13 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
 	auditCmd.Flags().BoolVar(&flagAuditFresh, "fresh", false, "Refresh threat intel before the audit (network opt-in)")
 	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
+	// Runtime errors (ErrThresholdExceeded after the verdict
+	// computes "fail", --fresh network failures) should not
+	// trigger Cobra's flag-usage block. The verdict line plus the
+	// JSON sub-results are already enough to act on; printing
+	// --help on top of those makes the CI log read as command
+	// misuse. See scan.go for the same rationale.
+	auditCmd.SilenceUsage = true
 	rootCmd.AddCommand(auditCmd)
 }
 

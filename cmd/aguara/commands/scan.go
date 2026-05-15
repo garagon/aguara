@@ -69,6 +69,14 @@ func init() {
 	scanCmd.Flags().StringVar(&flagToolName, "tool-name", "", "Tool context for false-positive reduction (e.g. Bash, Edit, WebFetch)")
 	scanCmd.Flags().StringVar(&flagProfile, "profile", "", "Scan profile: strict (default), content-aware, minimal")
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
+	// Runtime errors (ErrThresholdExceeded after a successful scan,
+	// network failures on --auto) should not trigger Cobra's
+	// flag-usage block: a CI log that already says
+	// "Error: findings exceed severity threshold" then prints the
+	// full --help reads as a command-misuse error to non-technical
+	// readers. Flag-parse errors still surface with a clear error
+	// message; we just stop printing the usage block on top.
+	scanCmd.SilenceUsage = true
 	rootCmd.AddCommand(scanCmd)
 }
 

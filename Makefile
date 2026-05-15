@@ -33,7 +33,8 @@ SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-supply-chain.json smoke-supply-chain-clean.json \
 	smoke-v016-autodetect.json smoke-v016-ci.json \
 	smoke-v016-ci-clean.json smoke-v016-status.txt \
-	smoke-v016-audit.json smoke-v016-audit-clean.json
+	smoke-v016-audit.json smoke-v016-audit.stderr.txt \
+	smoke-v016-audit-clean.json
 
 .PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
 	bench-docker-image race-docker-image \
