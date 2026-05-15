@@ -100,6 +100,30 @@ var KnownCompromised = []CompromisedPackage{
 		Date:      "2021-11-12",
 		Summary:   "Compromised rc releases delivered the same credential-stealing payload as the coa incident from the same week.",
 	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "node-ipc",
+		Versions:  []string{"9.1.6", "9.2.3", "12.0.1"},
+		Advisory:  "SOCKET-2026-05-14-node-ipc",
+		Date:      "2026-05-14",
+		Summary:   "Compromised node-ipc releases shipped an obfuscated CommonJS credential-stealing payload in node-ipc.cjs; CommonJS consumers trigger it via require(\"node-ipc\"). Exfiltrates secrets via DNS TXT queries against bt.node.js and an HTTPS endpoint at sh.azurestaticprovider.net.",
+		IOCs: []IOC{
+			{Type: "hash", Value: "96097e0612d9575cb133021017fb1a5c68a03b60f9f3d24ebdc0e628d9034144"},
+			{Type: "endpoint", Value: "sh.azurestaticprovider.net"},
+			{Type: "endpoint", Value: "37.16.75.69"},
+			{Type: "dns-zone", Value: "bt.node.js"},
+			{Type: "runtime", Value: "__ntw"},
+			{Type: "runtime", Value: "__ntRun"},
+		},
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "node-ipc",
+		Versions:  []string{"10.1.1", "10.1.2", "11.0.0", "11.1.0"},
+		Advisory:  "SOCKET-node-ipc-historical-malicious",
+		Date:      "2022-03-07",
+		Summary:   "Historical malicious node-ipc releases (originally surfaced as the \"peacenotwar\" / RIAEvangelist incident) tied to destructive or unauthorized file-writing behavior on installs from specific geographies. Listed separately from the 2026 compromise because the payload and motivation differ.",
+	},
 }
 
 // IsCompromised checks if a package name+version is in the PyPI
