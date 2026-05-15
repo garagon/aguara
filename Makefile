@@ -30,7 +30,10 @@ RACE_ARTIFACTS := go-test-race.txt provenance-race.json
 SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-npm-fixture.json smoke-npm-bare.txt \
 	smoke-npm-node-ipc.json \
-	smoke-supply-chain.json smoke-supply-chain-clean.json
+	smoke-supply-chain.json smoke-supply-chain-clean.json \
+	smoke-v016-autodetect.json smoke-v016-ci.json \
+	smoke-v016-ci-clean.json smoke-v016-status.txt \
+	smoke-v016-audit.json smoke-v016-audit-clean.json
 
 .PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
 	bench-docker-image race-docker-image \
@@ -83,6 +86,9 @@ smoke-docker: bench-docker-image
 		-v "$(CURDIR)/.bench:/out" $(DOCKER_BENCH_IMAGE)
 	docker run $(DOCKER_RUN_FLAGS) \
 		--entrypoint /src/benchmarks/smoke-supply-chain.sh \
+		-v "$(CURDIR)/.bench:/out" $(DOCKER_BENCH_IMAGE)
+	docker run $(DOCKER_RUN_FLAGS) \
+		--entrypoint /src/benchmarks/smoke-v016-commands.sh \
 		-v "$(CURDIR)/.bench:/out" $(DOCKER_BENCH_IMAGE)
 
 verify-docker: bench-docker test-race-docker smoke-docker
