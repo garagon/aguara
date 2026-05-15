@@ -190,6 +190,83 @@ func TestCheckNPM_AcceptsProjectRoot(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_DetectsNodeIPC2026Compromise(t *testing.T) {
+	// The May 2026 node-ipc compromise (Socket / StepSecurity):
+	// versions 9.1.6, 9.2.3, and 12.0.1 published an obfuscated
+	// CommonJS payload. Each must surface as CRITICAL with the
+	// SOCKET-2026-05-14 advisory.
+	for _, ver := range []string{"9.1.6", "9.2.3", "12.0.1"} {
+		ver := ver
+		t.Run(ver, func(t *testing.T) {
+			dir := t.TempDir()
+			nm := filepath.Join(dir, "node_modules")
+			writeNPMPackage(t, nm, "node-ipc", ver)
+
+			result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+			if err != nil {
+				t.Fatalf("CheckNPM error: %v", err)
+			}
+			if len(result.Findings) != 1 {
+				t.Fatalf("expected 1 finding for node-ipc %s, got %d: %+v", ver, len(result.Findings), result.Findings)
+			}
+			f := result.Findings[0]
+			if f.Severity != incident.SevCritical {
+				t.Errorf("expected CRITICAL, got %q", f.Severity)
+			}
+			if !strings.Contains(f.Title+f.Detail, "SOCKET-2026-05-14-node-ipc") {
+				t.Errorf("expected SOCKET-2026-05-14-node-ipc advisory reference, got title=%q detail=%q", f.Title, f.Detail)
+			}
+		})
+	}
+}
+
+func TestCheckNPM_DetectsHistoricalNodeIPCCompromises(t *testing.T) {
+	// The 2022 "peacenotwar" / RIAEvangelist incident. These
+	// versions are listed as historical malicious to surface them
+	// on installs that still pin or transitively depend on them.
+	for _, ver := range []string{"10.1.1", "10.1.2", "11.0.0", "11.1.0"} {
+		ver := ver
+		t.Run(ver, func(t *testing.T) {
+			dir := t.TempDir()
+			nm := filepath.Join(dir, "node_modules")
+			writeNPMPackage(t, nm, "node-ipc", ver)
+
+			result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+			if err != nil {
+				t.Fatalf("CheckNPM error: %v", err)
+			}
+			if len(result.Findings) != 1 {
+				t.Fatalf("expected 1 finding for historical node-ipc %s, got %d", ver, len(result.Findings))
+			}
+			if !strings.Contains(result.Findings[0].Title+result.Findings[0].Detail, "SOCKET-node-ipc-historical-malicious") {
+				t.Errorf("expected historical advisory reference, got: %+v", result.Findings[0])
+			}
+		})
+	}
+}
+
+func TestCheckNPM_NodeIPCCleanVersions(t *testing.T) {
+	// Versions adjacent to the compromised tuples must not be
+	// flagged. 12.0.0 is the immediately prior version to the
+	// compromised 12.0.1 in the same minor series.
+	for _, ver := range []string{"9.0.0", "9.1.5", "12.0.0", "9.2.4"} {
+		ver := ver
+		t.Run(ver, func(t *testing.T) {
+			dir := t.TempDir()
+			nm := filepath.Join(dir, "node_modules")
+			writeNPMPackage(t, nm, "node-ipc", ver)
+
+			result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+			if err != nil {
+				t.Fatalf("CheckNPM error: %v", err)
+			}
+			if len(result.Findings) != 0 {
+				t.Errorf("clean node-ipc %s must not produce findings, got: %+v", ver, result.Findings)
+			}
+		})
+	}
+}
+
 func TestCheckNPM_RejectsBareDirWithoutNodeModules(t *testing.T) {
 	// A directory that is neither node_modules nor a project with
 	// one must error rather than report a clean (and misleading)

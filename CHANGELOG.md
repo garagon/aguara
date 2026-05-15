@@ -5,6 +5,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- `aguara check --ecosystem npm` now flags the May 2026 node-ipc compromise (versions 9.1.6, 9.2.3, 12.0.1; advisory `SOCKET-2026-05-14-node-ipc`). The package-metadata check catches the compromised versions by name and version against an installed `node_modules` tree (which is what `check --ecosystem npm` walks; `scan` itself ignores `node_modules` by default). The historical 2022 RIAEvangelist / "peacenotwar" versions (10.1.1, 10.1.2, 11.0.0, 11.1.0) are tracked as a separate `SOCKET-node-ipc-historical-malicious` entry so the two incidents stay legible.
+- New `jsrisk` rule `JS_DNS_TXT_EXFIL_001`. Detects credential exfiltration via DNS TXT queries. The detector requires a real `resolveTxt` invocation (inline `require('dns').resolveTxt`, a discovered `dns` / `dns/promises` module alias, a `new dns.Resolver()` instance, or a destructured `{ resolveTxt }` import) and at least one further chain signal: CI/cloud secret read, on-disk `envs.txt` credential stage, tar.gz archive staged under `os.tmpdir()`, install-time daemonization, or a known IOC string from the 2026 node-ipc compromise (`bt.node.js`, `sh.azurestaticprovider.net`, `__ntw`, `__ntRun`). Fires HIGH on a single partner; CRITICAL on three-plus partners or a known IOC.
+
 ### Fixed
 
 - `install.sh` extraction now passes `-o` to tar so the install succeeds under hardened container runtimes that drop `CAP_CHOWN` (`--cap-drop ALL`, rootless containers). Without the flag, tar attempted to restore the archive's recorded `uid/gid 1001` and failed with `Cannot change ownership`. POSIX-portable across GNU, BSD, and BusyBox tar.

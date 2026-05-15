@@ -108,5 +108,29 @@ if /tmp/aguara --no-update-check check --ecosystem npm \
 fi
 ok "bare directory without node_modules errored explicitly"
 
+# --- Case 5: node-ipc 12.0.1 from the May 2026 Socket advisory ---
+case5="$FIX_ROOT/node-ipc-2026"
+mkdir -p "$case5/node_modules/node-ipc"
+printf '{"name":"node-ipc","version":"12.0.1"}\n' \
+  > "$case5/node_modules/node-ipc/package.json"
+
+case5_json="$OUT/smoke-npm-node-ipc.json"
+/tmp/aguara --no-update-check check --ecosystem npm \
+  --path "$case5/node_modules" --format json > "$case5_json"
+
+if ! grep -Eq '"severity":[[:space:]]*"CRITICAL"' "$case5_json"; then
+  cat "$case5_json"
+  fail "node-ipc 12.0.1 must surface as CRITICAL"
+fi
+if ! grep -q '"node-ipc 12.0.1' "$case5_json"; then
+  cat "$case5_json"
+  fail "node-ipc 12.0.1 finding missing exact name/version anchor"
+fi
+if ! grep -q 'SOCKET-2026-05-14-node-ipc' "$case5_json"; then
+  cat "$case5_json"
+  fail "node-ipc 12.0.1 finding missing SOCKET-2026-05-14-node-ipc advisory"
+fi
+ok "node-ipc 12.0.1 flagged CRITICAL with SOCKET-2026-05-14 advisory"
+
 echo
 echo "all npm incident smokes passed"

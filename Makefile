@@ -29,6 +29,7 @@ BENCH_ARTIFACTS := aguara-version.txt provenance.json go-test.txt \
 RACE_ARTIFACTS := go-test-race.txt provenance-race.json
 SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-npm-fixture.json smoke-npm-bare.txt \
+	smoke-npm-node-ipc.json \
 	smoke-supply-chain.json smoke-supply-chain-clean.json
 
 .PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
