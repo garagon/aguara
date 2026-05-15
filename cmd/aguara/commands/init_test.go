@@ -57,6 +57,14 @@ func TestInitWorkflowUsesActionNotBrokenAsset(t *testing.T) {
 		"workflow must not curl release assets directly; the action handles install + checksum")
 	require.True(t, strings.Contains(body, "uses: garagon/aguara@"),
 		"workflow must invoke the official garagon/aguara action so version pin + checksum verify are guaranteed")
+
+	// Codex P2 follow-up: the action ref alone does NOT pin the
+	// binary version (the action's `version` input defaults to
+	// empty -> install.sh fetches whatever is latest at run time).
+	// The scaffold MUST also set the `version:` input so the
+	// installed CLI is reproducible across runs.
+	require.True(t, strings.Contains(body, "version: v"),
+		"workflow must pin the Aguara binary version (action ref alone does not pin the install)")
 }
 
 func TestInitSkipsExisting(t *testing.T) {

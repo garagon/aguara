@@ -235,6 +235,12 @@ jobs:
         with:
           path: .
           fail-on: high
+          # Pin the actual Aguara BINARY version too. Without this,
+          # the action's install step calls install.sh with no
+          # version override and fetches whatever release is
+          # "latest" at run time -- so the scanner code can drift
+          # away from the action ref above without notice.
+          version: v0.16.0
           # SARIF results land at aguara-results.sarif and are
           # uploaded to GitHub Code Scanning automatically. Set
           # upload-sarif: 'false' to disable that upload.
