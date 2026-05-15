@@ -2,9 +2,12 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -88,11 +91,88 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("aguara update: save snapshot: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Aguara threat intel updated\n")
-	for _, eco := range res.PerEcosystem {
-		fmt.Fprintf(os.Stdout, "  %-8s -> %d records\n", eco.Ecosystem, eco.RecordsKept)
+	return writeUpdateOutput(res, store.Dir)
+}
+
+// updateOutput is the JSON-stable shape `aguara update --format json`
+// emits. Field names match the snake_case scheme the rest of the JSON
+// surface uses; the array is always non-nil so consumers parsing it
+// in a typed language see []byte / [] cleanly.
+type updateOutput struct {
+	SnapshotPath string                  `json:"snapshot_path"`
+	Records      int                     `json:"records"`
+	GeneratedAt  time.Time               `json:"generated_at"`
+	PerEcosystem []updateEcosystemOutput `json:"per_ecosystem"`
+}
+
+type updateEcosystemOutput struct {
+	Ecosystem    string    `json:"ecosystem"`
+	RecordsKept  int       `json:"records_kept"`
+	BytesRead    int64     `json:"bytes_read"`
+	DownloadedAt time.Time `json:"downloaded_at"`
+}
+
+// writeUpdateOutput dispatches between the JSON and terminal
+// writers based on the global --format flag. The -o flag, when
+// present, redirects EITHER format to a file; otherwise both go to
+// stdout. Stderr is untouched so the per-ecosystem progress line
+// the intel.Update Stderr hook prints stays visible regardless of
+// --format. Network failures error out before this function is
+// called, so this path is offline-only.
+func writeUpdateOutput(res *intel.UpdateResult, storeDir string) error {
+	snapshotPath := filepath.Join(storeDir, "snapshot.json")
+
+	if strings.ToLower(flagFormat) == "json" {
+		return writeUpdateJSON(res, snapshotPath)
 	}
-	fmt.Fprintf(os.Stdout, "  Written: %s\n", store.Dir+"/snapshot.json")
+	return writeUpdateTerminal(res, snapshotPath)
+}
+
+func writeUpdateJSON(res *intel.UpdateResult, snapshotPath string) error {
+	out := updateOutput{
+		SnapshotPath: snapshotPath,
+		Records:      len(res.Snapshot.Records),
+		GeneratedAt:  res.Snapshot.GeneratedAt,
+		PerEcosystem: make([]updateEcosystemOutput, 0, len(res.PerEcosystem)),
+	}
+	for _, eco := range res.PerEcosystem {
+		out.PerEcosystem = append(out.PerEcosystem, updateEcosystemOutput{
+			Ecosystem:    eco.Ecosystem,
+			RecordsKept:  eco.RecordsKept,
+			BytesRead:    eco.BytesRead,
+			DownloadedAt: eco.DownloadedAt,
+		})
+	}
+
+	w := io.Writer(os.Stdout)
+	if flagOutput != "" {
+		f, err := os.Create(flagOutput)
+		if err != nil {
+			return fmt.Errorf("aguara update: write --output: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		w = f
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func writeUpdateTerminal(res *intel.UpdateResult, snapshotPath string) error {
+	w := io.Writer(os.Stdout)
+	if flagOutput != "" {
+		f, err := os.Create(flagOutput)
+		if err != nil {
+			return fmt.Errorf("aguara update: write --output: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		w = f
+	}
+	fmt.Fprintf(w, "Aguara threat intel updated\n")
+	for _, eco := range res.PerEcosystem {
+		fmt.Fprintf(w, "  %-8s -> %d records\n", eco.Ecosystem, eco.RecordsKept)
+	}
+	fmt.Fprintf(w, "  Written: %s\n", snapshotPath)
 	return nil
 }
 
