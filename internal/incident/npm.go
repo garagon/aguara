@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/garagon/aguara/internal/intel"
 )
 
 // NPMPackage is a package parsed from a node_modules entry's package.json.
@@ -45,22 +47,35 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		Environment: root,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Intel:       embeddedIntelSummary(),
 	}
 
+	// Same wiring as the Python check path: route through the
+	// embedded intel matcher (manual + OSV) so any OSV record the
+	// maintainer regenerates participates in the match. The
+	// legacy IsCompromisedIn is still exported for external
+	// callers, but the check pipeline no longer goes through it
+	// because that would advertise "osv" in the IntelSummary
+	// without actually consulting OSV records.
+	matcher := defaultIntelMatcher()
 	packages := readInstalledNPMPackages(root)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
-		cp := IsCompromisedIn(EcosystemNPM, pkg.Name, pkg.Version)
-		if cp == nil {
-			continue
-		}
-		result.Findings = append(result.Findings, Finding{
-			Severity:    SevCritical,
-			Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, cp.Advisory),
-			Detail:      cp.Summary,
-			Path:        pkg.Dir,
-			Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
+		hits := matcher.MatchPackage(intel.MatchInput{
+			Ecosystem: intel.EcosystemNPM,
+			Name:      pkg.Name,
+			Version:   pkg.Version,
+			Path:      pkg.Dir,
 		})
+		for _, hit := range hits {
+			result.Findings = append(result.Findings, Finding{
+				Severity:    SevCritical,
+				Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+				Detail:      hit.Record.Summary,
+				Path:        pkg.Dir,
+				Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
+			})
+		}
 	}
 
 	return result, nil

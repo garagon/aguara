@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
+
+	"github.com/garagon/aguara/internal/intel"
 )
 
 // Severity levels for check findings.
@@ -40,6 +43,35 @@ type CheckResult struct {
 	Credentials  []CredentialFile `json:"credentials"`
 	PackagesRead int              `json:"packages_read"`
 	PthScanned   int              `json:"pth_scanned"`
+	// Intel describes which threat-intel snapshot produced the
+	// findings and whether it was offline-embedded or refreshed.
+	// Populated by Check / CheckNPM; consumers can rely on it
+	// being non-zero (mode + snapshot are always set).
+	Intel IntelSummary `json:"intel"`
+}
+
+// IntelSummary tells the consumer (terminal output, JSON
+// downstream, CI gate logic) which threat-intel snapshot produced
+// the findings. The CLI exposes the same fields under `aguara
+// status` so operators can reconcile the two.
+//
+// Stable contract:
+//   - Mode is one of: "offline" (no network was used) or "online"
+//     (an --fresh refresh ran in this invocation).
+//   - Snapshot is one of: "embedded" (binary's built-in snapshot),
+//     "local" (the on-disk cache at ~/.aguara/intel), or
+//     "remote-fresh" (downloaded this invocation).
+//   - Sources lists the SourceMeta.Kind values that fed the
+//     snapshot, deduplicated.
+//   - Stale is true when the snapshot is older than a freshness
+//     threshold the CLI decides; left false here so the lower
+//     layer does not own a policy.
+type IntelSummary struct {
+	Mode        string    `json:"mode"`
+	Snapshot    string    `json:"snapshot"`
+	GeneratedAt time.Time `json:"generated_at"`
+	Sources     []string  `json:"sources"`
+	Stale       bool      `json:"stale"`
 }
 
 // InstalledPackage is a package parsed from dist-info METADATA.
@@ -71,17 +103,31 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		Environment: siteDir,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Intel:       embeddedIntelSummary(),
 	}
 
-	// 1. Read installed packages and check against known-bad list
+	// 1. Read installed packages and check against the embedded
+	// intel matcher (manual KnownCompromised + OSV-derived stub
+	// from generated_intel.go). Going through the matcher rather
+	// than the legacy IsCompromised slice scan means any OSV
+	// record the maintainer regenerates is automatically picked
+	// up here -- otherwise the IntelSummary would advertise "osv"
+	// as a source the check pipeline never consults.
+	matcher := defaultIntelMatcher()
 	packages := readInstalledPackages(siteDir)
 	result.PackagesRead = len(packages)
 	for _, pkg := range packages {
-		if cp := IsCompromised(pkg.Name, pkg.Version); cp != nil {
+		hits := matcher.MatchPackage(intel.MatchInput{
+			Ecosystem: intel.EcosystemPyPI,
+			Name:      pkg.Name,
+			Version:   pkg.Version,
+			Path:      pkg.Dir,
+		})
+		for _, hit := range hits {
 			result.Findings = append(result.Findings, Finding{
 				Severity:    SevCritical,
-				Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, cp.Advisory),
-				Detail:      cp.Summary,
+				Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+				Detail:      hit.Record.Summary,
 				Path:        pkg.Dir,
 				Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
 			})
@@ -347,6 +393,7 @@ func checkCaches() []Finding {
 		filepath.Join(home, "Library/Caches/pip"), // macOS
 	}
 
+	matcher := defaultIntelMatcher()
 	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -367,17 +414,30 @@ func checkCaches() []Finding {
 				return nil
 			}
 
-			// Check METADATA in dist-info dirs for compromised versions
+			// Check METADATA in dist-info dirs for compromised versions.
+			// Routed through the embedded matcher (manual + OSV) so an
+			// OSV-only cache artifact is caught -- otherwise the
+			// IntelSummary would advertise OSV provenance while the
+			// cache scan silently missed records from that source.
 			if d.IsDir() && strings.HasSuffix(name, ".dist-info") {
 				metaPath := filepath.Join(path, "METADATA")
 				pkg := parseMetadata(metaPath)
 				if pkg.Name != "" {
-					if cp := IsCompromised(pkg.Name, pkg.Version); cp != nil && !seen[path] {
+					hits := matcher.MatchPackage(intel.MatchInput{
+						Ecosystem: intel.EcosystemPyPI,
+						Name:      pkg.Name,
+						Version:   pkg.Version,
+						Path:      path,
+					})
+					for _, hit := range hits {
+						if seen[path] {
+							break
+						}
 						seen[path] = true
 						findings = append(findings, Finding{
 							Severity:    SevCritical,
-							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", cp.Name, pkg.Version, cp.Advisory),
-							Detail:      cp.Summary,
+							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+							Detail:      hit.Record.Summary,
 							Path:        path,
 							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 						})
@@ -386,25 +446,31 @@ func checkCaches() []Finding {
 				return filepath.SkipDir
 			}
 
-			// Filename-based check for cache artifacts. The cache scan
-			// is part of the Python check path, so only PyPI entries
-			// apply here; npm rows live in a separate scan.
+			// Filename-based check for cache artifacts. The cache
+			// scan is part of the Python check path, so only PyPI
+			// entries apply here; npm rows live in a separate scan.
+			// Iterating the embedded snapshots (manual + OSV) lets
+			// OSV-only entries trip this path too -- previously
+			// only KnownCompromised would, so an OSV-only PyPI
+			// malicious package cached as a wheel would be missed.
 			base := strings.ToLower(name)
-			for _, cp := range KnownCompromised {
-				entryEco := cp.Ecosystem
-				if entryEco == "" {
-					entryEco = EcosystemPyPI
-				}
-				if entryEco != EcosystemPyPI {
-					continue
-				}
-				if strings.Contains(base, cp.Name) {
-					for _, v := range cp.Versions {
+			for _, snap := range EmbeddedSnapshots() {
+				for _, rec := range snap.Records {
+					if rec.Ecosystem != intel.EcosystemPyPI {
+						continue
+					}
+					if rec.Withdrawn {
+						continue
+					}
+					if !strings.Contains(base, strings.ToLower(rec.Name)) {
+						continue
+					}
+					for _, v := range rec.Versions {
 						if strings.Contains(base, v) && !seen[path] {
 							seen[path] = true
 							findings = append(findings, Finding{
 								Severity:    SevWarning,
-								Title:       fmt.Sprintf("Cached compromised artifact: %s %s", cp.Name, v),
+								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", rec.Name, v, rec.ID),
 								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 							})
