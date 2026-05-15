@@ -13,8 +13,8 @@
 package rulecatalog
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -139,10 +139,18 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 	}
 
 	// 6. Per-rule overrides: drop disabled rules and apply
-	// severity overrides. Same surface aguara.WithRuleOverrides
-	// exposes -- without this, a policy UI built on ListRules
-	// disagrees with what scan runs (the scanner sees the
-	// override, list-rules did not).
+	// severity overrides. ONLY applied to YAML pattern rules
+	// (Analyzer == ""), matching the scanner contract: the
+	// scanner's rules.ApplyOverrides path operates over
+	// []*rules.CompiledRule only, so analyzer-owned findings
+	// (JS_*, GHA_*, TOXIC_*, ...) are emitted regardless of
+	// RuleOverride. If the catalog ALSO applied Overrides to
+	// analyzer rules, list-rules would claim a policy is in
+	// effect that Scan would not honour for those IDs.
+	//
+	// Users who want to suppress an analyzer rule should use
+	// WithDisabledRules / --disable-rule (the scanner DOES honour
+	// that via Scanner.SetDisabledRules).
 	if len(opts.Overrides) > 0 {
 		normalised := make(map[string]Override, len(opts.Overrides))
 		for id, o := range opts.Overrides {
@@ -151,7 +159,11 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		filtered := out[:0]
 		for _, r := range out {
 			ovr, ok := normalised[strings.ToUpper(r.ID)]
-			if !ok {
+			// Pass analyzer rules through untouched -- their
+			// behaviour is governed by DisableRuleIDs, not by
+			// Overrides, so the catalog must not pretend
+			// otherwise.
+			if !ok || r.Analyzer != "" {
 				filtered = append(filtered, r)
 				continue
 			}
@@ -183,10 +195,27 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 	return out, nil
 }
 
+// ErrRuleNotFound is the sentinel FindByID returns when the
+// lookup completes successfully but no rule with that ID exists.
+// Distinguished from catalog-build errors (custom-rules dir
+// missing, malformed YAML, ...) so callers can map a typo to a
+// clean "rule X not found" message while surfacing real
+// configuration problems with their full context.
+var ErrRuleNotFound = errors.New("rule not found")
+
 // FindByID returns the catalog entry with the given ID (case-
-// insensitive) or os.ErrNotExist when nothing matches. Used by
-// explain.go and aguara.ExplainRule so both surfaces share one
-// lookup path.
+// insensitive). Used by explain.go and aguara.ExplainRule so
+// both surfaces share one lookup path.
+//
+// Two error shapes:
+//
+//   - errors.Is(err, ErrRuleNotFound) -> the catalog built
+//     successfully but no rule with that ID exists. Callers
+//     should surface a clean "rule X not found" message.
+//   - any other error -> the catalog failed to build (e.g.
+//     --rules pointed at a missing directory). Callers should
+//     surface the underlying error so the user can diagnose
+//     the configuration problem.
 func FindByID(opts Options, id string) (*rulemeta.Rule, error) {
 	id = strings.ToUpper(strings.TrimSpace(id))
 	cat, err := Build(opts)
@@ -198,7 +227,7 @@ func FindByID(opts Options, id string) (*rulemeta.Rule, error) {
 			return &cat[i], nil
 		}
 	}
-	return nil, fmt.Errorf("rule %q not found: %w", id, os.ErrNotExist)
+	return nil, fmt.Errorf("rule %q: %w", id, ErrRuleNotFound)
 }
 
 // fromCompiledRule projects a compiled YAML rule into the catalog

@@ -2,7 +2,6 @@ package rulecatalog_test
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/garagon/aguara/internal/rulecatalog"
@@ -114,14 +113,31 @@ func TestFindByIDCaseInsensitive(t *testing.T) {
 	require.Equal(t, "JS_DNS_TXT_EXFIL_001", rec.ID)
 }
 
-func TestFindByIDMissingReturnsErrNotExist(t *testing.T) {
-	// CLI maps os.ErrNotExist to a clean "rule X not found"
+func TestFindByIDMissingReturnsErrRuleNotFound(t *testing.T) {
+	// CLI maps ErrRuleNotFound to a clean "rule X not found"
 	// message. Other errors (load failure, malformed YAML) keep
-	// surfacing as wrapped errors.
+	// surfacing as wrapped errors so the user can diagnose them.
 	_, err := rulecatalog.FindByID(rulecatalog.Options{}, "DEFINITELY_NOT_A_RULE_999")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, os.ErrNotExist),
-		"missing rule must wrap os.ErrNotExist for the CLI's error-mapping path")
+	require.True(t, errors.Is(err, rulecatalog.ErrRuleNotFound),
+		"missing rule must wrap ErrRuleNotFound (not the generic os.ErrNotExist)")
+}
+
+func TestFindByIDBuildErrorDistinctFromNotFound(t *testing.T) {
+	// Codex P3 round 3: when --rules points at a directory that
+	// does not exist, Build returns an error wrapping
+	// os.ErrNotExist (because LoadFromDir fails). The CLI must
+	// NOT collapse that into "rule not found" -- the underlying
+	// config typo would be hidden. Test: a missing custom-rules
+	// dir produces an error that is NOT ErrRuleNotFound, so
+	// explain.go's mapping (which only maps ErrRuleNotFound)
+	// surfaces the real error.
+	_, err := rulecatalog.FindByID(rulecatalog.Options{
+		CustomRulesDir: "/definitely/not/a/real/dir/" + t.Name(),
+	}, "PROMPT_INJECTION_001")
+	require.Error(t, err)
+	require.False(t, errors.Is(err, rulecatalog.ErrRuleNotFound),
+		"a missing custom-rules dir must NOT be mapped as ErrRuleNotFound; the CLI would mask the real error otherwise")
 }
 
 func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
@@ -163,9 +179,16 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 	}
 }
 
-func TestBuildOverridesDisableAndSeverity(t *testing.T) {
+func TestBuildOverridesDisableAndSeverityYAMLOnly(t *testing.T) {
 	// Catalog-level test for the override path the aguara public
-	// API wires to. Disabled=true drops the rule; Severity remaps.
+	// API wires to. The scanner's rules.ApplyOverrides only
+	// operates on YAML compiled rules, so the catalog mirrors
+	// that contract: Overrides DROP / REMAP YAML rules but DO
+	// NOT touch analyzer rules. A divergence would mean a policy
+	// UI built on ListRules disagrees with what the scanner
+	// emits for analyzer findings.
+
+	// YAML rule -- Disabled drops it from the listing.
 	disabled, err := rulecatalog.Build(rulecatalog.Options{
 		Overrides: map[string]rulecatalog.Override{
 			"PROMPT_INJECTION_001": {Disabled: true},
@@ -174,9 +197,10 @@ func TestBuildOverridesDisableAndSeverity(t *testing.T) {
 	require.NoError(t, err)
 	for _, r := range disabled {
 		require.NotEqual(t, "PROMPT_INJECTION_001", r.ID,
-			"Overrides{Disabled:true} must drop the rule")
+			"Overrides{Disabled:true} must drop YAML rules")
 	}
 
+	// YAML rule -- Severity is remapped.
 	remapped, err := rulecatalog.Build(rulecatalog.Options{
 		Overrides: map[string]rulecatalog.Override{
 			"PROMPT_INJECTION_001": {Severity: "low"},
@@ -190,7 +214,29 @@ func TestBuildOverridesDisableAndSeverity(t *testing.T) {
 			break
 		}
 	}
-	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must upper-case + apply")
+	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must upper-case + apply to YAML rules")
+
+	// Analyzer rule -- Disabled is IGNORED. The scanner does not
+	// apply RuleOverrides to analyzer findings, so the catalog
+	// must not pretend it does. Users who want to suppress an
+	// analyzer rule should use WithDisabledRules instead.
+	notDropped, err := rulecatalog.Build(rulecatalog.Options{
+		Overrides: map[string]rulecatalog.Override{
+			"JS_DNS_TXT_EXFIL_001": {Disabled: true},
+		},
+	})
+	require.NoError(t, err)
+	var found bool
+	for _, r := range notDropped {
+		if r.ID == "JS_DNS_TXT_EXFIL_001" {
+			found = true
+			require.Equal(t, "HIGH", r.Severity,
+				"analyzer rule severity must NOT be touched by Overrides; scanner does not apply them to analyzer findings")
+			break
+		}
+	}
+	require.True(t, found,
+		"analyzer rule must survive Overrides{Disabled:true}; the scanner does not honour overrides for analyzer findings, so the catalog must not either")
 }
 
 func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {

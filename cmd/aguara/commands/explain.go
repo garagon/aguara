@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -42,7 +41,12 @@ func runExplain(cmd *cobra.Command, args []string) error {
 		},
 	}, ruleID)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		// Distinguish a clean miss (typo in the ID) from a
+		// catalog-build failure (e.g. --rules points at a
+		// missing directory). The latter must surface its real
+		// error so the user can diagnose, not get masked as
+		// "rule not found".
+		if errors.Is(err, rulecatalog.ErrRuleNotFound) {
 			return fmt.Errorf("rule %q not found", ruleID)
 		}
 		return err

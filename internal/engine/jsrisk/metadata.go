@@ -39,9 +39,12 @@ func RuleMetadata() []rulemeta.Rule {
 				"behaviour in the package README and the lifecycle script comment.",
 		},
 		{
-			ID:       RuleCISecretHarvest,
-			Name:     "CI secret harvest: process.env read + network sink",
-			Severity: "HIGH",
+			ID:   RuleCISecretHarvest,
+			Name: "CI secret harvest: process.env read + network sink",
+			// Emit site (jsrisk.go) ships SeverityCritical for
+			// this rule; the catalog mirrors that so list-rules /
+			// explain triage stays aligned with scan findings.
+			Severity: "CRITICAL",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
 			Description: "Script reads CI secret env vars (GITHUB_TOKEN, NPM_TOKEN, " +
