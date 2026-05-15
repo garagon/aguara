@@ -45,6 +45,7 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		Environment: root,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Intel:       embeddedIntelSummary(),
 	}
 
 	packages := readInstalledNPMPackages(root)

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Severity levels for check findings.
@@ -40,6 +41,35 @@ type CheckResult struct {
 	Credentials  []CredentialFile `json:"credentials"`
 	PackagesRead int              `json:"packages_read"`
 	PthScanned   int              `json:"pth_scanned"`
+	// Intel describes which threat-intel snapshot produced the
+	// findings and whether it was offline-embedded or refreshed.
+	// Populated by Check / CheckNPM; consumers can rely on it
+	// being non-zero (mode + snapshot are always set).
+	Intel IntelSummary `json:"intel"`
+}
+
+// IntelSummary tells the consumer (terminal output, JSON
+// downstream, CI gate logic) which threat-intel snapshot produced
+// the findings. The CLI exposes the same fields under `aguara
+// status` so operators can reconcile the two.
+//
+// Stable contract:
+//   - Mode is one of: "offline" (no network was used) or "online"
+//     (an --fresh refresh ran in this invocation).
+//   - Snapshot is one of: "embedded" (binary's built-in snapshot),
+//     "local" (the on-disk cache at ~/.aguara/intel), or
+//     "remote-fresh" (downloaded this invocation).
+//   - Sources lists the SourceMeta.Kind values that fed the
+//     snapshot, deduplicated.
+//   - Stale is true when the snapshot is older than a freshness
+//     threshold the CLI decides; left false here so the lower
+//     layer does not own a policy.
+type IntelSummary struct {
+	Mode        string    `json:"mode"`
+	Snapshot    string    `json:"snapshot"`
+	GeneratedAt time.Time `json:"generated_at"`
+	Sources     []string  `json:"sources"`
+	Stale       bool      `json:"stale"`
 }
 
 // InstalledPackage is a package parsed from dist-info METADATA.
@@ -71,6 +101,7 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		Environment: siteDir,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Intel:       embeddedIntelSummary(),
 	}
 
 	// 1. Read installed packages and check against known-bad list
