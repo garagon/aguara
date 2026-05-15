@@ -200,11 +200,11 @@ func TestMatcherNilSafeOnEmptySnapshot(t *testing.T) {
 }
 
 func TestMatcherDedupAcrossSnapshots(t *testing.T) {
-	// A record that appears in two snapshots at the same
-	// (ecosystem, name, version, ID) tuple must only produce one
-	// Match. Distinct IDs at the same tuple stay separate -- a
-	// new OSV advisory for an already-tracked manual entry is
-	// useful provenance, not a duplicate.
+	// A record with the same (ecosystem, name, ID) coming from
+	// two snapshots (the documented manual + OSV case) must only
+	// produce one Match. Without this, every compromised package
+	// found via two sources would show up as two findings in the
+	// terminal output.
 	rec := intel.Record{
 		ID:        "DUP-1",
 		Ecosystem: intel.EcosystemNPM,
@@ -220,15 +220,41 @@ func TestMatcherDedupAcrossSnapshots(t *testing.T) {
 		Name:      "node-ipc",
 		Version:   "12.0.1",
 	})
-	// Both snapshots index the record; both produce a hit. The
-	// dedup contract is on the (ecosystem, name, version, ID)
-	// tuple at index time only -- it must keep the bookkeeping
-	// idempotent without dropping legitimate cross-source
-	// matches with distinct IDs.
-	require.GreaterOrEqual(t, len(hits), 1)
+	require.Len(t, hits, 1, "duplicate records across snapshots must collapse to a single Match")
+	require.Equal(t, "DUP-1", hits[0].Record.ID)
+}
+
+func TestMatcherDistinctIDsAtSameTupleStaySeparate(t *testing.T) {
+	// Two records that share (ecosystem, name, version) but carry
+	// different advisory IDs are distinct intel entries (e.g. an
+	// OSV advisory PLUS a Socket advisory for the same compromise).
+	// The matcher must surface both so consumers can correlate.
+	m := intel.NewMatcher(
+		intel.Snapshot{Records: []intel.Record{{
+			ID:        "OSV-1",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "node-ipc",
+			Versions:  []string{"12.0.1"},
+		}}},
+		intel.Snapshot{Records: []intel.Record{{
+			ID:        "SOCKET-1",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "node-ipc",
+			Versions:  []string{"12.0.1"},
+		}}},
+	)
+	hits := m.MatchPackage(intel.MatchInput{
+		Ecosystem: "npm",
+		Name:      "node-ipc",
+		Version:   "12.0.1",
+	})
+	require.Len(t, hits, 2, "distinct advisory IDs at the same tuple must not collapse")
+	seen := map[string]bool{}
 	for _, h := range hits {
-		require.Equal(t, "DUP-1", h.Record.ID)
+		seen[h.Record.ID] = true
 	}
+	require.True(t, seen["OSV-1"])
+	require.True(t, seen["SOCKET-1"])
 }
 
 func TestMatcherPEP503TrailingSeparator(t *testing.T) {

@@ -44,9 +44,16 @@ type Matcher struct {
 // are indexed and returned. Withdrawn records are excluded at
 // index time so MatchPackage never has to filter them.
 //
-// Duplicate records are collapsed by (ecosystem, name, version,
-// record.ID) so an entry that appears in both the manual snapshot
-// and the OSV snapshot only produces one Match.
+// Duplicate records are collapsed by (ecosystem, name, record.ID):
+// when the same advisory appears in two snapshots (the documented
+// manual + OSV case) only the first occurrence is indexed. We use
+// (ecosystem, name, ID) rather than (ecosystem, name, version, ID)
+// because two snapshots that share an advisory ID are expected to
+// agree on the affected version set; merging on ID is simpler and
+// removes the worst-case where one snapshot's stale version list
+// shadows the other's fresh one. If we ever need to merge version
+// sets across sources, that lives in the importer, not the runtime
+// matcher.
 func NewMatcher(snapshots ...Snapshot) *Matcher {
 	m := &Matcher{byKey: make(map[string][]Record)}
 	seen := make(map[string]struct{})
@@ -59,33 +66,15 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 			if key == "" {
 				continue
 			}
-			// Dedup: an entry that appears in both the manual
-			// snapshot and the OSV snapshot at the same
-			// (ecosystem, name, version, id) tuple counts once.
-			for _, v := range versionSet(rec) {
-				dedupKey := key + "\x00" + v + "\x00" + rec.ID
-				if _, ok := seen[dedupKey]; ok {
-					continue
-				}
-				seen[dedupKey] = struct{}{}
+			dedupKey := key + "\x00" + rec.ID
+			if _, ok := seen[dedupKey]; ok {
+				continue
 			}
+			seen[dedupKey] = struct{}{}
 			m.byKey[key] = append(m.byKey[key], rec)
 		}
 	}
 	return m
-}
-
-// versionSet returns the set of exact versions a record covers.
-// Used only by NewMatcher's dedup path; MatchPackage walks
-// Record.Versions directly.
-func versionSet(rec Record) []string {
-	if len(rec.Versions) == 0 {
-		// Ensures a records-with-no-versions record still produces
-		// at least one dedup key so identical no-version entries
-		// from two sources collapse correctly.
-		return []string{""}
-	}
-	return rec.Versions
 }
 
 // MatchPackage returns every Record that affects the given
