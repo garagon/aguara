@@ -138,34 +138,54 @@ func TestAuditVerdictWarningTrips(t *testing.T) {
 	// either a check warning OR a scan high. Direct unit test
 	// because building a fixture that emits a scan-high finding
 	// from the audit pipeline is expensive.
-	result := &AuditResult{
-		Check: nil,
-		Scan:  nil,
-	}
-	// Use the public-but-internal helper via reflection of the
-	// computed fields. Simpler: stub the result + call the
-	// helper directly.
-	v := computeAuditVerdict(stubAuditResult(t, 0, 1, 0, 0), "warning")
+	v, err := computeAuditVerdict(stubAuditResult(t, 0, 1, 0, 0, 0, 0), "warning")
+	require.NoError(t, err)
 	require.True(t, v.ThresholdExceeded)
 	require.Equal(t, "fail", v.Status)
 	require.Equal(t, 1, v.CheckWarnings)
 
-	v = computeAuditVerdict(stubAuditResult(t, 0, 0, 0, 1), "warning")
+	v, err = computeAuditVerdict(stubAuditResult(t, 0, 0, 0, 1, 0, 0), "warning")
+	require.NoError(t, err)
 	require.True(t, v.ThresholdExceeded, "scan high must trip warning threshold")
-	_ = result
 }
 
 func TestAuditVerdictCriticalPassesOnWarningOnly(t *testing.T) {
-	v := computeAuditVerdict(stubAuditResult(t, 0, 1, 0, 0), "critical")
+	v, err := computeAuditVerdict(stubAuditResult(t, 0, 1, 0, 0, 0, 0), "critical")
+	require.NoError(t, err)
 	require.False(t, v.ThresholdExceeded, "single warning must not trip critical gate")
 	require.Equal(t, "pass", v.Status)
 }
 
+func TestAuditVerdictInfoTripsOnInfoFindings(t *testing.T) {
+	// Codex P2 regression (PR 5 review): --fail-on info must
+	// trip on INFO-level findings from either side. The earlier
+	// shape only summed critical/warning for check and
+	// critical/high/medium/low for scan, so an INFO-only
+	// finding could pass --fail-on info cleanly. That broke the
+	// "lowest threshold" contract.
+	v, err := computeAuditVerdict(stubAuditResult(t, 0, 0, 0, 0, 1, 0), "info")
+	require.NoError(t, err)
+	require.True(t, v.ThresholdExceeded, "check INFO must trip --fail-on info")
+
+	v, err = computeAuditVerdict(stubAuditResult(t, 0, 0, 0, 0, 0, 1), "info")
+	require.NoError(t, err)
+	require.True(t, v.ThresholdExceeded, "scan INFO must trip --fail-on info")
+}
+
+func TestAuditVerdictRejectsInvalidThreshold(t *testing.T) {
+	// Codex P2 regression (PR 5 review): a typo in --fail-on
+	// previously fell through the switch without setting
+	// ThresholdExceeded and the audit exited green. scan and
+	// check both reject invalid thresholds; audit must do the
+	// same so a CI typo cannot silently disable the gate.
+	_, err := computeAuditVerdict(stubAuditResult(t, 1, 0, 0, 0, 0, 0), "critcal") // intentional typo
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid --fail-on")
+}
+
 // stubAuditResult builds a minimal AuditResult with the requested
-// finding counts. checkC/W are check criticals/warnings;
-// scanC/H are scan criticals/highs. Used in the verdict unit
-// tests.
-func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH int) *AuditResult {
+// finding counts. Used in the verdict unit tests.
+func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH, checkI, scanI int) *AuditResult {
 	t.Helper()
 	check := &incident.CheckResult{}
 	for i := 0; i < checkC; i++ {
@@ -174,12 +194,18 @@ func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH int) *AuditResul
 	for i := 0; i < checkW; i++ {
 		check.Findings = append(check.Findings, incident.Finding{Severity: incident.SevWarning})
 	}
+	for i := 0; i < checkI; i++ {
+		check.Findings = append(check.Findings, incident.Finding{Severity: incident.SevInfo})
+	}
 	scan := &scanner.ScanResult{}
 	for i := 0; i < scanC; i++ {
 		scan.Findings = append(scan.Findings, types.Finding{Severity: scanner.SeverityCritical})
 	}
 	for i := 0; i < scanH; i++ {
 		scan.Findings = append(scan.Findings, types.Finding{Severity: scanner.SeverityHigh})
+	}
+	for i := 0; i < scanI; i++ {
+		scan.Findings = append(scan.Findings, types.Finding{Severity: scanner.SeverityInfo})
 	}
 	return &AuditResult{Check: check, Scan: scan}
 }

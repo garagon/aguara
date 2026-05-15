@@ -64,10 +64,12 @@ type AuditVerdict struct {
 	Status            string `json:"status"` // "pass" | "fail"
 	CheckCriticals    int    `json:"check_criticals"`
 	CheckWarnings     int    `json:"check_warnings"`
+	CheckInfos        int    `json:"check_infos"`
 	ScanCriticals     int    `json:"scan_criticals"`
 	ScanHighs         int    `json:"scan_highs"`
 	ScanMediums       int    `json:"scan_mediums"`
 	ScanLows          int    `json:"scan_lows"`
+	ScanInfos         int    `json:"scan_infos"`
 	ThresholdExceeded bool   `json:"threshold_exceeded"`
 }
 
@@ -128,7 +130,15 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		Scan:   scanResult,
 		Intel:  checkResult.Intel,
 	}
-	result.Verdict = computeAuditVerdict(result, flagAuditFailOn)
+	verdict, vErr := computeAuditVerdict(result, flagAuditFailOn)
+	if vErr != nil {
+		// An invalid --fail-on value must error rather than
+		// silently disable the gate. scan / check both do the
+		// same; audit must not be the one path where a typo
+		// (--fail-on critcal) ships green.
+		return vErr
+	}
+	result.Verdict = verdict
 
 	// 4. Emit.
 	if flagFormat == "json" {
@@ -218,7 +228,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 // surprise users who expect "warning" to mean "the loudest of the
 // non-critical buckets" in both vocabularies. The simple mapping
 // also means a single --fail-on flag is unambiguous in CI logs.
-func computeAuditVerdict(result *AuditResult, threshold string) AuditVerdict {
+func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, error) {
 	v := AuditVerdict{Status: "pass"}
 
 	for _, f := range result.Check.Findings {
@@ -227,6 +237,8 @@ func computeAuditVerdict(result *AuditResult, threshold string) AuditVerdict {
 			v.CheckCriticals++
 		case incident.SevWarning:
 			v.CheckWarnings++
+		case incident.SevInfo:
+			v.CheckInfos++
 		}
 	}
 	for _, f := range result.Scan.Findings {
@@ -239,11 +251,13 @@ func computeAuditVerdict(result *AuditResult, threshold string) AuditVerdict {
 			v.ScanMediums++
 		case scanner.SeverityLow:
 			v.ScanLows++
+		case scanner.SeverityInfo:
+			v.ScanInfos++
 		}
 	}
 
 	if threshold == "" {
-		return v
+		return v, nil
 	}
 	switch strings.ToUpper(strings.TrimSpace(threshold)) {
 	case "CRITICAL":
@@ -256,16 +270,23 @@ func computeAuditVerdict(result *AuditResult, threshold string) AuditVerdict {
 			v.ThresholdExceeded = true
 		}
 	case "INFO":
-		// Any finding at all trips the gate.
-		if v.CheckCriticals+v.CheckWarnings > 0 ||
-			v.ScanCriticals+v.ScanHighs+v.ScanMediums+v.ScanLows > 0 {
+		// Any finding at all trips the gate, including INFO
+		// on either side. The earlier shape silently dropped
+		// INFO findings, so a custom INFO-only rule could
+		// have passed `--fail-on info` cleanly. That broke the
+		// "lowest threshold" contract; the explicit InfoCount
+		// fields above feed this gate now.
+		if v.CheckCriticals+v.CheckWarnings+v.CheckInfos > 0 ||
+			v.ScanCriticals+v.ScanHighs+v.ScanMediums+v.ScanLows+v.ScanInfos > 0 {
 			v.ThresholdExceeded = true
 		}
+	default:
+		return v, fmt.Errorf("invalid --fail-on %q: choose critical, warning, or info", threshold)
 	}
 	if v.ThresholdExceeded {
 		v.Status = "fail"
 	}
-	return v
+	return v, nil
 }
 
 func writeAuditJSON(result *AuditResult) error {
