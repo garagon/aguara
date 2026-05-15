@@ -393,6 +393,7 @@ func checkCaches() []Finding {
 		filepath.Join(home, "Library/Caches/pip"), // macOS
 	}
 
+	matcher := defaultIntelMatcher()
 	seen := make(map[string]bool) // deduplicate findings by path
 	for _, dir := range cacheDirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -413,17 +414,30 @@ func checkCaches() []Finding {
 				return nil
 			}
 
-			// Check METADATA in dist-info dirs for compromised versions
+			// Check METADATA in dist-info dirs for compromised versions.
+			// Routed through the embedded matcher (manual + OSV) so an
+			// OSV-only cache artifact is caught -- otherwise the
+			// IntelSummary would advertise OSV provenance while the
+			// cache scan silently missed records from that source.
 			if d.IsDir() && strings.HasSuffix(name, ".dist-info") {
 				metaPath := filepath.Join(path, "METADATA")
 				pkg := parseMetadata(metaPath)
 				if pkg.Name != "" {
-					if cp := IsCompromised(pkg.Name, pkg.Version); cp != nil && !seen[path] {
+					hits := matcher.MatchPackage(intel.MatchInput{
+						Ecosystem: intel.EcosystemPyPI,
+						Name:      pkg.Name,
+						Version:   pkg.Version,
+						Path:      path,
+					})
+					for _, hit := range hits {
+						if seen[path] {
+							break
+						}
 						seen[path] = true
 						findings = append(findings, Finding{
 							Severity:    SevCritical,
-							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", cp.Name, pkg.Version, cp.Advisory),
-							Detail:      cp.Summary,
+							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+							Detail:      hit.Record.Summary,
 							Path:        path,
 							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 						})

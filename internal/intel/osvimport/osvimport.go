@@ -297,11 +297,17 @@ func hasHighConfidenceSignal(osv osvRecord) bool {
 	return false
 }
 
-// hasKeywordMatch returns true when summary, details, or reference
-// URLs contain one of the high-confidence keywords. The match is
-// case-insensitive substring; matching is intentionally narrow
-// because the broader the keyword list, the more generic CVEs leak
-// into the malicious-package snapshot.
+// hasKeywordMatch returns true when summary, details, or any
+// reference URL contains one of the high-confidence keywords. The
+// match is case-insensitive substring; matching is intentionally
+// narrow because the broader the keyword list, the more generic
+// CVEs leak into the malicious-package snapshot.
+//
+// References are scanned because OSV advisories often point to a
+// Socket / Snyk / vendor blog post whose URL slug carries the
+// signal ("malicious-package-foo", "credential-stealing-bar") even
+// when the summary text is a generic vulnerability sentence. Without
+// scanning the URL, those records would silently drop.
 func hasKeywordMatch(osv osvRecord) bool {
 	for _, hay := range []string{osv.Summary, osv.Details} {
 		if hay == "" {
@@ -310,6 +316,24 @@ func hasKeywordMatch(osv osvRecord) bool {
 		lower := strings.ToLower(hay)
 		for _, kw := range highConfidenceKeywords {
 			if strings.Contains(lower, kw) {
+				return true
+			}
+		}
+	}
+	for _, ref := range osv.References {
+		if ref.URL == "" {
+			continue
+		}
+		// URL slugs use `-`, `_`, and `/` as word separators
+		// (`/blog/malicious-package-foo-bar`). Normalise to
+		// spaces so the keyword scan can match phrases like
+		// "malicious package" against the slug form.
+		normalised := strings.ToLower(ref.URL)
+		for _, sep := range []string{"-", "_", "/"} {
+			normalised = strings.ReplaceAll(normalised, sep, " ")
+		}
+		for _, kw := range highConfidenceKeywords {
+			if strings.Contains(normalised, kw) {
 				return true
 			}
 		}

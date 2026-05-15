@@ -34,9 +34,10 @@ const MaxZipTotalDecompressedBytes int64 = 1024 * 1024 * 1024 // 1 GiB
 // first.
 //
 // Size MUST be the true length of the underlying source; archive/zip
-// uses it to locate the central directory. Pass <= 0 to let
-// ImportFromZip read it from r.Size if r implements that method
-// (avoids one bug class where callers thread the wrong length).
+// uses it to locate the central directory. Callers that hold a
+// *bytes.Reader / *os.File can pass r.Len() / Stat().Size() directly.
+// Passing size <= 0 is an error so a wrong-length argument fails
+// loudly rather than mis-parsing.
 //
 // Returns the produced snapshot. Errors come from the zip layer
 // (malformed archive, oversize entry) or from the size cap; an

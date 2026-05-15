@@ -91,6 +91,43 @@ func TestImportKeepsOpenSSFSource(t *testing.T) {
 	require.Equal(t, "GHSA-aaaa-bbbb-cccc", snap.Records[0].ID)
 }
 
+func TestImportKeywordMatchOnReferenceURL(t *testing.T) {
+	// Codex P2 regression (PR 3 review): the keyword scan must
+	// consult OSV reference URLs too, because Socket / Snyk
+	// blog-post URLs sometimes carry the only "malicious package"
+	// hint a record has. Without scanning References, such
+	// records silently drop.
+	rec := struct {
+		ID         string            `json:"id"`
+		Summary    string            `json:"summary"`
+		Affected   []affectedFixture `json:"affected"`
+		References []struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"references"`
+	}{
+		ID:      "GHSA-ref-hit",
+		Summary: "Dependency confusion in foo-bar package",
+		Affected: []affectedFixture{{
+			Package:  packageFixture{Name: "foo-bar", Ecosystem: "npm"},
+			Versions: []string{"1.0.0"},
+		}},
+		References: []struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		}{
+			{Type: "REPORT", URL: "https://socket.dev/blog/malicious-package-foo-bar"},
+		},
+	}
+	snap, err := osvimport.Import(
+		[][]byte{mustMarshal(t, rec)},
+		osvimport.Options{Ecosystems: []string{"npm"}, GeneratedAt: time.Unix(0, 0)},
+	)
+	require.NoError(t, err)
+	require.Len(t, snap.Records, 1, "URL keyword 'malicious package' must qualify the record")
+	require.Equal(t, "GHSA-ref-hit", snap.Records[0].ID)
+}
+
 func TestImportKeepsKeywordMatchWithVersions(t *testing.T) {
 	// The keyword path requires (a) one of the high-confidence
 	// terms in summary/details AND (b) exact affected versions.
