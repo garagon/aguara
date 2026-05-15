@@ -122,7 +122,16 @@ func applyCheckCIDefaults() {
 // --ecosystem is empty does auto-detection run. An empty --path remains
 // empty for Python (so the legacy site-packages auto-discovery still
 // works) and resolves to "." for npm probing only.
+//
+// An EXPLICIT --path that does not exist (or points at a regular file)
+// is an error: a typo in CI -- e.g. `--path /opt/venv/lib/pyhton...` --
+// must not look like a clean check result. The validator only fires
+// when path != ""; empty path keeps the legacy Python autodiscovery
+// contract intact.
 func resolveCheckTarget(eco, path string) (string, string, error) {
+	if err := validateExplicitCheckPath(path); err != nil {
+		return "", "", err
+	}
 	switch strings.ToLower(strings.TrimSpace(eco)) {
 	case "python", "pypi":
 		return ecoPython, path, nil
@@ -133,6 +142,30 @@ func resolveCheckTarget(eco, path string) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python or npm", eco)
 	}
+}
+
+// validateExplicitCheckPath enforces that an explicit --path (when
+// non-empty) refers to an existing directory. Returns nil when path
+// is empty so the autodiscovery branch keeps working. A missing path
+// is the typical typo case ("/opt/venv/lib/pyhton..." vs "python");
+// returning a clean error here means CI surfaces the typo as exit 2
+// instead of advertising a green check on a path the operator never
+// asked to scan.
+func validateExplicitCheckPath(path string) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("check: --path %s: no such file or directory", path)
+		}
+		return fmt.Errorf("check: --path %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("check: --path %s: not a directory", path)
+	}
+	return nil
 }
 
 // autoDetectCheckTarget chooses an ecosystem from the filesystem shape

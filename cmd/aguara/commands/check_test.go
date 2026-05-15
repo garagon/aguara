@@ -337,6 +337,98 @@ func TestResolveCheckTargetExplicitFlags(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "unsupported"))
 }
 
+func TestResolveCheckTargetRejectsMissingPath(t *testing.T) {
+	// QA regression on v0.16.0: `aguara check --path /no/existe`
+	// returned exit 0 with an empty result, masking a typo as a
+	// clean check. Every code path that takes a non-empty --path
+	// must surface a clear error before any check pipeline runs.
+	missing := filepath.Join(t.TempDir(), "definitely-does-not-exist")
+
+	for _, eco := range []string{"", "python", "pypi", "npm"} {
+		eco := eco
+		t.Run("ecosystem="+eco, func(t *testing.T) {
+			_, _, err := resolveCheckTarget(eco, missing)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "no such file or directory",
+				"missing --path must surface the canonical filesystem error")
+			require.Contains(t, err.Error(), missing,
+				"error must echo the bad path so the user can spot the typo")
+		})
+	}
+}
+
+func TestResolveCheckTargetRejectsFilePath(t *testing.T) {
+	// --path pointing at a regular file is a typo too: the user
+	// likely meant a sibling directory. Surface a distinct error
+	// from missing-path so logs are unambiguous.
+	f, err := os.CreateTemp(t.TempDir(), "not-a-dir-*")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	for _, eco := range []string{"", "python", "pypi", "npm"} {
+		eco := eco
+		t.Run("ecosystem="+eco, func(t *testing.T) {
+			_, _, err := resolveCheckTarget(eco, f.Name())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "not a directory")
+			require.Contains(t, err.Error(), f.Name())
+		})
+	}
+}
+
+func TestResolveCheckTargetEmptyPathStillAutodiscovers(t *testing.T) {
+	// Guardrail: the new validator must NOT fire on empty --path.
+	// The legacy Python autodiscovery contract (`aguara check`
+	// with no flags falls back to site-packages) MUST keep
+	// working; nobody should suddenly have to pass --path on a
+	// host where the prior release found Python automatically.
+	eco, path, err := resolveCheckTarget("", "")
+	require.NoError(t, err)
+	// Either ecoPython (no node_modules in cwd) or ecoNPM (if the
+	// test host happens to have one). Both are acceptable. What
+	// matters is no error and the path remains as auto-detect
+	// wants it.
+	require.Contains(t, []string{ecoPython, ecoNPM}, eco)
+	_ = path
+}
+
+func TestRunCheckExplicitMissingPathProducesError(t *testing.T) {
+	// End-to-end via cobra: a missing --path on the CLI surface
+	// produces a non-nil error from rootCmd.Execute (which
+	// main.go maps to os.Exit(2)) and -o never writes a JSON
+	// file. Locks the "no false clean JSON" contract.
+	resetFlags()
+	outFile := filepath.Join(t.TempDir(), "check.json")
+	missing := filepath.Join(t.TempDir(), "missing")
+
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs([]string{
+		"check",
+		"--path", missing,
+		"--format", "json",
+		"-o", outFile,
+		"--no-update-check",
+	})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "missing --path must surface a non-nil error from Execute")
+	require.Contains(t, err.Error(), missing)
+
+	// And -o must NOT have been written -- the cardinal sin is
+	// producing a green check.json on a path the user never
+	// asked to scan.
+	_, statErr := os.Stat(outFile)
+	require.True(t, os.IsNotExist(statErr),
+		"no JSON output file should exist on a missing-path error; got stat err %v", statErr)
+}
+
 func TestResolveCheckTargetAutoDetectFromInsideNodeModules(t *testing.T) {
 	// Regression for codex P2 (PR review, 2026-05-15): when the
 	// probe is "." -- e.g. the user runs `aguara check` from inside
