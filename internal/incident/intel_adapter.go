@@ -1,10 +1,39 @@
 package incident
 
 import (
+	"sync"
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
 )
+
+// defaultIntelMatcherOnce + defaultIntelMatcherCache lazily build
+// the package-level matcher from EmbeddedSnapshots(). Lazy because
+// KnownCompromisedSnapshot() walks the manual list every call;
+// caching the matcher avoids re-walking on every check.
+//
+// The matcher is read-only after construction, so concurrent
+// MatchPackage calls from the check pipeline are safe without
+// further synchronisation.
+var (
+	defaultIntelMatcherOnce  sync.Once
+	defaultIntelMatcherCache *intel.Matcher
+)
+
+// defaultIntelMatcher returns the singleton matcher built from
+// the binary's embedded snapshots (manual + generated OSV stub).
+// Both check entry points (Check / CheckNPM) consult it.
+//
+// Exposing this as a package-private helper rather than a public
+// variable means callers can not accidentally mutate the cached
+// matcher, and tests in this package can still reach it for
+// assertions through the same path.
+func defaultIntelMatcher() *intel.Matcher {
+	defaultIntelMatcherOnce.Do(func() {
+		defaultIntelMatcherCache = intel.NewMatcher(EmbeddedSnapshots()...)
+	})
+	return defaultIntelMatcherCache
+}
 
 // KnownCompromisedSnapshot converts the hand-curated KnownCompromised
 // list into an intel.Snapshot so it can be matched alongside future
@@ -85,25 +114,65 @@ func normalizeEcosystemForIntel(eco string) string {
 	}
 }
 
+// EmbeddedSnapshots returns the per-source snapshots baked into
+// the binary. The runtime matcher consumes them through
+// intel.NewMatcher so the cross-snapshot merge / withdrawn-
+// tombstone semantics apply: an OSV refresh that adds a fresh
+// affected version surfaces it; an OSV record that retracts a
+// manual entry tombstones the indexed match.
+//
+// Manual goes first so its metadata (Summary, Severity, IOCs)
+// wins the first-occurrence merge for any advisory ID that
+// appears in both sources. The OSV slice may be empty -- the
+// generated file ships empty until the maintainer regenerates it
+// from a fresh OSV dump.
+func EmbeddedSnapshots() []intel.Snapshot {
+	return []intel.Snapshot{
+		KnownCompromisedSnapshot(),
+		EmbeddedIntelSnapshot,
+	}
+}
+
 // embeddedIntelSummary returns the IntelSummary that describes the
-// snapshot baked into the binary. Used by Check and CheckNPM so
+// snapshots baked into the binary. Used by Check and CheckNPM so
 // every CheckResult carries provenance even when no runtime intel
 // store has been wired in yet.
 //
-// Mode stays "offline" because PR 2 has no network path; PR 4 will
-// flip Mode to "online" when --fresh produced the snapshot used.
-// Snapshot stays "embedded" because the local on-disk cache is not
-// consulted here yet.
+// Mode stays "offline" because no network path exists yet; the
+// runtime-update PR will flip Mode to "online" when --fresh
+// produced the snapshot used. Snapshot stays "embedded" because
+// the local on-disk cache is not consulted here yet.
+//
+// GeneratedAt picks the LATER of the two source timestamps so the
+// user sees the freshest data the binary actually carries -- a
+// recent OSV regeneration shows through even if the manual list
+// has not changed. Sources is deduplicated by kind so the terminal
+// can read "Sources: manual, osv" without listing each source
+// entry separately.
 func embeddedIntelSummary() IntelSummary {
-	snap := KnownCompromisedSnapshot()
-	sources := make([]string, 0, len(snap.Sources))
-	for _, src := range snap.Sources {
-		sources = append(sources, string(src.Kind))
+	seen := make(map[string]struct{})
+	var sources []string
+	var generatedAt time.Time
+	for _, snap := range EmbeddedSnapshots() {
+		if snap.GeneratedAt.After(generatedAt) {
+			generatedAt = snap.GeneratedAt
+		}
+		for _, src := range snap.Sources {
+			kind := string(src.Kind)
+			if kind == "" {
+				continue
+			}
+			if _, ok := seen[kind]; ok {
+				continue
+			}
+			seen[kind] = struct{}{}
+			sources = append(sources, kind)
+		}
 	}
 	return IntelSummary{
 		Mode:        "offline",
 		Snapshot:    "embedded",
-		GeneratedAt: snap.GeneratedAt,
+		GeneratedAt: generatedAt,
 		Sources:     sources,
 		Stale:       false,
 	}
