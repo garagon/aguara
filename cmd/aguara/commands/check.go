@@ -125,7 +125,18 @@ func autoDetectCheckTarget(path string) (string, string, error) {
 		probe = "."
 	}
 	if info, err := os.Stat(probe); err == nil && info.IsDir() {
-		if filepath.Base(probe) == "node_modules" {
+		// Resolve the probe so `filepath.Base` returns the real
+		// directory name. Without this, `aguara check` from inside
+		// a node_modules tree (probe == ".") would yield Base == "."
+		// and the npm signal would be missed -- the npm checker
+		// never runs and a compromised package is silently reported
+		// clean. Fall back to the raw probe if Abs fails, so we
+		// still get the historical behaviour on weird inputs.
+		resolved := probe
+		if abs, err := filepath.Abs(probe); err == nil {
+			resolved = abs
+		}
+		if filepath.Base(resolved) == "node_modules" {
 			return ecoNPM, probe, nil
 		}
 		nm := filepath.Join(probe, "node_modules")
