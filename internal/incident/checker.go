@@ -446,25 +446,31 @@ func checkCaches() []Finding {
 				return filepath.SkipDir
 			}
 
-			// Filename-based check for cache artifacts. The cache scan
-			// is part of the Python check path, so only PyPI entries
-			// apply here; npm rows live in a separate scan.
+			// Filename-based check for cache artifacts. The cache
+			// scan is part of the Python check path, so only PyPI
+			// entries apply here; npm rows live in a separate scan.
+			// Iterating the embedded snapshots (manual + OSV) lets
+			// OSV-only entries trip this path too -- previously
+			// only KnownCompromised would, so an OSV-only PyPI
+			// malicious package cached as a wheel would be missed.
 			base := strings.ToLower(name)
-			for _, cp := range KnownCompromised {
-				entryEco := cp.Ecosystem
-				if entryEco == "" {
-					entryEco = EcosystemPyPI
-				}
-				if entryEco != EcosystemPyPI {
-					continue
-				}
-				if strings.Contains(base, cp.Name) {
-					for _, v := range cp.Versions {
+			for _, snap := range EmbeddedSnapshots() {
+				for _, rec := range snap.Records {
+					if rec.Ecosystem != intel.EcosystemPyPI {
+						continue
+					}
+					if rec.Withdrawn {
+						continue
+					}
+					if !strings.Contains(base, strings.ToLower(rec.Name)) {
+						continue
+					}
+					for _, v := range rec.Versions {
 						if strings.Contains(base, v) && !seen[path] {
 							seen[path] = true
 							findings = append(findings, Finding{
 								Severity:    SevWarning,
-								Title:       fmt.Sprintf("Cached compromised artifact: %s %s", cp.Name, v),
+								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", rec.Name, v, rec.ID),
 								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
 							})
