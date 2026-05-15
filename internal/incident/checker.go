@@ -481,8 +481,8 @@ func checkCaches(opts CheckOptions) []Finding {
 			// advisory trips the heuristic without having to wait
 			// for the next release.
 			base := strings.ToLower(name)
-			candidateName, rest := parsePyPIWheelName(base)
-			if candidateName == "" {
+			candidates := parsePyPIWheelName(base)
+			if len(candidates) == 0 {
 				// Filename is not a wheel/sdist shape (pip's
 				// content-hash cache entries fall here). Skip
 				// rather than substring-scan, which v0.15
@@ -490,30 +490,41 @@ func checkCaches(opts CheckOptions) []Finding {
 				// to contain a record name.
 				return nil
 			}
-			entries, ok := pypiIndex[intel.PEP503Normalize(candidateName)]
-			if !ok {
-				return nil
-			}
-			for _, entry := range entries {
+			// Try every (name, rest) split. Hyphenated sdist names
+			// (e.g. `233-misc-0.0.3.tar.gz`) have multiple
+			// candidate boundaries; we accept the FIRST that hits
+			// the index. The intel index is PEP 503 normalised so
+			// we normalise the candidate before lookup.
+			for _, cand := range candidates {
 				if seen[path] {
 					break
 				}
-				for _, v := range entry.versions {
-					// Require version to appear in the suffix
-					// after the name. Without that constraint
-					// `numpy-1.26.4.whl` could spuriously match
-					// a record whose version string lives only
-					// inside `numpy` itself (1-digit versions
-					// like "1" would explode otherwise).
-					if strings.Contains(rest, v) {
-						seen[path] = true
-						findings = append(findings, Finding{
-							Severity:    SevWarning,
-							Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
-							Path:        path,
-							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
-						})
+				entries, ok := pypiIndex[intel.PEP503Normalize(cand.name)]
+				if !ok {
+					continue
+				}
+				for _, entry := range entries {
+					if seen[path] {
 						break
+					}
+					for _, v := range entry.versions {
+						// Version must appear in the suffix
+						// after the name. Without that constraint
+						// `numpy-1.26.4.whl` could spuriously
+						// match a record whose version string
+						// lives only inside `numpy` itself
+						// (1-digit versions like "1" would
+						// explode otherwise).
+						if strings.Contains(cand.rest, v) {
+							seen[path] = true
+							findings = append(findings, Finding{
+								Severity:    SevWarning,
+								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
+								Path:        path,
+								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+							})
+							break
+						}
 					}
 				}
 			}
@@ -576,22 +587,51 @@ func buildPyPIFilenameIndex(snaps []intel.Snapshot) pypiFilenameIndex {
 	return idx
 }
 
-// parsePyPIWheelName extracts the (name, rest) pair from a PyPI
-// cache filename. Returns ("", "") for filenames that do not
-// match a wheel/sdist shape (e.g. pip's content-hash cache entries
-// in http-v2/) so the caller can skip them cleanly.
+// parsePyPIWheelName extracts (name, rest) candidates from a PyPI
+// cache filename. Returns the EMPTY slice for filenames that do
+// not match a wheel/sdist shape (e.g. pip's content-hash cache
+// entries in http-v2/) so the caller can skip them cleanly.
 //
 // Wheel: `<name>-<version>-<python>-<abi>-<platform>.whl`
-// Sdist: `<name>-<version>.tar.gz` (or .zip)
+//   - PEP 491: non-alphanumeric chars in name are normalised to `_`
+//     in wheel filenames, so the wheel name never contains `-`.
 //
-// Both forms put the name first, followed by `-`. We do not
-// require any specific suffix because pip caches sometimes drop
-// the extension; the lookup-by-version step below catches false
-// hits anyway.
-func parsePyPIWheelName(base string) (name, rest string) {
-	idx := strings.IndexByte(base, '-')
-	if idx <= 0 {
-		return "", ""
+// Sdist: `<name>-<version>.tar.gz` (or .zip)
+//   - Name may contain `-` (e.g. `233-misc-0.0.3.tar.gz` has name
+//     `233-misc`, version `0.0.3`).
+//
+// We resolve the ambiguity by emitting a candidate at every `-`
+// position whose next byte is a digit (PEP 440 versions always
+// start with a digit, possibly preceded by an epoch which itself
+// starts with a digit). Callers try each candidate in order; the
+// first that resolves in the intel index wins. For wheels there
+// is exactly one such boundary; for hyphenated sdists there are
+// typically two (the inner ones don't match the index but the
+// last one does).
+func parsePyPIWheelName(base string) []nameCandidate {
+	var out []nameCandidate
+	for i := 0; i < len(base); i++ {
+		if base[i] != '-' {
+			continue
+		}
+		if i+1 >= len(base) {
+			break
+		}
+		if base[i+1] < '0' || base[i+1] > '9' {
+			continue
+		}
+		if i == 0 {
+			continue // leading '-' has no name part
+		}
+		out = append(out, nameCandidate{name: base[:i], rest: base[i+1:]})
 	}
-	return base[:idx], base[idx+1:]
+	return out
+}
+
+// nameCandidate is one possible (name, rest) split of a PyPI cache
+// filename. parsePyPIWheelName returns all candidates; the caller
+// tries each against the intel index until one resolves.
+type nameCandidate struct {
+	name string
+	rest string
 }
