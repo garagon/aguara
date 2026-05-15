@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,42 @@ func TestInitCreatesFiles(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, data, "expected %s to have content", name)
 	}
+}
+
+func TestInitWorkflowUsesActionNotBrokenAsset(t *testing.T) {
+	// QA regression on v0.16.0: the scaffolded workflow downloaded
+	// `aguara-linux-amd64` from /releases/latest/download/, an asset
+	// shape that does not exist (release assets are tar.gz archives
+	// like `aguara_0.16.0_linux_amd64.tar.gz`). The curl 404'd and
+	// every new-user CI job broke at install.
+	//
+	// The workflow must now:
+	//   1. NOT reference the broken `aguara-linux-amd64` asset,
+	//   2. NOT manually curl install.sh in the workflow itself
+	//      (the action does that with checksum verification),
+	//   3. USE the official `garagon/aguara` action so version pin
+	//      + checksum verify happen via the action's contract.
+	dir := t.TempDir()
+	require.NoError(t, runInit(nil, []string{dir}))
+
+	wf, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "aguara.yml"))
+	require.NoError(t, err)
+	body := string(wf)
+
+	require.NotContains(t, body, "aguara-linux-amd64",
+		"workflow must not reference the non-existent aguara-linux-amd64 asset (release assets are tar.gz archives)")
+	require.NotContains(t, body, "/releases/latest/download/aguara",
+		"workflow must not curl release assets directly; the action handles install + checksum")
+	require.True(t, strings.Contains(body, "uses: garagon/aguara@"),
+		"workflow must invoke the official garagon/aguara action so version pin + checksum verify are guaranteed")
+
+	// Codex P2 follow-up: the action ref alone does NOT pin the
+	// binary version (the action's `version` input defaults to
+	// empty -> install.sh fetches whatever is latest at run time).
+	// The scaffold MUST also set the `version:` input so the
+	// installed CLI is reproducible across runs.
+	require.True(t, strings.Contains(body, "version: v"),
+		"workflow must pin the Aguara binary version (action ref alone does not pin the install)")
 }
 
 func TestInitSkipsExisting(t *testing.T) {

@@ -192,6 +192,24 @@ aguara scan . --fail-on high --no-color
 exit $?
 `
 
+// workflowTemplateV2 is the GitHub Actions workflow scaffolded by
+// `aguara init`. It uses the official `garagon/aguara` action so
+// the workflow gets:
+//
+//   - install.sh-backed binary install with mandatory checksum
+//     verification (no manual curl + 404 risk),
+//   - SARIF upload to Code Scanning out of the box,
+//   - automatic version pinning matching whatever tag the user
+//     pins the `uses:` ref to.
+//
+// The action ref is pinned to the v0.16.0 tag rather than `@v1`
+// (which exists but lags significantly behind point releases). New
+// projects get a reproducible, dependabot-friendly pin; users who
+// want floating-major can edit the ref themselves.
+//
+// The 'Comment on PR' step is kept so the workflow feels complete
+// out of the box; it reads from the action's default SARIF output
+// path (aguara-results.sarif).
 const workflowTemplateV2 = `name: Aguara Security Scan
 
 on:
@@ -211,37 +229,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Aguara binary
-        uses: actions/cache@v4
-        with:
-          path: ./aguara
-          key: aguara-linux-amd64
-
-      - name: Install Aguara
-        run: |
-          if [ ! -f ./aguara ]; then
-            curl -sSL https://github.com/garagon/aguara/releases/latest/download/aguara-linux-amd64 -o aguara
-            chmod +x aguara
-          fi
-
-      - name: Run Aguara scan
+      - name: Run Aguara security scan
         id: scan
-        continue-on-error: true
-        run: ./aguara scan . --format sarif --output results.sarif --fail-on high
-
-      - name: Upload SARIF results
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: garagon/aguara@v0.16.0
         with:
-          sarif_file: results.sarif
+          path: .
+          fail-on: high
+          # Pin the actual Aguara BINARY version too. Without this,
+          # the action's install step calls install.sh with no
+          # version override and fetches whatever release is
+          # "latest" at run time -- so the scanner code can drift
+          # away from the action ref above without notice.
+          version: v0.16.0
+          # SARIF results land at aguara-results.sarif and are
+          # uploaded to GitHub Code Scanning automatically. Set
+          # upload-sarif: 'false' to disable that upload.
 
-      - name: Comment on PR
-        if: github.event_name == 'pull_request' && always()
+      - name: Comment summary on PR
+        if: github.event_name == 'pull_request' && always() && hashFiles('aguara-results.sarif') != ''
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const sarif = JSON.parse(fs.readFileSync('results.sarif', 'utf8'));
+            const sarif = JSON.parse(fs.readFileSync('aguara-results.sarif', 'utf8'));
             const results = sarif.runs[0].results || [];
             const counts = {};
             results.forEach(r => { counts[r.level] = (counts[r.level] || 0) + 1; });
@@ -260,8 +270,4 @@ jobs:
               issue_number: context.issue.number,
               body: lines.join('\n')
             });
-
-      - name: Fail on findings
-        if: steps.scan.outcome == 'failure'
-        run: exit 1
 `
