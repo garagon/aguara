@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/garagon/aguara/internal/rules"
-	"github.com/garagon/aguara/internal/rules/builtin"
+	"github.com/garagon/aguara/internal/rulecatalog"
+	"github.com/garagon/aguara/internal/rulemeta"
 )
 
 var explainCmd = &cobra.Command{
@@ -21,94 +22,46 @@ var explainCmd = &cobra.Command{
 }
 
 func init() {
+	// `rule not found` is a runtime user error (typo in the ID),
+	// not a flag-parse issue. Cobra's default behaviour would
+	// dump the Usage block on top of the error -- in CI logs that
+	// reads as command misuse rather than "you typed the ID
+	// wrong". Same SilenceUsage pattern PR #91 applied to scan /
+	// check / audit / update.
+	explainCmd.SilenceUsage = true
 	rootCmd.AddCommand(explainCmd)
-}
-
-type explainInfo struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Severity       string   `json:"severity"`
-	Category       string   `json:"category"`
-	Description    string   `json:"description"`
-	Remediation    string   `json:"remediation,omitempty"`
-	Patterns       []string `json:"patterns"`
-	TruePositives  []string `json:"true_positives"`
-	FalsePositives []string `json:"false_positives"`
 }
 
 func runExplain(cmd *cobra.Command, args []string) error {
 	ruleID := strings.ToUpper(strings.TrimSpace(args[0]))
 
-	found, err := findRule(ruleID)
+	found, err := rulecatalog.FindByID(rulecatalog.Options{
+		CustomRulesDir: flagRules,
+		Warn: func(format string, a ...any) {
+			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
+		},
+	}, ruleID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("rule %q not found", ruleID)
+		}
 		return err
 	}
 
-	patterns := describePatterns(found)
 	w := cmd.OutOrStdout()
-
 	if strings.ToLower(flagFormat) == "json" {
-		return writeExplainJSON(w, found, patterns)
+		return writeExplainJSON(w, found)
 	}
-	return writeExplainTerminal(w, found, patterns)
+	return writeExplainTerminal(w, found)
 }
 
-func findRule(ruleID string) (*rules.CompiledRule, error) {
-	rawRules, err := rules.LoadFromFS(builtin.FS())
-	if err != nil {
-		return nil, fmt.Errorf("loading built-in rules: %w", err)
-	}
-	if flagRules != "" {
-		customRules, err := rules.LoadFromDir(flagRules)
-		if err != nil {
-			return nil, fmt.Errorf("loading custom rules from %s: %w", flagRules, err)
-		}
-		rawRules = append(rawRules, customRules...)
-	}
-	compiled, compileErrs := rules.CompileAll(rawRules)
-	for _, e := range compileErrs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-
-	for _, r := range compiled {
-		if r.ID == ruleID {
-			return r, nil
-		}
-	}
-	return nil, fmt.Errorf("rule %q not found", ruleID)
-}
-
-func describePatterns(r *rules.CompiledRule) []string {
-	patterns := make([]string, len(r.Patterns))
-	for i, p := range r.Patterns {
-		switch p.Type {
-		case rules.PatternRegex:
-			patterns[i] = fmt.Sprintf("[regex] %s", p.Regex.String())
-		case rules.PatternContains:
-			patterns[i] = fmt.Sprintf("[contains] %s", p.Value)
-		}
-	}
-	return patterns
-}
-
-func writeExplainJSON(w io.Writer, r *rules.CompiledRule, patterns []string) error {
-	info := explainInfo{
-		ID:             r.ID,
-		Name:           r.Name,
-		Severity:       r.Severity.String(),
-		Category:       r.Category,
-		Description:    r.Description,
-		Remediation:    r.Remediation,
-		Patterns:       patterns,
-		TruePositives:  r.Examples.TruePositive,
-		FalsePositives: r.Examples.FalsePositive,
-	}
+func writeExplainJSON(w io.Writer, r *rulemeta.Rule) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(info)
+	return enc.Encode(r)
 }
 
-func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []string) error {
+func writeExplainTerminal(w io.Writer, found *rulemeta.Rule) error {
 	color := func(code, text string) string {
 		if flagNoColor {
 			return text
@@ -124,7 +77,7 @@ func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []str
 	green := "\033[32m"
 
 	sevColor := cyan
-	switch found.Severity.String() {
+	switch found.Severity {
 	case "CRITICAL":
 		sevColor = red + bold
 	case "HIGH":
@@ -135,8 +88,11 @@ func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []str
 
 	fmt.Fprintf(w, "\n%s %s\n", color(dim, "Rule:"), color(bold, found.ID))
 	fmt.Fprintf(w, "%s %s\n", color(dim, "Name:"), found.Name)
-	fmt.Fprintf(w, "%s %s\n", color(dim, "Severity:"), color(sevColor, found.Severity.String()))
+	fmt.Fprintf(w, "%s %s\n", color(dim, "Severity:"), color(sevColor, found.Severity))
 	fmt.Fprintf(w, "%s %s\n", color(dim, "Category:"), found.Category)
+	if found.Analyzer != "" {
+		fmt.Fprintf(w, "%s %s\n", color(dim, "Analyzer:"), found.Analyzer)
+	}
 
 	if found.Description != "" {
 		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Description:"), found.Description)
@@ -146,24 +102,24 @@ func writeExplainTerminal(w io.Writer, found *rules.CompiledRule, patterns []str
 		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Remediation:"), color(green, found.Remediation))
 	}
 
-	if len(patterns) > 0 {
+	if len(found.Patterns) > 0 {
 		fmt.Fprintf(w, "\n%s\n", color(bold, "Patterns:"))
-		for i, p := range patterns {
+		for i, p := range found.Patterns {
 			fmt.Fprintf(w, "  %d. %s\n", i+1, color(dim, p))
 		}
 	}
 
-	if len(found.Examples.TruePositive) > 0 {
+	if len(found.TruePositives) > 0 {
 		fmt.Fprintf(w, "\n%s\n", color(bold, "True Positives:"))
-		for _, ex := range found.Examples.TruePositive {
-			fmt.Fprintf(w, "  %s %s\n", color(red, "\u2716"), ex)
+		for _, ex := range found.TruePositives {
+			fmt.Fprintf(w, "  %s %s\n", color(red, "✖"), ex)
 		}
 	}
 
-	if len(found.Examples.FalsePositive) > 0 {
+	if len(found.FalsePositives) > 0 {
 		fmt.Fprintf(w, "\n%s\n", color(bold, "False Positives:"))
-		for _, ex := range found.Examples.FalsePositive {
-			fmt.Fprintf(w, "  %s %s\n", color(green, "\u2714"), ex)
+		for _, ex := range found.FalsePositives {
+			fmt.Fprintf(w, "  %s %s\n", color(green, "✔"), ex)
 		}
 	}
 
