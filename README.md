@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.15.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.0 sh
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
@@ -73,7 +73,7 @@ To update an existing install, rerun the installer. It downloads the selected re
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 
 # Update/pin to a specific release
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.15.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.0 sh
 ```
 
 ### Alternative methods
