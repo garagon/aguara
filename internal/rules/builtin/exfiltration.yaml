@@ -292,6 +292,7 @@ severity: HIGH
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: all
+sensitive: true
 remediation: "Separate credential access from network operations. Use a secrets manager and never transmit raw credentials."
 patterns:
   - type: regex
@@ -314,6 +315,7 @@ severity: HIGH
 category: exfiltration
 targets: ["*.md", "*.txt"]
 match_mode: any
+sensitive: true
 remediation: "Never include credential variables in POST data. Use secure auth mechanisms (OAuth, mTLS) instead of raw secrets."
 patterns:
   - type: regex
