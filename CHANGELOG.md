@@ -5,6 +5,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-05-16
+
+Patch release for v0.16.0 focused on onboarding, CLI output contracts, and release hygiene.
+
+### Fixed
+
+- `aguara init --ci` now scaffolds the official `garagon/aguara` GitHub Action with both the action ref and binary version pinned to the release tag. This replaces the broken direct download of a non-existent `aguara-linux-amd64` asset.
+- `aguara check --path <missing>` now fails loudly when the user explicitly passes a missing or non-directory path instead of silently falling back to autodiscovery.
+- `aguara explain <RULE_ID>` and `aguara list-rules` now include analyzer-emitted rules such as `JS_DNS_TXT_EXFIL_001`, with metadata matching the analyzer emit site.
+- `aguara update --format json` now emits stable JSON, honors `-o`, and refuses output paths that would overwrite the local threat-intel snapshot.
+- Release prep now has `.github/scripts/check-version-pins.sh`, which fails before tagging if the init scaffold, action default ref, install.sh test pin, or README install snippets still point at a previous release.
+
+### Verified
+
+- Docker validation passed with `make verify-docker`.
+- Real OSV refresh was validated in Docker with isolated `HOME=/tmp/home`.
+- `aguara check --fresh` and `aguara audit --fresh --ci` were validated against `event-stream@3.3.6`.
+
 ## [0.16.0] - 2026-05-15
 
 Aguara now ships with built-in threat intelligence. Where prior
