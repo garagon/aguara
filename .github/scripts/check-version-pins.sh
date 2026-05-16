@@ -44,16 +44,19 @@ if [ -z "${VERSION:-}" ]; then
   exit 2
 fi
 
-# Validate semver shape. The version MUST look like vMAJOR.MINOR.PATCH;
-# anything else would be a typo (or a pre-release the release flow
-# does not handle yet).
-case "$VERSION" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
-  *)
-    echo "check-version-pins: VERSION must be a semver tag like vX.Y.Z, got: $VERSION" >&2
-    exit 2
-    ;;
-esac
+# Validate semver shape. The version MUST look exactly like
+# vMAJOR.MINOR.PATCH; anything else (pre-release suffixes,
+# trailing junk like 'v0.17.0foo') is a typo the release flow
+# does not handle yet.
+#
+# `case "$VERSION" in v[0-9]*.[0-9]*.[0-9]*)` is NOT strict
+# enough -- the trailing `*` in a shell glob consumes any
+# characters, so 'v0.17.0foo' would match. Use a grep -E anchor
+# instead, which is POSIX and enforces exact end-of-string.
+if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "check-version-pins: VERSION must be a semver tag like vX.Y.Z, got: $VERSION" >&2
+  exit 2
+fi
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO_ROOT"
@@ -93,23 +96,31 @@ if ! grep -Eq "^INSTALL_SH_TEST_VERSION[[:space:]]*\?=[[:space:]]*$VERSION\$" Ma
   report "Makefile: INSTALL_SH_TEST_VERSION does not default to $VERSION"
 fi
 
-# 5+6. README.md: curl-pipe install snippets that document
-#      VERSION=<tag> sh. There are two of these (quick install +
-#      pin-to-version examples); both must match.
-readme_hits=$(grep -c "VERSION=$VERSION sh" README.md || true)
-if [ "$readme_hits" -lt 2 ]; then
-  report "README.md: expected >=2 install snippets with 'VERSION=$VERSION sh' (found $readme_hits)"
+# 5. README.md: curl-pipe install snippets that document
+#    VERSION=<tag> sh. Every snippet matching the shape
+#    `VERSION=vX.Y.Z sh` MUST pin to $VERSION; anything else is a
+#    stale snippet a maintainer forgot to bump.
+#
+# Walking the matches line-by-line (rather than counting +
+# negative-grep) means a README with two updated + one stale
+# snippet fails too. The previous count-based check passed in
+# that scenario because the count threshold was satisfied.
+stale_readme=$(grep -nE "VERSION=v[0-9]+\.[0-9]+\.[0-9]+ sh" README.md | grep -v "VERSION=$VERSION sh" || true)
+if [ -n "$stale_readme" ]; then
+  printf '%s\n' "$stale_readme" | while IFS= read -r line; do
+    report "README.md:$line (must pin to $VERSION)"
+  done
+  # The pipeline above runs in a subshell; drift_count increments
+  # there do not propagate to the parent. Add a single sentinel
+  # bump here so the overall exit reflects the README drift.
+  drift_count=$((drift_count + 1))
 fi
 
-# Report stale README snippets too -- if VERSION=v0.15.0 still
-# appears, the user will know which line to fix.
-if grep -nE "VERSION=v[0-9]+\.[0-9]+\.[0-9]+ sh" README.md | grep -vE "VERSION=$VERSION sh"; then
-  : # the grep above prints the offending lines on stderr-equivalent;
-    # increment the counter via a sentinel marker.
-  if grep -nqE "VERSION=v[0-9]+\.[0-9]+\.[0-9]+ sh" README.md && \
-     ! grep -nq "VERSION=$VERSION sh" README.md; then
-    report "README.md: install snippets reference a different VERSION than $VERSION (see lines above)"
-  fi
+# Sanity: if README has ZERO matching snippets at all, even after
+# the stale-snippets check, that's also a drift (someone removed
+# the example entirely or the convention changed).
+if ! grep -Fq "VERSION=$VERSION sh" README.md; then
+  report "README.md: no install snippet pins 'VERSION=$VERSION sh' (the canonical example)"
 fi
 
 if [ "$drift_count" -gt 0 ]; then
