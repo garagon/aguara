@@ -119,17 +119,32 @@ const RedactedPlaceholder = "[REDACTED]"
 // intact because their match is typically a pattern signature rather than a
 // secret.
 //
-// Context redaction differs by source. For Sensitive findings every Context
-// entry is replaced, because analyzers like NLP_CRED_EXFIL_COMBO emit one
-// finding for a whole section / file and the secret can sit on a wrapped
-// continuation line where IsMatch is false. For the legacy credential-leak
-// category only the IsMatch line is replaced, preserving the existing
-// surrounding-line view that pre-Sensitive consumers rely on.
+// Context redaction differs by source. Analyzer-emitted Sensitive findings
+// (nlp-injection, toxicflow, toxicflow-crossfile) treat their entire Context
+// window as secret-bearing because their MatchedText is a multi-line section
+// / file blob — the secret can sit on a non-IsMatch context line. Single-
+// line Sensitive findings (pattern matcher) and the legacy credential-leak
+// category scrub only the IsMatch line so the surrounding-line view used by
+// reviewers stays intact.
 //
 // The category fallback exists so custom rules authored before the Sensitive
 // flag existed keep redacting — dropping it would silently regress every user
 // who relied on category == "credential-leak" to gate redaction.
+//
+// A second pass scrubs sensitive lines across every finding's Context. Two
+// findings can share a Context window (a credential-leak hit on line 5 + a
+// prompt-injection hit on line 7 both pull lines 2-10 via ExtractContext);
+// without the second pass the prompt-injection finding would still serialize
+// the line 5 secret even though the credential-leak finding got redacted.
 func RedactSensitiveFindings(findings []Finding) {
+	// Pass 1: redact each Sensitive / credential-leak finding's own
+	// MatchedText + Context, and record which (FilePath, Line) tuples
+	// are now considered secret-bearing.
+	type fileLine struct {
+		path string
+		line int
+	}
+	sensitiveLines := make(map[fileLine]bool)
 	for i := range findings {
 		isSensitive := findings[i].Sensitive
 		isLegacyCred := findings[i].Category == "credential-leak"
@@ -137,19 +152,50 @@ func RedactSensitiveFindings(findings []Finding) {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
+		multiLine := isSensitive && multiLineAnalyzers[findings[i].Analyzer]
 		for j := range findings[i].Context {
-			if isSensitive {
-				// Sensitive findings can span multiple lines; the
+			cl := &findings[i].Context[j]
+			if multiLine {
+				// Analyzer findings span multiple source lines; the
 				// secret may sit on a non-IsMatch context line, so
-				// scrub the whole block.
-				findings[i].Context[j].Content = RedactedPlaceholder
+				// scrub the whole block AND mark every line in the
+				// window for cross-finding redaction.
+				cl.Content = RedactedPlaceholder
+				sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] = true
 				continue
 			}
-			if findings[i].Context[j].IsMatch {
-				findings[i].Context[j].Content = RedactedPlaceholder
+			if cl.IsMatch {
+				cl.Content = RedactedPlaceholder
+				sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] = true
 			}
 		}
 	}
+
+	if len(sensitiveLines) == 0 {
+		return
+	}
+
+	// Pass 2: for every finding (including non-sensitive ones), scrub
+	// Context lines whose (FilePath, Line) was marked sensitive in pass 1.
+	for i := range findings {
+		for j := range findings[i].Context {
+			cl := &findings[i].Context[j]
+			if sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] {
+				cl.Content = RedactedPlaceholder
+			}
+		}
+	}
+}
+
+// multiLineAnalyzers names the analyzers whose emitted Finding's MatchedText
+// is a multi-line section / file blob rather than a single-line regex hit.
+// For these, the secret can sit on any line in the Context window, not just
+// the IsMatch one, so RedactSensitiveFindings widens the per-finding scrub
+// and the cross-finding sensitive-line set.
+var multiLineAnalyzers = map[string]bool{
+	"nlp-injection":       true,
+	"toxicflow":           true,
+	"toxicflow-crossfile": true,
 }
 
 // RedactCredentialFindings is the previous name of RedactSensitiveFindings,
