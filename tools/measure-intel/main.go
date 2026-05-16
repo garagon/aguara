@@ -38,14 +38,13 @@
 //	# generator or a follow-up architecture decision doc).
 //	go run ./tools/measure-intel --download --format json
 //
-// Filter logic. The per-record gate mirrors osvimport.convertOSVRecord
-// (exact-versions present + signal-or-keyword pass). The mirror is
-// intentional: this tool must NOT depend on osvimport's hardcoded
-// canonicaliseEcosystem (which today rejects everything except npm /
-// pypi) but it MUST produce the same counts the importer would
-// produce once PR #1 widens canonicaliseEcosystem. The two filter
-// implementations are kept in sync by review; any change to the
-// importer's filter rules must reproduce here.
+// Filter logic. Each record is fed to osvimport.ClassifyForEcosystem
+// which returns the production importer's per-record verdict
+// (ecosystem-miss / withdrawn / ranges-only / neither / kept). PR #1
+// (ecosystem registry) widened the importer's canonicaliser to
+// accept all 8 ecosystems, so this tool no longer needs the local
+// filter mirror that PR #0 carried; the counts here are guaranteed
+// to match the production importer because they come from it.
 package main
 
 import (
@@ -331,20 +330,20 @@ func measure(job measureJob) (ecosystemReport, error) {
 		r.ZipDecompressedBytes += int64(len(data))
 		r.TotalRecords++
 
-		rec, status := classifyRecord(data, job.ecosystem)
+		rec, status := osvimport.ClassifyForEcosystem(data, job.ecosystem)
 		switch status {
-		case statusEcosystemMiss:
+		case osvimport.StatusEcosystemMiss:
 			// nothing to count beyond TotalRecords
-		case statusWithdrawn:
+		case osvimport.StatusWithdrawn:
 			r.EcosystemMatchedRecords++
 			r.WithdrawnRecords++
-		case statusRangesOnly:
+		case osvimport.StatusRangesOnly:
 			r.EcosystemMatchedRecords++
 			r.RangesOnlyDroppedRecords++
-		case statusNeither:
+		case osvimport.StatusNeither:
 			r.EcosystemMatchedRecords++
 			r.NeitherDroppedRecords++
-		case statusKeptSignal, statusKeptKeyword:
+		case osvimport.StatusKept:
 			r.EcosystemMatchedRecords++
 			r.SignalOrKeywordKept++
 			r.FinalKeptRecords++

@@ -127,7 +127,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	for _, raw := range ecosystems {
 		c := canonicaliseEcosystemForUpdate(raw)
 		if c == "" {
-			return nil, fmt.Errorf("intel update: unsupported ecosystem %q (supported: npm, PyPI)", raw)
+			return nil, fmt.Errorf("intel update: unsupported ecosystem %q (supported: %s)", raw, SupportedEcosystemsHint())
 		}
 		canonical = append(canonical, c)
 	}
@@ -215,23 +215,25 @@ func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem
 	return snap, int64(len(data)), nil
 }
 
-// canonicaliseEcosystemForUpdate maps aliases ("pypi", "Python")
-// onto the canonical OSV bucket key (EcosystemPyPI = "PyPI",
-// EcosystemNPM = "npm"). Returns "" for unsupported inputs so
-// Update can fail loud rather than 404 on a wrongly-cased URL.
+// canonicaliseEcosystemForUpdate maps aliases ("pypi", "Python",
+// "rust", "java", "dotnet", ...) onto the canonical OSV bucket key.
+// Returns "" for unsupported inputs so Update can fail loud rather
+// than 404 on a wrongly-cased URL.
 //
-// This duplicates osvimport.canonicaliseEcosystem on purpose:
-// importing osvimport here would create a cycle (intel <-
-// osvimport <- intel), and the function is two switch-arms.
+// Delegates to the registry in ecosystem.go; this thin wrapper
+// stays so the update path keeps a named function for grep-discovery
+// and so callers reading the file can see where the CLI-level
+// alias resolution happens before the URL is built.
+//
+// The default ecosystem list ([npm, PyPI]) is intentionally NOT
+// widened to all 8 in this PR. The embedded snapshot still ships
+// only npm + PyPI; flipping the update default before the embedded
+// snapshot covers the new ecosystems would create an asymmetric
+// experience (`aguara update` pulls 8 buckets but `aguara check`
+// has embedded matches for 2). The default flip lands in the
+// release PR that regenerates the embedded snapshot.
 func canonicaliseEcosystemForUpdate(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "npm":
-		return EcosystemNPM
-	case "pypi", "python":
-		return EcosystemPyPI
-	default:
-		return ""
-	}
+	return CanonicaliseEcosystem(raw)
 }
 
 // dedupeSources collapses the merged Sources slice to one entry

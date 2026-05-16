@@ -30,6 +30,12 @@ malicious-package dumps for the configured ecosystems (default: npm, PyPI),
 filters to high-confidence records, and writes the merged snapshot to
 ~/.aguara/intel/snapshot.json.
 
+Pass --ecosystem to refresh additional ecosystems. Supported (with
+case-insensitive aliases in parentheses): npm, PyPI (python),
+Go (golang), crates.io (cargo, rust), Packagist (php, composer),
+RubyGems (ruby, gem), Maven (java), NuGet (dotnet, csharp). Repeat
+--ecosystem or comma-separate the values to refresh several at once.
+
 This command is the only place 'aguara update' touches the network. Default
 'aguara check' invocations stay offline; future checks will consult the local
 snapshot in addition to the binary's embedded snapshot.

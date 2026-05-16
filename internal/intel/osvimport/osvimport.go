@@ -252,6 +252,88 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 	return out, true
 }
 
+// RecordStatus is the per-record verdict the filter funnel produces.
+// Used by ClassifyForEcosystem so diagnostic / measurement tooling
+// can count how each ecosystem's OSV bucket would fare against the
+// production importer without re-implementing the filter.
+type RecordStatus int
+
+const (
+	// StatusEcosystemMiss: the record is malformed, empty, or
+	// does not have an affected[] entry for the target ecosystem.
+	StatusEcosystemMiss RecordStatus = iota
+	// StatusWithdrawn: the record is retracted in OSV. The
+	// production importer emits a tombstone in this case; the
+	// classifier returns an empty Record so callers do not have
+	// to discriminate.
+	StatusWithdrawn
+	// StatusRangesOnly: the affected entry carries only version
+	// ranges, no exact versions. The matcher consumes exact
+	// versions only, so the record is dropped from the snapshot.
+	StatusRangesOnly
+	// StatusNeither: the record has exact versions but fails both
+	// the high-confidence signal gate (MAL- prefix / OpenSSF
+	// origin) and the keyword gate. CVE-flavoured records land
+	// here and do not belong in a malicious-package snapshot.
+	StatusNeither
+	// StatusKept: the record survives the filter and becomes an
+	// intel.Record in the snapshot.
+	StatusKept
+)
+
+// ClassifyForEcosystem walks a raw OSV record and reports how a
+// single (target-ecosystem) affected entry would fare against the
+// importer's filter. It is the counters-friendly variant of
+// Import: production callers should use Import / ImportFromZip,
+// but measurement and diagnostic tooling (tools/measure-intel)
+// needs the per-status breakdown that Import collapses away.
+//
+// The function is pure and safe for concurrent use. Returns
+// (intel.Record{}, StatusEcosystemMiss) when the target ecosystem
+// is unknown to the registry or absent from the record.
+func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, RecordStatus) {
+	canon := canonicaliseEcosystem(targetEcosystem)
+	if canon == "" {
+		return intel.Record{}, StatusEcosystemMiss
+	}
+	var osv osvRecord
+	if err := json.Unmarshal(raw, &osv); err != nil {
+		return intel.Record{}, StatusEcosystemMiss
+	}
+	if osv.ID == "" || len(osv.Affected) == 0 {
+		return intel.Record{}, StatusEcosystemMiss
+	}
+	var aff *osvAffected
+	for i := range osv.Affected {
+		if canonicaliseEcosystem(osv.Affected[i].Package.Ecosystem) == canon {
+			aff = &osv.Affected[i]
+			break
+		}
+	}
+	if aff == nil {
+		return intel.Record{}, StatusEcosystemMiss
+	}
+	if osv.Withdrawn != "" {
+		return intel.Record{}, StatusWithdrawn
+	}
+	if len(aff.Versions) == 0 {
+		return intel.Record{}, StatusRangesOnly
+	}
+	if !hasHighConfidenceSignal(osv) && !hasKeywordMatch(osv) {
+		return intel.Record{}, StatusNeither
+	}
+	return intel.Record{
+		ID:         osv.ID,
+		Aliases:    append([]string(nil), osv.Aliases...),
+		Ecosystem:  canon,
+		Name:       aff.Package.Name,
+		Kind:       intel.KindMalicious,
+		Summary:    pickSummary(osv),
+		Versions:   append([]string(nil), aff.Versions...),
+		References: extractReferenceURLs(osv.References),
+	}, StatusKept
+}
+
 // buildEcosystemFilter returns a set keyed by the canonical
 // ecosystem identifier (matcher.go conventions). A nil return means
 // "do not filter".
@@ -270,7 +352,7 @@ func buildEcosystemFilter(allowed []string) (map[string]struct{}, error) {
 	for _, e := range allowed {
 		canon := canonicaliseEcosystem(e)
 		if canon == "" {
-			return nil, fmt.Errorf("osvimport: unsupported ecosystem %q (supported: npm, PyPI)", e)
+			return nil, fmt.Errorf("osvimport: unsupported ecosystem %q (supported: %s)", e, intel.SupportedEcosystemsHint())
 		}
 		out[canon] = struct{}{}
 	}
@@ -278,21 +360,14 @@ func buildEcosystemFilter(allowed []string) (map[string]struct{}, error) {
 }
 
 // canonicaliseEcosystem maps the assorted spellings OSV uses (and
-// that callers pass) onto the matcher's canonical identifiers. OSV
-// itself emits "npm" and "PyPI" with that exact casing; we accept
-// the lower-case alias so users who write `--ecosystem pypi` are
-// not surprised.
+// that callers pass) onto the matcher's canonical identifiers via
+// the intel package's ecosystem registry. OSV publishes "npm",
+// "PyPI", "Go", "crates.io", "Packagist", "RubyGems", "Maven",
+// "NuGet" with exact casing; the registry also accepts the
+// lower-case aliases and human-friendly synonyms (`python`,
+// `golang`, `rust`, `java`, `dotnet`, ...).
 func canonicaliseEcosystem(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "npm":
-		return intel.EcosystemNPM
-	case "pypi":
-		return intel.EcosystemPyPI
-	default:
-		// Future ecosystems land additively; lower-cased so a
-		// later matcher entry can resolve them.
-		return ""
-	}
+	return intel.CanonicaliseEcosystem(raw)
 }
 
 // hasHighConfidenceSignal returns true when the record carries a

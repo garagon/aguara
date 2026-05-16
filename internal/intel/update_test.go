@@ -309,7 +309,88 @@ func TestUpdateRejectsUnsupportedEcosystemEarly(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported ecosystem")
+	// The error message must list every supported choice so the
+	// user can recover from the typo without reading the source.
+	require.Contains(t, err.Error(), "npm")
+	require.Contains(t, err.Error(), "PyPI")
+	require.Contains(t, err.Error(), "Go")
+	require.Contains(t, err.Error(), "crates.io")
+	require.Contains(t, err.Error(), "Packagist")
+	require.Contains(t, err.Error(), "RubyGems")
+	require.Contains(t, err.Error(), "Maven")
+	require.Contains(t, err.Error(), "NuGet")
 	require.False(t, called, "no HTTP request should fire for an unsupported ecosystem")
+}
+
+// TestUpdateAcceptsAllEightCanonicalEcosystems exercises the URL
+// path for every registry entry. The importer is stubbed so no
+// real OSV traffic happens; the test verifies that Update builds
+// the right per-ecosystem URL using OSV's case-sensitive bucket
+// keys (PyPI not pypi, crates.io not Crates.io, etc.).
+func TestUpdateAcceptsAllEightCanonicalEcosystems(t *testing.T) {
+	canonicalIDs := []string{"npm", "PyPI", "Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"}
+
+	for _, id := range canonicalIDs {
+		t.Run(id, func(t *testing.T) {
+			var seenPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenPath = r.URL.Path
+				_, _ = w.Write([]byte("fake-zip"))
+			}))
+			defer srv.Close()
+
+			_, err := intel.Update(context.Background(), intel.UpdateOptions{
+				Ecosystems:  []string{id},
+				URLTemplate: srv.URL + "/%s/all.zip",
+				HTTPClient:  srv.Client(),
+				Importer:    importerStub(t, map[string]intel.Snapshot{id: {Records: []intel.Record{{ID: "MAL-" + id, Ecosystem: id, Name: "x", Versions: []string{"1.0.0"}}}}}),
+			})
+			require.NoError(t, err)
+			require.Equal(t, "/"+id+"/all.zip", seenPath, "must use OSV's case-sensitive bucket key")
+		})
+	}
+}
+
+// TestUpdateAcceptsCommonAliases covers the alias path. Users
+// reaching for "python" / "rust" / "java" / "dotnet" should get
+// the same canonical bucket as the corresponding ID.
+func TestUpdateAcceptsCommonAliases(t *testing.T) {
+	cases := []struct {
+		alias string
+		want  string // canonical bucket name in the URL
+	}{
+		{"python", "PyPI"},
+		{"PYTHON", "PyPI"},
+		{"rust", "crates.io"},
+		{"cargo", "crates.io"},
+		{"java", "Maven"},
+		{"dotnet", "NuGet"},
+		{"csharp", "NuGet"},
+		{"ruby", "RubyGems"},
+		{"gem", "RubyGems"},
+		{"php", "Packagist"},
+		{"composer", "Packagist"},
+		{"golang", "Go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alias, func(t *testing.T) {
+			var seenPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenPath = r.URL.Path
+				_, _ = w.Write([]byte("fake-zip"))
+			}))
+			defer srv.Close()
+
+			_, err := intel.Update(context.Background(), intel.UpdateOptions{
+				Ecosystems:  []string{tc.alias},
+				URLTemplate: srv.URL + "/%s/all.zip",
+				HTTPClient:  srv.Client(),
+				Importer:    importerStub(t, map[string]intel.Snapshot{tc.want: {Records: []intel.Record{{ID: "MAL-1", Ecosystem: tc.want, Name: "x", Versions: []string{"1.0.0"}}}}}),
+			})
+			require.NoError(t, err)
+			require.Equal(t, "/"+tc.want+"/all.zip", seenPath, "alias %q must canonicalise to %q", tc.alias, tc.want)
+		})
+	}
 }
 
 // TestUpdateSendsUserAgent locks the User-Agent header so OSV.dev
