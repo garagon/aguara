@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -192,10 +193,19 @@ func writeUpdateTerminal(res *intel.UpdateResult, snapshotPath string) error {
 // assertOutputNotShadowingStore returns an error if flagOutput
 // would resolve to the same on-disk file the intel.Store writes
 // the snapshot to. Compared by canonical absolute path so a
-// relative -o (or one with redundant separators) is caught too.
-// Symlink shenanigans across the two paths are out of scope: if
-// the user has set up a symlink farm pointing -o at the snapshot,
-// they have asked for trouble.
+// relative -o (or one with redundant separators) is caught.
+//
+// On case-insensitive filesystems (macOS HFS+/APFS, Windows
+// NTFS), `Snapshot.JSON` and `snapshot.json` resolve to the same
+// file even though the bytes differ; we fold case for the
+// comparison so the corruption guard fires for that scenario
+// too. Linux's ext4/xfs are case-sensitive by default and the
+// byte-for-byte compare is correct there; the case-fold path
+// stays gated on runtime.GOOS so we do not over-reject.
+//
+// Symlink shenanigans across the two paths are still out of
+// scope (a user who sets up a symlink farm pointing -o at the
+// snapshot has asked for trouble).
 //
 // Returns nil for the common case (no -o, or -o pointing
 // anywhere other than the snapshot path) so the rest of the
@@ -212,10 +222,42 @@ func assertOutputNotShadowingStore(out, storeDir string) error {
 	if err != nil {
 		return nil
 	}
-	if filepath.Clean(outAbs) == filepath.Clean(storeAbs) {
+	if pathsCollide(filepath.Clean(outAbs), filepath.Clean(storeAbs)) {
 		return fmt.Errorf("aguara update: --output %s would overwrite the threat-intel snapshot the command just wrote; pick a different path (the snapshot already lives there)", out)
 	}
 	return nil
+}
+
+// pathsCollide reports whether two canonical absolute paths
+// resolve to the same on-disk file under the host's filesystem
+// rules. macOS and Windows default to case-insensitive lookups,
+// so `Snapshot.JSON` and `snapshot.json` open the same file even
+// though the bytes differ. Linux ext4/xfs are case-sensitive by
+// default and the byte compare is sufficient there.
+func pathsCollide(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if isCaseInsensitiveFS() && strings.EqualFold(a, b) {
+		return true
+	}
+	return false
+}
+
+// isCaseInsensitiveFS reports whether the host's default
+// filesystem treats paths case-insensitively. macOS APFS CAN be
+// created case-sensitive, but the default (and the format every
+// homebrew/installer assumes) is case-insensitive; treating both
+// macOS and Windows as case-insensitive is the defensive choice
+// vs running data-corruption risk for the small minority of
+// case-sensitive macOS volumes.
+func isCaseInsensitiveFS() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	default:
+		return false
+	}
 }
 
 // osvImporterAdapter bridges intel.UpdateOptions.Importer (an

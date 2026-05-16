@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,34 @@ func TestAssertOutputNotShadowingStore(t *testing.T) {
 	err = assertOutputNotShadowingStore("snapshot.json", storeDir)
 	require.Error(t, err,
 		"a relative -o resolving to the snapshot path must collide too")
+}
+
+func TestAssertOutputNotShadowingStoreCaseInsensitive(t *testing.T) {
+	// Codex P2 round 2 (PR 3): on macOS/Windows, `Snapshot.JSON`
+	// and `snapshot.json` resolve to the same file even though
+	// the bytes differ. The guard MUST fire there too -- a
+	// byte-for-byte compare misses the collision and the writer
+	// overwrites the cache. On case-sensitive filesystems
+	// (Linux ext4/xfs default) the two are distinct files and
+	// the guard correctly does NOT fire.
+	storeDir := t.TempDir()
+
+	mixedCase := filepath.Join(storeDir, "Snapshot.JSON")
+	err := assertOutputNotShadowingStore(mixedCase, storeDir)
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		require.Error(t, err,
+			"case-insensitive FS must catch mixed-case -o that resolves to the same file")
+		require.Contains(t, err.Error(), "would overwrite")
+	default:
+		// Linux: case-sensitive default. Snapshot.JSON is a
+		// genuinely different file from snapshot.json, so the
+		// guard correctly returns nil. (A case-insensitive
+		// mount on Linux could fool this, but we mirror what
+		// the kernel's path-lookup actually does on the host.)
+		require.NoError(t, err,
+			"case-sensitive FS: Snapshot.JSON and snapshot.json are distinct files; guard must not over-reject")
+	}
 }
 
 func TestWriteUpdateTerminalRespectsOutputFile(t *testing.T) {
