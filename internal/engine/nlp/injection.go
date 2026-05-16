@@ -374,25 +374,42 @@ func checkDangerousCombos(section MarkdownSection, lines []string, target *scann
 	var findings []scanner.Finding
 	if credScore >= 1.0 && networkScore >= 1.2 {
 		comboScore := credScore + networkScore
-		findings = append(findings, makeFindingWithConfidence(
+		f := makeFindingWithConfidence(
 			"NLP_CRED_EXFIL_COMBO",
 			"Text combines credential access with network transmission",
 			scanner.SeverityCritical,
 			"exfiltration",
 			section, lines, target,
 			classifierConfidence(comboScore),
-		))
+		)
+		// MatchedText copies the section's raw prose (truncated to 200
+		// chars). When the section literally contains the credential
+		// value (e.g. `password = "hunter2"` plus `POST to attacker`),
+		// the secret rides along into JSON/SARIF unless we mark this
+		// finding sensitive so RedactSensitiveFindings scrubs it.
+		f.Sensitive = true
+		findings = append(findings, f)
 	}
 	if overrideScore >= 1.0 && (networkScore >= 1.0 || credScore >= 1.0) {
 		comboScore := overrideScore + max(networkScore, credScore)
-		findings = append(findings, makeFindingWithConfidence(
+		f := makeFindingWithConfidence(
 			"NLP_OVERRIDE_DANGEROUS",
 			"Instruction override combined with dangerous operations",
 			scanner.SeverityCritical,
 			"prompt-injection",
 			section, lines, target,
 			classifierConfidence(comboScore),
-		))
+		)
+		// When the credential-access signal contributed to the trigger,
+		// the section's raw prose embedded in MatchedText / Context can
+		// carry a real secret value. Mark sensitive so the redaction
+		// boundary scrubs it; the network-only path (override + transmit
+		// verbs alone, no cred references) is left as-is because its
+		// MatchedText is signature, not value.
+		if credScore >= 1.0 {
+			f.Sensitive = true
+		}
+		findings = append(findings, f)
 	}
 	return findings
 }

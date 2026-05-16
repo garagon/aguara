@@ -113,15 +113,19 @@ func WithStateDir(dir string) Option {
 	}
 }
 
-// WithRedaction controls whether matched text from credential-leak findings
-// is replaced with "[REDACTED]" in the returned Finding. Enabled by default
-// so secrets detected by CRED_* rules never appear in scan output, CI logs,
-// or SARIF artifacts uploaded to GitHub Code Scanning.
+// WithRedaction controls whether matched text from sensitive findings is
+// replaced with "[REDACTED]" in the returned Finding. Enabled by default so
+// secrets the scanner detects never appear in scan output, CI logs, or SARIF
+// artifacts uploaded to GitHub Code Scanning.
+//
+// A finding is redacted when its rule (YAML `sensitive: true`) or its
+// analyzer emit site (NLP_CRED_EXFIL_COMBO, toxicflow cred-bound pairs)
+// marked it Sensitive, OR when its Category is "credential-leak" (legacy
+// contract preserved for custom rules predating the Sensitive flag).
 //
 // Disable only when the consumer needs the raw match to programmatically
 // verify or act on the detected secret (e.g. a remediation pipeline that
 // cross-references the leak against a credential rotation tracker).
-// Rules outside the credential-leak category are never redacted.
 func WithRedaction(enabled bool) Option {
 	return func(c *scanConfig) {
 		c.redact = enabled

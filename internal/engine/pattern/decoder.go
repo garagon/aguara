@@ -382,6 +382,7 @@ func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Ta
 					Context:     types.ExtractContext(origLines, origLine, ctxRadius, ctxRadius),
 					Analyzer:    "pattern-decoder",
 					InCodeBlock: inCB,
+					Sensitive:   rule.Sensitive,
 					Confidence:  0.90,
 				})
 			}

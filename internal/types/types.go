@@ -95,6 +95,16 @@ type Finding struct {
 	Remediation string        `json:"remediation,omitempty"`
 	Analyzer    string        `json:"analyzer"`
 	InCodeBlock bool          `json:"in_code_block,omitempty"`
+	// Sensitive marks findings whose MatchedText / matching context line is
+	// expected to capture a real secret value (a credential read combined
+	// with a transmission verb, a cred+exfil NLP combo, a toxic-flow pair
+	// rooted in private-data access). RedactSensitiveFindings scrubs these
+	// before they reach JSON, SARIF, or terminal output so the scanner does
+	// not create a second copy of the secret in CI logs or uploaded
+	// artifacts. The flag is independent of Category so a rule outside the
+	// "credential-leak" category (MCP_007, NLP_CRED_EXFIL_COMBO, TOXIC_*
+	// cred-bound) can still opt into redaction.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // RedactedPlaceholder is the value that replaces matched text and matching
@@ -102,26 +112,92 @@ type Finding struct {
 // stable string so JSON/SARIF consumers can grep for it consistently.
 const RedactedPlaceholder = "[REDACTED]"
 
-// RedactCredentialFindings scrubs matched text and matching context lines for
-// findings in the credential-leak category so that detecting a secret does not
-// create a second copy of the secret in scan output, CI logs, or SARIF
-// artifacts uploaded to GitHub Code Scanning.
+// RedactSensitiveFindings scrubs matched text and context lines for findings
+// that are known to carry a real secret value: either the rule / analyzer set
+// Sensitive == true, or the legacy category-based contract
+// (Category == "credential-leak") still applies. Other findings are left
+// intact because their match is typically a pattern signature rather than a
+// secret.
 //
-// Only findings with Category == "credential-leak" are modified. Other
-// categories are left intact because their match is typically a pattern
-// signature rather than a secret.
-func RedactCredentialFindings(findings []Finding) {
+// Context redaction differs by source. Sensitive findings treat their entire
+// Context window as secret-bearing because either (a) the analyzer's
+// MatchedText is a multi-line section / file blob (NLP, toxicflow) or
+// (b) a pattern matcher rule with match_mode: all can land its secondary
+// pattern hit on a non-IsMatch context line (EXFIL_013's `read .env` hits
+// line 1, its `transmit to endpoint` hits line 2, and line 2 is then a
+// non-IsMatch context line carrying the secret). The legacy credential-leak
+// category only scrubs the IsMatch line, preserving the existing
+// surrounding-line view that pre-Sensitive consumers rely on.
+//
+// The category fallback exists so custom rules authored before the Sensitive
+// flag existed keep redacting — dropping it would silently regress every user
+// who relied on category == "credential-leak" to gate redaction.
+//
+// A second pass scrubs sensitive lines across every finding's Context. Two
+// findings can share a Context window (a credential-leak hit on line 5 + a
+// prompt-injection hit on line 7 both pull lines 2-10 via ExtractContext);
+// without the second pass the prompt-injection finding would still serialize
+// the line 5 secret even though the credential-leak finding got redacted.
+func RedactSensitiveFindings(findings []Finding) {
+	// Pass 1: redact each Sensitive / credential-leak finding's own
+	// MatchedText + Context, and record which (FilePath, Line) tuples
+	// are now considered secret-bearing.
+	type fileLine struct {
+		path string
+		line int
+	}
+	sensitiveLines := make(map[fileLine]bool)
 	for i := range findings {
-		if findings[i].Category != "credential-leak" {
+		isSensitive := findings[i].Sensitive
+		isLegacyCred := findings[i].Category == "credential-leak"
+		if !isSensitive && !isLegacyCred {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
 		for j := range findings[i].Context {
-			if findings[i].Context[j].IsMatch {
-				findings[i].Context[j].Content = RedactedPlaceholder
+			cl := &findings[i].Context[j]
+			if isSensitive {
+				// Sensitive findings can carry the secret on a
+				// non-IsMatch context line (multi-line analyzer
+				// section, or a match_mode: all rule whose
+				// secondary pattern hit lands on a context line).
+				// Scrub the whole window AND mark every line for
+				// cross-finding redaction.
+				cl.Content = RedactedPlaceholder
+				sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] = true
+				continue
+			}
+			if cl.IsMatch {
+				cl.Content = RedactedPlaceholder
+				sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] = true
 			}
 		}
 	}
+
+	if len(sensitiveLines) == 0 {
+		return
+	}
+
+	// Pass 2: for every finding (including non-sensitive ones), scrub
+	// Context lines whose (FilePath, Line) was marked sensitive in pass 1.
+	for i := range findings {
+		for j := range findings[i].Context {
+			cl := &findings[i].Context[j]
+			if sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] {
+				cl.Content = RedactedPlaceholder
+			}
+		}
+	}
+}
+
+// RedactCredentialFindings is the previous name of RedactSensitiveFindings,
+// kept as an alias so library consumers pinned to the old API keep compiling.
+//
+// Deprecated: use RedactSensitiveFindings. Behaviour is identical — the new
+// name also covers findings flagged Sensitive == true by rules or analyzers
+// outside the "credential-leak" category.
+func RedactCredentialFindings(findings []Finding) {
+	RedactSensitiveFindings(findings)
 }
 
 // DowngradeSeverity drops severity by one level, flooring at LOW.

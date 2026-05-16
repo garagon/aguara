@@ -39,6 +39,8 @@ func NewCrossFileAnalyzer() *CrossFileAnalyzer {
 }
 
 // crossFileToxicPairs define cross-file toxic combinations.
+// sensitive mirrors toxicPairs: true when the "a" side reads private data,
+// so the matched text quoting both files can include secret values.
 var crossFileToxicPairs = []toxicPair{
 	{
 		a:           readsPrivateData,
@@ -46,6 +48,7 @@ var crossFileToxicPairs = []toxicPair{
 		ruleID:      "TOXIC_CROSS_001",
 		name:        "Cross-file: private data read with public output",
 		description: "One file reads private data while another in the same directory writes to public channels. This combination enables data exfiltration across tool boundaries.",
+		sensitive:   true,
 	},
 	{
 		a:           readsPrivateData,
@@ -53,6 +56,7 @@ var crossFileToxicPairs = []toxicPair{
 		ruleID:      "TOXIC_CROSS_002",
 		name:        "Cross-file: private data read with code execution",
 		description: "One file reads private data while another in the same directory executes arbitrary code. This combination enables credential theft across tool boundaries.",
+		sensitive:   true,
 	},
 	{
 		a:           destructive,
@@ -142,6 +146,7 @@ func (c *CrossFileAnalyzer) Finalize() []types.Finding {
 						Line:        b.line,
 						MatchedText: matchedText,
 						Analyzer:    "toxicflow-crossfile",
+						Sensitive:   tp.sensitive,
 						Confidence:  0.85,
 					})
 

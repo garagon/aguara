@@ -138,6 +138,7 @@ severity: MEDIUM
 category: mcp-attack
 targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt", "*.py", "*.js", "*.ts"]
 match_mode: all
+sensitive: true
 remediation: "Isolate credential-reading tools from network-capable tools. Apply per-tool output scoping to prevent cross-tool data flow."
 patterns:
   - type: regex

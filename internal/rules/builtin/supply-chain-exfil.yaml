@@ -36,6 +36,7 @@ severity: CRITICAL
 category: supply-chain-exfil
 targets: ["*.py"]
 match_mode: all
+sensitive: true
 remediation: "Do not encode or encrypt file contents for external transmission. If encryption is needed for legitimate storage, use well-known libraries with documented key management."
 patterns:
   - type: regex
@@ -56,6 +57,7 @@ severity: CRITICAL
 category: supply-chain-exfil
 targets: ["*.py"]
 match_mode: all
+sensitive: true
 remediation: "Do not transmit environment variables over the network. Access only the specific variables you need with os.environ.get()."
 patterns:
   - type: regex
