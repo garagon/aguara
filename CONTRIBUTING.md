@@ -144,7 +144,13 @@ CI currently does not gate on self-scan output; rule coverage is asserted by the
 
 ## Release Process
 
-After merging the release PR (`release/vX.Y.Z`) and tagging:
+**Before** tagging, run the pin-check script against the new version. Several files hardcode the current release tag (the scaffolded `aguara init` workflow, the action's `DEFAULT_REF`, the install.sh acceptance target, and the README install snippets). Bumping ONLY the git tag while leaving any of these on the old version ships a release whose first-touch UX still points at the prior version — PR #92 was that exact regression.
+
+```bash
+VERSION=vX.Y.Z .github/scripts/check-version-pins.sh
+```
+
+The script exits non-zero with a per-location `DRIFT:` report listing every file that still references the prior version. Fix each one in the release commit, re-run until it exits 0, then tag:
 
 ```bash
 git tag vX.Y.Z && git push origin vX.Y.Z
