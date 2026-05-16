@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.1 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.2 sh
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
@@ -73,7 +73,7 @@ To update an existing install, rerun the installer. It downloads the selected re
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 
 # Update/pin to a specific release
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.1 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.2 sh
 ```
 
 ### Alternative methods
@@ -276,29 +276,29 @@ aguara scan --auto
 #### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.16.1
+- uses: garagon/aguara@v0.16.2
   with:
     path: .
     fail-on: high
-    version: v0.16.1
+    version: v0.16.2
 ```
 
 Both pins (the action ref AND the `version:` input) are required. The
 action ref alone pins only the composite action and its install
 script; `version:` pins the Aguara binary the action installs. Setting
 both makes the workflow reproducible and dependabot-friendly: when
-v0.16.2 lands, the bot updates both together.
+v0.16.3 lands, the bot updates both together.
 
 Scans your repository, uploads findings to GitHub Code Scanning, and
 optionally fails the build:
 
 ```yaml
-- uses: garagon/aguara@v0.16.1
+- uses: garagon/aguara@v0.16.2
   with:
     path: ./mcp-server/
     severity: medium
     fail-on: high
-    version: v0.16.1
+    version: v0.16.2
 ```
 
 All inputs are optional. See [`action.yml`](action.yml) for the full list.

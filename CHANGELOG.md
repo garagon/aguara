@@ -5,6 +5,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-05-16
+
+Patch release. Closes the P1 secret-leak found in the v0.16.1 security audit.
+
+### Fixed
+
+- Aguara previously redacted findings only when `Category == "credential-leak"`. That missed credential-bearing findings emitted under other categories: `MCP_007` (mcp-attack), `NLP_CRED_EXFIL_COMBO` (exfiltration), toxic-flow credential-bound pairs (`TOXIC_001/002`, `TOXIC_CROSS_001/002`), and selected exfiltration / supply-chain exfil pattern rules. Those findings could copy raw secrets into `matched_text`, `context`, and SARIF `message.text`, so CI logs or GitHub Code Scanning artifacts became a second copy of the secret. (#97)
+- Cross-finding context bleed: a non-sensitive finding whose context window overlapped a sensitive sibling's match line no longer serializes that line raw.
+- Dedup-survivor leak: when a non-sensitive finding outranks a sensitive one on the same line at dedup time, the survivor now inherits the redaction obligation.
+
+### Changed
+
+- `types.Finding` gains an optional `Sensitive bool` (`"sensitive"` in JSON, emitted only when true).
+- YAML rules can opt in to redaction via `sensitive: true`. Analyzer emit sites (`NLP_CRED_EXFIL_COMBO`, `NLP_OVERRIDE_DANGEROUS` when credentials contribute, `TOXIC_*` cred-bound) mark findings sensitive inline.
+- `types.RedactCredentialFindings` is renamed to `RedactSensitiveFindings`; the old name is kept as a deprecated alias so library consumers keep compiling. Backward compatible: `Category == "credential-leak"` still triggers redaction even without the new flag.
+- `--no-redact` / `WithRedaction(false)` remain the explicit raw-output escape hatch.
+
+### Known follow-ups (v0.16.3)
+
+- `match_mode: all` rules whose secondary pattern hit lands more than ~3 lines from the anchor: that line is outside the recorded sensitive set. Will need `Finding.MatchedLines []int` plumbing.
+- Sensitive findings dropped by the `--severity` filter before redaction can leave their secret lines unmarked in surviving findings' context windows. Will need to collect sensitive lines inside `scanner.postProcess` before the severity filter.
+
 ## [0.16.1] - 2026-05-16
 
 Patch release for v0.16.0 focused on onboarding, CLI output contracts, and release hygiene.
