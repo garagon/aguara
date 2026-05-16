@@ -107,13 +107,19 @@ fi
 # that scenario because the count threshold was satisfied.
 stale_readme=$(grep -nE "VERSION=v[0-9]+\.[0-9]+\.[0-9]+ sh" README.md | grep -v "VERSION=$VERSION sh" || true)
 if [ -n "$stale_readme" ]; then
-  printf '%s\n' "$stale_readme" | while IFS= read -r line; do
+  # Use a here-doc to feed the while loop instead of a pipe. A
+  # pipe spawns the right-hand side in a subshell, so 'report'
+  # would bump a copy of drift_count that vanishes when the
+  # subshell exits -- the parent's count then under-reports the
+  # number of locations the maintainer has to fix. The here-doc
+  # keeps the loop in the current shell so each stale snippet
+  # increments drift_count for real.
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
     report "README.md:$line (must pin to $VERSION)"
-  done
-  # The pipeline above runs in a subshell; drift_count increments
-  # there do not propagate to the parent. Add a single sentinel
-  # bump here so the overall exit reflects the README drift.
-  drift_count=$((drift_count + 1))
+  done <<EOF
+$stale_readme
+EOF
 fi
 
 # Sanity: if README has ZERO matching snippets at all, even after
