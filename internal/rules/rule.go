@@ -38,13 +38,19 @@ type RawExamples struct {
 
 // RawRule is the YAML representation of a detection rule.
 type RawRule struct {
-	ID              string       `yaml:"id"`
-	Name            string       `yaml:"name"`
-	Description     string       `yaml:"description"`
-	Severity        string       `yaml:"severity"`
-	Category        string       `yaml:"category"`
-	Targets         []string     `yaml:"targets"`
-	MatchMode       string       `yaml:"match_mode"`
+	ID          string   `yaml:"id"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Severity    string   `yaml:"severity"`
+	Category    string   `yaml:"category"`
+	Targets     []string `yaml:"targets"`
+	MatchMode   string   `yaml:"match_mode"`
+	// Sensitive marks rules whose match captures a real secret value
+	// (credential read combined with a transmission sink, cross-tool
+	// data leak, exfil chain). The scanner copies this flag onto every
+	// emitted Finding so RedactSensitiveFindings can scrub MatchedText
+	// and the matching context line before JSON/SARIF output.
+	Sensitive       bool         `yaml:"sensitive"`
 	Patterns        []RawPattern `yaml:"patterns"`
 	ExcludePatterns []RawPattern `yaml:"exclude_patterns"`
 	Remediation     string       `yaml:"remediation"`
@@ -67,6 +73,7 @@ type CompiledRule struct {
 	Category        string
 	Targets         []string
 	MatchMode       MatchMode
+	Sensitive       bool
 	Patterns        []CompiledPattern
 	ExcludePatterns []CompiledPattern
 	Remediation     string

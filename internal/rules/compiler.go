@@ -41,6 +41,7 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		Category:    raw.Category,
 		Targets:     raw.Targets,
 		MatchMode:   mode,
+		Sensitive:   raw.Sensitive,
 		Remediation: raw.Remediation,
 		Examples:    raw.Examples,
 	}

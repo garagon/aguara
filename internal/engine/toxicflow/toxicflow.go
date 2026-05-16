@@ -69,11 +69,17 @@ var classifiers = []capPattern{
 }
 
 // toxicPair defines a dangerous combination of capabilities.
+//
+// sensitive is true when the "a" side of the pair reads private data: the
+// matched text concatenates literal substrings around credential / SSH / env
+// paths, so the finding's MatchedText and matching context line can leak the
+// secret value into JSON/SARIF unless redacted.
 type toxicPair struct {
 	a, b        capability
 	ruleID      string
 	name        string
 	description string
+	sensitive   bool
 }
 
 var toxicPairs = []toxicPair{
@@ -83,6 +89,7 @@ var toxicPairs = []toxicPair{
 		ruleID:      "TOXIC_001",
 		name:        "Private data read with public output",
 		description: "Skill can read private data (credentials, SSH keys, env vars) AND write to public channels (Slack, Discord, email). This combination enables data exfiltration.",
+		sensitive:   true,
 	},
 	{
 		a:           readsPrivateData,
@@ -90,6 +97,7 @@ var toxicPairs = []toxicPair{
 		ruleID:      "TOXIC_002",
 		name:        "Private data read with code execution",
 		description: "Skill can read private data AND execute arbitrary code. This combination enables credential theft via dynamic code.",
+		sensitive:   true,
 	},
 	{
 		a:           destructive,
@@ -158,6 +166,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			Line:        line,
 			MatchedText: matchedText,
 			Analyzer:    "toxicflow",
+			Sensitive:   tp.sensitive,
 			Confidence:  0.90,
 		})
 	}

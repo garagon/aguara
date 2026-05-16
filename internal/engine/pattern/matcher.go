@@ -223,6 +223,7 @@ func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent strin
 				Context:     types.ExtractContext(lines, hit.line, ctxRadius, ctxRadius),
 				Analyzer:    "pattern",
 				InCodeBlock: inCB,
+				Sensitive:   rule.Sensitive,
 				Confidence:  0.85, // placeholder, updated below
 			})
 		}
@@ -276,6 +277,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content, lowerContent strin
 		Context:     types.ExtractContext(lines, firstHit.line, ctxRadius, ctxRadius),
 		Analyzer:    "pattern",
 		InCodeBlock: inCB,
+		Sensitive:   rule.Sensitive,
 		Confidence:  0.95,
 	}}
 }

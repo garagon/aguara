@@ -140,7 +140,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if !flagNoRedact {
-		types.RedactCredentialFindings(result.Findings)
+		types.RedactSensitiveFindings(result.Findings)
 	}
 
 	if err := writeOutput(result); err != nil {
@@ -223,7 +223,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	}
 
 	if !flagNoRedact {
-		types.RedactCredentialFindings(aggregate.Findings)
+		types.RedactSensitiveFindings(aggregate.Findings)
 	}
 
 	if err := writeOutput(aggregate); err != nil {

@@ -128,7 +128,7 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 	}
 	result.RulesLoaded = len(compiled)
 	if cfg.redact {
-		redactCredentialFindings(result.Findings)
+		redactSensitiveFindings(result.Findings)
 	}
 	return result, nil
 }
@@ -174,7 +174,7 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	}
 	result.RulesLoaded = len(compiled)
 	if cfg.redact {
-		redactCredentialFindings(result.Findings)
+		redactSensitiveFindings(result.Findings)
 	}
 	return result, nil
 }
@@ -316,7 +316,7 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 	}
 	result.RulesLoaded = len(sc.compiled)
 	if sc.cfg.redact {
-		redactCredentialFindings(result.Findings)
+		redactSensitiveFindings(result.Findings)
 	}
 	return result, nil
 }
@@ -333,7 +333,7 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 	}
 	result.RulesLoaded = len(sc.compiled)
 	if sc.cfg.redact {
-		redactCredentialFindings(result.Findings)
+		redactSensitiveFindings(result.Findings)
 	}
 	return result, nil
 }
@@ -467,17 +467,21 @@ func applyOpts(opts []Option) *scanConfig {
 	return cfg
 }
 
-// redactCredentialFindings scrubs matched text and context for findings in the
-// credential-leak category. Detecting a secret and then writing it verbatim to
-// terminal, JSON, SARIF, or -o output defeats the purpose of detection: the
-// finding artifact becomes a second copy of the secret, often with weaker
-// access controls than the original file (CI logs, GitHub Code Scanning,
-// Slack notifications, etc.).
+// redactSensitiveFindings scrubs matched text and the matching context line
+// for findings the rule or analyzer marked Sensitive (cred+exfil combos,
+// toxic-flow cred reads, the NLP credential-transmission combo), plus the
+// legacy credential-leak category for backward compatibility with custom
+// rules predating the Sensitive flag.
 //
-// Delegates to types.RedactCredentialFindings so the CLI and library share a
-// single implementation. Only credential-leak findings are altered.
-func redactCredentialFindings(findings []Finding) {
-	types.RedactCredentialFindings(findings)
+// Detecting a secret and then writing it verbatim to terminal, JSON, SARIF,
+// or -o output defeats the purpose of detection: the finding artifact becomes
+// a second copy of the secret, often with weaker access controls than the
+// original file (CI logs, GitHub Code Scanning, Slack notifications, etc.).
+//
+// Delegates to types.RedactSensitiveFindings so the CLI and library share a
+// single implementation.
+func redactSensitiveFindings(findings []Finding) {
+	types.RedactSensitiveFindings(findings)
 }
 
 type compileResult struct {

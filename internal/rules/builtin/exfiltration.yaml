@@ -50,6 +50,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+sensitive: true
 remediation: "Remove commands that transmit secrets externally. Use a secrets manager and restrict outbound network access."
 patterns:
   - type: regex
@@ -75,6 +76,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+sensitive: true
 remediation: "Remove DNS-based data exfiltration commands. Restrict DNS resolution to trusted resolvers only."
 patterns:
   - type: regex
@@ -97,6 +99,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+sensitive: true
 remediation: "Remove curl/wget commands that POST sensitive files. Use an API client with an allowlist of safe endpoints instead."
 patterns:
   - type: regex
@@ -142,6 +145,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+sensitive: true
 remediation: "Never pipe environment variables to network commands. Access only specific, non-secret variables when needed."
 patterns:
   - type: regex
@@ -167,6 +171,7 @@ severity: HIGH
 category: exfiltration
 targets: []
 match_mode: any
+sensitive: true
 remediation: "Remove file-to-network pipes. If data must be sent, use an allowlist of permitted files and destinations."
 patterns:
   - type: regex

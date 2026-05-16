@@ -95,6 +95,16 @@ type Finding struct {
 	Remediation string        `json:"remediation,omitempty"`
 	Analyzer    string        `json:"analyzer"`
 	InCodeBlock bool          `json:"in_code_block,omitempty"`
+	// Sensitive marks findings whose MatchedText / matching context line is
+	// expected to capture a real secret value (a credential read combined
+	// with a transmission verb, a cred+exfil NLP combo, a toxic-flow pair
+	// rooted in private-data access). RedactSensitiveFindings scrubs these
+	// before they reach JSON, SARIF, or terminal output so the scanner does
+	// not create a second copy of the secret in CI logs or uploaded
+	// artifacts. The flag is independent of Category so a rule outside the
+	// "credential-leak" category (MCP_007, NLP_CRED_EXFIL_COMBO, TOXIC_*
+	// cred-bound) can still opt into redaction.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // RedactedPlaceholder is the value that replaces matched text and matching
@@ -102,17 +112,19 @@ type Finding struct {
 // stable string so JSON/SARIF consumers can grep for it consistently.
 const RedactedPlaceholder = "[REDACTED]"
 
-// RedactCredentialFindings scrubs matched text and matching context lines for
-// findings in the credential-leak category so that detecting a secret does not
-// create a second copy of the secret in scan output, CI logs, or SARIF
-// artifacts uploaded to GitHub Code Scanning.
+// RedactSensitiveFindings scrubs matched text and the matching context line
+// for findings that are known to carry a real secret value: either the rule /
+// analyzer set Sensitive == true, or the legacy category-based contract
+// (Category == "credential-leak") still applies. Other findings are left
+// intact because their match is typically a pattern signature rather than a
+// secret.
 //
-// Only findings with Category == "credential-leak" are modified. Other
-// categories are left intact because their match is typically a pattern
-// signature rather than a secret.
-func RedactCredentialFindings(findings []Finding) {
+// The category fallback exists so custom rules authored before the Sensitive
+// flag existed keep redacting — dropping it would silently regress every user
+// who relied on category == "credential-leak" to gate redaction.
+func RedactSensitiveFindings(findings []Finding) {
 	for i := range findings {
-		if findings[i].Category != "credential-leak" {
+		if !findings[i].Sensitive && findings[i].Category != "credential-leak" {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
@@ -122,6 +134,16 @@ func RedactCredentialFindings(findings []Finding) {
 			}
 		}
 	}
+}
+
+// RedactCredentialFindings is the previous name of RedactSensitiveFindings,
+// kept as an alias so library consumers pinned to the old API keep compiling.
+//
+// Deprecated: use RedactSensitiveFindings. Behaviour is identical — the new
+// name also covers findings flagged Sensitive == true by rules or analyzers
+// outside the "credential-leak" category.
+func RedactCredentialFindings(findings []Finding) {
+	RedactSensitiveFindings(findings)
 }
 
 // DowngradeSeverity drops severity by one level, flooring at LOW.
