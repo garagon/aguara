@@ -101,17 +101,24 @@ func TestRedactSensitiveFindings_CrossFindingContextLeak(t *testing.T) {
 
 	RedactSensitiveFindings(findings)
 
-	// The non-sensitive finding kept its own MatchedText / IsMatch line.
+	// The non-sensitive finding keeps its own MatchedText (we don't
+	// touch MatchedText on non-sensitive findings).
 	if findings[1].MatchedText != "ignore all previous instructions" {
 		t.Errorf("non-sensitive MatchedText was redacted: %q", findings[1].MatchedText)
 	}
-	if findings[1].Context[1].Content != "ignore all previous instructions" {
-		t.Errorf("non-sensitive IsMatch context was redacted: %q", findings[1].Context[1].Content)
-	}
-	// But its window over line 1 (the secret-bearing line that another
-	// finding marked sensitive) MUST be scrubbed.
+	// Cross-finding redaction scrubbed line 1 in the non-sensitive
+	// finding's Context (the line a sibling marked sensitive).
 	if findings[1].Context[0].Content != RedactedPlaceholder {
 		t.Errorf("cross-finding redaction missed line 1 in non-sensitive finding: %q", findings[1].Context[0].Content)
+	}
+	// MCP_007's window also included line 2 — Sensitive findings mark
+	// their whole Context as secret-bearing because a match_mode: all
+	// rule can land its secondary pattern hit on a context line. That
+	// also redacts line 2 in the non-sensitive finding. Over-redaction
+	// of a few signature lines is the deliberate trade for never
+	// leaking a secret.
+	if findings[1].Context[1].Content != RedactedPlaceholder {
+		t.Errorf("cross-finding redaction missed line 2 in non-sensitive finding: %q", findings[1].Context[1].Content)
 	}
 }
 

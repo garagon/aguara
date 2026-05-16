@@ -119,13 +119,15 @@ const RedactedPlaceholder = "[REDACTED]"
 // intact because their match is typically a pattern signature rather than a
 // secret.
 //
-// Context redaction differs by source. Analyzer-emitted Sensitive findings
-// (nlp-injection, toxicflow, toxicflow-crossfile) treat their entire Context
-// window as secret-bearing because their MatchedText is a multi-line section
-// / file blob — the secret can sit on a non-IsMatch context line. Single-
-// line Sensitive findings (pattern matcher) and the legacy credential-leak
-// category scrub only the IsMatch line so the surrounding-line view used by
-// reviewers stays intact.
+// Context redaction differs by source. Sensitive findings treat their entire
+// Context window as secret-bearing because either (a) the analyzer's
+// MatchedText is a multi-line section / file blob (NLP, toxicflow) or
+// (b) a pattern matcher rule with match_mode: all can land its secondary
+// pattern hit on a non-IsMatch context line (EXFIL_013's `read .env` hits
+// line 1, its `transmit to endpoint` hits line 2, and line 2 is then a
+// non-IsMatch context line carrying the secret). The legacy credential-leak
+// category only scrubs the IsMatch line, preserving the existing
+// surrounding-line view that pre-Sensitive consumers rely on.
 //
 // The category fallback exists so custom rules authored before the Sensitive
 // flag existed keep redacting — dropping it would silently regress every user
@@ -152,14 +154,15 @@ func RedactSensitiveFindings(findings []Finding) {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
-		multiLine := isSensitive && multiLineAnalyzers[findings[i].Analyzer]
 		for j := range findings[i].Context {
 			cl := &findings[i].Context[j]
-			if multiLine {
-				// Analyzer findings span multiple source lines; the
-				// secret may sit on a non-IsMatch context line, so
-				// scrub the whole block AND mark every line in the
-				// window for cross-finding redaction.
+			if isSensitive {
+				// Sensitive findings can carry the secret on a
+				// non-IsMatch context line (multi-line analyzer
+				// section, or a match_mode: all rule whose
+				// secondary pattern hit lands on a context line).
+				// Scrub the whole window AND mark every line for
+				// cross-finding redaction.
 				cl.Content = RedactedPlaceholder
 				sensitiveLines[fileLine{findings[i].FilePath, cl.Line}] = true
 				continue
@@ -185,17 +188,6 @@ func RedactSensitiveFindings(findings []Finding) {
 			}
 		}
 	}
-}
-
-// multiLineAnalyzers names the analyzers whose emitted Finding's MatchedText
-// is a multi-line section / file blob rather than a single-line regex hit.
-// For these, the secret can sit on any line in the Context window, not just
-// the IsMatch one, so RedactSensitiveFindings widens the per-finding scrub
-// and the cross-finding sensitive-line set.
-var multiLineAnalyzers = map[string]bool{
-	"nlp-injection":       true,
-	"toxicflow":           true,
-	"toxicflow-crossfile": true,
 }
 
 // RedactCredentialFindings is the previous name of RedactSensitiveFindings,
