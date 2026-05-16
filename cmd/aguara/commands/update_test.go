@@ -1,0 +1,253 @@
+package commands
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/garagon/aguara/internal/intel"
+	"github.com/stretchr/testify/require"
+)
+
+// makeUpdateResult builds a minimal intel.UpdateResult for the
+// writer tests. Pure: no HTTP, no Store, no filesystem beyond
+// what each test arranges itself.
+func makeUpdateResult(records int, generated time.Time) *intel.UpdateResult {
+	return &intel.UpdateResult{
+		Snapshot: intel.Snapshot{
+			SchemaVersion: intel.CurrentSchemaVersion,
+			GeneratedAt:   generated,
+			Records:       make([]intel.Record, records),
+		},
+		PerEcosystem: []intel.EcosystemResult{
+			{Ecosystem: intel.EcosystemNPM, RecordsKept: 10, BytesRead: 1024, DownloadedAt: generated},
+			{Ecosystem: intel.EcosystemPyPI, RecordsKept: 5, BytesRead: 512, DownloadedAt: generated},
+		},
+	}
+}
+
+// captureStdoutBytes redirects os.Stdout to a temp file for the
+// duration of a test and returns the captured bytes. The update
+// writers write to os.Stdout directly (not cobra's SetOut, since
+// they format machine-readable output), so this is the right
+// hook to assert on. Mirrors the helper in status_test.go.
+func captureStdoutBytes(t *testing.T, fn func()) []byte {
+	t.Helper()
+	orig := os.Stdout
+	tmp, err := os.CreateTemp(t.TempDir(), "stdout-*.txt")
+	require.NoError(t, err)
+	os.Stdout = tmp
+	defer func() {
+		os.Stdout = orig
+		_ = tmp.Close()
+	}()
+	fn()
+	_ = tmp.Sync()
+	data, err := os.ReadFile(tmp.Name())
+	require.NoError(t, err)
+	return data
+}
+
+func TestWriteUpdateJSONShape(t *testing.T) {
+	// QA on v0.16.0 reported `aguara update --format json` emits
+	// human-readable output. PR 3 contract: --format json must
+	// emit a stable JSON shape the spec defined ({snapshot_path,
+	// records, generated_at, per_ecosystem:[...]}) and nothing
+	// else on stdout.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagFormat = "json"
+	flagOutput = ""
+
+	res := makeUpdateResult(15, time.Date(2026, time.May, 15, 12, 0, 0, 0, time.UTC))
+	snapshotPath := "/home/user/.aguara/intel/snapshot.json"
+
+	out := captureStdoutBytes(t, func() {
+		require.NoError(t, writeUpdateOutput(res, filepath.Dir(snapshotPath)))
+	})
+
+	// 1) Must parse as JSON.
+	var parsed updateOutput
+	require.NoError(t, json.Unmarshal(out, &parsed),
+		"--format json must produce parseable JSON, not human text. got: %s", string(out))
+
+	// 2) Field shape matches the spec.
+	require.Equal(t, snapshotPath, parsed.SnapshotPath)
+	require.Equal(t, 15, parsed.Records)
+	require.Equal(t, time.Date(2026, time.May, 15, 12, 0, 0, 0, time.UTC), parsed.GeneratedAt.UTC())
+	require.Len(t, parsed.PerEcosystem, 2)
+	require.Equal(t, intel.EcosystemNPM, parsed.PerEcosystem[0].Ecosystem)
+	require.Equal(t, 10, parsed.PerEcosystem[0].RecordsKept)
+	require.Equal(t, int64(1024), parsed.PerEcosystem[0].BytesRead)
+	require.Equal(t, intel.EcosystemPyPI, parsed.PerEcosystem[1].Ecosystem)
+
+	// 3) No human-readable lines leaked in. The legacy terminal
+	// output starts with "Aguara threat intel updated"; that
+	// string must NOT appear in JSON-mode output even as a
+	// stray Fprintf.
+	require.NotContains(t, string(out), "Aguara threat intel updated",
+		"--format json must not emit the human-readable header line")
+	require.NotContains(t, string(out), "Written:",
+		"--format json must not emit the human-readable 'Written:' line")
+}
+
+func TestWriteUpdateJSONEmptyPerEcosystem(t *testing.T) {
+	// A run with no ecosystems (unusual but possible if a future
+	// configuration filters all of them out) must still emit a
+	// VALID JSON document with per_ecosystem as an empty array,
+	// not null. Stable shape for typed consumers.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagFormat = "json"
+
+	res := &intel.UpdateResult{
+		Snapshot: intel.Snapshot{
+			SchemaVersion: intel.CurrentSchemaVersion,
+			GeneratedAt:   time.Unix(0, 0).UTC(),
+		},
+	}
+	out := captureStdoutBytes(t, func() {
+		require.NoError(t, writeUpdateOutput(res, "/tmp"))
+	})
+	require.Contains(t, string(out), `"per_ecosystem": []`,
+		"empty per_ecosystem must serialise as [] not null; got: %s", string(out))
+}
+
+func TestWriteUpdateJSONToFile(t *testing.T) {
+	// --format json combined with -o must redirect the JSON to
+	// the file AND leave stdout clean. Critical for automation:
+	// callers tee output and pipe stdout; spurious bytes on
+	// stdout corrupt their pipeline.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagFormat = "json"
+	outFile := filepath.Join(t.TempDir(), "update.json")
+	flagOutput = outFile
+
+	res := makeUpdateResult(20, time.Date(2026, time.May, 15, 0, 0, 0, 0, time.UTC))
+
+	stdoutBytes := captureStdoutBytes(t, func() {
+		require.NoError(t, writeUpdateOutput(res, "/home/user/.aguara/intel"))
+	})
+
+	require.Empty(t, stdoutBytes,
+		"--format json -o file must leave stdout empty; bytes leaked: %d", len(stdoutBytes))
+
+	fileBytes, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	var parsed updateOutput
+	require.NoError(t, json.Unmarshal(fileBytes, &parsed))
+	require.Equal(t, 20, parsed.Records)
+}
+
+func TestWriteUpdateTerminalDefault(t *testing.T) {
+	// Default (no --format) keeps the human-readable output as
+	// before. No regression for users who upgrade and were
+	// relying on the legacy terminal shape.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagFormat = "terminal"
+
+	res := makeUpdateResult(15, time.Unix(0, 0))
+	out := captureStdoutBytes(t, func() {
+		require.NoError(t, writeUpdateOutput(res, "/home/user/.aguara/intel"))
+	})
+	s := string(out)
+	require.Contains(t, s, "Aguara threat intel updated")
+	require.Contains(t, s, "npm")
+	require.Contains(t, s, "PyPI")
+	require.Contains(t, s, "Written:")
+	// And the terminal output must NOT be valid JSON, so a
+	// consumer scripting against --format json sees the
+	// difference immediately if they forgot the flag.
+	require.False(t, strings.HasPrefix(strings.TrimSpace(s), "{"),
+		"terminal default must not start like JSON; got: %s", s)
+}
+
+func TestAssertOutputNotShadowingStore(t *testing.T) {
+	// Codex P2 (PR 3): `aguara update -o ~/.aguara/intel/snapshot.json`
+	// would first write the real refreshed snapshot via store.Save,
+	// then truncate the same file to a terminal/JSON summary,
+	// silently corrupting the cache. The guard catches the path
+	// collision BEFORE any I/O happens.
+	storeDir := t.TempDir()
+	snapshotPath := filepath.Join(storeDir, "snapshot.json")
+
+	// Exact match -> rejected.
+	err := assertOutputNotShadowingStore(snapshotPath, storeDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "would overwrite")
+	require.Contains(t, err.Error(), snapshotPath)
+
+	// Trailing slash redundancy still collides under
+	// filepath.Clean normalisation.
+	err = assertOutputNotShadowingStore(snapshotPath+"/./.", storeDir)
+	require.Error(t, err)
+
+	// Empty -o -> nil (the common case).
+	err = assertOutputNotShadowingStore("", storeDir)
+	require.NoError(t, err)
+
+	// Different path -> nil.
+	err = assertOutputNotShadowingStore(filepath.Join(storeDir, "summary.json"), storeDir)
+	require.NoError(t, err)
+
+	// Relative path that resolves to the snapshot still
+	// collides (filepath.Abs normalises).
+	// Set up: chdir into storeDir, pass `snapshot.json` as -o.
+	t.Chdir(storeDir)
+	err = assertOutputNotShadowingStore("snapshot.json", storeDir)
+	require.Error(t, err,
+		"a relative -o resolving to the snapshot path must collide too")
+}
+
+func TestAssertOutputNotShadowingStoreCaseInsensitive(t *testing.T) {
+	// Codex P2 round 2 (PR 3): on macOS/Windows, `Snapshot.JSON`
+	// and `snapshot.json` resolve to the same file even though
+	// the bytes differ. The guard MUST fire there too -- a
+	// byte-for-byte compare misses the collision and the writer
+	// overwrites the cache. On case-sensitive filesystems
+	// (Linux ext4/xfs default) the two are distinct files and
+	// the guard correctly does NOT fire.
+	storeDir := t.TempDir()
+
+	mixedCase := filepath.Join(storeDir, "Snapshot.JSON")
+	err := assertOutputNotShadowingStore(mixedCase, storeDir)
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		require.Error(t, err,
+			"case-insensitive FS must catch mixed-case -o that resolves to the same file")
+		require.Contains(t, err.Error(), "would overwrite")
+	default:
+		// Linux: case-sensitive default. Snapshot.JSON is a
+		// genuinely different file from snapshot.json, so the
+		// guard correctly returns nil. (A case-insensitive
+		// mount on Linux could fool this, but we mirror what
+		// the kernel's path-lookup actually does on the host.)
+		require.NoError(t, err,
+			"case-sensitive FS: Snapshot.JSON and snapshot.json are distinct files; guard must not over-reject")
+	}
+}
+
+func TestWriteUpdateTerminalRespectsOutputFile(t *testing.T) {
+	// -o without --format puts the terminal text in the file
+	// (same legacy semantics as scan / check), so users who
+	// scripted `aguara update -o file` keep their flow.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	outFile := filepath.Join(t.TempDir(), "update.txt")
+	flagOutput = outFile
+
+	res := makeUpdateResult(15, time.Unix(0, 0))
+	stdoutBytes := captureStdoutBytes(t, func() {
+		require.NoError(t, writeUpdateOutput(res, "/home/user/.aguara/intel"))
+	})
+	require.Empty(t, stdoutBytes, "with -o, stdout must be empty regardless of format")
+	fileBytes, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	require.Contains(t, string(fileBytes), "Aguara threat intel updated")
+}
