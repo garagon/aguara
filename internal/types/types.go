@@ -112,23 +112,39 @@ type Finding struct {
 // stable string so JSON/SARIF consumers can grep for it consistently.
 const RedactedPlaceholder = "[REDACTED]"
 
-// RedactSensitiveFindings scrubs matched text and the matching context line
-// for findings that are known to carry a real secret value: either the rule /
-// analyzer set Sensitive == true, or the legacy category-based contract
+// RedactSensitiveFindings scrubs matched text and context lines for findings
+// that are known to carry a real secret value: either the rule / analyzer set
+// Sensitive == true, or the legacy category-based contract
 // (Category == "credential-leak") still applies. Other findings are left
 // intact because their match is typically a pattern signature rather than a
 // secret.
+//
+// Context redaction differs by source. For Sensitive findings every Context
+// entry is replaced, because analyzers like NLP_CRED_EXFIL_COMBO emit one
+// finding for a whole section / file and the secret can sit on a wrapped
+// continuation line where IsMatch is false. For the legacy credential-leak
+// category only the IsMatch line is replaced, preserving the existing
+// surrounding-line view that pre-Sensitive consumers rely on.
 //
 // The category fallback exists so custom rules authored before the Sensitive
 // flag existed keep redacting — dropping it would silently regress every user
 // who relied on category == "credential-leak" to gate redaction.
 func RedactSensitiveFindings(findings []Finding) {
 	for i := range findings {
-		if !findings[i].Sensitive && findings[i].Category != "credential-leak" {
+		isSensitive := findings[i].Sensitive
+		isLegacyCred := findings[i].Category == "credential-leak"
+		if !isSensitive && !isLegacyCred {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
 		for j := range findings[i].Context {
+			if isSensitive {
+				// Sensitive findings can span multiple lines; the
+				// secret may sit on a non-IsMatch context line, so
+				// scrub the whole block.
+				findings[i].Context[j].Content = RedactedPlaceholder
+				continue
+			}
 			if findings[i].Context[j].IsMatch {
 				findings[i].Context[j].Content = RedactedPlaceholder
 			}
