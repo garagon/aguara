@@ -100,7 +100,7 @@ verify-docker: bench-docker test-race-docker smoke-docker
 # archive + checksums from github.com), so this target is intentionally
 # NOT folded into `verify-docker` which runs offline.
 # Override INSTALL_SH_TEST_VERSION to pin to a different release.
-INSTALL_SH_TEST_VERSION ?= v0.16.2
+INSTALL_SH_TEST_VERSION ?= v0.17.0
 INSTALL_SH_TEST_IMAGE   ?= aguara-install-test:cap-drop
 
 test-install-sh-docker:

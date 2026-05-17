@@ -5,22 +5,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-17
+
+`aguara check .` now walks the dependency surface of a modern repo
+instead of stopping at npm/Python. v0.17 adds offline malicious-package
+checks across npm, PyPI, Go, Rust, PHP/Composer, Ruby/Bundler,
+Java/Maven/Gradle, and .NET/NuGet, built from OSV.dev + OpenSSF
+Malicious Packages records.
+
 ### Added
 
 - Recursive multi-ecosystem `aguara check`. Running `aguara check .` from a repo root walks the path for npm `node_modules`, Python `site-packages`, plus lockfiles for Go (`go.sum`/`go.mod`), Rust (`Cargo.lock`, crates.io registry only), PHP (`composer.lock`), Ruby (`Gemfile.lock`), Java (`pom.xml`, `gradle.lockfile`, `gradle/dependency-locks/*.lockfile`), and .NET (`packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj`). One `EcosystemResult` entry per discovered lockfile; top-level `findings[]` stays flat.
 - `--ecosystem` now accepts multiple values, comma-separated (`--ecosystem go,ruby`) or repeated (`--ecosystem go --ecosystem ruby`). Aliases: `python`, `pypi`, `golang`, `cargo`, `rust`, `php`, `composer`, `gem`, `rubygems`, `java`, `dotnet`, `csharp`.
 - `aguara audit` now uses the same multi-ecosystem check plan as `aguara check`, so `audit --path . --format json` includes the recursive `ecosystems[]` slice.
+- Embedded threat-intel snapshot now ships records for all 8 ecosystems (23,926 records total, up from ~21,500 in v0.16). Strong embedded coverage today on npm, PyPI, RubyGems, NuGet; parser-ready coverage on Go, crates.io, Packagist, Maven (range-aware OSV matching deferred to a follow-up).
 
 ### Changed
 
 - `aguara update` default refreshes every supported ecosystem (npm, PyPI, Go, crates.io, Packagist, RubyGems, Maven, NuGet) instead of only npm + PyPI. Use `--ecosystem` to scope a refresh.
-- `aguara check --fresh` now refreshes only the ecosystems the plan actually touches. `aguara check --fresh --ecosystem maven` no longer pulls npm + PyPI as a side effect of the legacy default.
+- `aguara check --fresh` now refreshes only the ecosystems the plan actually touches. `aguara check --fresh --ecosystem maven` no longer pulls npm + PyPI as a side effect of the legacy default. `--fresh` on an empty plan skips the network entirely.
 - `aguara check` terminal output for multi-ecosystem runs frames the scan as "project dependencies" and reports `Targets found:` instead of the single-ecosystem `Lockfiles found:` line. Action guidance for packagecheck-routed ecosystems no longer recommends `aguara clean` (which only knows Python persistence artifacts).
 - Default `aguara check` on an explicit `--path` with no signals returns a clean result with `"ecosystems": []` instead of silently falling back to the host's global Python `site-packages`.
+- README "Aguara Watch" section: previous public observatory is stale; section now states Watch is being reworked and points users at the scanner / CLI / Docker image / signed release artifacts as the supported v0.17 surfaces.
 
 ### Known limitations
 
-- Range-aware OSV matching is deferred. Go / crates.io / Packagist / Maven ship parsers with limited current coverage today because their OSV streams are CVE/range-shaped and the matcher only consumes exact versions. Tracking issue: see follow-up filed at PR #5 merge.
+- Range-aware OSV matching is deferred. Go / crates.io / Packagist / Maven ship parsers with limited current coverage today because their OSV streams are CVE/range-shaped and the matcher only consumes exact versions. Tracking issue: [#105](https://github.com/garagon/aguara/issues/105).
 
 ## [0.16.2] - 2026-05-16
 
