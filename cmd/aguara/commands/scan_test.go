@@ -35,7 +35,7 @@ func resetFlags() {
 	flagProfile = ""
 	flagNoRedact = false
 	flagCheckPath = ""
-	flagCheckEcosystem = ""
+	flagCheckEcosystems = nil
 	flagCheckFailOn = ""
 	flagCheckCI = false
 	flagCheckFresh = false

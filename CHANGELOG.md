@@ -5,6 +5,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Recursive multi-ecosystem `aguara check`. Running `aguara check .` from a repo root walks the path for npm `node_modules`, Python `site-packages`, plus lockfiles for Go (`go.sum`/`go.mod`), Rust (`Cargo.lock`, crates.io registry only), PHP (`composer.lock`), Ruby (`Gemfile.lock`), Java (`pom.xml`, `gradle.lockfile`, `gradle/dependency-locks/*.lockfile`), and .NET (`packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj`). One `EcosystemResult` entry per discovered lockfile; top-level `findings[]` stays flat.
+- `--ecosystem` now accepts multiple values, comma-separated (`--ecosystem go,ruby`) or repeated (`--ecosystem go --ecosystem ruby`). Aliases: `python`, `pypi`, `golang`, `cargo`, `rust`, `php`, `composer`, `gem`, `rubygems`, `java`, `dotnet`, `csharp`.
+- `aguara audit` now uses the same multi-ecosystem check plan as `aguara check`, so `audit --path . --format json` includes the recursive `ecosystems[]` slice.
+
+### Changed
+
+- `aguara update` default refreshes every supported ecosystem (npm, PyPI, Go, crates.io, Packagist, RubyGems, Maven, NuGet) instead of only npm + PyPI. Use `--ecosystem` to scope a refresh.
+- `aguara check --fresh` now refreshes only the ecosystems the plan actually touches. `aguara check --fresh --ecosystem maven` no longer pulls npm + PyPI as a side effect of the legacy default.
+- `aguara check` terminal output for multi-ecosystem runs frames the scan as "project dependencies" and reports `Targets found:` instead of the single-ecosystem `Lockfiles found:` line. Action guidance for packagecheck-routed ecosystems no longer recommends `aguara clean` (which only knows Python persistence artifacts).
+- Default `aguara check` on an explicit `--path` with no signals returns a clean result with `"ecosystems": []` instead of silently falling back to the host's global Python `site-packages`.
+
+### Known limitations
+
+- Range-aware OSV matching is deferred. Go / crates.io / Packagist / Maven ship parsers with limited current coverage today because their OSV streams are CVE/range-shaped and the matcher only consumes exact versions. Tracking issue: see follow-up filed at PR #5 merge.
+
 ## [0.16.2] - 2026-05-16
 
 Patch release. Closes the P1 secret-leak found in the v0.16.1 security audit.

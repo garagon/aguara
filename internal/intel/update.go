@@ -37,10 +37,12 @@ const MaxHTTPBodyBytes int64 = 256 * 1024 * 1024
 // zero values are wired in Update so a caller that just wants
 // "refresh everything" can pass UpdateOptions{}.
 type UpdateOptions struct {
-	// Ecosystems to refresh. Empty defaults to [npm, PyPI] -- the
-	// two production ecosystems the importer supports. Adding
-	// more later requires both an importer canonicalisation
-	// entry and a server-side OSV slice.
+	// Ecosystems to refresh. Empty defaults to the full
+	// SupportedEcosystems() list (npm, PyPI, Go, crates.io,
+	// Packagist, RubyGems, Maven, NuGet in v0.17). Callers that
+	// want a scoped refresh pass an explicit slice; the CLI
+	// surfaces this via the --ecosystem flag on both
+	// `aguara update` and `aguara check --fresh`.
 	Ecosystems []string
 	// HTTPClient overrides the client used to fetch OSV dumps.
 	// Tests pass httptest.NewServer()'s client; production
@@ -116,7 +118,14 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	}
 	ecosystems := opts.Ecosystems
 	if len(ecosystems) == 0 {
-		ecosystems = []string{EcosystemNPM, EcosystemPyPI}
+		// v0.17 widened the default from [npm, PyPI] to every
+		// canonical OSV bucket the registry knows about so the
+		// "refresh everything" default matches `aguara check`'s
+		// recursive autodetect. Callers that want a scoped
+		// refresh pass explicit Ecosystems (the CLI's
+		// --ecosystem flag does so for both `aguara update` and
+		// `aguara check --fresh`).
+		ecosystems = SupportedEcosystems()
 	}
 	// Canonicalise before building URLs. OSV's GCS bucket keys
 	// are case-sensitive (`PyPI/all.zip`, not `pypi/all.zip`),
