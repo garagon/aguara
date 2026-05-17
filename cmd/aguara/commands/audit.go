@@ -91,35 +91,28 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		target = "."
 	}
 
-	// Intel override: reuse the standalone check's resolution
-	// helper. We mirror audit's --fresh / --allow-stale flags
-	// onto the check-side globals so resolveCheckIntel reads the
-	// right intent. Restoring them on exit keeps the two surfaces
-	// from leaking state across commands in long-lived test runs.
+	// audit's --fresh / --allow-stale flags mirror onto the
+	// check-side globals so resolveCheckIntel reads the right
+	// intent. Restoring them on exit keeps the two surfaces from
+	// leaking state across commands in long-lived test runs.
 	prevFresh, prevAllowStale := flagCheckFresh, flagCheckAllowStale
 	flagCheckFresh, flagCheckAllowStale = flagAuditFresh, flagAuditAllowStale
 	defer func() { flagCheckFresh, flagCheckAllowStale = prevFresh, prevAllowStale }()
 
-	intelOverride, err := resolveCheckIntel(cmd.Context())
+	// 1. Build the same check plan `aguara check` would build
+	// for `target`. audit reuses buildCheckPlan + runCheckPlan
+	// so a Go / Rust / .NET monorepo audit reports the same
+	// `check.ecosystems` slice as a standalone `aguara check`
+	// against the same path.
+	plan, err := buildCheckPlan(nil, target)
 	if err != nil {
 		return err
 	}
-
-	// 1. Run the supply-chain check.
-	checkEco, checkPath, err := resolveCheckTarget("", target)
+	intelOverride, err := resolveCheckIntel(cmd.Context(), plan.intelEcosystems())
 	if err != nil {
 		return err
 	}
-	checkOpts := incident.CheckOptions{Path: checkPath, Intel: intelOverride}
-	var checkResult *incident.CheckResult
-	switch checkEco {
-	case ecoPython:
-		checkResult, err = incident.Check(checkOpts)
-	case ecoNPM:
-		checkResult, err = incident.CheckNPM(checkOpts)
-	default:
-		return fmt.Errorf("audit: unresolved ecosystem %q", checkEco)
-	}
+	checkResult, err := runCheckPlan(plan, intelOverride)
 	if err != nil {
 		return fmt.Errorf("audit: check phase: %w", err)
 	}

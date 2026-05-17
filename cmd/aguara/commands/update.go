@@ -26,15 +26,15 @@ var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Refresh the local threat-intel snapshot from OSV.dev",
 	Long: `Refresh Aguara's local threat-intel snapshot. Downloads OSV.dev
-malicious-package dumps for the configured ecosystems (default: npm, PyPI),
+malicious-package dumps for every supported ecosystem by default,
 filters to high-confidence records, and writes the merged snapshot to
 ~/.aguara/intel/snapshot.json.
 
-Pass --ecosystem to refresh additional ecosystems. Supported (with
-case-insensitive aliases in parentheses): npm, PyPI (python),
-Go (golang), crates.io (cargo, rust), Packagist (php, composer),
-RubyGems (ruby, gem), Maven (java), NuGet (dotnet, csharp). Repeat
---ecosystem or comma-separate the values to refresh several at once.
+Supported ecosystems (with case-insensitive aliases in parentheses):
+npm, PyPI (python), Go (golang), crates.io (cargo, rust),
+Packagist (php, composer), RubyGems (ruby, gem), Maven (java),
+NuGet (dotnet, csharp). Pass --ecosystem to scope a refresh; repeat
+the flag or comma-separate the values to refresh several at once.
 
 This command is the only place 'aguara update' touches the network. Default
 'aguara check' invocations stay offline; future checks will consult the local
@@ -46,7 +46,7 @@ This command updates THREAT INTEL only. It does not update the Aguara binary.`,
 
 func init() {
 	updateCmd.Flags().DurationVar(&flagUpdateTimeout, "timeout", intel.DefaultHTTPTimeout, "Overall HTTP timeout for the refresh")
-	updateCmd.Flags().StringSliceVar(&flagUpdateEcosystems, "ecosystem", nil, "Ecosystems to refresh (default: npm, PyPI)")
+	updateCmd.Flags().StringSliceVar(&flagUpdateEcosystems, "ecosystem", nil, "Ecosystems to refresh (default: every supported ecosystem)")
 	updateCmd.Flags().BoolVar(&flagUpdateAllowEmpty, "allow-empty", false, "Save a 0-record snapshot anyway (defaults to error so an upstream outage cannot wipe cached intel)")
 	// Runtime errors (HTTP failures, OSV outage producing 0
 	// records) should not trigger Cobra's flag-usage block. Same

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -161,8 +162,16 @@ func TestCheckRejectsUnsupportedEcosystem(t *testing.T) {
 	// recover from the typo without reading source. PR #1
 	// established the same contract on `aguara update`; we
 	// mirror it here.
-	for _, eco := range []string{"python", "npm", "go", "cargo", "composer", "ruby", "maven", "nuget"} {
+	// PR #5: the unsupported-ecosystem error now uses the
+	// SupportedEcosystemsHint() format ("Maven (java)",
+	// "NuGet (dotnet, csharp)"). Aliases stay lowercase but
+	// canonical IDs are capitalised, so assert on a mix of
+	// canonical-case canonical IDs and lowercase aliases.
+	for _, eco := range []string{"npm", "PyPI", "Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
 		require.Contains(t, err.Error(), eco, "error must list %s", eco)
+	}
+	for _, alias := range []string{"python", "golang", "cargo", "rust", "php", "composer", "ruby", "java", "dotnet"} {
+		require.Contains(t, err.Error(), alias, "error must list alias %s", alias)
 	}
 }
 
@@ -750,4 +759,164 @@ func TestCheckMavenAndNuGetEmptyPathEmitsEmptyArray(t *testing.T) {
 			require.NotContains(t, string(raw), `"ecosystems": null`)
 		})
 	}
+}
+
+// --- PR #5: multi-ecosystem autodetect + explicit multi --ecosystem ---
+
+func TestCheckMultiEcosystemAutodetectFindsAllSixPackagecheckEcosystems(t *testing.T) {
+	// The multi-all fixture has one lockfile per packagecheck
+	// ecosystem (Go, Cargo, Composer, RubyGems, Maven, NuGet)
+	// nested under separate service directories. Default
+	// `aguara check --path <root>` must discover every one
+	// without --ecosystem.
+	result := checkToFile(t, "--path", "../../../internal/packagecheck/testdata/multi-all")
+
+	require.Len(t, result.Ecosystems, 6, "expected one EcosystemResult per discovered lockfile, got %+v", result.Ecosystems)
+	seen := map[string]bool{}
+	for _, e := range result.Ecosystems {
+		seen[e.Ecosystem] = true
+	}
+	for _, eco := range []string{"Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
+		require.True(t, seen[eco], "missing ecosystem %s in autodetect output (got %+v)", eco, seen)
+	}
+}
+
+func TestCheckExplicitMultiEcosystemFlag(t *testing.T) {
+	// `--ecosystem go,ruby` constrains the scan to two pipelines
+	// even though the fixture has six lockfiles.
+	result := checkToFile(t, "--ecosystem", "go,ruby", "--path", "../../../internal/packagecheck/testdata/multi-all")
+
+	require.Len(t, result.Ecosystems, 2, "expected exactly Go + RubyGems, got %+v", result.Ecosystems)
+	seen := map[string]bool{}
+	for _, e := range result.Ecosystems {
+		seen[e.Ecosystem] = true
+	}
+	require.True(t, seen["Go"], "expected Go in ecosystems")
+	require.True(t, seen["RubyGems"], "expected RubyGems in ecosystems")
+}
+
+func TestCheckRepeatedEcosystemFlagAggregates(t *testing.T) {
+	// `--ecosystem go --ecosystem ruby` must produce the same
+	// plan as the comma-separated form.
+	result := checkToFile(t, "--ecosystem", "go", "--ecosystem", "ruby", "--path", "../../../internal/packagecheck/testdata/multi-all")
+
+	require.Len(t, result.Ecosystems, 2)
+	seen := map[string]bool{}
+	for _, e := range result.Ecosystems {
+		seen[e.Ecosystem] = true
+	}
+	require.True(t, seen["Go"] && seen["RubyGems"])
+}
+
+func TestCheckExplicitPathEmptyDirReturnsCleanResult(t *testing.T) {
+	// Spec contract: an explicit --path with no signals must
+	// return a clean result, NOT fall through to Python's global
+	// site-packages autodiscovery. The JSON shape stays
+	// `"ecosystems": []` so consumers iterating the slice never
+	// see surprise Python findings from /usr/lib/python*.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+
+	raw := checkToFileRaw(t, "--path", tmp)
+	require.Contains(t, string(raw), `"ecosystems": []`)
+	require.NotContains(t, string(raw), `"ecosystems": null`)
+	require.NotContains(t, string(raw), `site-packages`, "explicit --path with no signals must NOT trigger Python global discovery")
+}
+
+func TestCheckPlanIntelEcosystemsScopesFreshRefresh(t *testing.T) {
+	// --fresh + --ecosystem maven must refresh ONLY Maven, not
+	// the legacy default of [npm, PyPI]. We assert at the
+	// checkPlan level (the same struct resolveCheckIntel
+	// consumes) so the test does not require a live network.
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "svc-maven"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "svc-maven", "pom.xml"), []byte(`<?xml version="1.0"?><project><modelVersion>4.0.0</modelVersion><groupId>g</groupId><artifactId>a</artifactId><version>1</version><dependencies><dependency><groupId>org.example</groupId><artifactId>lib</artifactId><version>1.0.0</version></dependency></dependencies></project>`), 0o644))
+
+	plan, err := buildCheckPlan([]string{"maven"}, tmp)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Maven"}, plan.intelEcosystems(), "--ecosystem maven must scope intel refresh to Maven only")
+}
+
+func TestCheckPlanIntelEcosystemsForAutodetect(t *testing.T) {
+	// Autodetect plan's intelEcosystems must list every OSV
+	// bucket the plan touches so --fresh refreshes the right
+	// set.
+	plan, err := buildCheckPlan(nil, "../../../internal/packagecheck/testdata/multi-all")
+	require.NoError(t, err)
+	got := plan.intelEcosystems()
+	for _, want := range []string{"Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
+		require.Contains(t, got, want, "autodetect plan must include %s in intel refresh set", want)
+	}
+}
+
+// --- PR #5 blocker 1: --fresh must scope to requested ecosystems even when discovery is empty ---
+
+func TestCheckPlanIntelEcosystemsExplicitNoTargets(t *testing.T) {
+	// --ecosystem maven --path <empty-dir> must keep "Maven"
+	// in intelEcosystems() so a follow-up --fresh refreshes
+	// Maven specifically, not the legacy default-all.
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven"}, tmp)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Maven"}, plan.intelEcosystems(), "explicit --ecosystem must survive empty discovery so --fresh stays scoped")
+	require.True(t, plan.explicitEcosystem)
+	require.Empty(t, plan.packagecheckTargets, "discovery walked an empty dir; no targets expected")
+}
+
+func TestCheckPlanIntelEcosystemsExplicitMultipleNoTargets(t *testing.T) {
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven", "ruby"}, tmp)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"Maven", "RubyGems"}, plan.intelEcosystems())
+}
+
+func TestCheckPlanIntelEcosystemsAutodetectEmptyExplicitPath(t *testing.T) {
+	// Autodetect on an explicit empty path produces an empty
+	// plan (no Python fallback, per the spec contract). The
+	// empty intelEcosystems() is what resolveCheckIntel uses
+	// to skip the --fresh network call entirely.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+	plan, err := buildCheckPlan(nil, tmp)
+	require.NoError(t, err)
+	require.Empty(t, plan.intelEcosystems(), "autodetect with no signals must leave intelEcosystems empty so --fresh does not fall through to default-all")
+	require.False(t, plan.explicitEcosystem)
+}
+
+func TestResolveCheckIntelSkipsFreshWhenPlanIsEmpty(t *testing.T) {
+	// Spec: --fresh on an empty plan must NOT trigger
+	// intel.Update's empty-default refresh-all-ecosystems path.
+	// resolveCheckIntel takes the safe answer (local /
+	// embedded) and does no network I/O. We assert by enabling
+	// --fresh + an empty ecosystems list and a context that
+	// would cancel any real HTTP attempt before it could finish;
+	// the call must succeed without ever hitting the network.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagCheckFresh = true
+	flagCheckAllowStale = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // ensure any actual HTTP attempt would fail fast.
+
+	override, err := resolveCheckIntel(ctx, nil)
+	require.NoError(t, err, "--fresh with empty ecosystem list must succeed without making a network call")
+	// override may be nil (no local snapshot) or non-nil
+	// (local snapshot exists); both are valid "no fresh refresh"
+	// outcomes. The contract is that we did not error and did
+	// not declare an "online" / "remote-fresh" mode.
+	if override != nil {
+		require.NotEqual(t, "remote-fresh", override.SnapshotLabel, "empty plan must not declare a remote-fresh refresh")
+	}
+}
+
+func TestCheckSingleEcoTokenHonoursExplicitEcosystemWithEmptyDiscovery(t *testing.T) {
+	// `aguara check --ecosystem maven --path <empty-dir>` must
+	// label the terminal output "Maven / Gradle dependencies"
+	// instead of falling through to the Python default + the
+	// ".pth files scanned" line.
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven"}, tmp)
+	require.NoError(t, err)
+	require.Equal(t, ecoMaven, plan.singleEcoToken(), "explicit Maven request with empty discovery must keep the Maven label")
 }

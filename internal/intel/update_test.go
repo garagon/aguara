@@ -161,9 +161,11 @@ func TestUpdateEnforcesSizeCap(t *testing.T) {
 }
 
 func TestUpdateUsesDefaultEcosystems(t *testing.T) {
-	// Empty UpdateOptions.Ecosystems must default to [npm, PyPI]
-	// so users running `aguara update` with no flags get the
-	// production two-ecosystem refresh.
+	// v0.17 widened the default from [npm, PyPI] to every
+	// canonical OSV bucket the registry knows. Empty
+	// UpdateOptions.Ecosystems must produce one HTTP fetch per
+	// SupportedEcosystems() entry so `aguara update` with no
+	// flags refreshes the same surface `aguara check` covers.
 	body := buildEcosystemZip(t)
 	var seenURLs []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,18 +174,31 @@ func TestUpdateUsesDefaultEcosystems(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	stub := map[string]intel.Snapshot{}
+	for _, eco := range intel.SupportedEcosystems() {
+		stub[eco] = intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion}
+	}
 	_, err := intel.Update(context.Background(), intel.UpdateOptions{
 		URLTemplate: srv.URL + "/%s/all.zip",
 		HTTPClient:  srv.Client(),
-		Importer: importerStub(t, map[string]intel.Snapshot{
-			intel.EcosystemNPM:  {SchemaVersion: intel.CurrentSchemaVersion},
-			intel.EcosystemPyPI: {SchemaVersion: intel.CurrentSchemaVersion},
-		}),
+		Importer:    importerStub(t, stub),
 	})
 	require.NoError(t, err)
-	require.Len(t, seenURLs, 2, "default ecosystems must produce two HTTP fetches")
+	require.Len(t, seenURLs, len(intel.SupportedEcosystems()), "default ecosystems must produce one HTTP fetch per supported ecosystem")
+	// First two URLs are still npm + PyPI (registry order) so
+	// the legacy contract about which buckets get fetched
+	// first stays observable.
 	require.Equal(t, "/npm/all.zip", seenURLs[0])
 	require.Equal(t, "/PyPI/all.zip", seenURLs[1])
+	// Spot-check a v0.17 newcomer to lock the widened default.
+	var hitGo bool
+	for _, u := range seenURLs {
+		if u == "/Go/all.zip" {
+			hitGo = true
+			break
+		}
+	}
+	require.True(t, hitGo, "Go must appear in default fetch list (seenURLs=%v)", seenURLs)
 }
 
 func TestUpdateRespectsContextCancellation(t *testing.T) {

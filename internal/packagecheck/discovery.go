@@ -246,9 +246,13 @@ func pickMavenTargets(dir string) []Target {
 //     lockfile is in use)
 //
 // A directory with BOTH a lockfile AND a project file emits both
-// targets; the lockfile and the project files cover different
-// resolution paths and the matcher's per-(ref, advisory) dedup
-// keeps double-counted hits from inflating FindingsCount.
+// targets independently. Each Target is parsed and matched on its
+// own; per-(ref, advisory ID) dedup is per-PackageRef, NOT global
+// cross-target. The same package appearing in both the lockfile
+// and the .csproj will produce one EcosystemResult entry per
+// target and the matcher will hit each independently. This is
+// intentional per-target visibility — a future PR can add
+// cross-target collapsing if user feedback warrants it.
 //
 // Source labels: "packages.lock.json" for the lockfile,
 // "csproj"/"fsproj"/"vbproj" (no leading dot) for project files

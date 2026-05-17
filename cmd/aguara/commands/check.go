@@ -19,12 +19,12 @@ import (
 )
 
 var (
-	flagCheckPath       string
-	flagCheckEcosystem  string
-	flagCheckFailOn     string
-	flagCheckCI         bool
-	flagCheckFresh      bool
-	flagCheckAllowStale bool
+	flagCheckPath        string
+	flagCheckEcosystems  []string
+	flagCheckFailOn      string
+	flagCheckCI          bool
+	flagCheckFresh       bool
+	flagCheckAllowStale  bool
 )
 
 const (
@@ -52,15 +52,36 @@ var packagecheckEcosystems = map[string]string{
 	ecoNuGet:    intel.EcosystemNuGet,
 }
 
+// osvIDToEcoToken inverts packagecheckEcosystems so the runner can
+// recover the CLI dispatch label (ecoGo / ecoCargo / ...) from an
+// OSV bucket ID it received from packagecheck. Used by
+// ecosystemFindingText to pick the right per-ecosystem remediation
+// text when running in autodetect mode where the original CLI
+// token is not available per-hit.
+var osvIDToEcoToken = func() map[string]string {
+	out := make(map[string]string, len(packagecheckEcosystems))
+	for token, id := range packagecheckEcosystems {
+		out[id] = token
+	}
+	return out
+}()
+
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check for compromised packages and persistence artifacts",
-	Long: `Scan an installed package tree for known compromised versions and
-persistence artifacts. With no flags, auto-detects npm (any directory
-containing node_modules), Go (go.sum or go.mod at the path root), or
-falls back to Python site-packages discovery. Pass --ecosystem to force
-a specific check:
+	Long: `Run from a project root. Aguara discovers installed npm /
+Python environments at the path AND lockfiles for Go, Rust,
+PHP/Composer, Ruby/Bundler, Java/Maven/Gradle, and .NET/NuGet
+recursively under the path, then matches every declared package
+against the embedded threat-intel snapshot.
 
+Pass --ecosystem to constrain the scan. Multiple values supported,
+comma-separated or repeated:
+
+  --ecosystem go,ruby
+  --ecosystem cargo --ecosystem maven
+
+Supported values (case-insensitive):
   python (alias: pypi)
   npm
   go     (alias: golang)
@@ -70,13 +91,14 @@ a specific check:
   maven  (alias: java)
   nuget  (aliases: dotnet, csharp)
 
-The known-bad list ships embedded with the binary.`,
+The known-bad list ships embedded with the binary; --fresh refreshes
+only the ecosystems actually being checked.`,
 	RunE: runCheck,
 }
 
 func init() {
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
-	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, go, cargo, composer, ruby, maven, nuget")
+	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
@@ -94,30 +116,17 @@ func init() {
 func runCheck(cmd *cobra.Command, args []string) error {
 	applyCheckCIDefaults()
 
-	eco, path, err := resolveCheckTarget(flagCheckEcosystem, flagCheckPath)
+	plan, err := buildCheckPlan(flagCheckEcosystems, flagCheckPath)
 	if err != nil {
 		return err
 	}
 
-	override, err := resolveCheckIntel(cmd.Context())
+	override, err := resolveCheckIntel(cmd.Context(), plan.intelEcosystems())
 	if err != nil {
 		return err
 	}
 
-	opts := incident.CheckOptions{Path: path, Intel: override}
-	var result *incident.CheckResult
-	switch eco {
-	case ecoPython:
-		result, err = incident.Check(opts)
-	case ecoNPM:
-		result, err = incident.CheckNPM(opts)
-	default:
-		osvID, ok := packagecheckEcosystems[eco]
-		if !ok {
-			return fmt.Errorf("internal error: unresolved ecosystem %q", eco)
-		}
-		result, err = runPackageCheck(path, osvID, eco, override)
-	}
+	result, err := runCheckPlan(plan, override)
 	if err != nil {
 		return err
 	}
@@ -127,7 +136,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		if err := writeCheckTerminal(result, eco); err != nil {
+		if err := writeCheckTerminal(result, plan); err != nil {
 			return err
 		}
 	}
@@ -151,45 +160,318 @@ func applyCheckCIDefaults() {
 	}
 }
 
-// resolveCheckTarget turns the user-supplied --ecosystem / --path pair
-// into a (resolved-ecosystem, path) tuple the runner can dispatch on.
+// checkPlan describes which check pipelines runCheckPlan will invoke
+// for a single `aguara check` call. The plan separates the legacy
+// incident-based paths (npm / Python) from the packagecheck path
+// (Go / Cargo / Composer / Ruby / Maven / NuGet) so each can produce
+// its own slice of intel.MatchInputs and the runner merges the
+// resulting CheckResults into one flat output.
 //
-// Explicit --ecosystem values short-circuit auto-detection; only when
-// --ecosystem is empty does auto-detection run. An empty --path remains
-// empty for Python (so the legacy site-packages auto-discovery still
-// works) and resolves to "." for npm probing only.
+// `intelEcosystems()` returns the OSV bucket IDs the plan touches;
+// resolveCheckIntel uses that list to scope a --fresh refresh to
+// only what the user is checking.
+type checkPlan struct {
+	rootPath          string // the path the user passed (may be "")
+	runPython           bool
+	pythonPath          string
+	runNPM              bool
+	npmPath             string
+	packagecheckTargets []packagecheck.Target
+	// requestedEcosystems carries the OSV bucket IDs the user
+	// asked for via --ecosystem, even when the discovery walk
+	// found zero matching lockfiles. intelEcosystems() unions
+	// this set with the discovered targets so
+	// `aguara check --fresh --ecosystem maven` on a repo
+	// without pom.xml still refreshes Maven (and ONLY Maven).
+	// Empty in autodetect mode.
+	requestedEcosystems []string
+	// explicitEcosystem records whether the user passed
+	// --ecosystem (non-empty list). Distinguishes "autodetect
+	// found nothing -> default" from "user asked for X
+	// explicitly -> empty discovery is fine". Drives the
+	// terminal label too: an explicit single-ecosystem plan
+	// with no targets still gets the per-ecosystem env label
+	// ("Maven / Gradle dependencies") instead of falling back
+	// to the Python default.
+	explicitEcosystem bool
+}
+
+// intelEcosystems returns the OSV bucket IDs the plan needs intel
+// for. Used by resolveCheckIntel so --fresh refreshes only the
+// ecosystems actually being checked (a `--ecosystem maven` user
+// should NOT pull npm + PyPI on --fresh because the legacy default
+// happens to be those two).
 //
-// An EXPLICIT --path that does not exist (or points at a regular file)
-// is an error: a typo in CI -- e.g. `--path /opt/venv/lib/pyhton...` --
-// must not look like a clean check result. The validator only fires
-// when path != ""; empty path keeps the legacy Python autodiscovery
-// contract intact.
-func resolveCheckTarget(eco, path string) (string, string, error) {
+// The set unions the explicitly requested ecosystems (from
+// --ecosystem) with the ecosystems of every discovered target plus
+// the Python / npm pipelines. The explicit set wins even when
+// discovery found nothing: `--fresh --ecosystem maven` on a repo
+// without pom.xml still refreshes Maven so the user's intent is
+// honoured.
+func (p checkPlan) intelEcosystems() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range p.requestedEcosystems {
+		add(id)
+	}
+	if p.runPython {
+		add(intel.EcosystemPyPI)
+	}
+	if p.runNPM {
+		add(intel.EcosystemNPM)
+	}
+	for _, t := range p.packagecheckTargets {
+		add(t.Ecosystem)
+	}
+	return out
+}
+
+// isMulti reports whether the plan touches more than one pipeline
+// (Python + npm, npm + packagecheck targets across multiple
+// ecosystems, etc.). The terminal formatter uses the answer to pick
+// between the per-ecosystem environment labels ("Go modules",
+// "npm node_modules tree") and the multi-ecosystem framing
+// ("project dependencies").
+func (p checkPlan) isMulti() bool {
+	pipelines := 0
+	if p.runPython {
+		pipelines++
+	}
+	if p.runNPM {
+		pipelines++
+	}
+	if len(p.packagecheckTargets) > 0 {
+		pipelines++
+	}
+	if pipelines > 1 {
+		return true
+	}
+	// One pipeline but multiple packagecheck ecosystems still
+	// counts as multi for display purposes.
+	eco := map[string]bool{}
+	for _, t := range p.packagecheckTargets {
+		eco[t.Ecosystem] = true
+	}
+	return len(eco) > 1
+}
+
+// singleEcoToken returns the CLI dispatch label when the plan is
+// single-ecosystem; "" when the plan is multi or empty. The
+// terminal formatter uses this to pick the existing per-ecosystem
+// labels for single-ecosystem checks.
+//
+// When discovery found nothing but the user explicitly requested
+// a single ecosystem via --ecosystem, we surface that token so
+// the terminal label says "Maven / Gradle dependencies (0
+// lockfiles)" instead of falling through to the Python default.
+func (p checkPlan) singleEcoToken() string {
+	if p.isMulti() {
+		return ""
+	}
+	if p.runPython {
+		return ecoPython
+	}
+	if p.runNPM {
+		return ecoNPM
+	}
+	if len(p.packagecheckTargets) > 0 {
+		return osvIDToEcoToken[p.packagecheckTargets[0].Ecosystem]
+	}
+	// Explicit empty-discovery case: a single --ecosystem
+	// request with no matching lockfiles still picks the
+	// per-ecosystem label.
+	if p.explicitEcosystem && len(p.requestedEcosystems) == 1 {
+		id := p.requestedEcosystems[0]
+		switch id {
+		case intel.EcosystemPyPI:
+			return ecoPython
+		case intel.EcosystemNPM:
+			return ecoNPM
+		default:
+			return osvIDToEcoToken[id]
+		}
+	}
+	return ""
+}
+
+// buildCheckPlan turns the user-supplied --ecosystem flags + --path
+// into a concrete plan. An empty --ecosystem list triggers recursive
+// autodetect; a non-empty list constrains the plan to exactly the
+// requested ecosystems.
+//
+// An EXPLICIT --path that does not exist (or points at a regular
+// file) is an error: a typo in CI -- e.g.
+// `--path /opt/venv/lib/pyhton...` -- must not look like a clean
+// check result. The validator only fires when path != ""; empty
+// path keeps the legacy Python autodiscovery contract intact.
+//
+// When --ecosystem is empty AND --path is explicit, an empty plan
+// (no targets found, no Python / npm signals) is returned without
+// falling back to Python's site-packages autodiscovery. The
+// fallback fires only when --path is empty so the historical
+// behaviour of `aguara check` (no flags) on a host with a global
+// site-packages keeps working.
+func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 	if err := validateExplicitCheckPath(path); err != nil {
+		return checkPlan{}, err
+	}
+	plan := checkPlan{rootPath: path}
+
+	// --- Explicit ecosystem path ---
+	if len(ecoFlags) > 0 {
+		plan.explicitEcosystem = true
+		var packagecheckIDs []string
+		for _, raw := range ecoFlags {
+			token, err := canonicaliseCheckEcosystem(raw)
+			if err != nil {
+				return checkPlan{}, err
+			}
+			switch token {
+			case ecoPython:
+				plan.runPython = true
+				plan.pythonPath = path
+				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
+			case ecoNPM:
+				plan.runNPM = true
+				plan.npmPath = path
+				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
+			default:
+				osvID, ok := packagecheckEcosystems[token]
+				if !ok {
+					return checkPlan{}, fmt.Errorf("internal error: unresolved ecosystem token %q", token)
+				}
+				packagecheckIDs = append(packagecheckIDs, osvID)
+				plan.requestedEcosystems = append(plan.requestedEcosystems, osvID)
+			}
+		}
+		if len(packagecheckIDs) > 0 {
+			root := path
+			if root == "" {
+				root = "."
+			}
+			targets, err := packagecheck.Discover(root, packagecheckIDs)
+			if err != nil {
+				return checkPlan{}, fmt.Errorf("check: discover %s: %w", root, err)
+			}
+			plan.packagecheckTargets = targets
+		}
+		return plan, nil
+	}
+
+	// --- Autodetect ---
+	probe := path
+	if probe == "" {
+		probe = "."
+	}
+	resolved := probe
+	if abs, err := filepath.Abs(probe); err == nil {
+		resolved = abs
+	}
+
+	// npm: probe root is node_modules itself OR contains one.
+	if filepath.Base(resolved) == "node_modules" {
+		plan.runNPM = true
+		plan.npmPath = resolved
+	} else if statDir(filepath.Join(resolved, "node_modules")) {
+		plan.runNPM = true
+		plan.npmPath = resolved
+	}
+
+	// packagecheck: recursive walk for every supported ecosystem
+	// at once. Discover honours the skip-list (vendor, target,
+	// bin, obj, .gradle, node_modules, .git, .aguara) so this is
+	// safe to run unconditionally.
+	if statDir(resolved) {
+		targets, err := packagecheck.Discover(resolved, nil)
+		if err != nil {
+			return checkPlan{}, fmt.Errorf("check: discover %s: %w", resolved, err)
+		}
+		plan.packagecheckTargets = targets
+	}
+
+	// Python legacy: explicit path heuristic (site-packages-shaped
+	// directory) wins regardless of whether npm / packagecheck
+	// also fired, because a site-packages tree IS a Python check.
+	if path != "" && looksLikePythonSitePackages(resolved) {
+		plan.runPython = true
+		plan.pythonPath = path
+	}
+
+	// Python legacy: implicit-path fallback. When the user ran
+	// `aguara check` with NO --path and we found nothing, fire
+	// the historical site-packages autodiscovery so the
+	// no-flag invocation on a host with global Python keeps
+	// working.
+	if path == "" && !plan.runNPM && len(plan.packagecheckTargets) == 0 && !plan.runPython {
+		plan.runPython = true
+		plan.pythonPath = ""
+	}
+
+	return plan, nil
+}
+
+// canonicaliseCheckEcosystem maps a raw --ecosystem flag value to
+// the internal CLI dispatch token. Used by buildCheckPlan;
+// unsupported values surface the full list of choices so the user
+// can recover from a typo without reading source.
+func canonicaliseCheckEcosystem(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "python", "pypi":
+		return ecoPython, nil
+	case "npm":
+		return ecoNPM, nil
+	case "go", "golang":
+		return ecoGo, nil
+	case "cargo", "rust":
+		return ecoCargo, nil
+	case "composer", "php":
+		return ecoComposer, nil
+	case "ruby", "gem", "rubygems":
+		return ecoRuby, nil
+	case "maven", "java":
+		return ecoMaven, nil
+	case "nuget", "dotnet", "csharp":
+		return ecoNuGet, nil
+	default:
+		return "", fmt.Errorf("unsupported ecosystem %q (supported: %s)", raw, intel.SupportedEcosystemsHint())
+	}
+}
+
+// resolveCheckTarget is the single-ecosystem helper kept for tests
+// + audit that have not migrated to checkPlan yet. New code should
+// call buildCheckPlan directly. Returns the FIRST ecosystem the
+// plan resolves to; multi-ecosystem plans are flattened to their
+// first packagecheck target (or Python / npm if those fire first).
+func resolveCheckTarget(eco, path string) (string, string, error) {
+	flags := []string(nil)
+	if strings.TrimSpace(eco) != "" {
+		flags = []string{eco}
+	}
+	plan, err := buildCheckPlan(flags, path)
+	if err != nil {
 		return "", "", err
 	}
-	switch strings.ToLower(strings.TrimSpace(eco)) {
-	case "python", "pypi":
-		return ecoPython, path, nil
-	case "npm":
-		return ecoNPM, path, nil
-	case "go", "golang":
-		return ecoGo, path, nil
-	case "cargo", "rust":
-		return ecoCargo, path, nil
-	case "composer", "php":
-		return ecoComposer, path, nil
-	case "ruby", "gem", "rubygems":
-		return ecoRuby, path, nil
-	case "maven", "java":
-		return ecoMaven, path, nil
-	case "nuget", "dotnet", "csharp":
-		return ecoNuGet, path, nil
-	case "":
-		return autoDetectCheckTarget(path)
-	default:
-		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, go, cargo, composer, ruby, maven, or nuget", eco)
+	if plan.runPython {
+		return ecoPython, plan.pythonPath, nil
 	}
+	if plan.runNPM {
+		return ecoNPM, plan.npmPath, nil
+	}
+	if len(plan.packagecheckTargets) > 0 {
+		token := osvIDToEcoToken[plan.packagecheckTargets[0].Ecosystem]
+		return token, path, nil
+	}
+	// Empty plan: explicit --path with no targets. Tests that
+	// pre-date PR #5 expect a non-empty ecosystem back; fall back
+	// to Python so the legacy test contract holds.
+	return ecoPython, path, nil
 }
 
 // validateExplicitCheckPath enforces that an explicit --path (when
@@ -216,116 +498,158 @@ func validateExplicitCheckPath(path string) error {
 	return nil
 }
 
-// autoDetectCheckTarget chooses an ecosystem from the filesystem shape
-// at path. The rules are deliberately narrow so the default
-// `aguara check` does not silently switch ecosystems on directories
-// that merely happen to share a name with one. npm wins only when
-// there is a real node_modules directory; otherwise the call falls
-// back to the historical Python check path.
-func autoDetectCheckTarget(path string) (string, string, error) {
-	probe := path
-	if probe == "" {
-		probe = "."
+// singleEcoEnvLabel returns the terminal-friendly label for a
+// single-ecosystem plan ("npm node_modules tree", "Go modules",
+// ...). Returns "" for multi-ecosystem plans; the caller falls
+// back to the generic "project dependencies" framing in that case.
+func singleEcoEnvLabel(token string) string {
+	switch token {
+	case ecoPython:
+		return "Python environment"
+	case ecoNPM:
+		return "npm node_modules tree"
+	case ecoGo:
+		return "Go modules"
+	case ecoCargo:
+		return "Rust crates"
+	case ecoComposer:
+		return "Composer packages"
+	case ecoRuby:
+		return "RubyGems"
+	case ecoMaven:
+		return "Maven / Gradle dependencies"
+	case ecoNuGet:
+		return "NuGet packages"
+	default:
+		return ""
 	}
-	if info, err := os.Stat(probe); err == nil && info.IsDir() {
-		// Resolve the probe so `filepath.Base` returns the real
-		// directory name. Without this, `aguara check` from inside
-		// a node_modules tree (probe == ".") would yield Base == "."
-		// and the npm signal would be missed -- the npm checker
-		// never runs and a compromised package is silently reported
-		// clean. Fall back to the raw probe if Abs fails, so we
-		// still get the historical behaviour on weird inputs.
-		resolved := probe
-		if abs, err := filepath.Abs(probe); err == nil {
-			resolved = abs
-		}
-		// On the npm-detected branches, return the resolved path so
-		// incident.CheckNPM -> resolveNPMRoot does not have to repeat
-		// the same dot-aware basename trick. Passing a literal "."
-		// through here breaks the npm walker because
-		// filepath.Base(".") == "." and the path has no
-		// `./node_modules` child.
-		if filepath.Base(resolved) == "node_modules" {
-			return ecoNPM, resolved, nil
-		}
-		nm := filepath.Join(resolved, "node_modules")
-		if nmInfo, err := os.Stat(nm); err == nil && nmInfo.IsDir() {
-			return ecoNPM, resolved, nil
-		}
-		// PR #2: Go autodetect. If go.sum or go.mod sits at the
-		// probe root we treat the directory as a Go module and run
-		// the packagecheck Go path. The check is intentionally
-		// shallow (only the probe root, not a recursive walk) so a
-		// vendored go.sum deep inside a Python project does not
-		// silently switch ecosystems on the user. The Runner's
-		// discovery walks recursively from `resolved` once the
-		// dispatch lands on ecoGo.
-		if statRegularFile(filepath.Join(resolved, "go.sum")) || statRegularFile(filepath.Join(resolved, "go.mod")) {
-			return ecoGo, resolved, nil
-		}
-	}
-	// Fall back to Python. Preserve the caller's original (possibly
-	// empty) path so discoverSitePackages() can still kick in.
-	return ecoPython, path, nil
 }
 
-// statRegularFile is the autodetect-side existence probe. Lives in
-// this file (not packagecheck) because autodetect operates on the
-// scan root before we know which ecosystem owns it.
-func statRegularFile(path string) bool {
+// statDir reports whether path exists as a directory. Used by the
+// autodetect arm of buildCheckPlan to decide whether the probe is
+// safe to walk.
+func statDir(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+	return err == nil && info.IsDir()
 }
 
-// runPackageCheck dispatches a packagecheck-routed ecosystem
-// branch of `aguara check`. Discovers every lockfile under path
-// for the requested ecosystem, parses each, looks every
-// (name, version) up in the matcher built from override (or the
-// cached embedded default when override is nil), and emits a
-// CheckResult populated with:
+// looksLikePythonSitePackages returns true when path's basename is
+// one of the conventional Python install-tree directory names, or
+// when any `*.dist-info` directory sits at the path root. Used by
+// buildCheckPlan to fire the legacy Python check when the user
+// explicitly points at a venv / system install rather than a
+// project root.
 //
-//   - Findings: one entry per matched (name, version, advisory)
-//     tuple, severity CRITICAL with ecosystem-specific
-//     remediation text.
-//   - Ecosystems: one entry per discovered lockfile.
-//   - PackagesRead: sum of declared packages across every target.
-//   - Intel: the IntelSummary the override would have produced.
+// Conservative on purpose: a directory whose basename happens to
+// equal "site-packages" inside an unrelated project must NOT fire
+// Python unless the dist-info evidence is present. The dist-info
+// signal is what proves "this really is a Python install".
+func looksLikePythonSitePackages(path string) bool {
+	base := filepath.Base(path)
+	switch base {
+	case "site-packages", "dist-packages":
+		return true
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasSuffix(e.Name(), ".dist-info") {
+			return true
+		}
+	}
+	return false
+}
+
+// runCheckPlan executes every pipeline the plan asks for and
+// merges the per-pipeline CheckResults into one. Top-level
+// Findings stays flat across pipelines; Ecosystems aggregates the
+// packagecheck per-lockfile entries. Errors from a single
+// pipeline surface immediately rather than producing a partial
+// result.
 //
-// Returns a clean CheckResult with empty Ecosystems / Findings
-// when no lockfiles for the requested ecosystem are present under
-// path. That is the "no targets for the requested ecosystem"
-// contract the user spec asks for (zero error, just empty arrays).
-//
-// osvID is the canonical OSV bucket the matcher consults; ecoToken
-// is the CLI-side dispatch label (ecoGo / ecoCargo / etc.) used
-// only to pick the finding title and remediation text.
-func runPackageCheck(path, osvID, ecoToken string, override *incident.IntelOverride) (*incident.CheckResult, error) {
-	root := path
+// An empty plan (explicit --path with no targets and no Python /
+// npm signals) produces a clean CheckResult so JSON consumers see
+// the stable `"findings": []` / `"ecosystems": []` shape.
+func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, error) {
+	var parts []*incident.CheckResult
+
+	if plan.runPython {
+		opts := incident.CheckOptions{Path: plan.pythonPath, Intel: override}
+		r, err := incident.Check(opts)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, r)
+	}
+	if plan.runNPM {
+		opts := incident.CheckOptions{Path: plan.npmPath, Intel: override}
+		r, err := incident.CheckNPM(opts)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, r)
+	}
+	if len(plan.packagecheckTargets) > 0 {
+		r, err := runPackagecheckPlan(plan, override)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, r)
+	}
+
+	if len(parts) == 0 {
+		// Explicit --path with no signals. Return the canonical
+		// empty CheckResult so the JSON contract still emits
+		// `"ecosystems": []` and `"findings": []`.
+		env := plan.rootPath
+		if env == "" {
+			env = "."
+		}
+		return &incident.CheckResult{
+			Environment: env,
+			Findings:    []incident.Finding{},
+			Credentials: []incident.CredentialFile{},
+			Ecosystems:  []packagecheck.EcosystemResult{},
+			Intel:       incident.IntelSummaryForOverride(override),
+		}, nil
+	}
+	return mergeCheckResults(parts, plan.rootPath), nil
+}
+
+// runPackagecheckPlan runs the packagecheck Runner against every
+// Target the plan discovered and converts the resulting Hits into
+// incident.Finding entries with per-ecosystem remediation text.
+// The Ecosystems slice carries one entry per lockfile so multi-
+// language repos show every manifest in JSON output.
+func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, error) {
+	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
+	runRes, err := runner.Run(plan.packagecheckTargets)
+	if err != nil {
+		return nil, fmt.Errorf("aguara check: packagecheck: %w", err)
+	}
+	root := plan.rootPath
 	if root == "" {
 		root = "."
 	}
-	targets, err := packagecheck.Discover(root, []string{osvID})
-	if err != nil {
-		return nil, fmt.Errorf("aguara check %s: discover %s: %w", ecoToken, root, err)
-	}
-	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
-	runRes, err := runner.Run(targets)
-	if err != nil {
-		return nil, fmt.Errorf("aguara check %s: %w", ecoToken, err)
-	}
-
 	result := &incident.CheckResult{
-		Environment:  root,
-		Findings:     []incident.Finding{},
-		Credentials:  []incident.CredentialFile{},
-		PackagesRead: 0,
-		Intel:        incident.IntelSummaryForOverride(override),
-		Ecosystems:   runRes.Ecosystems,
+		Environment: root,
+		Findings:    []incident.Finding{},
+		Credentials: []incident.CredentialFile{},
+		Ecosystems:  runRes.Ecosystems,
+		Intel:       incident.IntelSummaryForOverride(override),
 	}
 	for _, e := range runRes.Ecosystems {
 		result.PackagesRead += e.PackagesRead
 	}
 	for _, hit := range runRes.Hits {
+		// Recover the CLI dispatch label from the OSV bucket so
+		// ecosystemFindingText picks the right wording. Falls back
+		// to a generic message if the ecosystem is unknown (which
+		// should never happen because packagecheckEcosystems and
+		// osvIDToEcoToken stay in sync via the same map literal).
+		ecoToken := osvIDToEcoToken[hit.Ref.Ecosystem]
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
@@ -336,6 +660,47 @@ func runPackageCheck(path, osvID, ecoToken string, override *incident.IntelOverr
 		})
 	}
 	return result, nil
+}
+
+// mergeCheckResults concatenates Findings + Credentials +
+// Ecosystems across pipelines and sums PackagesRead / PthScanned.
+// Intel comes from the first non-zero summary so the merged
+// result's `intel` block still reflects the snapshot generation
+// the pipelines actually consulted. Environment is the user-
+// supplied root path (or "." when implicit) for multi-pipeline
+// plans so JSON consumers do not have to reason about which
+// pipeline "wins" the environment field.
+func mergeCheckResults(parts []*incident.CheckResult, rootPath string) *incident.CheckResult {
+	if len(parts) == 1 {
+		// Single pipeline: surface its result unchanged so the
+		// existing single-eco contract (Environment = the path
+		// that pipeline scanned, etc.) holds.
+		return parts[0]
+	}
+	out := &incident.CheckResult{
+		Findings:    []incident.Finding{},
+		Credentials: []incident.CredentialFile{},
+		Ecosystems:  []packagecheck.EcosystemResult{},
+	}
+	if rootPath == "" {
+		out.Environment = "."
+	} else {
+		out.Environment = rootPath
+	}
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		out.Findings = append(out.Findings, p.Findings...)
+		out.Credentials = append(out.Credentials, p.Credentials...)
+		out.Ecosystems = append(out.Ecosystems, p.Ecosystems...)
+		out.PackagesRead += p.PackagesRead
+		out.PthScanned += p.PthScanned
+		if out.Intel.Mode == "" {
+			out.Intel = p.Intel
+		}
+	}
+	return out
 }
 
 // ecosystemFindingText returns the per-ecosystem (title,
@@ -388,29 +753,20 @@ func writeCheckJSON(result *incident.CheckResult) error {
 	return enc.Encode(result)
 }
 
-func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
-	envLabel := "Python environment"
-	switch ecosystem {
-	case ecoNPM:
-		envLabel = "npm node_modules tree"
-	case ecoGo:
-		envLabel = "Go modules"
-	case ecoCargo:
-		envLabel = "Rust crates"
-	case ecoComposer:
-		envLabel = "Composer packages"
-	case ecoRuby:
-		envLabel = "RubyGems"
-	case ecoMaven:
-		envLabel = "Maven / Gradle dependencies"
-	case ecoNuGet:
-		envLabel = "NuGet packages"
+func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
+	ecosystem := plan.singleEcoToken()
+	envLabel := singleEcoEnvLabel(ecosystem)
+	if envLabel == "" {
+		envLabel = "project dependencies"
 	}
 	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
-	switch ecosystem {
-	case ecoNPM:
+	switch {
+	case plan.isMulti():
+		fmt.Printf("Packages read: %d  |  Targets found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
+	case ecosystem == ecoNPM:
 		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
-	case ecoGo, ecoCargo, ecoComposer, ecoRuby, ecoMaven, ecoNuGet:
+	case ecosystem == ecoGo, ecosystem == ecoCargo, ecosystem == ecoComposer,
+		ecosystem == ecoRuby, ecosystem == ecoMaven, ecosystem == ecoNuGet:
 		fmt.Printf("Packages read: %d  |  Lockfiles found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
 	default:
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
@@ -481,15 +837,25 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 
 	// Action guidance is ecosystem-specific because `aguara clean`
 	// only knows how to remove the Python compromise artifacts.
+	// Maven / NuGet / Go / Rust / PHP / Ruby / npm get
+	// generic "update / remove / rebuild lockfile / rotate
+	// credentials" guidance; the Python path keeps the
+	// `aguara clean` recommendation since it owns the
+	// persistence-artifact cleanup.
 	fmt.Printf("%sAction required:%s\n", bold, reset)
-	if ecosystem == ecoNPM {
-		fmt.Println("  1. Remove the affected packages with the package manager (`npm uninstall <name>`)")
-		fmt.Println("  2. Rotate ALL credentials reachable from runs that included the compromised version")
-		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
-	} else {
-		fmt.Println("  1. Run 'aguara clean' to remove malicious files")
+	switch ecosystem {
+	case ecoPython:
+		fmt.Println("  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
 		fmt.Println("  2. Rotate ALL credentials listed above")
 		fmt.Println("  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+	default:
+		// Single packagecheck ecosystem, or single npm, or
+		// multi-ecosystem: same guidance shape (the
+		// per-ecosystem package-manager commands live in each
+		// Finding.Remediation, not in this summary).
+		fmt.Println("  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
+		fmt.Println("  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
+		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
 	}
 
 	// Build summary line
@@ -516,15 +882,23 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 }
 
 // resolveCheckIntel builds the IntelOverride the check pipeline
-// should consume. The logic is:
+// should consume. ecosystems scopes a --fresh refresh to only the
+// OSV buckets the plan actually touches (a `--ecosystem maven`
+// user does NOT want a --fresh to pull npm + PyPI just because
+// those happened to be the legacy intel.Update default). An empty
+// ecosystems list leaves intel.Update's default behaviour intact
+// (all supported ecosystems in v0.17).
 //
-//  1. If --fresh was passed, run intel.Update; on success save to
-//     local Store and override with [embedded..., refreshed].
-//     IntelSummary.Mode = "online", Snapshot = "remote-fresh".
+// The logic is:
+//
+//  1. If --fresh was passed, run intel.Update for `ecosystems`;
+//     on success save to local Store and override with
+//     [embedded..., refreshed]. IntelSummary.Mode = "online",
+//     Snapshot = "remote-fresh".
 //  2. If --fresh failed AND --allow-stale was passed, fall back
 //     to a local-only or embedded-only override and continue.
-//  3. If --fresh was NOT passed AND a local snapshot exists, layer
-//     it over the embedded snapshots. Mode stays "offline";
+//  3. If --fresh was NOT passed AND a local snapshot exists,
+//     layer it over the embedded snapshots. Mode stays "offline";
 //     Snapshot = "local".
 //  4. Otherwise, return nil so the check uses the cached embedded
 //     matcher (the legacy default path).
@@ -532,7 +906,7 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 // This is the only place the CLI touches the network for `check`.
 // Returning nil keeps the default-check contract intact: no flags,
 // no network.
-func resolveCheckIntel(ctx context.Context) (*incident.IntelOverride, error) {
+func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.IntelOverride, error) {
 	store, storeErr := intel.DefaultStore()
 	if storeErr != nil {
 		// A missing $HOME is exotic; fall through to the
@@ -540,13 +914,26 @@ func resolveCheckIntel(ctx context.Context) (*incident.IntelOverride, error) {
 		store = nil
 	}
 
+	if flagCheckFresh && len(ecosystems) == 0 {
+		// --fresh on an empty plan (e.g. `aguara check --fresh
+		// --path <empty-dir>` autodetect that found nothing)
+		// has nothing to refresh. We skip the network entirely
+		// rather than fall through to intel.Update's empty-
+		// default behaviour, which would refresh every supported
+		// ecosystem just to satisfy a check that will produce
+		// zero findings. The local / embedded snapshot is the
+		// safe answer.
+		return localOrEmbeddedOverride(store), nil
+	}
+
 	if flagCheckFresh {
 		ctx, cancel := context.WithTimeout(ctx, intel.DefaultHTTPTimeout)
 		defer cancel()
 
 		res, err := intel.Update(ctx, intel.UpdateOptions{
-			Importer: osvUpdateAdapter,
-			Stderr:   os.Stderr,
+			Importer:   osvUpdateAdapter,
+			Stderr:     os.Stderr,
+			Ecosystems: ecosystems,
 		})
 		if err != nil {
 			if !flagCheckAllowStale {
