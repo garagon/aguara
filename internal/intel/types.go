@@ -131,10 +131,19 @@ type IOC struct {
 }
 
 // Ecosystem identifiers used across the intel package. Snapshot
-// records and MatchInput use the strings on the right; the
-// Normalize* helpers in matcher.go know how to canonicalise names
-// for each.
+// records and MatchInput use the strings on the right; each value
+// is the OSV bucket key exactly as OSV.dev publishes it
+// (case-sensitive). The ecosystem registry in ecosystem.go maps
+// CLI / config aliases ("python", "rust", "golang", ...) onto these
+// IDs; the Normalize* helpers in matcher.go consult the registry
+// to apply per-ecosystem name canonicalisation.
 const (
-	EcosystemNPM  = "npm"
-	EcosystemPyPI = "PyPI"
+	EcosystemNPM       = "npm"
+	EcosystemPyPI      = "PyPI"
+	EcosystemGo        = "Go"
+	EcosystemCargo     = "crates.io"
+	EcosystemPackagist = "Packagist"
+	EcosystemRubyGems  = "RubyGems"
+	EcosystemMaven     = "Maven"
+	EcosystemNuGet     = "NuGet"
 )

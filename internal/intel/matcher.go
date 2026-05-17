@@ -198,43 +198,29 @@ func indexKey(ecosystem, name string) string {
 }
 
 // normalizeEcosystem maps assorted ecosystem spellings to the
-// canonical value. The check command, OSV importer, and manual
-// adapter may all use slightly different casing or aliases; this
-// function is the one place that has to know about them.
+// canonical OSV bucket key via the registry in ecosystem.go.
+// Unknown ecosystems are preserved as-is (lower-cased) so future
+// ecosystems wire in additively here; they simply will not match
+// anything until the registry knows about them.
 func normalizeEcosystem(s string) string {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "npm":
-		return EcosystemNPM
-	case "pypi", "python":
-		return EcosystemPyPI
-	default:
-		// Unknown ecosystems are preserved as-is (lower-cased)
-		// so future ecosystems wire in additively without code
-		// changes here. They simply will not match anything
-		// until records ship for them.
-		return strings.ToLower(strings.TrimSpace(s))
+	if canon := CanonicaliseEcosystem(s); canon != "" {
+		return canon
 	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// normalizeName applies ecosystem-specific name canonicalisation.
-//
-//   - npm: trim whitespace, preserve case and scope.
-//   - PyPI: PEP 503 -- lower-case, then collapse runs of [-_.]
-//     into a single '-'.
-//
-// Anything else falls back to a whitespace trim + lower-case,
-// which is the safe-default behaviour for ecosystems we have not
+// normalizeName applies ecosystem-specific name canonicalisation
+// via the registry. Each EcosystemSpec.NormalizePackageName carries
+// the rule: PEP 503 for PyPI, lower-case + trim for the case-folding
+// ecosystems (Cargo / Packagist / RubyGems / NuGet), case-preserving
+// trim for npm / Go / Maven. Unknown ecosystems fall back to
+// lower-case + trim, the safe default for ecosystems we have not
 // taught the package about yet.
 func normalizeName(ecosystem, name string) string {
-	name = strings.TrimSpace(name)
-	switch ecosystem {
-	case EcosystemNPM:
-		return name
-	case EcosystemPyPI:
-		return PEP503Normalize(name)
-	default:
-		return strings.ToLower(name)
+	if spec, ok := lookupSpec(ecosystem); ok && spec.NormalizePackageName != nil {
+		return spec.NormalizePackageName(name)
 	}
+	return nameLowerTrim(name)
 }
 
 // PEP503Normalize implements the simple form of PEP 503 used by

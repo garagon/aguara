@@ -412,6 +412,136 @@ func TestImportRejectsUnsupportedEcosystem(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported ecosystem")
+	// PR #1: error message must enumerate every supported ecosystem
+	// so the user can recover from a typo without reading source.
+	for _, eco := range []string{"npm", "PyPI", "Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
+		require.Contains(t, err.Error(), eco, "error must list %s", eco)
+	}
+}
+
+// TestImportAcceptsAllEightCanonicalEcosystems exercises the
+// post-PR-#1 registry: the importer now canonicalises every OSV
+// bucket key its records can carry, so a filter on "Go" /
+// "crates.io" / "Maven" / etc. does not silently drop everything.
+func TestImportAcceptsAllEightCanonicalEcosystems(t *testing.T) {
+	ecosystems := []string{"npm", "PyPI", "Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"}
+	for _, eco := range ecosystems {
+		t.Run(eco, func(t *testing.T) {
+			rec := osvRecordFixture{
+				ID: "MAL-FIXTURE-" + eco,
+				Affected: []affectedFixture{{
+					Package:  packageFixture{Name: "evil-pkg", Ecosystem: eco},
+					Versions: []string{"1.0.0"},
+				}},
+			}
+			snap, err := osvimport.Import(
+				[][]byte{mustMarshal(t, rec)},
+				osvimport.Options{Ecosystems: []string{eco}, GeneratedAt: time.Unix(0, 0)},
+			)
+			require.NoError(t, err)
+			require.Len(t, snap.Records, 1, "filter on %q must keep the record", eco)
+			require.Equal(t, eco, snap.Records[0].Ecosystem)
+		})
+	}
+}
+
+// TestImportAcceptsAliases covers the CLI alias path: a user
+// passing `--ecosystem rust` should hit the same crates.io bucket
+// as `--ecosystem crates.io`.
+func TestImportAcceptsAliases(t *testing.T) {
+	aliasToCanonical := map[string]string{
+		"python":  "PyPI",
+		"rust":    "crates.io",
+		"cargo":   "crates.io",
+		"java":    "Maven",
+		"dotnet":  "NuGet",
+		"ruby":    "RubyGems",
+		"php":     "Packagist",
+		"golang":  "Go",
+	}
+	for alias, canon := range aliasToCanonical {
+		t.Run(alias, func(t *testing.T) {
+			rec := osvRecordFixture{
+				ID: "MAL-FIXTURE-ALIAS",
+				Affected: []affectedFixture{{
+					Package:  packageFixture{Name: "evil-pkg", Ecosystem: canon},
+					Versions: []string{"1.0.0"},
+				}},
+			}
+			snap, err := osvimport.Import(
+				[][]byte{mustMarshal(t, rec)},
+				osvimport.Options{Ecosystems: []string{alias}, GeneratedAt: time.Unix(0, 0)},
+			)
+			require.NoError(t, err)
+			require.Len(t, snap.Records, 1, "alias %q must canonicalise to %q", alias, canon)
+			require.Equal(t, canon, snap.Records[0].Ecosystem)
+		})
+	}
+}
+
+func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
+	// Smoke-test the per-record verdict osvimport.ClassifyForEcosystem
+	// returns. measure-intel relies on this for the funnel counts
+	// it prints; if any status drifts, the embed/parser-now/
+	// range-required recommendation flips silently.
+	t.Run("ecosystem miss", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID: "MAL-1",
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: "x", Ecosystem: "npm"},
+				Versions: []string{"1.0.0"},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
+		require.Equal(t, osvimport.StatusEcosystemMiss, status)
+	})
+	t.Run("withdrawn", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID:        "MAL-2",
+			Withdrawn: "2024-01-15T00:00:00Z",
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: "x", Ecosystem: "RubyGems"},
+				Versions: []string{"1.0.0"},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "RubyGems")
+		require.Equal(t, osvimport.StatusWithdrawn, status)
+	})
+	t.Run("ranges only", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID: "MAL-3",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "x", Ecosystem: "Go"},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
+		require.Equal(t, osvimport.StatusRangesOnly, status)
+	})
+	t.Run("neither signal nor keyword", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID:      "CVE-2024-9999",
+			Summary: "Some generic vulnerability",
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: "x", Ecosystem: "Maven"},
+				Versions: []string{"1.0.0"},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Maven")
+		require.Equal(t, osvimport.StatusNeither, status)
+	})
+	t.Run("kept via MAL signal", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID: "MAL-OK",
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: "evil", Ecosystem: "NuGet"},
+				Versions: []string{"1.0.0"},
+			}},
+		}
+		got, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "NuGet")
+		require.Equal(t, osvimport.StatusKept, status)
+		require.Equal(t, "NuGet", got.Ecosystem)
+		require.Equal(t, "evil", got.Name)
+	})
 }
 
 func TestImportFromZipRejectsCumulativeOversize(t *testing.T) {
