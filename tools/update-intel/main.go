@@ -3,12 +3,27 @@
 //
 // Production invocation reads zip dumps from local disk (the maintainer
 // downloads them out-of-band via curl/wget) so the importer never
-// touches the network from within `aguara`:
+// touches the network from within `aguara`. v0.17 ships all 8
+// supported ecosystems in the embedded snapshot, so a release-prep
+// regeneration passes one --from-zip / --ecosystem pair per ecosystem:
 //
 //	go run ./tools/update-intel \
-//	    --from-zip ./osv-npm.zip --ecosystem npm \
-//	    --from-zip ./osv-pypi.zip --ecosystem PyPI \
+//	    --from-zip ./osv-npm.zip       --ecosystem npm \
+//	    --from-zip ./osv-pypi.zip      --ecosystem PyPI \
+//	    --from-zip ./osv-go.zip        --ecosystem Go \
+//	    --from-zip ./osv-crates.io.zip --ecosystem crates.io \
+//	    --from-zip ./osv-packagist.zip --ecosystem Packagist \
+//	    --from-zip ./osv-rubygems.zip  --ecosystem RubyGems \
+//	    --from-zip ./osv-maven.zip     --ecosystem Maven \
+//	    --from-zip ./osv-nuget.zip     --ecosystem NuGet \
 //	    --out internal/incident/generated_intel.go
+//
+// A regeneration that forgets one of the 8 pairs is caught by
+// TestEmbeddedSnapshotCoversAllEightEcosystems in
+// internal/incident: the test asserts every SupportedEcosystems()
+// entry has a SourceMeta in the snapshot. The header in the
+// generated file is derived from snap.Sources so it always lists
+// the ecosystems actually present.
 //
 // The flag pairs --from-zip / --ecosystem are positional: the Nth
 // zip is interpreted under the Nth ecosystem filter. Mismatched

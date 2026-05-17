@@ -652,3 +652,40 @@ func TestRenderGoSourceDeterministic(t *testing.T) {
 	require.True(t, strings.Contains(a, "intel.SourceOSV"))
 	require.True(t, strings.Contains(a, "intel.KindMalicious"))
 }
+
+func TestRenderGoSourceHeaderListsSnapshotEcosystems(t *testing.T) {
+	// Spec/release-hygiene: the regeneration command shown in
+	// the generated file's header must match the ecosystems
+	// actually written below. Earlier versions hardcoded
+	// `--ecosystem npm` + `--ecosystem PyPI` even when the
+	// snapshot covered the v0.17 8-ecosystem set, so the next
+	// maintainer copying the command would shrink the snapshot
+	// silently. RenderGoSource now derives the pairs from
+	// snap.Sources.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC),
+		Sources: []intel.SourceMeta{
+			{Name: "osv.dev/npm", Kind: intel.SourceOSV},
+			{Name: "osv.dev/pypi", Kind: intel.SourceOSV},
+			{Name: "osv.dev/maven", Kind: intel.SourceOSV},
+			{Name: "osv.dev/nuget", Kind: intel.SourceOSV},
+		},
+	}
+	out, err := osvimport.RenderGoSource(snap, osvimport.RenderConfig{Package: "incident", VarName: "EmbeddedIntelSnapshot"})
+	require.NoError(t, err)
+	for _, want := range []string{
+		"--from-zip ./osv-npm.zip --ecosystem npm",
+		"--from-zip ./osv-pypi.zip --ecosystem PyPI",
+		"--from-zip ./osv-maven.zip --ecosystem Maven",
+		"--from-zip ./osv-nuget.zip --ecosystem NuGet",
+	} {
+		require.Contains(t, out, want, "header must list %q", want)
+	}
+	// Ecosystems absent from snap.Sources must NOT show up in
+	// the header (a stale `--ecosystem Go` would mislead the
+	// next maintainer into a wrong regeneration command).
+	for _, absent := range []string{"--ecosystem Go", "--ecosystem crates.io", "--ecosystem Packagist", "--ecosystem RubyGems"} {
+		require.NotContains(t, out, absent, "header must NOT advertise %q (not in snapshot)", absent)
+	}
+}
