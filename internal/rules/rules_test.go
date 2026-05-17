@@ -75,6 +75,34 @@ func TestCompileMissingID(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestSensitiveFlag_MCPCFG003 pins that MCPCFG_003 carries the
+// sensitive flag through YAML -> compiled rule. The rule's `match_mode:
+// all` requires both the env-block pattern AND the secret-bearing
+// key/value pattern to fire, so the resulting MatchedText literally
+// contains the value side of the env binding. Without the flag,
+// types.RedactSensitiveFindings does not scrub that text and the
+// value flows un-redacted into JSON / SARIF / terminal output. Peer
+// rules with the same shape (MCP_007, all CRED_* via category) set
+// this; MCPCFG_003 was missed in the original sensitive-flag rollout
+// and is restored here.
+func TestSensitiveFlag_MCPCFG003(t *testing.T) {
+	rawRules, err := rules.LoadFromFS(builtin.FS())
+	require.NoError(t, err)
+	compiled, errs := rules.CompileAll(rawRules)
+	require.Empty(t, errs)
+
+	var rule *rules.CompiledRule
+	for i := range compiled {
+		if compiled[i].ID == "MCPCFG_003" {
+			rule = compiled[i]
+			break
+		}
+	}
+	require.NotNil(t, rule, "MCPCFG_003 not found in built-in rules")
+	require.True(t, rule.Sensitive,
+		"MCPCFG_003 must be sensitive: true; otherwise its matched_text flows un-redacted through output formatters")
+}
+
 func TestLoadBuiltinRules(t *testing.T) {
 	rawRules, err := rules.LoadFromFS(builtin.FS())
 	require.NoError(t, err)

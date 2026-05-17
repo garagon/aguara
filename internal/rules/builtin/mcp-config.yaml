@@ -47,6 +47,7 @@ severity: LOW
 category: mcp-config
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: all
+sensitive: true
 remediation: "Use environment variable references (e.g., $ENV_VAR) or a secrets manager instead of hardcoding credentials."
 patterns:
   - type: regex

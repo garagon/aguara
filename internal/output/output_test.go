@@ -590,6 +590,69 @@ func TestJSONFormatterRedactsSensitiveMatch(t *testing.T) {
 	require.Contains(t, out, "[REDACTED]")
 }
 
+// TestJSONFormatterRedactsMCPCFG003 locks the YAML -> runtime -> output
+// chain for MCPCFG_003. The rule's `match_mode: all` requires the env
+// block pattern AND the secret-bearing key/value pattern to fire, so
+// the resulting MatchedText literally contains the value side of the
+// env binding. With sensitive: true on the rule, the runtime emits
+// Finding.Sensitive=true and RedactSensitiveFindings scrubs MatchedText
+// before any output formatter sees it. The fixture value is obviously
+// synthetic padding (no resemblance to a real credential) and the test
+// asserts it never reaches the JSON output.
+func TestJSONFormatterRedactsMCPCFG003(t *testing.T) {
+	const fixtureValue = "not-a-real-key-just-test-padding-XYZ-0123456789"
+	findings := []types.Finding{
+		{
+			RuleID:      "MCPCFG_003",
+			RuleName:    "Hardcoded secrets in MCP env block",
+			Severity:    types.SeverityLow,
+			Category:    "mcp-config",
+			FilePath:    "mcp.json",
+			Line:        4,
+			MatchedText: `"env":{ + "API_KEY":"` + fixtureValue + `"`,
+			Sensitive:   true,
+		},
+	}
+	types.RedactSensitiveFindings(findings)
+
+	f := &output.JSONFormatter{}
+	var buf bytes.Buffer
+	require.NoError(t, f.Format(&buf, &types.ScanResult{Findings: findings}))
+
+	out := buf.String()
+	require.NotContains(t, out, fixtureValue, "MCPCFG_003 captured value leaked into JSON output")
+	require.Contains(t, out, "[REDACTED]", "JSON output should embed the redaction placeholder")
+}
+
+// TestSARIFFormatterRedactsMCPCFG003 is the SARIF counterpart. The
+// SARIF formatter embeds MatchedText into message.text which gets
+// published to GitHub Code Scanning, so the redaction must run before
+// SARIF serialization.
+func TestSARIFFormatterRedactsMCPCFG003(t *testing.T) {
+	const fixtureValue = "not-a-real-key-just-test-padding-XYZ-0123456789"
+	findings := []types.Finding{
+		{
+			RuleID:      "MCPCFG_003",
+			RuleName:    "Hardcoded secrets in MCP env block",
+			Severity:    types.SeverityLow,
+			Category:    "mcp-config",
+			FilePath:    "mcp.json",
+			Line:        4,
+			MatchedText: `"env":{ + "API_KEY":"` + fixtureValue + `"`,
+			Sensitive:   true,
+		},
+	}
+	types.RedactSensitiveFindings(findings)
+
+	f := &output.SARIFFormatter{}
+	var buf bytes.Buffer
+	require.NoError(t, f.Format(&buf, &types.ScanResult{Findings: findings}))
+
+	out := buf.String()
+	require.NotContains(t, out, fixtureValue, "MCPCFG_003 captured value leaked into SARIF output")
+	require.Contains(t, out, "[REDACTED]", "SARIF output should embed the redaction placeholder")
+}
+
 // TestSARIFFormatterPreservesNonSensitiveMatch is the negative case: a
 // non-sensitive finding (e.g. a prompt-injection signature) must keep its
 // MatchedText so reviewers can see what tripped the rule.
