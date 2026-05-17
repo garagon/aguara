@@ -247,3 +247,63 @@ func TestRunner_ComposerAliasDoesNotDoubleCountFinding(t *testing.T) {
 		t.Errorf("findings_count = %d, want 1", res.Ecosystems[0].FindingsCount)
 	}
 }
+
+func TestRunner_MavenSyntheticHit(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID:        "MAL-MAVEN",
+			Ecosystem: intel.EcosystemMaven,
+			Name:      "com.fasterxml.jackson.core:jackson-databind",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"2.16.1"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, _ := Discover(filepath.Join("testdata", "maven-compromised"), []string{intel.EcosystemMaven})
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1 (hits=%+v)", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Ref.Name != "com.fasterxml.jackson.core:jackson-databind" {
+		t.Errorf("hit ref name = %q, want com.fasterxml.jackson.core:jackson-databind", res.Hits[0].Ref.Name)
+	}
+	if res.Ecosystems[0].FindingsCount != 1 {
+		t.Errorf("findings_count = %d, want 1", res.Ecosystems[0].FindingsCount)
+	}
+}
+
+func TestRunner_NuGetSyntheticHit(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID:        "MAL-NUGET",
+			Ecosystem: intel.EcosystemNuGet,
+			Name:      "newtonsoft.json", // case-folded by intel.normalizeName
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"13.0.3"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, _ := Discover(filepath.Join("testdata", "nuget-compromised"), []string{intel.EcosystemNuGet})
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) == 0 {
+		t.Fatal("expected at least one hit (Newtonsoft.Json 13.0.3 in lockfile + csproj)")
+	}
+	// Both packages.lock.json and the .csproj declare
+	// Newtonsoft.Json 13.0.3; the per-(ref, advisory) dedup is
+	// per-target, so each lockfile gets one hit. With two
+	// targets that means up to 2 hits — but the lockfile and
+	// the csproj produce different PackageRef paths.
+	for _, h := range res.Hits {
+		if h.Record.ID != "MAL-NUGET" {
+			t.Errorf("hit record ID = %q, want MAL-NUGET", h.Record.ID)
+		}
+	}
+}

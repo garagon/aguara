@@ -34,6 +34,8 @@ const (
 	ecoCargo    = "cargo"
 	ecoComposer = "composer"
 	ecoRuby     = "ruby"
+	ecoMaven    = "maven"
+	ecoNuGet    = "nuget"
 )
 
 // packagecheckEcosystems maps CLI dispatch tokens to the
@@ -46,6 +48,8 @@ var packagecheckEcosystems = map[string]string{
 	ecoCargo:    intel.EcosystemCargo,
 	ecoComposer: intel.EcosystemPackagist,
 	ecoRuby:     intel.EcosystemRubyGems,
+	ecoMaven:    intel.EcosystemMaven,
+	ecoNuGet:    intel.EcosystemNuGet,
 }
 
 var checkCmd = &cobra.Command{
@@ -63,6 +67,8 @@ a specific check:
   cargo  (alias: rust)
   composer (alias: php)
   ruby   (aliases: gem, rubygems)
+  maven  (alias: java)
+  nuget  (aliases: dotnet, csharp)
 
 The known-bad list ships embedded with the binary.`,
 	RunE: runCheck,
@@ -70,7 +76,7 @@ The known-bad list ships embedded with the binary.`,
 
 func init() {
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
-	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, go, cargo, composer, ruby")
+	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
@@ -175,10 +181,14 @@ func resolveCheckTarget(eco, path string) (string, string, error) {
 		return ecoComposer, path, nil
 	case "ruby", "gem", "rubygems":
 		return ecoRuby, path, nil
+	case "maven", "java":
+		return ecoMaven, path, nil
+	case "nuget", "dotnet", "csharp":
+		return ecoNuGet, path, nil
 	case "":
 		return autoDetectCheckTarget(path)
 	default:
-		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, go, cargo, composer, or ruby", eco)
+		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, go, cargo, composer, ruby, maven, or nuget", eco)
 	}
 }
 
@@ -347,6 +357,12 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 	case ecoRuby:
 		return fmt.Sprintf("%s %s is a known compromised RubyGem (%s)", name, version, id),
 			fmt.Sprintf("Run `bundle update %s` or pin a fixed version in Gemfile. Rotate secrets reachable from builds that used the compromised gem.", name)
+	case ecoMaven:
+		return fmt.Sprintf("%s %s is a known compromised Maven package (%s)", name, version, id),
+			fmt.Sprintf("Update %s to a fixed version in pom.xml / Gradle lockfile and rebuild the lockfile. Rotate secrets reachable from builds that used the compromised package.", name)
+	case ecoNuGet:
+		return fmt.Sprintf("%s %s is a known compromised NuGet package (%s)", name, version, id),
+			fmt.Sprintf("Update %s to a fixed version in the project file or packages.lock.json and restore. Rotate secrets reachable from builds that used the compromised package.", name)
 	default:
 		// Defensive: a packagecheck ecosystem without a wording
 		// entry still produces a usable finding rather than a
@@ -385,12 +401,16 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 		envLabel = "Composer packages"
 	case ecoRuby:
 		envLabel = "RubyGems"
+	case ecoMaven:
+		envLabel = "Maven / Gradle dependencies"
+	case ecoNuGet:
+		envLabel = "NuGet packages"
 	}
 	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
 	switch ecosystem {
 	case ecoNPM:
 		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
-	case ecoGo, ecoCargo, ecoComposer, ecoRuby:
+	case ecoGo, ecoCargo, ecoComposer, ecoRuby, ecoMaven, ecoNuGet:
 		fmt.Printf("Packages read: %d  |  Lockfiles found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
 	default:
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)

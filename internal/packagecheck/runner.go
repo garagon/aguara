@@ -106,6 +106,10 @@ func parseTarget(t Target) ([]PackageRef, error) {
 		return ParseComposer(t)
 	case intel.EcosystemRubyGems:
 		return ParseRuby(t)
+	case intel.EcosystemMaven:
+		return ParseMaven(t)
+	case intel.EcosystemNuGet:
+		return ParseNuGet(t)
 	default:
 		return nil, fmt.Errorf("no parser for ecosystem %q", t.Ecosystem)
 	}

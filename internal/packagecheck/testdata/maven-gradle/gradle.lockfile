@@ -1,0 +1,7 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+empty=annotationProcessor,testAnnotationProcessor
+org.apache.commons:commons-lang3:3.14.0=compileClasspath,runtimeClasspath
+com.google.guava:guava:33.0.0-jre=compileClasspath,runtimeClasspath
+com.example:with-classifier:1.0.0:linux-x86_64=compileClasspath

@@ -179,3 +179,99 @@ func TestDiscover_DefaultNilCoversAllPackagecheckEcosystems(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscover_MavenAndNuGetMonorepoSkipsBuildDirs(t *testing.T) {
+	// Monorepo fixture has:
+	//   api/pom.xml             (Maven)
+	//   web/Web.csproj          (NuGet)
+	//   vendor/should-skip.csproj   (skipped: vendor/)
+	//   target/skip/pom.xml         (skipped: target/)
+	//   .gradle/skip/gradle.lockfile (skipped: .gradle/)
+	//   web/bin/Skip.csproj         (skipped: bin/)
+	//   web/obj/Skip.csproj         (skipped: obj/)
+	root := filepath.Join("testdata", "multi-mvn-nuget")
+	targets, err := Discover(root, []string{intel.EcosystemMaven, intel.EcosystemNuGet})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if got, want := len(targets), 2; got != want {
+		t.Fatalf("targets = %d, want %d (targets=%+v)", got, want, targets)
+	}
+	var sawMaven, sawNuGet bool
+	for _, target := range targets {
+		switch target.Ecosystem {
+		case intel.EcosystemMaven:
+			sawMaven = true
+			if target.Source != "pom.xml" {
+				t.Errorf("Maven source = %q, want pom.xml", target.Source)
+			}
+			if !strings.Contains(target.Path, "/api/") {
+				t.Errorf("Maven path %q not under api/", target.Path)
+			}
+		case intel.EcosystemNuGet:
+			sawNuGet = true
+			if target.Source != "csproj" {
+				t.Errorf("NuGet source = %q, want csproj", target.Source)
+			}
+		}
+	}
+	if !sawMaven || !sawNuGet {
+		t.Errorf("expected both Maven + NuGet targets, got %+v", targets)
+	}
+	for _, target := range targets {
+		for _, skipDir := range []string{"/vendor/", "/target/", "/.gradle/", "/bin/", "/obj/"} {
+			if strings.Contains(target.Path, skipDir) {
+				t.Errorf("Discover walked into %s: %q", skipDir, target.Path)
+			}
+		}
+	}
+}
+
+func TestDiscover_GradleDependencyLocksDirectoryEmitsPerFileTarget(t *testing.T) {
+	// gradle/dependency-locks/*.lockfile must emit one Target
+	// per file, NOT one per directory. The maven-gradle fixture
+	// has compileClasspath.lockfile + runtimeClasspath.lockfile
+	// under gradle/dependency-locks/ AND a root-level
+	// gradle.lockfile, so total = 3 Maven targets in the
+	// directory tree.
+	root := filepath.Join("testdata", "maven-gradle")
+	targets, err := Discover(root, []string{intel.EcosystemMaven})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(targets) != 3 {
+		t.Fatalf("targets = %d, want 3 (gradle.lockfile + 2 dependency-locks files); got %+v", len(targets), targets)
+	}
+	for _, target := range targets {
+		if target.Ecosystem != intel.EcosystemMaven {
+			t.Errorf("ecosystem = %q, want Maven", target.Ecosystem)
+		}
+		if target.Source != "gradle.lockfile" {
+			t.Errorf("source = %q, want gradle.lockfile", target.Source)
+		}
+	}
+}
+
+func TestDiscover_NuGetMultipleProjectFilesPerDirectory(t *testing.T) {
+	// A directory with both a packages.lock.json AND a .csproj
+	// emits both targets (different parser source-of-truth: the
+	// lockfile carries resolved versions, the .csproj carries
+	// the declared version that may differ).
+	root := filepath.Join("testdata", "nuget-compromised")
+	targets, err := Discover(root, []string{intel.EcosystemNuGet})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets = %d, want 2 (packages.lock.json + MyApp.csproj); got %+v", len(targets), targets)
+	}
+	sources := map[string]bool{}
+	for _, target := range targets {
+		sources[target.Source] = true
+	}
+	for _, want := range []string{"packages.lock.json", "csproj"} {
+		if !sources[want] {
+			t.Errorf("missing source %q in %+v", want, sources)
+		}
+	}
+}
