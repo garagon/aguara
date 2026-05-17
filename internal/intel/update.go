@@ -234,13 +234,12 @@ func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem
 // and so callers reading the file can see where the CLI-level
 // alias resolution happens before the URL is built.
 //
-// The default ecosystem list ([npm, PyPI]) is intentionally NOT
-// widened to all 8 in this PR. The embedded snapshot still ships
-// only npm + PyPI; flipping the update default before the embedded
-// snapshot covers the new ecosystems would create an asymmetric
-// experience (`aguara update` pulls 8 buckets but `aguara check`
-// has embedded matches for 2). The default flip lands in the
-// release PR that regenerates the embedded snapshot.
+// The default ecosystem list widened to SupportedEcosystems() in
+// v0.17 (PR #106) when the embedded snapshot grew to cover all 8
+// OSV buckets; see Update() above for the empty-Ecosystems
+// default. `aguara update` and `aguara check --fresh` now share
+// the same refresh surface, scoped per call via --ecosystem when
+// the caller wants a narrower refresh.
 func canonicaliseEcosystemForUpdate(raw string) string {
 	return CanonicaliseEcosystem(raw)
 }

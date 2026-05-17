@@ -202,7 +202,7 @@ exit $?
 //   - automatic version pinning matching whatever tag the user
 //     pins the `uses:` ref to.
 //
-// The action ref is pinned to the v0.16.2 tag rather than `@v1`
+// The action ref is pinned to the v0.17.0 tag rather than `@v1`
 // (which exists but lags significantly behind point releases). New
 // projects get a reproducible, dependabot-friendly pin; users who
 // want floating-major can edit the ref themselves.
@@ -231,7 +231,7 @@ jobs:
 
       - name: Run Aguara security scan
         id: scan
-        uses: garagon/aguara@v0.16.2
+        uses: garagon/aguara@v0.17.0
         with:
           path: .
           fail-on: high
@@ -240,7 +240,7 @@ jobs:
           # version override and fetches whatever release is
           # "latest" at run time -- so the scanner code can drift
           # away from the action ref above without notice.
-          version: v0.16.2
+          version: v0.17.0
           # SARIF results land at aguara-results.sarif and are
           # uploaded to GitHub Code Scanning automatically. Set
           # upload-sarif: 'false' to disable that upload.

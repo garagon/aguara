@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.2 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.0 sh
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
@@ -73,7 +73,7 @@ To update an existing install, rerun the installer. It downloads the selected re
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 
 # Update/pin to a specific release
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.16.2 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.0 sh
 ```
 
 ### Alternative methods
@@ -94,7 +94,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.16.1 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.17.0 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -278,29 +278,29 @@ aguara scan --auto
 #### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.16.2
+- uses: garagon/aguara@v0.17.0
   with:
     path: .
     fail-on: high
-    version: v0.16.2
+    version: v0.17.0
 ```
 
 Both pins (the action ref AND the `version:` input) are required. The
 action ref alone pins only the composite action and its install
 script; `version:` pins the Aguara binary the action installs. Setting
 both makes the workflow reproducible and dependabot-friendly: when
-v0.16.3 lands, the bot updates both together.
+v0.17.1 lands, the bot updates both together.
 
 Scans your repository, uploads findings to GitHub Code Scanning, and
 optionally fails the build:
 
 ```yaml
-- uses: garagon/aguara@v0.16.2
+- uses: garagon/aguara@v0.17.0
   with:
     path: ./mcp-server/
     severity: medium
     fail-on: high
-    version: v0.16.2
+    version: v0.17.0
 ```
 
 All inputs are optional. See [`action.yml`](action.yml) for the full list.
@@ -480,6 +480,9 @@ aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
 ## Supply-Chain Check
+
+In v0.17, `aguara check .` walks the dependency surface of a modern repo
+instead of stopping at npm/Python.
 
 Aguara ships with native threat intel built from [OSV.dev](https://osv.dev)'s
 public vulnerability database and OpenSSF Malicious Packages records, plus a
@@ -661,7 +664,7 @@ Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `
 
 ## Aguara Watch
 
-[Aguara Watch](https://watch.aguarascan.com/) continuously scans **28,000+ AI agent skills** across 6 public registries to track the real-world threat landscape for AI agents. All scans are powered by Aguara.
+Aguara Watch is being reworked. The previous public observatory is stale, so we are not using it as a product signal for this release. The scanner, CLI, Docker image, and signed release artifacts remain the supported surfaces for v0.17.0.
 
 ## Go Library
 
