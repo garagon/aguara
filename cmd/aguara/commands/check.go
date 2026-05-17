@@ -28,10 +28,25 @@ var (
 )
 
 const (
-	ecoPython = "python"
-	ecoNPM    = "npm"
-	ecoGo     = "go"
+	ecoPython   = "python"
+	ecoNPM      = "npm"
+	ecoGo       = "go"
+	ecoCargo    = "cargo"
+	ecoComposer = "composer"
+	ecoRuby     = "ruby"
 )
+
+// packagecheckEcosystems maps CLI dispatch tokens to the
+// canonical OSV bucket the packagecheck runner queries the
+// matcher with. runCheck routes the whole set through
+// runPackageCheck; adding a new packagecheck-driven ecosystem is
+// one entry here plus a case-arm in resolveCheckTarget.
+var packagecheckEcosystems = map[string]string{
+	ecoGo:       intel.EcosystemGo,
+	ecoCargo:    intel.EcosystemCargo,
+	ecoComposer: intel.EcosystemPackagist,
+	ecoRuby:     intel.EcosystemRubyGems,
+}
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
@@ -39,16 +54,23 @@ var checkCmd = &cobra.Command{
 	Long: `Scan an installed package tree for known compromised versions and
 persistence artifacts. With no flags, auto-detects npm (any directory
 containing node_modules), Go (go.sum or go.mod at the path root), or
-falls back to Python site-packages discovery. Pass --ecosystem
-(python, npm, go) to force a specific check; aliases golang and
-pypi are accepted too. The known-bad list ships embedded with the
-binary.`,
+falls back to Python site-packages discovery. Pass --ecosystem to force
+a specific check:
+
+  python (alias: pypi)
+  npm
+  go     (alias: golang)
+  cargo  (alias: rust)
+  composer (alias: php)
+  ruby   (aliases: gem, rubygems)
+
+The known-bad list ships embedded with the binary.`,
 	RunE: runCheck,
 }
 
 func init() {
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
-	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, or go")
+	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, go, cargo, composer, ruby")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
@@ -83,10 +105,12 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		result, err = incident.Check(opts)
 	case ecoNPM:
 		result, err = incident.CheckNPM(opts)
-	case ecoGo:
-		result, err = runGoPackageCheck(path, override)
 	default:
-		return fmt.Errorf("internal error: unresolved ecosystem %q", eco)
+		osvID, ok := packagecheckEcosystems[eco]
+		if !ok {
+			return fmt.Errorf("internal error: unresolved ecosystem %q", eco)
+		}
+		result, err = runPackageCheck(path, osvID, eco, override)
 	}
 	if err != nil {
 		return err
@@ -145,10 +169,16 @@ func resolveCheckTarget(eco, path string) (string, string, error) {
 		return ecoNPM, path, nil
 	case "go", "golang":
 		return ecoGo, path, nil
+	case "cargo", "rust":
+		return ecoCargo, path, nil
+	case "composer", "php":
+		return ecoComposer, path, nil
+	case "ruby", "gem", "rubygems":
+		return ecoRuby, path, nil
 	case "":
 		return autoDetectCheckTarget(path)
 	default:
-		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, or go", eco)
+		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, go, cargo, composer, or ruby", eco)
 	}
 }
 
@@ -237,37 +267,41 @@ func statRegularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// runGoPackageCheck dispatches the Go branch of `aguara check`.
-// Discovers every go.sum / go.mod under path, parses each, looks
-// every (module, version) up in the matcher built from override
-// (or the cached embedded default when override is nil), and
-// emits a CheckResult populated with:
+// runPackageCheck dispatches a packagecheck-routed ecosystem
+// branch of `aguara check`. Discovers every lockfile under path
+// for the requested ecosystem, parses each, looks every
+// (name, version) up in the matcher built from override (or the
+// cached embedded default when override is nil), and emits a
+// CheckResult populated with:
 //
-//   - Findings: one entry per matched (module, version, advisory)
-//     tuple, severity CRITICAL with Go-specific remediation text.
-//   - Ecosystems: one entry per discovered lockfile (monorepos
-//     show each services/api/go.sum + workers/scraper/go.sum
-//     separately).
-//   - PackagesRead: sum of declared modules across every target.
+//   - Findings: one entry per matched (name, version, advisory)
+//     tuple, severity CRITICAL with ecosystem-specific
+//     remediation text.
+//   - Ecosystems: one entry per discovered lockfile.
+//   - PackagesRead: sum of declared packages across every target.
 //   - Intel: the IntelSummary the override would have produced.
 //
 // Returns a clean CheckResult with empty Ecosystems / Findings
-// when no Go lockfiles are present under path. That is the
-// "no targets for the requested ecosystem" contract the user spec
-// asked for (zero error, just empty arrays).
-func runGoPackageCheck(path string, override *incident.IntelOverride) (*incident.CheckResult, error) {
+// when no lockfiles for the requested ecosystem are present under
+// path. That is the "no targets for the requested ecosystem"
+// contract the user spec asks for (zero error, just empty arrays).
+//
+// osvID is the canonical OSV bucket the matcher consults; ecoToken
+// is the CLI-side dispatch label (ecoGo / ecoCargo / etc.) used
+// only to pick the finding title and remediation text.
+func runPackageCheck(path, osvID, ecoToken string, override *incident.IntelOverride) (*incident.CheckResult, error) {
 	root := path
 	if root == "" {
 		root = "."
 	}
-	targets, err := packagecheck.Discover(root, []string{intel.EcosystemGo})
+	targets, err := packagecheck.Discover(root, []string{osvID})
 	if err != nil {
-		return nil, fmt.Errorf("aguara check go: discover %s: %w", root, err)
+		return nil, fmt.Errorf("aguara check %s: discover %s: %w", ecoToken, root, err)
 	}
 	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
 	runRes, err := runner.Run(targets)
 	if err != nil {
-		return nil, fmt.Errorf("aguara check go: %w", err)
+		return nil, fmt.Errorf("aguara check %s: %w", ecoToken, err)
 	}
 
 	result := &incident.CheckResult{
@@ -282,15 +316,45 @@ func runGoPackageCheck(path string, override *incident.IntelOverride) (*incident
 		result.PackagesRead += e.PackagesRead
 	}
 	for _, hit := range runRes.Hits {
+		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
-			Title:       fmt.Sprintf("%s %s is a known compromised Go module (%s)", hit.Ref.Name, hit.Ref.Version, hit.Record.ID),
+			Title:       title,
 			Detail:      hit.Record.Summary,
 			Path:        hit.Ref.Path,
-			Remediation: fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", hit.Ref.Name, hit.Ref.Version),
+			Remediation: remediation,
 		})
 	}
 	return result, nil
+}
+
+// ecosystemFindingText returns the per-ecosystem (title,
+// remediation) pair for a Hit. The wording stays close to the
+// ecosystem's native tooling so the user can copy-paste the
+// remediation into their package manager without translation.
+func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remediation string) {
+	name, version, id := hit.Ref.Name, hit.Ref.Version, hit.Record.ID
+	switch ecoToken {
+	case ecoGo:
+		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id),
+			fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
+	case ecoCargo:
+		return fmt.Sprintf("%s %s is a known compromised Rust crate (%s)", name, version, id),
+			fmt.Sprintf("Run `cargo update -p %s` or pin a fixed version in Cargo.toml. Rotate secrets reachable from builds that used the compromised crate.", name)
+	case ecoComposer:
+		return fmt.Sprintf("%s %s is a known compromised Composer package (%s)", name, version, id),
+			fmt.Sprintf("Run `composer update %s` or pin a fixed version in composer.json. Rotate secrets reachable from builds that used the compromised package.", name)
+	case ecoRuby:
+		return fmt.Sprintf("%s %s is a known compromised RubyGem (%s)", name, version, id),
+			fmt.Sprintf("Run `bundle update %s` or pin a fixed version in Gemfile. Rotate secrets reachable from builds that used the compromised gem.", name)
+	default:
+		// Defensive: a packagecheck ecosystem without a wording
+		// entry still produces a usable finding rather than a
+		// crash. Adding the ecosystem-specific copy is then a
+		// follow-up tightening, not a release blocker.
+		return fmt.Sprintf("%s %s is a known compromised package (%s)", name, version, id),
+			fmt.Sprintf("Remove %s %s from your dependencies. Rotate secrets reachable from builds that used the compromised version.", name, version)
+	}
 }
 
 func writeCheckJSON(result *incident.CheckResult) error {
@@ -315,12 +379,18 @@ func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 		envLabel = "npm node_modules tree"
 	case ecoGo:
 		envLabel = "Go modules"
+	case ecoCargo:
+		envLabel = "Rust crates"
+	case ecoComposer:
+		envLabel = "Composer packages"
+	case ecoRuby:
+		envLabel = "RubyGems"
 	}
 	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
 	switch ecosystem {
 	case ecoNPM:
 		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
-	case ecoGo:
+	case ecoGo, ecoCargo, ecoComposer, ecoRuby:
 		fmt.Printf("Packages read: %d  |  Lockfiles found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
 	default:
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)

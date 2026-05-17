@@ -1,0 +1,28 @@
+GIT
+  remote: https://github.com/foo/git-only-gem.git
+  revision: abc123
+  specs:
+    git-only-gem (1.0.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rails (7.1.3)
+      activesupport (= 7.1.3)
+      actionpack (= 7.1.3)
+    rack (3.0.8)
+    compromised-gem (2.0.0)
+      rake (~> 13.0)
+    nokogiri (1.16.2-arm64-darwin)
+
+PLATFORMS
+  arm64-darwin-23
+  ruby
+
+DEPENDENCIES
+  rails
+  rack
+  compromised-gem
+
+BUNDLED WITH
+   2.5.3

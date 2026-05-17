@@ -139,10 +139,14 @@ func TestCheckExplicitEcosystemPythonSkipsNPMAutoDetect(t *testing.T) {
 }
 
 func TestCheckRejectsUnsupportedEcosystem(t *testing.T) {
+	// PR #3 added cargo / composer / ruby support, so the
+	// previously-unsupported fixture had to change. Swift is
+	// realistic-shape but still outside the registry; once
+	// Swift lands, swap for another genuinely unknown token.
 	resetFlags()
 	rootCmd.SetOut(new(bytes.Buffer))
 	rootCmd.SetErr(new(bytes.Buffer))
-	rootCmd.SetArgs([]string{"check", "--ecosystem", "ruby", "--no-update-check"})
+	rootCmd.SetArgs([]string{"check", "--ecosystem", "swift", "--no-update-check"})
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
@@ -153,6 +157,13 @@ func TestCheckRejectsUnsupportedEcosystem(t *testing.T) {
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported ecosystem")
+	// Error must list every supported choice so the user can
+	// recover from the typo without reading source. PR #1
+	// established the same contract on `aguara update`; we
+	// mirror it here.
+	for _, eco := range []string{"python", "npm", "go", "cargo", "composer", "ruby"} {
+		require.Contains(t, err.Error(), eco, "error must list %s", eco)
+	}
 }
 
 func TestCheckFailOnThresholdHelper(t *testing.T) {
@@ -627,4 +638,69 @@ func TestCheckGoAutoDetectsAtPathRoot(t *testing.T) {
 
 	require.Len(t, result.Ecosystems, 1, "expected Go autodetect to fire and produce one target")
 	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
+}
+
+// --- PR #3: Cargo / Composer / Ruby CLI paths ---
+
+func TestCheckCargoExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "cargo", "--path", "../../../internal/packagecheck/testdata/cargo-clean")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "crates.io", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "Cargo.lock", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "clean Cargo.lock declares serde + tokio")
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount)
+}
+
+func TestCheckCargoAliasRustResolves(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "rust", "--path", "../../../internal/packagecheck/testdata/cargo-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "crates.io", result.Ecosystems[0].Ecosystem)
+}
+
+func TestCheckComposerExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "composer", "--path", "../../../internal/packagecheck/testdata/composer-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "Packagist", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "composer.lock", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "clean composer.lock has symfony/console + phpunit/phpunit")
+}
+
+func TestCheckComposerAliasPhpResolves(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "php", "--path", "../../../internal/packagecheck/testdata/composer-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "Packagist", result.Ecosystems[0].Ecosystem)
+}
+
+func TestCheckRubyExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "ruby", "--path", "../../../internal/packagecheck/testdata/ruby-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "RubyGems", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "Gemfile.lock", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "clean Gemfile.lock has rake + rspec (rspec-core is a dependency constraint, not a top-level spec)")
+}
+
+func TestCheckRubyAliasesGemAndRubygemsResolve(t *testing.T) {
+	for _, alias := range []string{"gem", "rubygems"} {
+		t.Run(alias, func(t *testing.T) {
+			result := checkToFile(t, "--ecosystem", alias, "--path", "../../../internal/packagecheck/testdata/ruby-clean")
+			require.Len(t, result.Ecosystems, 1)
+			require.Equal(t, "RubyGems", result.Ecosystems[0].Ecosystem)
+		})
+	}
+}
+
+func TestCheckNewEcosystemsReturnEmptyEcosystemsOnEmptyPath(t *testing.T) {
+	// Spec contract carries over from PR #2: `--ecosystem <X> --path
+	// <dir-without-lockfiles>` returns clean result with empty
+	// ecosystems[], NOT error.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+	for _, eco := range []string{"cargo", "rust", "composer", "php", "ruby", "gem", "rubygems"} {
+		t.Run(eco, func(t *testing.T) {
+			raw := checkToFileRaw(t, "--ecosystem", eco, "--path", tmp)
+			require.Contains(t, string(raw), `"ecosystems": []`)
+			require.NotContains(t, string(raw), `"ecosystems": null`)
+		})
+	}
 }

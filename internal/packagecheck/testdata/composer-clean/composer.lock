@@ -1,0 +1,15 @@
+{
+    "content-hash": "clean",
+    "packages": [
+        {
+            "name": "symfony/console",
+            "version": "v7.0.4"
+        }
+    ],
+    "packages-dev": [
+        {
+            "name": "phpunit/phpunit",
+            "version": "10.5.0"
+        }
+    ]
+}
