@@ -14,6 +14,7 @@ import (
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/intel/osvimport"
+	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/spf13/cobra"
 )
 
@@ -29,22 +30,25 @@ var (
 const (
 	ecoPython = "python"
 	ecoNPM    = "npm"
+	ecoGo     = "go"
 )
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check for compromised packages and persistence artifacts",
 	Long: `Scan an installed package tree for known compromised versions and
-persistence artifacts. With no flags, auto-detects an npm project (any
-directory containing node_modules) and otherwise falls back to Python
-site-packages discovery. Pass --ecosystem to force a specific check.
-The known-bad list ships embedded with the binary.`,
+persistence artifacts. With no flags, auto-detects npm (any directory
+containing node_modules), Go (go.sum or go.mod at the path root), or
+falls back to Python site-packages discovery. Pass --ecosystem
+(python, npm, go) to force a specific check; aliases golang and
+pypi are accepted too. The known-bad list ships embedded with the
+binary.`,
 	RunE: runCheck,
 }
 
 func init() {
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
-	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python or npm")
+	checkCmd.Flags().StringVar(&flagCheckEcosystem, "ecosystem", "", "Package ecosystem (auto-detect by default): python, npm, or go")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
@@ -79,6 +83,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		result, err = incident.Check(opts)
 	case ecoNPM:
 		result, err = incident.CheckNPM(opts)
+	case ecoGo:
+		result, err = runGoPackageCheck(path, override)
 	default:
 		return fmt.Errorf("internal error: unresolved ecosystem %q", eco)
 	}
@@ -137,10 +143,12 @@ func resolveCheckTarget(eco, path string) (string, string, error) {
 		return ecoPython, path, nil
 	case "npm":
 		return ecoNPM, path, nil
+	case "go", "golang":
+		return ecoGo, path, nil
 	case "":
 		return autoDetectCheckTarget(path)
 	default:
-		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python or npm", eco)
+		return "", "", fmt.Errorf("unsupported ecosystem %q: choose python, npm, or go", eco)
 	}
 }
 
@@ -204,10 +212,85 @@ func autoDetectCheckTarget(path string) (string, string, error) {
 		if nmInfo, err := os.Stat(nm); err == nil && nmInfo.IsDir() {
 			return ecoNPM, resolved, nil
 		}
+		// PR #2: Go autodetect. If go.sum or go.mod sits at the
+		// probe root we treat the directory as a Go module and run
+		// the packagecheck Go path. The check is intentionally
+		// shallow (only the probe root, not a recursive walk) so a
+		// vendored go.sum deep inside a Python project does not
+		// silently switch ecosystems on the user. The Runner's
+		// discovery walks recursively from `resolved` once the
+		// dispatch lands on ecoGo.
+		if statRegularFile(filepath.Join(resolved, "go.sum")) || statRegularFile(filepath.Join(resolved, "go.mod")) {
+			return ecoGo, resolved, nil
+		}
 	}
 	// Fall back to Python. Preserve the caller's original (possibly
 	// empty) path so discoverSitePackages() can still kick in.
 	return ecoPython, path, nil
+}
+
+// statRegularFile is the autodetect-side existence probe. Lives in
+// this file (not packagecheck) because autodetect operates on the
+// scan root before we know which ecosystem owns it.
+func statRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// runGoPackageCheck dispatches the Go branch of `aguara check`.
+// Discovers every go.sum / go.mod under path, parses each, looks
+// every (module, version) up in the matcher built from override
+// (or the cached embedded default when override is nil), and
+// emits a CheckResult populated with:
+//
+//   - Findings: one entry per matched (module, version, advisory)
+//     tuple, severity CRITICAL with Go-specific remediation text.
+//   - Ecosystems: one entry per discovered lockfile (monorepos
+//     show each services/api/go.sum + workers/scraper/go.sum
+//     separately).
+//   - PackagesRead: sum of declared modules across every target.
+//   - Intel: the IntelSummary the override would have produced.
+//
+// Returns a clean CheckResult with empty Ecosystems / Findings
+// when no Go lockfiles are present under path. That is the
+// "no targets for the requested ecosystem" contract the user spec
+// asked for (zero error, just empty arrays).
+func runGoPackageCheck(path string, override *incident.IntelOverride) (*incident.CheckResult, error) {
+	root := path
+	if root == "" {
+		root = "."
+	}
+	targets, err := packagecheck.Discover(root, []string{intel.EcosystemGo})
+	if err != nil {
+		return nil, fmt.Errorf("aguara check go: discover %s: %w", root, err)
+	}
+	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
+	runRes, err := runner.Run(targets)
+	if err != nil {
+		return nil, fmt.Errorf("aguara check go: %w", err)
+	}
+
+	result := &incident.CheckResult{
+		Environment:  root,
+		Findings:     []incident.Finding{},
+		Credentials:  []incident.CredentialFile{},
+		PackagesRead: 0,
+		Intel:        incident.IntelSummaryForOverride(override),
+		Ecosystems:   runRes.Ecosystems,
+	}
+	for _, e := range runRes.Ecosystems {
+		result.PackagesRead += e.PackagesRead
+	}
+	for _, hit := range runRes.Hits {
+		result.Findings = append(result.Findings, incident.Finding{
+			Severity:    incident.SevCritical,
+			Title:       fmt.Sprintf("%s %s is a known compromised Go module (%s)", hit.Ref.Name, hit.Ref.Version, hit.Record.ID),
+			Detail:      hit.Record.Summary,
+			Path:        hit.Ref.Path,
+			Remediation: fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", hit.Ref.Name, hit.Ref.Version),
+		})
+	}
+	return result, nil
 }
 
 func writeCheckJSON(result *incident.CheckResult) error {
@@ -227,13 +310,19 @@ func writeCheckJSON(result *incident.CheckResult) error {
 
 func writeCheckTerminal(result *incident.CheckResult, ecosystem string) error {
 	envLabel := "Python environment"
-	if ecosystem == ecoNPM {
+	switch ecosystem {
+	case ecoNPM:
 		envLabel = "npm node_modules tree"
+	case ecoGo:
+		envLabel = "Go modules"
 	}
 	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
-	if ecosystem == ecoNPM {
+	switch ecosystem {
+	case ecoNPM:
 		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
-	} else {
+	case ecoGo:
+		fmt.Printf("Packages read: %d  |  Lockfiles found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
+	default:
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
 	}
 

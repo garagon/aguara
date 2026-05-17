@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/packagecheck"
 )
 
 // NPMPackage is a package parsed from a node_modules entry's package.json.
@@ -47,6 +48,7 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		Environment: root,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Ecosystems:  []packagecheck.EcosystemResult{},
 		Intel:       intelSummaryFor(opts),
 	}
 

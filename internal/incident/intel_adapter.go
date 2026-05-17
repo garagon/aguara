@@ -49,6 +49,25 @@ func matcherFor(opts CheckOptions) *intel.Matcher {
 	return intel.NewMatcher(opts.Intel.Snapshots...)
 }
 
+// MatcherForOverride exposes matcherFor's logic to callers that
+// build a CheckResult outside the Check / CheckNPM path (e.g.
+// the packagecheck Go runner in commands/check.go). Nil override
+// -> the cached default matcher; non-nil -> a fresh matcher built
+// from the override's Snapshots, same as the legacy paths.
+func MatcherForOverride(override *IntelOverride) *intel.Matcher {
+	return matcherFor(CheckOptions{Intel: override})
+}
+
+// IntelSummaryForOverride exposes intelSummaryFor's logic to
+// callers building their own CheckResult. Returns the IntelSummary
+// the override would have produced via CheckOptions; the
+// Mode / SnapshotLabel / GeneratedAt / Sources / Stale fields stay
+// consistent with what Check / CheckNPM would have emitted for the
+// same override.
+func IntelSummaryForOverride(override *IntelOverride) IntelSummary {
+	return intelSummaryFor(CheckOptions{Intel: override})
+}
+
 // snapshotsFor returns the snapshot slice the check pipeline
 // should iterate for non-matcher heuristics (e.g. the cache
 // filename heuristic). Mirrors matcherFor so override callers
