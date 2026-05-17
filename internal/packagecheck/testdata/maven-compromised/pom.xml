@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>my-app</artifactId>
+  <version>0.1.0</version>
+
+  <properties>
+    <jackson.version>2.16.1</jackson.version>
+    <log4j.version>2.22.1</log4j.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.14.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>${log4j.version}</version>
+    </dependency>
+
+    <!-- test scope: must be excluded -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.0</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- provided scope: must be excluded -->
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>6.0.0</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- system scope: must be excluded -->
+    <dependency>
+      <groupId>com.local</groupId>
+      <artifactId>local-jar</artifactId>
+      <version>1.0.0</version>
+      <scope>system</scope>
+    </dependency>
+
+    <!-- unresolved placeholder: must be skipped -->
+    <dependency>
+      <groupId>com.unresolved</groupId>
+      <artifactId>missing-prop</artifactId>
+      <version>${not.defined.anywhere}</version>
+    </dependency>
+  </dependencies>
+</project>

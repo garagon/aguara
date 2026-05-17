@@ -161,7 +161,7 @@ func TestCheckRejectsUnsupportedEcosystem(t *testing.T) {
 	// recover from the typo without reading source. PR #1
 	// established the same contract on `aguara update`; we
 	// mirror it here.
-	for _, eco := range []string{"python", "npm", "go", "cargo", "composer", "ruby"} {
+	for _, eco := range []string{"python", "npm", "go", "cargo", "composer", "ruby", "maven", "nuget"} {
 		require.Contains(t, err.Error(), eco, "error must list %s", eco)
 	}
 }
@@ -697,6 +697,53 @@ func TestCheckNewEcosystemsReturnEmptyEcosystemsOnEmptyPath(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
 	for _, eco := range []string{"cargo", "rust", "composer", "php", "ruby", "gem", "rubygems"} {
+		t.Run(eco, func(t *testing.T) {
+			raw := checkToFileRaw(t, "--ecosystem", eco, "--path", tmp)
+			require.Contains(t, string(raw), `"ecosystems": []`)
+			require.NotContains(t, string(raw), `"ecosystems": null`)
+		})
+	}
+}
+
+// --- PR #4: Maven / NuGet CLI paths ---
+
+func TestCheckMavenExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "maven", "--path", "../../../internal/packagecheck/testdata/maven-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "Maven", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "pom.xml", result.Ecosystems[0].Source)
+	require.Equal(t, 1, result.Ecosystems[0].PackagesRead)
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount)
+}
+
+func TestCheckMavenAliasJavaResolves(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "java", "--path", "../../../internal/packagecheck/testdata/maven-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "Maven", result.Ecosystems[0].Ecosystem)
+}
+
+func TestCheckNuGetExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	result := checkToFile(t, "--ecosystem", "nuget", "--path", "../../../internal/packagecheck/testdata/nuget-clean")
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "NuGet", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "csproj", result.Ecosystems[0].Source)
+	require.Equal(t, 1, result.Ecosystems[0].PackagesRead)
+}
+
+func TestCheckNuGetAliasesDotnetAndCsharpResolve(t *testing.T) {
+	for _, alias := range []string{"dotnet", "csharp"} {
+		t.Run(alias, func(t *testing.T) {
+			result := checkToFile(t, "--ecosystem", alias, "--path", "../../../internal/packagecheck/testdata/nuget-clean")
+			require.Len(t, result.Ecosystems, 1)
+			require.Equal(t, "NuGet", result.Ecosystems[0].Ecosystem)
+		})
+	}
+}
+
+func TestCheckMavenAndNuGetEmptyPathEmitsEmptyArray(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+	for _, eco := range []string{"maven", "java", "nuget", "dotnet", "csharp"} {
 		t.Run(eco, func(t *testing.T) {
 			raw := checkToFileRaw(t, "--ecosystem", eco, "--path", tmp)
 			require.Contains(t, string(raw), `"ecosystems": []`)
