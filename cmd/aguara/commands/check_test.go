@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -846,4 +847,76 @@ func TestCheckPlanIntelEcosystemsForAutodetect(t *testing.T) {
 	for _, want := range []string{"Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
 		require.Contains(t, got, want, "autodetect plan must include %s in intel refresh set", want)
 	}
+}
+
+// --- PR #5 blocker 1: --fresh must scope to requested ecosystems even when discovery is empty ---
+
+func TestCheckPlanIntelEcosystemsExplicitNoTargets(t *testing.T) {
+	// --ecosystem maven --path <empty-dir> must keep "Maven"
+	// in intelEcosystems() so a follow-up --fresh refreshes
+	// Maven specifically, not the legacy default-all.
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven"}, tmp)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Maven"}, plan.intelEcosystems(), "explicit --ecosystem must survive empty discovery so --fresh stays scoped")
+	require.True(t, plan.explicitEcosystem)
+	require.Empty(t, plan.packagecheckTargets, "discovery walked an empty dir; no targets expected")
+}
+
+func TestCheckPlanIntelEcosystemsExplicitMultipleNoTargets(t *testing.T) {
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven", "ruby"}, tmp)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"Maven", "RubyGems"}, plan.intelEcosystems())
+}
+
+func TestCheckPlanIntelEcosystemsAutodetectEmptyExplicitPath(t *testing.T) {
+	// Autodetect on an explicit empty path produces an empty
+	// plan (no Python fallback, per the spec contract). The
+	// empty intelEcosystems() is what resolveCheckIntel uses
+	// to skip the --fresh network call entirely.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+	plan, err := buildCheckPlan(nil, tmp)
+	require.NoError(t, err)
+	require.Empty(t, plan.intelEcosystems(), "autodetect with no signals must leave intelEcosystems empty so --fresh does not fall through to default-all")
+	require.False(t, plan.explicitEcosystem)
+}
+
+func TestResolveCheckIntelSkipsFreshWhenPlanIsEmpty(t *testing.T) {
+	// Spec: --fresh on an empty plan must NOT trigger
+	// intel.Update's empty-default refresh-all-ecosystems path.
+	// resolveCheckIntel takes the safe answer (local /
+	// embedded) and does no network I/O. We assert by enabling
+	// --fresh + an empty ecosystems list and a context that
+	// would cancel any real HTTP attempt before it could finish;
+	// the call must succeed without ever hitting the network.
+	resetFlags()
+	t.Cleanup(resetFlags)
+	flagCheckFresh = true
+	flagCheckAllowStale = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // ensure any actual HTTP attempt would fail fast.
+
+	override, err := resolveCheckIntel(ctx, nil)
+	require.NoError(t, err, "--fresh with empty ecosystem list must succeed without making a network call")
+	// override may be nil (no local snapshot) or non-nil
+	// (local snapshot exists); both are valid "no fresh refresh"
+	// outcomes. The contract is that we did not error and did
+	// not declare an "online" / "remote-fresh" mode.
+	if override != nil {
+		require.NotEqual(t, "remote-fresh", override.SnapshotLabel, "empty plan must not declare a remote-fresh refresh")
+	}
+}
+
+func TestCheckSingleEcoTokenHonoursExplicitEcosystemWithEmptyDiscovery(t *testing.T) {
+	// `aguara check --ecosystem maven --path <empty-dir>` must
+	// label the terminal output "Maven / Gradle dependencies"
+	// instead of falling through to the Python default + the
+	// ".pth files scanned" line.
+	tmp := t.TempDir()
+	plan, err := buildCheckPlan([]string{"maven"}, tmp)
+	require.NoError(t, err)
+	require.Equal(t, ecoMaven, plan.singleEcoToken(), "explicit Maven request with empty discovery must keep the Maven label")
 }

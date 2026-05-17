@@ -172,11 +172,28 @@ func applyCheckCIDefaults() {
 // only what the user is checking.
 type checkPlan struct {
 	rootPath          string // the path the user passed (may be "")
-	runPython         bool
-	pythonPath        string
-	runNPM            bool
-	npmPath           string
+	runPython           bool
+	pythonPath          string
+	runNPM              bool
+	npmPath             string
 	packagecheckTargets []packagecheck.Target
+	// requestedEcosystems carries the OSV bucket IDs the user
+	// asked for via --ecosystem, even when the discovery walk
+	// found zero matching lockfiles. intelEcosystems() unions
+	// this set with the discovered targets so
+	// `aguara check --fresh --ecosystem maven` on a repo
+	// without pom.xml still refreshes Maven (and ONLY Maven).
+	// Empty in autodetect mode.
+	requestedEcosystems []string
+	// explicitEcosystem records whether the user passed
+	// --ecosystem (non-empty list). Distinguishes "autodetect
+	// found nothing -> default" from "user asked for X
+	// explicitly -> empty discovery is fine". Drives the
+	// terminal label too: an explicit single-ecosystem plan
+	// with no targets still gets the per-ecosystem env label
+	// ("Maven / Gradle dependencies") instead of falling back
+	// to the Python default.
+	explicitEcosystem bool
 }
 
 // intelEcosystems returns the OSV bucket IDs the plan needs intel
@@ -184,6 +201,13 @@ type checkPlan struct {
 // ecosystems actually being checked (a `--ecosystem maven` user
 // should NOT pull npm + PyPI on --fresh because the legacy default
 // happens to be those two).
+//
+// The set unions the explicitly requested ecosystems (from
+// --ecosystem) with the ecosystems of every discovered target plus
+// the Python / npm pipelines. The explicit set wins even when
+// discovery found nothing: `--fresh --ecosystem maven` on a repo
+// without pom.xml still refreshes Maven so the user's intent is
+// honoured.
 func (p checkPlan) intelEcosystems() []string {
 	seen := map[string]bool{}
 	var out []string
@@ -193,6 +217,9 @@ func (p checkPlan) intelEcosystems() []string {
 		}
 		seen[id] = true
 		out = append(out, id)
+	}
+	for _, id := range p.requestedEcosystems {
+		add(id)
 	}
 	if p.runPython {
 		add(intel.EcosystemPyPI)
@@ -239,6 +266,11 @@ func (p checkPlan) isMulti() bool {
 // single-ecosystem; "" when the plan is multi or empty. The
 // terminal formatter uses this to pick the existing per-ecosystem
 // labels for single-ecosystem checks.
+//
+// When discovery found nothing but the user explicitly requested
+// a single ecosystem via --ecosystem, we surface that token so
+// the terminal label says "Maven / Gradle dependencies (0
+// lockfiles)" instead of falling through to the Python default.
 func (p checkPlan) singleEcoToken() string {
 	if p.isMulti() {
 		return ""
@@ -251,6 +283,20 @@ func (p checkPlan) singleEcoToken() string {
 	}
 	if len(p.packagecheckTargets) > 0 {
 		return osvIDToEcoToken[p.packagecheckTargets[0].Ecosystem]
+	}
+	// Explicit empty-discovery case: a single --ecosystem
+	// request with no matching lockfiles still picks the
+	// per-ecosystem label.
+	if p.explicitEcosystem && len(p.requestedEcosystems) == 1 {
+		id := p.requestedEcosystems[0]
+		switch id {
+		case intel.EcosystemPyPI:
+			return ecoPython
+		case intel.EcosystemNPM:
+			return ecoNPM
+		default:
+			return osvIDToEcoToken[id]
+		}
 	}
 	return ""
 }
@@ -280,6 +326,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 
 	// --- Explicit ecosystem path ---
 	if len(ecoFlags) > 0 {
+		plan.explicitEcosystem = true
 		var packagecheckIDs []string
 		for _, raw := range ecoFlags {
 			token, err := canonicaliseCheckEcosystem(raw)
@@ -290,15 +337,18 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 			case ecoPython:
 				plan.runPython = true
 				plan.pythonPath = path
+				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
 			case ecoNPM:
 				plan.runNPM = true
 				plan.npmPath = path
+				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
 			default:
 				osvID, ok := packagecheckEcosystems[token]
 				if !ok {
 					return checkPlan{}, fmt.Errorf("internal error: unresolved ecosystem token %q", token)
 				}
 				packagecheckIDs = append(packagecheckIDs, osvID)
+				plan.requestedEcosystems = append(plan.requestedEcosystems, osvID)
 			}
 		}
 		if len(packagecheckIDs) > 0 {
@@ -862,6 +912,18 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 		// A missing $HOME is exotic; fall through to the
 		// embedded-only path rather than blocking the check.
 		store = nil
+	}
+
+	if flagCheckFresh && len(ecosystems) == 0 {
+		// --fresh on an empty plan (e.g. `aguara check --fresh
+		// --path <empty-dir>` autodetect that found nothing)
+		// has nothing to refresh. We skip the network entirely
+		// rather than fall through to intel.Update's empty-
+		// default behaviour, which would refresh every supported
+		// ecosystem just to satisfy a check that will produce
+		// zero findings. The local / embedded snapshot is the
+		// safe answer.
+		return localOrEmbeddedOverride(store), nil
 	}
 
 	if flagCheckFresh {
