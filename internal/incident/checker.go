@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/packagecheck"
 )
 
 // Severity levels for check findings.
@@ -48,6 +49,13 @@ type CheckResult struct {
 	// Populated by Check / CheckNPM; consumers can rely on it
 	// being non-zero (mode + snapshot are always set).
 	Intel IntelSummary `json:"intel"`
+	// Ecosystems is the per-discovery-target summary the
+	// packagecheck path produces (one entry per lockfile found).
+	// Populated only by the Go path in v0.17.0 PR #2; the legacy
+	// incident.Check / incident.CheckNPM paths leave it empty.
+	// Top-level Findings stays the flat union across every path so
+	// JSON consumers that read `findings` keep working unchanged.
+	Ecosystems []packagecheck.EcosystemResult `json:"ecosystems,omitempty"`
 }
 
 // IntelSummary tells the consumer (terminal output, JSON

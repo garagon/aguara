@@ -493,3 +493,76 @@ func TestResolveCheckTargetAutoDetect(t *testing.T) {
 		require.Equal(t, "", path)
 	}
 }
+
+// --- PR #2: packagecheck Go path ---
+
+func TestCheckGoExplicitEcosystemEmitsEcosystemsSlice(t *testing.T) {
+	// `aguara check --ecosystem go --path <project>` must walk the
+	// path for go.sum / go.mod and surface one EcosystemResult per
+	// discovered lockfile. The clean fixture has no compromised
+	// records in the embedded snapshot, so findings stay empty;
+	// what matters here is the ecosystems[] shape.
+	result := checkToFile(t, "--ecosystem", "go", "--path", "../../../internal/packagecheck/testdata/go-clean")
+
+	require.Len(t, result.Ecosystems, 1, "expected one Go target")
+	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "go.sum", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "go-clean/go.sum declares two unique (module, version) pairs after /go.mod dedupe")
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount)
+}
+
+func TestCheckGoMonorepoEmitsOneEcosystemPerLockfile(t *testing.T) {
+	// Monorepo fixture has go.sum in services/api and workers/scraper.
+	// Discovery must produce two entries and skip vendor/ +
+	// node_modules/ children.
+	result := checkToFile(t, "--ecosystem", "go", "--path", "../../../internal/packagecheck/testdata/go-monorepo")
+
+	require.Len(t, result.Ecosystems, 2, "expected services/api + workers/scraper, got %+v", result.Ecosystems)
+	for _, e := range result.Ecosystems {
+		require.Equal(t, "Go", e.Ecosystem)
+		require.Equal(t, "go.sum", e.Source)
+		require.NotContains(t, e.Path, "vendor", "discovery must not walk vendor/")
+		require.NotContains(t, e.Path, "node_modules", "discovery must not walk node_modules/")
+	}
+}
+
+func TestCheckGoAliasGolangResolves(t *testing.T) {
+	// PR #1 ecosystem registry maps `golang` -> Go. The CLI's
+	// resolveCheckTarget accepts the alias and routes to the Go
+	// path. Lock the alias contract so a future rename does not
+	// silently drop it.
+	result := checkToFile(t, "--ecosystem", "golang", "--path", "../../../internal/packagecheck/testdata/go-clean")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
+}
+
+func TestCheckGoEmptyPathReturnsCleanResult(t *testing.T) {
+	// `aguara check --ecosystem go --path <dir-without-go-files>`
+	// must succeed with empty ecosystems[], NOT error. Spec:
+	// "Si no hay targets del ecosistema pedido, devolver resultado
+	// limpio pero con ecosystems: []."
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+
+	result := checkToFile(t, "--ecosystem", "go", "--path", tmp)
+
+	require.Empty(t, result.Ecosystems, "no go.sum / go.mod -> empty ecosystems[]")
+	require.Empty(t, result.Findings)
+	require.Equal(t, 0, result.PackagesRead)
+}
+
+func TestCheckGoAutoDetectsAtPathRoot(t *testing.T) {
+	// With no --ecosystem flag and a go.mod / go.sum at the path
+	// root, autodetect must pick Go. This is the "Mantener npm/PyPI
+	// funcionando igual / Agregar Go cuando se detecte lockfile"
+	// contract for the root-only case; monorepo autodetect from a
+	// parent that doesn't have go.sum is deferred to PR #5.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "go.sum"), []byte("example.com/mod v1.0.0 h1:hash=\n"), 0o644))
+
+	result := checkToFile(t, "--path", tmp)
+
+	require.Len(t, result.Ecosystems, 1, "expected Go autodetect to fire and produce one target")
+	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
+}

@@ -1,0 +1,4 @@
+example.com/malicious-mod v1.2.3 h1:fakehash=
+example.com/malicious-mod v1.2.3/go.mod h1:fakehash=
+github.com/stretchr/testify v1.10.0 h1:abc=
+github.com/stretchr/testify v1.10.0/go.mod h1:def=
