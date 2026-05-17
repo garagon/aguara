@@ -547,9 +547,71 @@ func TestCheckGoEmptyPathReturnsCleanResult(t *testing.T) {
 
 	result := checkToFile(t, "--ecosystem", "go", "--path", tmp)
 
+	require.NotNil(t, result.Ecosystems, "ecosystems[] must be non-nil even when empty so JSON stays stable")
 	require.Empty(t, result.Ecosystems, "no go.sum / go.mod -> empty ecosystems[]")
 	require.Empty(t, result.Findings)
 	require.Equal(t, 0, result.PackagesRead)
+}
+
+// TestCheckEcosystemsJSONShapeAlwaysEmitsEmptyArray locks the raw
+// JSON contract. The struct-level unmarshal-then-require.Empty pass
+// hides the difference between `"ecosystems": []` (intended) and a
+// missing field or `"ecosystems": null` (regression: would re-appear
+// if someone re-adds `,omitempty` or skips initialising the slice
+// in incident.Check / incident.CheckNPM). External consumers
+// (aguara-mcp, CI scripts) iterate the array unconditionally, so the
+// literal `"ecosystems": []` substring is part of the JSON contract.
+func TestCheckEcosystemsJSONShapeAlwaysEmitsEmptyArray(t *testing.T) {
+	// Exercise the three paths that build CheckResult: explicit Go
+	// with no targets, explicit npm with no targets, and the
+	// Python fallback. All three must emit the literal
+	// `"ecosystems": []` so downstream JSON consumers can iterate
+	// without a nil check.
+	t.Run("ecosystem go on dir without go.sum", func(t *testing.T) {
+		tmp := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
+		raw := checkToFileRaw(t, "--ecosystem", "go", "--path", tmp)
+		require.Contains(t, string(raw), `"ecosystems": []`)
+		require.NotContains(t, string(raw), `"ecosystems": null`)
+	})
+	t.Run("ecosystem npm with empty node_modules", func(t *testing.T) {
+		nm := filepath.Join(t.TempDir(), "node_modules")
+		require.NoError(t, os.MkdirAll(nm, 0o755))
+		raw := checkToFileRaw(t, "--ecosystem", "npm", "--path", nm)
+		require.Contains(t, string(raw), `"ecosystems": []`)
+		require.NotContains(t, string(raw), `"ecosystems": null`)
+	})
+}
+
+// checkToFileRaw is the byte-level sibling of checkToFile. Returns
+// the raw JSON bytes so tests can assert on the JSON shape itself
+// (key presence, literal values) rather than going through Go's
+// struct unmarshal which would silently paper over a missing field.
+func checkToFileRaw(t *testing.T, args ...string) []byte {
+	t.Helper()
+	resetFlags()
+	outFile := filepath.Join(t.TempDir(), "check.json")
+	fullArgs := append([]string{"check"}, args...)
+	fullArgs = append(fullArgs, "-o", outFile, "--format", "json", "--no-update-check")
+
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs(fullArgs)
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	// `aguara check` against an empty npm node_modules tree
+	// can exit non-zero on some platforms when the resolver
+	// fails; we still want to inspect the JSON it wrote.
+	_ = rootCmd.Execute()
+
+	data, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	return data
 }
 
 func TestCheckGoAutoDetectsAtPathRoot(t *testing.T) {

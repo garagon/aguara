@@ -51,11 +51,13 @@ type CheckResult struct {
 	Intel IntelSummary `json:"intel"`
 	// Ecosystems is the per-discovery-target summary the
 	// packagecheck path produces (one entry per lockfile found).
-	// Populated only by the Go path in v0.17.0 PR #2; the legacy
-	// incident.Check / incident.CheckNPM paths leave it empty.
-	// Top-level Findings stays the flat union across every path so
-	// JSON consumers that read `findings` keep working unchanged.
-	Ecosystems []packagecheck.EcosystemResult `json:"ecosystems,omitempty"`
+	// Populated by the Go path in v0.17.0 PR #2; the legacy
+	// incident.Check / incident.CheckNPM paths initialise it to
+	// an empty non-nil slice so the JSON shape is always
+	// `"ecosystems": []` rather than missing or `null`. Top-level
+	// Findings stays the flat union across every path so JSON
+	// consumers that read `findings` keep working unchanged.
+	Ecosystems []packagecheck.EcosystemResult `json:"ecosystems"`
 }
 
 // IntelSummary tells the consumer (terminal output, JSON
@@ -129,6 +131,7 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		Environment: siteDir,
 		Findings:    []Finding{},
 		Credentials: []CredentialFile{},
+		Ecosystems:  []packagecheck.EcosystemResult{},
 		Intel:       intelSummaryFor(opts),
 	}
 
