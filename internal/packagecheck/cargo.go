@@ -16,13 +16,14 @@ import (
 // (name, version, source) are flat key/value pairs inside repeated
 // `[[package]]` arrays.
 //
-// Only registry-sourced packages are returned. Cargo lockfile
-// entries with a `source = "git+..."` or no source at all
-// (workspace members, path dependencies) are skipped: the OSV
-// matcher resolves identifiers under the crates.io ecosystem, so
-// non-registry crates would never match anyway and including them
-// would inflate packages_read with names the runtime cannot act
-// on.
+// Only entries sourced from the crates.io registry are returned;
+// see isCratesIORegistrySource. Cargo lockfile entries from
+// private registries, git sources, path dependencies, or
+// workspace members are skipped: the OSV matcher resolves
+// identifiers under the crates.io ecosystem, so non-crates.io
+// crates would either never match (best case) or false-positive
+// on a name collision with a public crate (worst case). The
+// allowlist closes the false-positive door.
 //
 // No external commands. No network.
 func ParseCargo(target Target) ([]PackageRef, error) {
@@ -39,10 +40,13 @@ func ParseCargo(target Target) ([]PackageRef, error) {
 	)
 	flush := func() {
 		// Only emit when the block declared a crates.io registry
-		// source AND we captured name + version. Workspace members
-		// (no source), git deps, and path deps fall through
-		// silently because the matcher cannot consume them.
-		if strings.HasPrefix(cur.source, "registry+") && cur.name != "" && cur.version != "" {
+		// source AND we captured name + version. Private registries,
+		// git deps, path deps, and workspace members (no source)
+		// fall through silently: the OSV matcher resolves
+		// identifiers under the crates.io ecosystem only, so
+		// emitting a private-registry crate with a name that
+		// collides with a public advisory would false-positive.
+		if isCratesIORegistrySource(cur.source) && cur.name != "" && cur.version != "" {
 			refs = append(refs, PackageRef{
 				Ecosystem: intel.EcosystemCargo,
 				Name:      cur.name,
@@ -104,6 +108,39 @@ func ParseCargo(target Target) ([]PackageRef, error) {
 }
 
 type cargoPkg struct{ name, version, source string }
+
+// isCratesIORegistrySource is the allowlist of `source = "..."`
+// values that mean "this crate came from the public crates.io
+// registry". Two forms exist in the wild:
+//
+//   - registry+https://github.com/rust-lang/crates.io-index
+//     The historical git-based index. Cargo writes this for
+//     every crate when the user runs against the default registry
+//     on Rust toolchains prior to 1.70 (and on 1.70+ when the
+//     legacy index protocol is selected).
+//   - sparse+https://index.crates.io/
+//     The sparse HTTP index Cargo adopted as the default in
+//     1.70 (RFC 2789). Newer lockfiles regenerated on Rust 1.70+
+//     carry this form for crates.io entries.
+//
+// A `registry+...` source pointing at any OTHER URL is a
+// private registry (Cloudsmith, JFrog Artifactory, AWS
+// CodeArtifact, an internal mirror, etc.). The packages those
+// registries host are unrelated to crates.io OSV advisories;
+// matching a private `serde 1.0.197` against a crates.io
+// `serde 1.0.197` advisory would be a false positive.
+//
+// New entries here require evidence that the URL canonically
+// serves the crates.io catalog under a different protocol.
+func isCratesIORegistrySource(source string) bool {
+	switch source {
+	case "registry+https://github.com/rust-lang/crates.io-index",
+		"sparse+https://index.crates.io/":
+		return true
+	default:
+		return false
+	}
+}
 
 // parseCargoKV splits a single `key = "value"` line into its parts
 // and strips the surrounding double quotes. Returns ok=false for

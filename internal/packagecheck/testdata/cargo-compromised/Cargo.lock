@@ -31,5 +31,20 @@ dependencies = [
  "innocent-crate",
 ]
 
+[[package]]
+name = "sparse-crate"
+version = "2.0.0"
+source = "sparse+https://index.crates.io/"
+
+[[package]]
+name = "private-mirror-crate"
+version = "9.9.9"
+source = "registry+https://private.example.com/index"
+
+[[package]]
+name = "jfrog-mirror-crate"
+version = "1.0.0"
+source = "registry+https://example.jfrog.io/cargo-local"
+
 [metadata]
 "checksum innocent-crate 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "deadbeef"

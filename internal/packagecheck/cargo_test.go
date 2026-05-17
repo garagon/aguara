@@ -17,10 +17,15 @@ func TestParseCargo_RegistryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCargo: %v", err)
 	}
+	// Expected crates: the three git-based crates.io registry
+	// entries plus the one sparse-protocol crates.io entry. The
+	// private-registry crates and the git/path/workspace entries
+	// must NOT appear.
 	want := map[string]string{
 		"innocent-crate":    "0.1.0",
 		"compromised-crate": "1.2.3",
 		"with-deps":         "0.5.0",
+		"sparse-crate":      "2.0.0",
 	}
 	if len(refs) != len(want) {
 		t.Fatalf("refs = %d, want %d (refs=%+v)", len(refs), len(want), refs)
@@ -34,12 +39,100 @@ func TestParseCargo_RegistryOnly(t *testing.T) {
 		}
 		v, ok := want[r.Name]
 		if !ok {
-			t.Errorf("unexpected crate %q (probably a non-registry leak)", r.Name)
+			t.Errorf("unexpected crate %q (probably a non-crates.io leak)", r.Name)
 			continue
 		}
 		if r.Version != v {
 			t.Errorf("crate %q: version = %q, want %q", r.Name, r.Version, v)
 		}
+	}
+}
+
+func TestParseCargo_ExcludesPrivateRegistries(t *testing.T) {
+	// Private Cargo registries (Cloudsmith, JFrog Artifactory,
+	// AWS CodeArtifact, internal mirrors) all use the same
+	// `registry+<URL>` shape that the public crates.io index
+	// uses. A naive `strings.HasPrefix("registry+")` would
+	// emit those crates against the crates.io OSV ecosystem
+	// and false-positive on any name collision with a public
+	// advisory (e.g. a private `serde 1.0.197` matching a
+	// real crates.io `serde 1.0.197` malicious entry).
+	//
+	// The cargo-compromised fixture has two private-registry
+	// crates with names that look real (`private-mirror-crate`,
+	// `jfrog-mirror-crate`) and one that uses a verbatim
+	// crates.io name (`compromised-crate`) under the public
+	// index. Only the public-index entry must come back.
+	refs, err := ParseCargo(Target{
+		Ecosystem: intel.EcosystemCargo,
+		Path:      filepath.Join("testdata", "cargo-compromised", "Cargo.lock"),
+		Source:    "Cargo.lock",
+	})
+	if err != nil {
+		t.Fatalf("ParseCargo: %v", err)
+	}
+	for _, r := range refs {
+		switch r.Name {
+		case "private-mirror-crate":
+			t.Errorf("private registry crate leaked: %+v", r)
+		case "jfrog-mirror-crate":
+			t.Errorf("JFrog registry crate leaked: %+v", r)
+		}
+	}
+}
+
+func TestParseCargo_AcceptsSparseCratesIOSource(t *testing.T) {
+	// `sparse+https://index.crates.io/` is the Cargo 1.70+
+	// sparse-protocol form for the public crates.io index.
+	// The allowlist must include it so newer lockfiles do
+	// not silently drop every public crate.
+	refs, err := ParseCargo(Target{
+		Ecosystem: intel.EcosystemCargo,
+		Path:      filepath.Join("testdata", "cargo-compromised", "Cargo.lock"),
+		Source:    "Cargo.lock",
+	})
+	if err != nil {
+		t.Fatalf("ParseCargo: %v", err)
+	}
+	var foundSparse bool
+	for _, r := range refs {
+		if r.Name == "sparse-crate" && r.Version == "2.0.0" {
+			foundSparse = true
+		}
+	}
+	if !foundSparse {
+		t.Errorf("sparse+https://index.crates.io/ entry was dropped (refs=%+v)", refs)
+	}
+}
+
+func TestIsCratesIORegistrySource_TableDriven(t *testing.T) {
+	tests := []struct {
+		source string
+		want   bool
+	}{
+		// Public crates.io, both protocols.
+		{"registry+https://github.com/rust-lang/crates.io-index", true},
+		{"sparse+https://index.crates.io/", true},
+		// Private registries that share the `registry+` prefix.
+		{"registry+https://private.example.com/index", false},
+		{"registry+https://example.jfrog.io/cargo-local", false},
+		{"registry+https://artifactory.example.org/cargo", false},
+		// Git / path / empty (the parser's other rejection paths
+		// also drop these, but isCratesIORegistrySource must say
+		// no in isolation).
+		{"git+https://github.com/foo/bar?rev=abc#abc", false},
+		{"", false},
+		// Defensive: small typos / variants that look like
+		// crates.io but are not the canonical strings.
+		{"registry+https://github.com/rust-lang/crates.io-index/", false},
+		{"sparse+https://INDEX.crates.io/", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.source, func(t *testing.T) {
+			if got := isCratesIORegistrySource(tc.source); got != tc.want {
+				t.Errorf("isCratesIORegistrySource(%q) = %v, want %v", tc.source, got, tc.want)
+			}
+		})
 	}
 }
 
