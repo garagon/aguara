@@ -2,6 +2,7 @@ package packagecheck
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
 )
@@ -57,15 +58,28 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		}
 		findings := 0
 		for _, ref := range refs {
-			matches := r.Matcher.MatchPackage(intel.MatchInput{
-				Ecosystem: ref.Ecosystem,
-				Name:      ref.Name,
-				Version:   ref.Version,
-				Path:      ref.Path,
-			})
-			for _, m := range matches {
-				out.Hits = append(out.Hits, Hit{Ref: ref, Record: m.Record})
-				findings++
+			// Some ecosystems (Composer especially) routinely
+			// ship version strings with a leading `v` while the
+			// OSV-side record carries the bare form. We query
+			// every alias the per-ecosystem helper returns and
+			// dedupe by advisory ID so a single (ref, advisory)
+			// match never emits two Findings.
+			seen := make(map[string]struct{})
+			for _, v := range versionAliases(ref.Ecosystem, ref.Version) {
+				matches := r.Matcher.MatchPackage(intel.MatchInput{
+					Ecosystem: ref.Ecosystem,
+					Name:      ref.Name,
+					Version:   v,
+					Path:      ref.Path,
+				})
+				for _, m := range matches {
+					if _, dup := seen[m.Record.ID]; dup {
+						continue
+					}
+					seen[m.Record.ID] = struct{}{}
+					out.Hits = append(out.Hits, Hit{Ref: ref, Record: m.Record})
+					findings++
+				}
 			}
 		}
 		out.Ecosystems = append(out.Ecosystems, EcosystemResult{
@@ -86,7 +100,38 @@ func parseTarget(t Target) ([]PackageRef, error) {
 	switch t.Ecosystem {
 	case intel.EcosystemGo:
 		return ParseGo(t)
+	case intel.EcosystemCargo:
+		return ParseCargo(t)
+	case intel.EcosystemPackagist:
+		return ParseComposer(t)
+	case intel.EcosystemRubyGems:
+		return ParseRuby(t)
 	default:
 		return nil, fmt.Errorf("no parser for ecosystem %q", t.Ecosystem)
 	}
+}
+
+// versionAliases returns the version strings the runner should
+// query the matcher with for a given (ecosystem, raw version)
+// pair. The first entry is always the raw version; per-ecosystem
+// conventions add aliases.
+//
+// Composer is the only ecosystem that needs an alias today:
+// composer.lock often ships `v1.2.3` while OSV Packagist records
+// publish the bare form `1.2.3`. Stripping the `v` prefix as an
+// alias matches either side without requiring the parser to pick
+// one canonical form (which would lose information when the
+// lockfile literally uses the prefixed form).
+//
+// Adding a new ecosystem alias rule is one case-arm here; the
+// per-ecosystem normalisation in intel/ecosystem.go stays focused
+// on name canonicalisation.
+func versionAliases(ecosystem, version string) []string {
+	out := []string{version}
+	if ecosystem == intel.EcosystemPackagist {
+		if alias := strings.TrimPrefix(version, "v"); alias != version && alias != "" {
+			out = append(out, alias)
+		}
+	}
+	return out
 }

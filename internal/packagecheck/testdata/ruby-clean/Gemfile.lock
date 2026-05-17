@@ -1,0 +1,16 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rake (13.2.0)
+    rspec (3.13.0)
+      rspec-core (~> 3.13.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rake
+  rspec
+
+BUNDLED WITH
+   2.5.3

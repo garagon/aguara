@@ -1,0 +1,4 @@
+[[package]]
+name = "should-not-be-scanned"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"

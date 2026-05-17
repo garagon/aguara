@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -114,5 +115,67 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestDiscover_MultiEcosystemMonorepo(t *testing.T) {
+	// Each services/* subdir carries a different lockfile. Discovery
+	// asked for all three ecosystems should emit one Target per
+	// (subdir, ecosystem) pair, and skip the vendor/ + node_modules/
+	// children that exist only to verify the skip rules still hold.
+	root := filepath.Join("testdata", "multi-ecosystem")
+	targets, err := Discover(root, []string{
+		intel.EcosystemCargo,
+		intel.EcosystemPackagist,
+		intel.EcosystemRubyGems,
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Path < targets[j].Path })
+
+	if got, want := len(targets), 3; got != want {
+		t.Fatalf("targets = %d, want %d (targets=%+v)", got, want, targets)
+	}
+	wantByEco := map[string]string{
+		intel.EcosystemCargo:     filepath.Join(root, "services", "cargo-svc", "Cargo.lock"),
+		intel.EcosystemPackagist: filepath.Join(root, "services", "composer-svc", "composer.lock"),
+		intel.EcosystemRubyGems:  filepath.Join(root, "services", "ruby-svc", "Gemfile.lock"),
+	}
+	got := map[string]string{}
+	for _, target := range targets {
+		got[target.Ecosystem] = target.Path
+	}
+	for eco, wantPath := range wantByEco {
+		if got[eco] != wantPath {
+			t.Errorf("ecosystem %s: got %q, want %q", eco, got[eco], wantPath)
+		}
+	}
+	// vendor/ and node_modules/ contain lockfiles solely to
+	// exercise the skip rules; they must not appear in targets.
+	for _, target := range targets {
+		if strings.Contains(target.Path, "/vendor/") || strings.Contains(target.Path, "/node_modules/") {
+			t.Errorf("Discover walked a skipped directory: %q", target.Path)
+		}
+	}
+}
+
+func TestDiscover_DefaultNilCoversAllPackagecheckEcosystems(t *testing.T) {
+	// PR #3 widens the default scan from Go-only to every
+	// ecosystem packagecheck knows. Caller passing nil must see
+	// all four lockfile types in the multi-ecosystem fixture.
+	root := filepath.Join("testdata", "multi-ecosystem")
+	targets, err := Discover(root, nil)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, target := range targets {
+		seen[target.Ecosystem] = true
+	}
+	for _, eco := range []string{intel.EcosystemCargo, intel.EcosystemPackagist, intel.EcosystemRubyGems} {
+		if !seen[eco] {
+			t.Errorf("default Discover missed ecosystem %s (targets=%+v)", eco, targets)
+		}
 	}
 }

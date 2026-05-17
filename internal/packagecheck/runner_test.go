@@ -155,3 +155,95 @@ func TestRunner_RequiresMatcher(t *testing.T) {
 		t.Fatal("expected error when Matcher is nil")
 	}
 }
+
+func TestRunner_MultiEcosystemSyntheticSnapshotHitsEach(t *testing.T) {
+	// One synthetic intel record per ecosystem; the multi-eco
+	// fixture has one matching package each. The runner must
+	// emit three Ecosystems[] entries with FindingsCount=1 each
+	// and three Hits total.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{
+			{ID: "MAL-CARGO", Ecosystem: intel.EcosystemCargo, Name: "serde", Kind: intel.KindMalicious, Versions: []string{"1.0.197"}},
+			{ID: "MAL-PACKAGIST", Ecosystem: intel.EcosystemPackagist, Name: "symfony/console", Kind: intel.KindMalicious, Versions: []string{"7.0.4"}},
+			{ID: "MAL-RUBYGEMS", Ecosystem: intel.EcosystemRubyGems, Name: "rake", Kind: intel.KindMalicious, Versions: []string{"13.2.0"}},
+		},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, err := Discover(filepath.Join("testdata", "multi-ecosystem"), []string{
+		intel.EcosystemCargo, intel.EcosystemPackagist, intel.EcosystemRubyGems,
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Ecosystems) != 3 {
+		t.Fatalf("ecosystems = %d, want 3", len(res.Ecosystems))
+	}
+	if len(res.Hits) != 3 {
+		t.Fatalf("hits = %d, want 3 (hits=%+v)", len(res.Hits), res.Hits)
+	}
+	for _, e := range res.Ecosystems {
+		if e.FindingsCount != 1 {
+			t.Errorf("%s/%s: findings_count = %d, want 1", e.Ecosystem, e.Source, e.FindingsCount)
+		}
+	}
+}
+
+func TestRunner_ComposerVPrefixAliasMatchesBareOSVVersion(t *testing.T) {
+	// composer.lock ships "v3.5.0"; the OSV record carries
+	// "3.5.0". The runner's versionAliases helper queries both
+	// forms so the match still fires. Locking the contract here
+	// catches a regression that would drop the alias path.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID:        "MAL-COMPOSER-ALIAS",
+			Ecosystem: intel.EcosystemPackagist,
+			Name:      "monolog/monolog",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"3.5.0"}, // bare form, no "v"
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, _ := Discover(filepath.Join("testdata", "composer-compromised"), []string{intel.EcosystemPackagist})
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1 (alias path broke; hits=%+v)", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Ref.Version != "v3.5.0" {
+		t.Errorf("hit ref version = %q, want v3.5.0 (lockfile raw value preserved)", res.Hits[0].Ref.Version)
+	}
+}
+
+func TestRunner_ComposerAliasDoesNotDoubleCountFinding(t *testing.T) {
+	// If the OSV record carries BOTH "v3.5.0" and "3.5.0" the
+	// alias-and-raw query path would naively fire twice. The
+	// runner's per-ref dedup keys on advisory ID so we emit
+	// exactly one Hit / FindingsCount=1 per (ref, advisory).
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID:        "MAL-COMPOSER-DUP",
+			Ecosystem: intel.EcosystemPackagist,
+			Name:      "monolog/monolog",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"v3.5.0", "3.5.0"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, _ := Discover(filepath.Join("testdata", "composer-compromised"), []string{intel.EcosystemPackagist})
+	res, _ := runner.Run(targets)
+	if len(res.Hits) != 1 {
+		t.Errorf("hits = %d, want 1 (alias dedup broke)", len(res.Hits))
+	}
+	if res.Ecosystems[0].FindingsCount != 1 {
+		t.Errorf("findings_count = %d, want 1", res.Ecosystems[0].FindingsCount)
+	}
+}

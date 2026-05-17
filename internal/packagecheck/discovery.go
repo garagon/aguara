@@ -20,11 +20,25 @@ var defaultSkipDirs = map[string]bool{
 	".aguara":      true,
 }
 
+// lockfilePicker pairs an ecosystem with the function that probes
+// a directory for the matching lockfile (or fallback). One picker
+// per ecosystem keeps Discover linear in `len(lockfilePickers) *
+// dirs walked`; adding a new ecosystem is one entry in the slice
+// plus the picker implementation.
+type lockfilePicker struct {
+	ecosystem string
+	pick      func(dir string) *Target
+}
+
+var lockfilePickers = []lockfilePicker{
+	{intel.EcosystemGo, pickGoTarget},
+	{intel.EcosystemCargo, pickCargoTarget},
+	{intel.EcosystemPackagist, pickComposerTarget},
+	{intel.EcosystemRubyGems, pickRubyTarget},
+}
+
 // Discover walks root and returns one Target per lockfile / discovery
-// anchor for every requested ecosystem. Currently only Go is
-// implemented (go.sum primary, go.mod fallback when the directory
-// has go.mod but no go.sum); future ecosystems hook in by extending
-// the per-directory switch in walkDir.
+// anchor for every requested ecosystem.
 //
 // When `ecosystems` is empty or nil, Discover scans for every
 // ecosystem packagecheck knows about. Callers that want to scope
@@ -32,12 +46,14 @@ var defaultSkipDirs = map[string]bool{
 //
 // Discovery is deterministic (filepath.WalkDir orders alphabetically)
 // and offline. Errors from filepath.WalkDir surface as-is so the
-// caller can distinguish "no go.sum found" (returns empty slice,
+// caller can distinguish "no lockfile found" (returns empty slice,
 // no error) from "permission denied reading root" (returns error).
 func Discover(root string, ecosystems []string) ([]Target, error) {
 	want := map[string]bool{}
 	if len(ecosystems) == 0 {
-		want[intel.EcosystemGo] = true
+		for _, p := range lockfilePickers {
+			want[p.ecosystem] = true
+		}
 	} else {
 		for _, eco := range ecosystems {
 			want[eco] = true
@@ -62,8 +78,11 @@ func Discover(root string, ecosystems []string) ([]Target, error) {
 		if path != root && defaultSkipDirs[d.Name()] {
 			return fs.SkipDir
 		}
-		if want[intel.EcosystemGo] {
-			if t := pickGoTarget(path); t != nil {
+		for _, p := range lockfilePickers {
+			if !want[p.ecosystem] {
+				continue
+			}
+			if t := p.pick(path); t != nil {
 				targets = append(targets, *t)
 			}
 		}
@@ -94,6 +113,50 @@ func pickGoTarget(dir string) *Target {
 			Ecosystem: intel.EcosystemGo,
 			Path:      filepath.Join(dir, "go.mod"),
 			Source:    "go.mod",
+		}
+	}
+	return nil
+}
+
+// pickCargoTarget returns a Target for a Cargo workspace rooted
+// at dir, or nil when no Cargo.lock is present. Cargo.toml-only
+// directories are intentionally skipped: without a lockfile the
+// resolved version set is whatever `cargo update` would produce
+// today, which the offline parser cannot determine.
+func pickCargoTarget(dir string) *Target {
+	if statRegular(filepath.Join(dir, "Cargo.lock")) {
+		return &Target{
+			Ecosystem: intel.EcosystemCargo,
+			Path:      filepath.Join(dir, "Cargo.lock"),
+			Source:    "Cargo.lock",
+		}
+	}
+	return nil
+}
+
+// pickComposerTarget returns a Target for a PHP project rooted at
+// dir, or nil when no composer.lock is present. composer.json
+// alone (no lockfile) is skipped for the same reason as Cargo.toml
+// without Cargo.lock.
+func pickComposerTarget(dir string) *Target {
+	if statRegular(filepath.Join(dir, "composer.lock")) {
+		return &Target{
+			Ecosystem: intel.EcosystemPackagist,
+			Path:      filepath.Join(dir, "composer.lock"),
+			Source:    "composer.lock",
+		}
+	}
+	return nil
+}
+
+// pickRubyTarget returns a Target for a Ruby/Bundler project
+// rooted at dir, or nil when no Gemfile.lock is present.
+func pickRubyTarget(dir string) *Target {
+	if statRegular(filepath.Join(dir, "Gemfile.lock")) {
+		return &Target{
+			Ecosystem: intel.EcosystemRubyGems,
+			Path:      filepath.Join(dir, "Gemfile.lock"),
+			Source:    "Gemfile.lock",
 		}
 	}
 	return nil
