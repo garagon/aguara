@@ -67,13 +67,25 @@ var osvIDToEcoToken = func() map[string]string {
 }()
 
 var checkCmd = &cobra.Command{
-	Use:   "check",
+	Use:   "check [path]",
 	Short: "Check for compromised packages and persistence artifacts",
 	Long: `Run from a project root. Aguara discovers installed npm /
 Python environments at the path AND lockfiles for Go, Rust,
 PHP/Composer, Ruby/Bundler, Java/Maven/Gradle, and .NET/NuGet
 recursively under the path, then matches every declared package
 against the embedded threat-intel snapshot.
+
+The scan target can be passed as a positional argument or via
+--path. The positional form is the natural one ('aguara check .'
+matches what users type first); --path stays for scripted callers
+and CI workflows that already use it.
+
+  aguara check .                # scan the current directory
+  aguara check ./myrepo         # scan a specific path
+  aguara check --path ./myrepo  # equivalent, flag form
+
+Passing both the positional argument and --path is an explicit
+error to avoid silent precedence: pick one, not both.
 
 Pass --ecosystem to constrain the scan. Multiple values supported,
 comma-separated or repeated:
@@ -93,11 +105,12 @@ Supported values (case-insensitive):
 
 The known-bad list ships embedded with the binary; --fresh refreshes
 only the ecosystems actually being checked.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runCheck,
 }
 
 func init() {
-	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages")
+	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages (also accepted as a positional argument)")
 	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
@@ -116,7 +129,12 @@ func init() {
 func runCheck(cmd *cobra.Command, args []string) error {
 	applyCheckCIDefaults()
 
-	plan, err := buildCheckPlan(flagCheckEcosystems, flagCheckPath)
+	path, err := resolveCheckPathArg(args, flagCheckPath)
+	if err != nil {
+		return err
+	}
+
+	plan, err := buildCheckPlan(flagCheckEcosystems, path)
 	if err != nil {
 		return err
 	}
@@ -142,6 +160,37 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	return checkIncidentFailOnThreshold(result, flagCheckFailOn)
+}
+
+// resolveCheckPathArg picks the effective scan path from the positional
+// argument or the --path flag and rejects ambiguous combinations.
+//
+//   no positional, no --path  -> "" (legacy default: site-packages auto-discovery)
+//   no positional, --path X   -> X
+//   positional X, no --path   -> X
+//   positional X, --path Y    -> explicit error (ambiguity)
+//
+// The explicit-error case is the deliberate choice this command makes
+// vs the silent flag-wins semantics 'audit' uses. Picking one form
+// removes a class of "which one took effect?" mistakes that would
+// otherwise show up only when the two paths point at different
+// directories. The error message names both values so the operator
+// can drop one and re-run.
+//
+// cobra.MaximumNArgs(1) on the command spec already rejects two or
+// more positionals before this runs, so the only ambiguity we have
+// to handle here is "one positional plus --path".
+func resolveCheckPathArg(args []string, flagPath string) (string, error) {
+	if len(args) == 1 && flagPath != "" {
+		return "", fmt.Errorf(
+			"ambiguous path: pass either the positional argument or --path, not both (got positional %q and --path %q)",
+			args[0], flagPath,
+		)
+	}
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	return flagPath, nil
 }
 
 // applyCheckCIDefaults wires --ci to the equivalent explicit flags.
