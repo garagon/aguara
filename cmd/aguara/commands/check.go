@@ -388,6 +388,16 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 	if len(ecoFlags) > 0 {
 		plan.explicitEcosystem = true
 		var packagecheckIDs []string
+		// explicitNPMRequested records whether the user passed
+		// `--ecosystem npm`. We preserve the historical "explicit
+		// npm + no signal anywhere = error" contract (smoke-tested
+		// in benchmarks/smoke-npm-incident.sh case 4) by checking
+		// after Discover that SOMETHING npm-shaped (node_modules
+		// or pnpm-lock.yaml) was actually found. Without this
+		// post-discover check, the new packagecheck npm fallback
+		// would silently turn the user-error case into a
+		// clean-looking empty result.
+		explicitNPMRequested := false
 		for _, raw := range ecoFlags {
 			token, err := canonicaliseCheckEcosystem(raw)
 			if err != nil {
@@ -399,6 +409,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				plan.pythonPath = path
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
 			case ecoNPM:
+				explicitNPMRequested = true
 				// Explicit `--ecosystem npm` now covers two surfaces:
 				//   1. installed-tree (node_modules + .pnpm store)
 				//      via incident.CheckNPM. Gated on node_modules
@@ -482,6 +493,35 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				return checkPlan{}, fmt.Errorf("check: discover %s: %w", root, err)
 			}
 			plan.packagecheckTargets = targets
+		}
+		// Preserve the historical "explicit npm with no signal
+		// anywhere = error" UX contract (smoke-tested in
+		// benchmarks/smoke-npm-incident.sh case 4). A user who
+		// passes `--ecosystem npm --path <empty-dir>` is signalling
+		// "I want an npm check here" and getting back a clean-looking
+		// empty result would silently hide the path mistake. We
+		// allow the empty result ONLY when at least one npm signal
+		// was discovered: runNPM (installed tree) or a packagecheck
+		// npm target (pnpm-lock.yaml today; package-lock.json /
+		// yarn.lock when those land).
+		if explicitNPMRequested && !plan.runNPM {
+			haveNPMTarget := false
+			for _, t := range plan.packagecheckTargets {
+				if t.Ecosystem == intel.EcosystemNPM {
+					haveNPMTarget = true
+					break
+				}
+			}
+			if !haveNPMTarget {
+				root := path
+				if root == "" {
+					root = "."
+				}
+				return checkPlan{}, fmt.Errorf(
+					"npm check: %s has no node_modules tree and no pnpm-lock.yaml; pass the path to a project with one or remove --ecosystem npm",
+					root,
+				)
+			}
 		}
 		return plan, nil
 	}

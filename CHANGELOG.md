@@ -5,6 +5,65 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-18
+
+`aguara check .` now reads `pnpm-lock.yaml` directly. A pnpm
+project freshly cloned from git — no `pnpm install` yet, no
+`node_modules` — is now checked against the embedded npm
+threat-intel snapshot the same way an installed npm tree is.
+Compromised packages declared in the lockfile surface as CRITICAL
+findings before any install runs.
+
+This closes the largest gap in v0.17.x's "supply-chain check"
+story: the public framing claimed Aguara walked the dependency
+surface of a modern repo, but pnpm — the package manager a large
+slice of modern Node projects use — had no pre-install coverage.
+`aguara check .` returned `ecosystems: []` for the npm pipeline on
+any pnpm repo until the user ran `pnpm install` first.
+
+### Added
+
+- **`pnpm-lock.yaml` parser in the packagecheck path** (#119).
+  Refs are routed through the existing npm ecosystem so they
+  match against the same OSV npm advisories the installed-tree
+  pipeline uses. No new ecosystem, no new OSV bucket. Coverage:
+  - modern v6+ keys (`name@version`, `@scope/pkg@version`)
+  - legacy v5 slash-form keys (`/name/version`, `/@scope/pkg/version`)
+  - v9+ paren-encoded peer-dep suffixes including scoped peers
+    (`@commitlint/cli@19.6.1(@types/node@22.10.2)`)
+  - pre-v9 underscore-encoded peer-dep suffixes
+  - dedup of peer-resolved duplicate entries so a package
+    consumed with multiple peer resolutions counts once
+  - deterministic output ordering (sorted keys)
+  - rejection of non-registry sources: `workspace:`, `file:`,
+    `link:`, `github:`, `git:`, `http:`, `https:`
+- **`aguara check .` (no flags) now autodetects pnpm-lock.yaml
+  alongside the other six packagecheck ecosystems and the
+  installed-tree npm path.** A repo with both `pnpm-lock.yaml`
+  and `node_modules` produces two `ecosystems[]` entries with
+  `source: "pnpm-lock.yaml"` and `source: "node_modules"`
+  respectively so consumers see both surfaces independently.
+- **`aguara check --ecosystem npm`** now covers both surfaces.
+  Gated on `node_modules` existing so a pnpm-only repo (no
+  install yet) no longer errors with "no node_modules
+  directory"; the packagecheck lockfile pipeline runs in that
+  case.
+
+### Changed
+
+- `aguara check` terminal output for single-ecosystem npm plans
+  now reads "Scanning npm dependencies" instead of "npm
+  node_modules tree". The neutral wording covers both the
+  installed-tree and pnpm-lock-only surfaces without
+  misrepresenting either.
+
+### Compatibility
+
+Drop-in for v0.17.x. No schema changes, no flag renames, no rule
+ID changes. Consumers reading `verdict.status` and `ecosystems[]`
+continue to see the same field shapes; pnpm projects will start
+producing additional entries where the array was empty before.
+
 ## [0.17.1] - 2026-05-18
 
 QA backlog patch release. Four release-blocker bugs surfaced by
