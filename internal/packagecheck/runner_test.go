@@ -276,6 +276,103 @@ func TestRunner_MavenSyntheticHit(t *testing.T) {
 	}
 }
 
+func TestRunner_PNPMLockHitsCompromisedNPMRecord(t *testing.T) {
+	// pnpm-lock.yaml support routes through the npm ecosystem path
+	// (pnpm installs from npm registry). The fixture declares
+	// node-ipc@9.2.3, which is in the May 2026 compromised list.
+	// Build a synthetic snapshot containing that exact record so
+	// the test does not depend on the embedded snapshot's contents.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Records: []intel.Record{{
+			ID:        "MAL-TEST-NPM-NODE-IPC-9.2.3",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "node-ipc",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"9.2.3"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+
+	targets, err := Discover(filepath.Join("testdata", "pnpm-compromised"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected one pnpm-lock.yaml target, got %d: %+v", len(targets), targets)
+	}
+	if targets[0].Source != "pnpm-lock.yaml" {
+		t.Errorf("source = %q, want pnpm-lock.yaml", targets[0].Source)
+	}
+	if targets[0].Ecosystem != intel.EcosystemNPM {
+		t.Errorf("ecosystem = %q, want npm", targets[0].Ecosystem)
+	}
+
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := len(res.Ecosystems), 1; got != want {
+		t.Fatalf("ecosystems = %d, want %d", got, want)
+	}
+	er := res.Ecosystems[0]
+	if er.Ecosystem != intel.EcosystemNPM {
+		t.Errorf("ecosystem = %q, want npm", er.Ecosystem)
+	}
+	if er.Source != "pnpm-lock.yaml" {
+		t.Errorf("source = %q, want pnpm-lock.yaml", er.Source)
+	}
+	if er.PackagesRead != 2 {
+		t.Errorf("packages_read = %d, want 2 (node-ipc + lodash)", er.PackagesRead)
+	}
+	if er.FindingsCount != 1 {
+		t.Errorf("findings_count = %d, want 1 (node-ipc 9.2.3)", er.FindingsCount)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1", len(res.Hits))
+	}
+	if res.Hits[0].Ref.Name != "node-ipc" {
+		t.Errorf("hit ref name = %q, want node-ipc", res.Hits[0].Ref.Name)
+	}
+	if res.Hits[0].Ref.Version != "9.2.3" {
+		t.Errorf("hit ref version = %q, want 9.2.3", res.Hits[0].Ref.Version)
+	}
+}
+
+func TestRunner_PNPMCleanFixtureProducesZeroFindings(t *testing.T) {
+	// pnpm-clean fixture has lodash + @types/node, neither in any
+	// compromised list. The runner must still emit one
+	// EcosystemResult so consumers see "pipeline ran, scanned N
+	// packages, zero findings" rather than silence.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+
+	targets, err := Discover(filepath.Join("testdata", "pnpm-clean"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := len(res.Ecosystems), 1; got != want {
+		t.Fatalf("ecosystems = %d, want %d", got, want)
+	}
+	if res.Ecosystems[0].PackagesRead != 2 {
+		t.Errorf("packages_read = %d, want 2 (lodash + @types/node)", res.Ecosystems[0].PackagesRead)
+	}
+	if res.Ecosystems[0].FindingsCount != 0 {
+		t.Errorf("findings_count = %d, want 0 (clean fixture)", res.Ecosystems[0].FindingsCount)
+	}
+	if len(res.Hits) != 0 {
+		t.Errorf("hits = %d, want 0 (clean fixture)", len(res.Hits))
+	}
+}
+
 func TestRunner_NuGetSyntheticHit(t *testing.T) {
 	snap := intel.Snapshot{
 		SchemaVersion: intel.CurrentSchemaVersion,

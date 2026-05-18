@@ -331,6 +331,17 @@ func (p checkPlan) singleEcoToken() string {
 		return ecoNPM
 	}
 	if len(p.packagecheckTargets) > 0 {
+		// npm packagecheck targets (pnpm-lock.yaml today;
+		// package-lock.json / yarn.lock in follow-ups) are not in
+		// osvIDToEcoToken because npm normally flows through the
+		// incident path. Without this explicit map-back, a
+		// pnpm-only plan (no node_modules, no other lockfiles)
+		// would surface "" from singleEcoToken and the terminal
+		// formatter would fall through to the multi-ecosystem
+		// label even though the plan is single-ecosystem.
+		if p.packagecheckTargets[0].Ecosystem == intel.EcosystemNPM {
+			return ecoNPM
+		}
 		return osvIDToEcoToken[p.packagecheckTargets[0].Ecosystem]
 	}
 	// Explicit empty-discovery case: a single --ecosystem
@@ -388,9 +399,70 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				plan.pythonPath = path
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
 			case ecoNPM:
-				plan.runNPM = true
-				plan.npmPath = path
+				// Explicit `--ecosystem npm` now covers two surfaces:
+				//   1. installed-tree (node_modules + .pnpm store)
+				//      via incident.CheckNPM. Gated on node_modules
+				//      actually existing under the probe path so a
+				//      pnpm-only repo (no install yet) does NOT error
+				//      from "no node_modules directory".
+				//   2. lockfile (pnpm-lock.yaml) via packagecheck
+				//      discovery + ParsePNPMLock. Always added for
+				//      explicit npm so the user gets the pre-install
+				//      audit surface regardless of node_modules state.
+				//
+				// Empty --path defaults to cwd for the existence
+				// probe (matching how other explicit packagecheck
+				// ecosystems treat the empty-path case via the
+				// `root := "."` default further down). Without this,
+				// `aguara check --ecosystem npm` from a pnpm-only
+				// cwd would set runNPM=true on an empty path, which
+				// incident.CheckNPM rejects up front and the
+				// packagecheck pnpm pipeline never gets to run.
+				probe := path
+				if probe == "" {
+					probe = "."
+				}
+				// Resolve to absolute so the basename check sees
+				// the real directory name rather than ".". A user
+				// running `aguara check --ecosystem npm --path .`
+				// from INSIDE a node_modules tree would otherwise
+				// miss the installed-tree detection (filepath.Base
+				// of "." is "."), skip incident.CheckNPM entirely,
+				// and silently scan nothing.
+				resolved := probe
+				if abs, err := filepath.Abs(probe); err == nil {
+					resolved = abs
+				}
+				rootIsNodeModules := filepath.Base(resolved) == "node_modules"
+				if rootIsNodeModules || statDir(filepath.Join(resolved, "node_modules")) {
+					plan.runNPM = true
+					// When the root is node_modules itself, pass
+					// the RESOLVED absolute path so
+					// incident.CheckNPM's own basename check
+					// recognises it. Passing "." would otherwise
+					// hit `filepath.Base(".") == "."` and fail
+					// with "not a node_modules directory".
+					// For the parent-of-node_modules case the
+					// probe is the project root that contains
+					// node_modules and works as-is.
+					if rootIsNodeModules {
+						plan.npmPath = resolved
+					} else {
+						plan.npmPath = probe
+					}
+				}
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
+				// Skip the packagecheck npm discovery when the
+				// scan root IS node_modules. incident.CheckNPM
+				// already walks the installed tree; the
+				// packagecheck recursive walk would re-traverse
+				// the same tree only for pickPnpmTarget's
+				// hasNodeModulesAncestor check to reject every
+				// path. Substantial redundant work on large
+				// installs without producing any new findings.
+				if !rootIsNodeModules {
+					packagecheckIDs = append(packagecheckIDs, intel.EcosystemNPM)
+				}
 			default:
 				osvID, ok := packagecheckEcosystems[token]
 				if !ok {
@@ -556,7 +628,12 @@ func singleEcoEnvLabel(token string) string {
 	case ecoPython:
 		return "Python environment"
 	case ecoNPM:
-		return "npm node_modules tree"
+		// Neutral label so both surfaces match: incident.CheckNPM
+		// scans node_modules + the pnpm .pnpm store; packagecheck
+		// scans pnpm-lock.yaml directly. A pnpm-only repo with no
+		// install would otherwise see "npm node_modules tree"
+		// when only the lockfile was read.
+		return "npm dependencies"
 	case ecoGo:
 		return "Go modules"
 	case ecoCargo:
@@ -694,11 +771,19 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 	}
 	for _, hit := range runRes.Hits {
 		// Recover the CLI dispatch label from the OSV bucket so
-		// ecosystemFindingText picks the right wording. Falls back
-		// to a generic message if the ecosystem is unknown (which
-		// should never happen because packagecheckEcosystems and
-		// osvIDToEcoToken stay in sync via the same map literal).
+		// ecosystemFindingText picks the right wording.
+		// npm is intentionally absent from osvIDToEcoToken (it
+		// flows through the incident path), but pnpm-lock.yaml
+		// hits land HERE with hit.Ref.Ecosystem == EcosystemNPM,
+		// so map them back to ecoNPM explicitly. Without this,
+		// the wording would fall through to the generic
+		// "compromised package" copy instead of the npm-specific
+		// title + remediation, losing parity with the
+		// installed-tree findings.
 		ecoToken := osvIDToEcoToken[hit.Ref.Ecosystem]
+		if ecoToken == "" && hit.Ref.Ecosystem == intel.EcosystemNPM {
+			ecoToken = ecoNPM
+		}
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
@@ -777,6 +862,18 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 	case ecoNuGet:
 		return fmt.Sprintf("%s %s is a known compromised NuGet package (%s)", name, version, id),
 			fmt.Sprintf("Update %s to a fixed version in the project file or packages.lock.json and restore. Rotate secrets reachable from builds that used the compromised package.", name)
+	case ecoNPM:
+		// pnpm-lock.yaml packagecheck hits land here. Mirrors the
+		// wording incident.CheckNPM emits for installed-tree
+		// findings so the two surfaces produce consistent
+		// finding text. Remediation points at the package manager
+		// generically (npm install / pnpm install / yarn) since
+		// the hit could have come from any of the npm registry
+		// consumers, and explicitly calls out the lockfile
+		// pinning that would otherwise re-introduce the same
+		// version on the next install.
+		return fmt.Sprintf("%s %s is a known compromised npm package (%s)", name, version, id),
+			fmt.Sprintf("Remove %s@%s from the lockfile and reinstall against a fixed version. Audit recent runs of the surrounding pipeline and rotate any tokens this environment has held.", name, version)
 	default:
 		// Defensive: a packagecheck ecosystem without a wording
 		// entry still produces a usable finding rather than a

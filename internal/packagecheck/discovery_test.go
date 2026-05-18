@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDiscover_MonorepoFindsBothGoTargets(t *testing.T) {
@@ -91,6 +92,51 @@ func TestDiscover_NoGoFilesReturnsEmpty(t *testing.T) {
 	}
 	if len(targets) != 0 {
 		t.Errorf("targets = %+v, want empty", targets)
+	}
+}
+
+func TestDiscover_SkipsPnpmLockUnderNodeModulesRoot(t *testing.T) {
+	// When the user passes a node_modules directory as the scan
+	// root (legitimate npm input), the recursive walk would
+	// normally pick up pnpm-lock.yaml shipped inside dependency
+	// packages as fixtures or dev lockfiles, producing findings
+	// unrelated to the user's project. The defaultSkipDirs gate
+	// only fires when `path != root`, so the pnpm picker has its
+	// own ancestor check to short-circuit.
+	root := t.TempDir()
+	nm := filepath.Join(root, "node_modules")
+	depDir := filepath.Join(nm, "some-dep")
+	require.NoError(t, os.MkdirAll(depDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(depDir, "pnpm-lock.yaml"), []byte("lockfileVersion: '9.0'\npackages:\n  node-ipc@9.2.3: {}\n"), 0o644))
+
+	// Scan root IS node_modules. The pnpm picker must NOT report
+	// the dep's lockfile as a project signal.
+	targets, err := Discover(nm, []string{intel.EcosystemNPM})
+	require.NoError(t, err)
+	require.Empty(t, targets, "pnpm-lock.yaml inside node_modules must not be discovered when root is node_modules; got %+v", targets)
+}
+
+func TestDiscover_FindsPnpmLockAsNPM(t *testing.T) {
+	// pnpm-lock.yaml routes through the packagecheck path with
+	// Ecosystem=npm and Source="pnpm-lock.yaml". This is what
+	// makes `aguara check .` on a fresh clone of a pnpm repo
+	// (no node_modules yet) surface npm coverage.
+	root := filepath.Join("testdata", "pnpm-compromised")
+	targets, err := Discover(root, []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if got, want := len(targets), 1; got != want {
+		t.Fatalf("targets = %d, want %d (targets=%+v)", got, want, targets)
+	}
+	if targets[0].Ecosystem != intel.EcosystemNPM {
+		t.Errorf("ecosystem = %q, want %q", targets[0].Ecosystem, intel.EcosystemNPM)
+	}
+	if targets[0].Source != "pnpm-lock.yaml" {
+		t.Errorf("source = %q, want pnpm-lock.yaml", targets[0].Source)
+	}
+	if !strings.HasSuffix(targets[0].Path, "pnpm-lock.yaml") {
+		t.Errorf("path = %q, want suffix pnpm-lock.yaml", targets[0].Path)
 	}
 }
 

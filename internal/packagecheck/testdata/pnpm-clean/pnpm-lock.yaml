@@ -1,0 +1,25 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+
+importers:
+  .:
+    dependencies:
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+      '@types/node':
+        specifier: ^20.5.0
+        version: 20.5.0
+
+packages:
+  lodash@4.17.21:
+    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}
+
+  '@types/node@20.5.0':
+    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}
+
+snapshots:
+  lodash@4.17.21: {}
+  '@types/node@20.5.0': {}

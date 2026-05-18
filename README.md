@@ -533,7 +533,7 @@ Coverage by ecosystem:
 
 | Ecosystem | Evidence read | Coverage today |
 |---|---|---|
-| npm | `node_modules` (incl. pnpm `.pnpm` store) | Strong malicious-package coverage |
+| npm | `node_modules` (incl. pnpm `.pnpm` store), `pnpm-lock.yaml` | Strong malicious-package coverage; pnpm lockfile readable pre-install |
 | PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage |
 | RubyGems | `Gemfile.lock` | Strong malicious-package coverage |
 | NuGet | `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj` | Strong exact-version malicious-package coverage |
@@ -546,13 +546,23 @@ Aguara is not claiming to be a full SCA vulnerability scanner yet. v0.17
 adds offline malicious-package checks across ecosystems. General
 CVE/range matching is the next layer.
 
+For pnpm projects, Aguara reads `pnpm-lock.yaml` directly. You do not need to run `pnpm install` first:
+
+```bash
+# Works before install in pnpm repos
+git clone <pnpm-repo>
+cd <pnpm-repo>
+aguara check .
+```
+
 Auto-detection rules (in order):
-- If the path is or contains `node_modules`, run the npm check.
-- Walk the path recursively for lockfiles (`go.sum`, `Cargo.lock`,
-  `composer.lock`, `Gemfile.lock`, `pom.xml`, `gradle.lockfile`,
-  `gradle/dependency-locks/*.lockfile`, `packages.lock.json`,
-  `*.csproj`/`*.fsproj`/`*.vbproj`). Skip `.git/`, `vendor/`,
-  `node_modules/`, `.aguara/`, `target/`, `bin/`, `obj/`, `.gradle/`.
+- If the path is or contains `node_modules`, run the installed-tree npm check (covers both flat `node_modules/<pkg>` and pnpm's `.pnpm` store).
+- Walk the path recursively for lockfiles (`pnpm-lock.yaml`, `go.sum`,
+  `Cargo.lock`, `composer.lock`, `Gemfile.lock`, `pom.xml`,
+  `gradle.lockfile`, `gradle/dependency-locks/*.lockfile`,
+  `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj`). Skip `.git/`,
+  `vendor/`, `node_modules/`, `.aguara/`, `target/`, `bin/`, `obj/`,
+  `.gradle/`.
 - If the explicit `--path` looks like a Python install
   (`site-packages` / `dist-packages` basename, or contains `*.dist-info`),
   run the Python check.
