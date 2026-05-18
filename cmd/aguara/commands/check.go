@@ -398,6 +398,14 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 		// would silently turn the user-error case into a
 		// clean-looking empty result.
 		explicitNPMRequested := false
+		// otherEcosystemRequested tracks whether the user combined
+		// `--ecosystem npm` with at least one non-npm ecosystem
+		// (e.g. `--ecosystem npm --ecosystem go`). In that case the
+		// legacy "no npm signal here = error" contract must yield to
+		// the discovered non-npm targets; otherwise a multi-ecosystem
+		// CI config would refuse to run on any repo or subproject
+		// without an npm surface, which is a functional regression.
+		otherEcosystemRequested := false
 		for _, raw := range ecoFlags {
 			token, err := canonicaliseCheckEcosystem(raw)
 			if err != nil {
@@ -408,6 +416,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				plan.runPython = true
 				plan.pythonPath = path
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
+				otherEcosystemRequested = true
 			case ecoNPM:
 				explicitNPMRequested = true
 				// Explicit `--ecosystem npm` now covers two surfaces:
@@ -481,6 +490,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				}
 				packagecheckIDs = append(packagecheckIDs, osvID)
 				plan.requestedEcosystems = append(plan.requestedEcosystems, osvID)
+				otherEcosystemRequested = true
 			}
 		}
 		if len(packagecheckIDs) > 0 {
@@ -504,7 +514,13 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 		// was discovered: runNPM (installed tree) or a packagecheck
 		// npm target (pnpm-lock.yaml today; package-lock.json /
 		// yarn.lock when those land).
-		if explicitNPMRequested && !plan.runNPM {
+		//
+		// Scope the error to npm-only invocations. When npm is
+		// combined with any other ecosystem the user is asking for
+		// a multi-ecosystem audit and a missing npm surface should
+		// not abort the run; the discovered non-npm targets still
+		// have something to scan.
+		if explicitNPMRequested && !otherEcosystemRequested && !plan.runNPM {
 			haveNPMTarget := false
 			for _, t := range plan.packagecheckTargets {
 				if t.Ecosystem == intel.EcosystemNPM {
