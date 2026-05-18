@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -160,6 +161,122 @@ func TestCheckNPM_CleanTreeJSONEmitsEmptyArrays(t *testing.T) {
 	}
 	if !strings.Contains(js, `"findings":[]`) {
 		t.Errorf("expected findings:[] in JSON output, got: %s", js)
+	}
+}
+
+// TestCheckNPM_AppendsNPMEcosystemEntry locks the per-call ecosystems[]
+// contract for the npm incident path. Issue #109: before this, the
+// npm path always emitted .Ecosystems = [] regardless of whether
+// node_modules was actually consulted, so JSON consumers reading the
+// ecosystems[] array concluded "npm not covered" even when packages
+// were checked and findings would have fired.
+func TestCheckNPM_AppendsNPMEcosystemEntry(t *testing.T) {
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "express", "4.18.2")
+	writeNPMPackage(t, nm, "lodash", "4.17.21")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM error: %v", err)
+	}
+	if len(result.Ecosystems) != 1 {
+		t.Fatalf("expected exactly one ecosystems[] entry for npm path, got %d (%+v)",
+			len(result.Ecosystems), result.Ecosystems)
+	}
+	got := result.Ecosystems[0]
+	if got.Ecosystem != "npm" {
+		t.Errorf("ecosystem = %q, want %q", got.Ecosystem, "npm")
+	}
+	if got.Source != "node_modules" {
+		t.Errorf("source = %q, want %q", got.Source, "node_modules")
+	}
+	if got.Path != nm {
+		t.Errorf("path = %q, want %q (the actual scanned node_modules dir)", got.Path, nm)
+	}
+	if got.PackagesRead != 2 {
+		t.Errorf("packages_read = %d, want 2 (express + lodash)", got.PackagesRead)
+	}
+	if got.FindingsCount != 0 {
+		t.Errorf("findings_count = %d, want 0 (clean tree)", got.FindingsCount)
+	}
+}
+
+// TestCheckNPM_AppendsNPMEcosystemEntry_WithFindings pins that
+// FindingsCount counts only package-match findings (not other
+// finding sources) and that the count survives serialisation.
+func TestCheckNPM_AppendsNPMEcosystemEntry_WithFindings(t *testing.T) {
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	// node-ipc 9.2.3 is in the embedded compromised list. The match
+	// makes this test exercise the findings-counting branch.
+	writeNPMPackage(t, nm, "node-ipc", "9.2.3")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM error: %v", err)
+	}
+	if len(result.Ecosystems) != 1 {
+		t.Fatalf("expected exactly one ecosystems[] entry, got %d", len(result.Ecosystems))
+	}
+	got := result.Ecosystems[0]
+	if got.PackagesRead != 1 {
+		t.Errorf("packages_read = %d, want 1", got.PackagesRead)
+	}
+	if got.FindingsCount < 1 {
+		t.Errorf("findings_count = %d, want at least 1 (node-ipc 9.2.3 should match)", got.FindingsCount)
+	}
+
+	// Round-trip through JSON to confirm the new entry survives
+	// serialisation with the documented field names.
+	out, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	js := string(out)
+	for _, want := range []string{
+		`"ecosystem":"npm"`,
+		`"source":"node_modules"`,
+		`"packages_read":1`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("JSON output missing %q in ecosystems[] entry; got: %s", want, js)
+		}
+	}
+}
+
+// TestCheckNPM_ReturnsErrorOnUnreadableTree pins the readability-probe
+// behaviour. WalkDir swallows traversal errors and returns an empty
+// package list, so without an explicit ReadDir probe an unreadable
+// node_modules would surface as a clean-looking result with
+// ecosystems[npm].PackagesRead=0, indistinguishable from a real empty
+// tree to coverage consumers. The probe converts the silent failure
+// into an explicit error.
+func TestCheckNPM_ReturnsErrorOnUnreadableTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode 0o000 does not block ReadDir on Windows; the readability semantics this test covers are Unix-only")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses POSIX permission checks; skip")
+	}
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(nm, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(nm, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(nm, 0o755) })
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err == nil {
+		t.Fatalf("unreadable node_modules must surface as a CheckNPM error, not a silent clean scan")
+	}
+	if result != nil {
+		t.Errorf("CheckNPM must not return a result when the directory cannot be read; got %+v", result)
+	}
+	if !strings.Contains(err.Error(), "cannot read node_modules directory") {
+		t.Errorf("error message must mention the readability failure for operators to diagnose; got %v", err)
 	}
 }
 

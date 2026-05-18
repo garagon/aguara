@@ -573,33 +573,43 @@ func TestCheckGoEmptyPathReturnsCleanResult(t *testing.T) {
 	require.Equal(t, 0, result.PackagesRead)
 }
 
-// TestCheckEcosystemsJSONShapeAlwaysEmitsEmptyArray locks the raw
-// JSON contract. The struct-level unmarshal-then-require.Empty pass
-// hides the difference between `"ecosystems": []` (intended) and a
-// missing field or `"ecosystems": null` (regression: would re-appear
-// if someone re-adds `,omitempty` or skips initialising the slice
-// in incident.Check / incident.CheckNPM). External consumers
-// (aguara-mcp, CI scripts) iterate the array unconditionally, so the
-// literal `"ecosystems": []` substring is part of the JSON contract.
-func TestCheckEcosystemsJSONShapeAlwaysEmitsEmptyArray(t *testing.T) {
-	// Exercise the three paths that build CheckResult: explicit Go
-	// with no targets, explicit npm with no targets, and the
-	// Python fallback. All three must emit the literal
-	// `"ecosystems": []` so downstream JSON consumers can iterate
-	// without a nil check.
-	t.Run("ecosystem go on dir without go.sum", func(t *testing.T) {
+// TestCheckEcosystemsJSONShape locks the raw JSON contract for the
+// ecosystems[] field across the three CheckResult paths.
+//
+// The original purpose of this test was to prevent
+// `"ecosystems": null` regressions: nil slices marshal as `null`,
+// breaking pipelines that iterate the array unconditionally. That
+// contract still holds for every path.
+//
+// What changed in #109: npm and PyPI incident paths now always
+// append exactly one ecosystems[] entry per call (even when
+// PackagesRead == 0), so JSON consumers see consistent coverage
+// data. The go-on-empty-dir case still emits the empty array because
+// the packagecheck path discovers zero lockfiles and dispatches
+// nothing.
+func TestCheckEcosystemsJSONShape(t *testing.T) {
+	t.Run("ecosystem go on dir without go.sum still emits empty array", func(t *testing.T) {
 		tmp := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# nothing\n"), 0o644))
 		raw := checkToFileRaw(t, "--ecosystem", "go", "--path", tmp)
 		require.Contains(t, string(raw), `"ecosystems": []`)
 		require.NotContains(t, string(raw), `"ecosystems": null`)
 	})
-	t.Run("ecosystem npm with empty node_modules", func(t *testing.T) {
+	t.Run("ecosystem npm with empty node_modules appends an entry per #109", func(t *testing.T) {
 		nm := filepath.Join(t.TempDir(), "node_modules")
 		require.NoError(t, os.MkdirAll(nm, 0o755))
 		raw := checkToFileRaw(t, "--ecosystem", "npm", "--path", nm)
-		require.Contains(t, string(raw), `"ecosystems": []`)
+		// The npm incident path runs unconditionally on the supplied
+		// node_modules directory, so a per-call entry is appended
+		// with PackagesRead=0 and FindingsCount=0. Important:
+		// "ecosystems": null must NOT reappear (the v0.17.0
+		// regression we're locking against).
 		require.NotContains(t, string(raw), `"ecosystems": null`)
+		require.NotContains(t, string(raw), `"ecosystems": []`,
+			"empty array on empty node_modules contradicts #109: the npm path consumed the directory and must surface the entry")
+		require.Contains(t, string(raw), `"ecosystem": "npm"`,
+			"expected the npm entry to be present even with zero packages read")
+		require.Contains(t, string(raw), `"source": "node_modules"`)
 	})
 }
 
@@ -763,22 +773,74 @@ func TestCheckMavenAndNuGetEmptyPathEmitsEmptyArray(t *testing.T) {
 
 // --- PR #5: multi-ecosystem autodetect + explicit multi --ecosystem ---
 
-func TestCheckMultiEcosystemAutodetectFindsAllSixPackagecheckEcosystems(t *testing.T) {
+func TestCheckMultiEcosystemAutodetectFindsAllEcosystemsInFixture(t *testing.T) {
 	// The multi-all fixture has one lockfile per packagecheck
 	// ecosystem (Go, Cargo, Composer, RubyGems, Maven, NuGet)
-	// nested under separate service directories. Default
-	// `aguara check --path <root>` must discover every one
-	// without --ecosystem.
+	// nested under separate service directories, plus a top-level
+	// node_modules/ that triggers the npm incident path. Default
+	// `aguara check --path <root>` must discover every one without
+	// --ecosystem. npm and PyPI now emit ecosystems[] entries on the
+	// incident path (issue #109), so the count is 7: 6 packagecheck
+	// targets + 1 npm. The fixture has no Python site-packages
+	// shape, so PyPI does not autodetect from this root and is not
+	// in the expected set.
 	result := checkToFile(t, "--path", "../../../internal/packagecheck/testdata/multi-all")
 
-	require.Len(t, result.Ecosystems, 6, "expected one EcosystemResult per discovered lockfile, got %+v", result.Ecosystems)
+	require.Len(t, result.Ecosystems, 7, "expected 6 packagecheck targets + 1 npm autodetect, got %+v", result.Ecosystems)
 	seen := map[string]bool{}
 	for _, e := range result.Ecosystems {
 		seen[e.Ecosystem] = true
 	}
-	for _, eco := range []string{"Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet"} {
+	for _, eco := range []string{"Go", "crates.io", "Packagist", "RubyGems", "Maven", "NuGet", "npm"} {
 		require.True(t, seen[eco], "missing ecosystem %s in autodetect output (got %+v)", eco, seen)
 	}
+}
+
+// --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
+
+func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {
+	// `aguara check --ecosystem npm --path <node_modules>` must
+	// surface an ecosystems[] entry alongside any findings so JSON
+	// consumers reading the array see consistent multi-ecosystem
+	// coverage data. Before #109 fix, ecosystems[] was always [] for
+	// the npm path, contradicting the "npm scanned" reality.
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	require.NoError(t, os.MkdirAll(nm, 0o755))
+	writeFakeNPMPackage(t, nm, "express", "4.18.2")
+	writeFakeNPMPackage(t, nm, "lodash", "4.17.21")
+
+	result := checkToFile(t, "--ecosystem", "npm", "--path", nm)
+
+	require.Len(t, result.Ecosystems, 1, "expected exactly one ecosystems[] entry for explicit npm path")
+	got := result.Ecosystems[0]
+	require.Equal(t, "npm", got.Ecosystem)
+	require.Equal(t, "node_modules", got.Source)
+	require.Equal(t, nm, got.Path)
+	require.Equal(t, 2, got.PackagesRead, "fixture has express + lodash")
+	require.Equal(t, 0, got.FindingsCount, "neither package is compromised; findings_count should be 0")
+}
+
+func TestCheckExplicitPython_AppendsEcosystemsEntry(t *testing.T) {
+	// `aguara check --ecosystem python --path <site-packages>` must
+	// surface an ecosystems[] entry. Builds a minimal site-packages
+	// shape (one dist-info) so the PyPI path runs and counts the
+	// package without producing findings.
+	siteDir := t.TempDir()
+	distInfo := filepath.Join(siteDir, "requests-2.31.0.dist-info")
+	require.NoError(t, os.Mkdir(distInfo, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+		"Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\n",
+	), 0o644))
+
+	result := checkToFile(t, "--ecosystem", "python", "--path", siteDir)
+
+	require.Len(t, result.Ecosystems, 1, "expected exactly one ecosystems[] entry for explicit python path")
+	got := result.Ecosystems[0]
+	require.Equal(t, "PyPI", got.Ecosystem)
+	require.Equal(t, "site-packages", got.Source)
+	require.Equal(t, siteDir, got.Path)
+	require.Equal(t, 1, got.PackagesRead, "fixture has one dist-info package")
+	require.Equal(t, 0, got.FindingsCount, "requests 2.31.0 is not in the compromised list")
 }
 
 func TestCheckExplicitMultiEcosystemFlag(t *testing.T) {

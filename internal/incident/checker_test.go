@@ -3,6 +3,7 @@ package incident
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,6 +128,90 @@ func TestCheckCleanPth(t *testing.T) {
 	for _, f := range result.Findings {
 		assert.NotContains(t, f.Path, "safe.pth", "legitimate .pth should not be flagged")
 	}
+}
+
+// TestCheck_AppendsPyPIEcosystemEntry locks the per-call ecosystems[]
+// contract for the PyPI incident path. Issue #109: before this, the
+// PyPI path always emitted .Ecosystems = [] regardless of whether
+// site-packages was actually consulted, so JSON consumers reading the
+// ecosystems[] array concluded "PyPI not covered" even when packages
+// were checked.
+func TestCheck_AppendsPyPIEcosystemEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	// Add a couple of dist-info packages so PackagesRead is > 0.
+	for _, p := range []struct{ name, version string }{
+		{"requests", "2.31.0"},
+		{"urllib3", "2.0.4"},
+	} {
+		distInfo := filepath.Join(dir, p.name+"-"+p.version+".dist-info")
+		require.NoError(t, os.Mkdir(distInfo, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+			"Metadata-Version: 2.1\nName: "+p.name+"\nVersion: "+p.version+"\n",
+		), 0o644))
+	}
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+	require.Len(t, result.Ecosystems, 1,
+		"expected exactly one ecosystems[] entry for PyPI path, got %+v", result.Ecosystems)
+
+	got := result.Ecosystems[0]
+	assert.Equal(t, "PyPI", got.Ecosystem)
+	assert.Equal(t, "site-packages", got.Source)
+	assert.Equal(t, dir, got.Path, "path should be the scanned site-packages dir")
+	assert.Equal(t, 2, got.PackagesRead, "packages_read should count both dist-info packages")
+	assert.Equal(t, 0, got.FindingsCount, "no compromised packages in fixture; findings_count should be 0")
+}
+
+// TestCheck_AppendsPyPIEcosystemEntry_WithFindings pins that
+// FindingsCount counts only package-match findings, not the .pth /
+// persistence / cache findings that the PyPI Check function also
+// emits.
+func TestCheck_AppendsPyPIEcosystemEntry_WithFindings(t *testing.T) {
+	dir := t.TempDir()
+
+	// litellm 1.82.8 is a known compromised package in the embedded
+	// snapshot (see TestCheckDetectsCompromisedPackage). The match
+	// fires the package-findings branch.
+	distInfo := filepath.Join(dir, "litellm-1.82.8.dist-info")
+	require.NoError(t, os.Mkdir(distInfo, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+		"Metadata-Version: 2.1\nName: litellm\nVersion: 1.82.8\n",
+	), 0o644))
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+	require.Len(t, result.Ecosystems, 1)
+
+	got := result.Ecosystems[0]
+	assert.Equal(t, "PyPI", got.Ecosystem)
+	assert.Equal(t, 1, got.PackagesRead)
+	assert.GreaterOrEqual(t, got.FindingsCount, 1,
+		"package match against litellm 1.82.8 should produce at least one PyPI ecosystem finding")
+}
+
+// TestCheck_ReturnsErrorOnUnreadableSiteDir pins the readability-probe
+// behaviour. Without the probe, an unreadable site-packages directory
+// would silently produce a clean-looking result with an ecosystems[]
+// entry reporting PackagesRead=0, which a dashboard could not
+// distinguish from a real empty environment. The probe converts the
+// silent failure into an explicit error.
+func TestCheck_ReturnsErrorOnUnreadableSiteDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode 0o000 does not block ReadDir on Windows; the readability semantics this test covers are Unix-only")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses POSIX permission checks; skip")
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.Error(t, err, "unreadable site-packages must surface as a Check error, not a silent clean scan")
+	require.Nil(t, result, "Check must not return a result when the directory cannot be read")
+	require.Contains(t, err.Error(), "cannot read site-packages directory")
 }
 
 func TestCheckEmptyEnvironment(t *testing.T) {
