@@ -796,6 +796,121 @@ func TestCheckMultiEcosystemAutodetectFindsAllEcosystemsInFixture(t *testing.T) 
 	}
 }
 
+// --- Issue #111: aguara check [path] accepts an optional positional ---
+
+func TestCheck_PositionalPath_Dot(t *testing.T) {
+	// `aguara check .` must walk the current working directory.
+	// The fixture lives at a known path; the test cd's into the
+	// fixture root and calls `check .` so the positional `.`
+	// resolves to that root.
+	project := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(project, "node_modules"), 0o755))
+	writeFakeNPMPackage(t, filepath.Join(project, "node_modules"), "lodash", "4.17.21")
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(project))
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	result := checkToFile(t, ".")
+
+	require.NotEmpty(t, result.Ecosystems, "positional '.' must resolve to the cwd and trigger the npm pipeline")
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+}
+
+func TestCheck_PositionalPath_RelativeWithEcosystemFlag(t *testing.T) {
+	// `aguara check ./fixtures --ecosystem npm` -- positional + flag
+	// on a different axis must coexist. The positional supplies the
+	// path; --ecosystem narrows the dispatch.
+	project := t.TempDir()
+	nm := filepath.Join(project, "node_modules")
+	require.NoError(t, os.MkdirAll(nm, 0o755))
+	writeFakeNPMPackage(t, nm, "lodash", "4.17.21")
+
+	result := checkToFile(t, project, "--ecosystem", "npm")
+
+	require.Len(t, result.Ecosystems, 1, "explicit --ecosystem npm with positional path must produce exactly one npm entry")
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, 1, result.Ecosystems[0].PackagesRead)
+}
+
+func TestCheck_PositionalPath_PlusPathFlagIsAmbiguity(t *testing.T) {
+	// Both forms together must fail with a clear ambiguity error.
+	// The alternative ("flag wins silently") would surprise users
+	// whose two paths point at different directories.
+	a := t.TempDir()
+	b := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(b, "node_modules"), 0o755))
+
+	resetFlags()
+	rootCmd.SetArgs([]string{"check", a, "--path", b, "--no-update-check"})
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "passing both positional and --path must error, not silently pick one")
+	require.Contains(t, err.Error(), "ambiguous path",
+		"error message must name the ambiguity so the operator can drop one")
+}
+
+func TestCheck_PositionalPath_TwoArgsRejected(t *testing.T) {
+	// `aguara check a b` must error via cobra.MaximumNArgs(1)
+	// rather than silently using the first arg and dropping the
+	// rest.
+	resetFlags()
+	rootCmd.SetArgs([]string{"check", "a", "b", "--no-update-check"})
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "two positional args must error")
+	require.Contains(t, err.Error(), "accepts at most 1 arg",
+		"cobra's MaximumNArgs(1) error wording is the stable signal we lock against")
+}
+
+func TestCheck_ResolveCheckPathArg_TableSemantics(t *testing.T) {
+	// Unit-level coverage of the precedence table for resolveCheckPathArg.
+	// The CLI-level tests above exercise the full Cobra round-trip;
+	// this one pins the contract at the helper boundary so the table
+	// is reviewable in one place.
+	cases := []struct {
+		name      string
+		args      []string
+		flagPath  string
+		want      string
+		wantError bool
+	}{
+		{name: "empty/empty -> empty (legacy default)", args: nil, flagPath: "", want: ""},
+		{name: "empty/flag -> flag", args: nil, flagPath: "/x", want: "/x"},
+		{name: "positional/empty -> positional", args: []string{"/y"}, flagPath: "", want: "/y"},
+		{name: "positional/flag -> error", args: []string{"/y"}, flagPath: "/x", wantError: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveCheckPathArg(tc.args, tc.flagPath)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "ambiguous path")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {
