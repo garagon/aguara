@@ -40,6 +40,10 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"v5 unscoped", "/lodash/4.17.21", "lodash", "4.17.21", true},
 		{"v5 scoped", "/@types/node/20.5.0", "@types/node", "20.5.0", true},
 		{"v5 unscoped slash-only no leading", "lodash/4.17.21", "lodash", "4.17.21", true},
+		// Legacy v5 + peer-dep suffix: the "@" in the peer suffix
+		// must NOT be picked as the version separator.
+		{"v5 unscoped + peer underscore", "lodash/4.17.21_react@18.0.0", "lodash", "4.17.21", true},
+		{"v5 scoped + peer underscore", "/@types/node/20.5.0_typescript@5.0.0", "@types/node", "20.5.0", true},
 
 		// Rejected: malformed
 		{"bare name no version", "node-ipc", "", "", false},

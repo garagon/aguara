@@ -424,7 +424,14 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				}
 				if filepath.Base(probe) == "node_modules" || statDir(filepath.Join(probe, "node_modules")) {
 					plan.runNPM = true
-					plan.npmPath = path
+					// Use the probe (already defaulted to ".")
+					// rather than the original (possibly empty)
+					// path. incident.CheckNPM rejects an empty
+					// path with an up-front error before any
+					// scan runs, so passing it the resolved
+					// probe matches the actual directory the
+					// existence check just confirmed.
+					plan.npmPath = probe
 				}
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
 				packagecheckIDs = append(packagecheckIDs, intel.EcosystemNPM)

@@ -124,50 +124,82 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		}
 	}
 
-	// Two pnpm key formats are valid in the wild:
+	// Two pnpm key formats coexist in the wild:
 	//
-	//   modern (v6+):    name@version           "@scope/pkg@1.2.3"
-	//   legacy (v5):     name/version           "@scope/pkg/1.2.3"
+	//   modern (v6+):  name@version            "lodash@4.17.21"
+	//                  @scope/pkg@version      "@scope/pkg@1.2.3"
+	//   legacy (v5):   name/version            "lodash/4.17.21"
+	//                  @scope/pkg/version      "@scope/pkg/1.2.3"
 	//
-	// Try the modern shape first by locating the version-separating
-	// "@". Correct rule:
-	//   - scoped key  ("@scope/pkg@1.2.3"):  find the "@" AFTER the
-	//     first "/"; that is the package/version boundary.
-	//     LastIndex would land in a peer-dep suffix instead.
-	//   - unscoped key ("node-ipc@1.2.3"):   first "@" is the
-	//     separator; anything later is a peer-dep suffix.
+	// Both shapes can be decorated with a peer-dep suffix (pre-v9
+	// "..._peer@version" underscore, v9+ "...(peer@version)" parens).
+	// The peer suffix is always AFTER the version, so peer-aware
+	// stripping happens once after the (name, version) pair is picked.
 	//
-	// If no "@" sits in a valid position, fall back to the legacy
-	// slash-separator shape (last "/" is the version boundary).
-	// Without this fallback, lockfileVersion 5.x projects with
-	// keys like "/lodash/4.17.21" or "/@types/node/20.5.0" would
-	// silently produce zero packages_read even when the lockfile
-	// declares compromised versions.
+	// The tricky combination is legacy v5 slash-form with a peer
+	// underscore: "lodash/4.17.21_react@18.0.0". The "@" in that
+	// key belongs to the peer suffix, NOT the package/version
+	// boundary. Picking the first "@" as the separator would
+	// produce ("lodash/4.17.21_react", "18.0.0") and silently
+	// drop the real package match. Decide modern vs v5 BEFORE
+	// looking for the "@" separator.
+	//
+	// Decision rule:
+	//   - scoped key (starts with "@"):
+	//       modern if there is an "@" AFTER the first "/"
+	//       v5     otherwise (slash-fallback)
+	//   - unscoped key:
+	//       v5     if there is a "/" AND ("/" appears before the
+	//              first "@" OR there is no "@" at all)
+	//       modern otherwise
 	var (
 		name    string
 		version string
 	)
 	if strings.HasPrefix(key, "@") {
-		slash := strings.IndexByte(key, '/')
-		if slash > 0 {
+		// Slash count discriminates modern vs v5 for scoped keys:
+		//   1 slash  -> "@scope/pkg@version" or "@scope/pkg" (modern)
+		//   2+ slashes -> "@scope/pkg/version[_peer@...]" (v5)
+		// Without this check, a v5 key with a peer-dep suffix
+		// containing "@" (e.g. "@types/node/20.5.0_typescript@5.0.0")
+		// would route through the modern branch and pick the peer
+		// "@" as the version separator, producing
+		// (name="@types/node/20.5.0_typescript", version="5.0.0").
+		switch strings.Count(key, "/") {
+		case 1:
+			// Modern scoped form. The "@" AFTER the first slash
+			// is the package/version boundary; any later "@"
+			// belongs to a peer-dep suffix.
+			slash := strings.IndexByte(key, '/')
 			if rel := strings.IndexByte(key[slash:], '@'); rel >= 0 {
 				at := slash + rel
 				name = key[:at]
 				version = key[at+1:]
 			}
+			// No "@" after the slash -> "@scope/pkg" without
+			// a version. Leave name="" so the v5 fallback below
+			// rejects via the >= 2 slashes guard.
+		default:
+			// 0 slashes -> malformed scoped (just "@something").
+			// >= 2 slashes -> v5 form; leave name="" for v5
+			//                slash-fallback below.
 		}
 	} else {
-		if at := strings.IndexByte(key, '@'); at > 0 {
-			name = key[:at]
-			version = key[at+1:]
+		firstAt := strings.IndexByte(key, '@')
+		firstSlash := strings.IndexByte(key, '/')
+		isV5SlashForm := firstSlash >= 0 && (firstAt < 0 || firstSlash < firstAt)
+		if !isV5SlashForm && firstAt > 0 {
+			name = key[:firstAt]
+			version = key[firstAt+1:]
 		}
+		// v5 slash-form OR no "@" anywhere -> leave name="" for
+		// v5 slash-fallback below.
 	}
 	if name == "" {
-		// Legacy v5 fallback: last "/" splits name from version.
-		// Validate slash structure to avoid mis-classifying malformed
-		// modern keys (like "@scope/pkg" with no version) as v5:
-		//   - scoped v5 keys are "@scope/pkg/version" (2 slashes)
-		//   - unscoped v5 keys are "name/version"     (1 slash)
+		// Legacy v5 fallback. Validate slash structure to avoid
+		// mis-classifying malformed modern keys as v5:
+		//   - scoped v5 keys are "@scope/pkg/version" (>= 2 slashes)
+		//   - unscoped v5 keys are "name/version"     (>= 1 slash)
 		// "@scope/pkg" has 1 slash and would otherwise resolve to
 		// (name="@scope", version="pkg"), which is wrong.
 		lastSlash := strings.LastIndexByte(key, '/')
