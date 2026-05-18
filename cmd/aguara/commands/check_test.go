@@ -986,6 +986,55 @@ func TestCheck_ExplicitNPMEcosystemOnPnpmRepoFires(t *testing.T) {
 	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "node-ipc 9.2.3 should fire")
 }
 
+func TestCheck_ExplicitNPMSoleEcosystemMissingSurfaceErrors(t *testing.T) {
+	// `aguara check --ecosystem npm --path <empty-dir>` must keep
+	// the legacy error contract (smoke-tested in
+	// benchmarks/smoke-npm-incident.sh case 4): explicit npm with no
+	// node_modules and no pnpm-lock.yaml is a user mistake, not a
+	// clean result.
+	empty := t.TempDir()
+
+	resetFlags()
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs([]string{
+		"check",
+		"--ecosystem", "npm",
+		"--path", empty,
+		"--format", "json",
+		"--no-update-check",
+	})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "explicit --ecosystem npm with no npm surface must error")
+	require.Contains(t, err.Error(), "npm check")
+	require.Contains(t, err.Error(), "no node_modules tree")
+}
+
+func TestCheck_ExplicitNPMWithOtherEcosystemSkipsLegacyError(t *testing.T) {
+	// `aguara check --ecosystem npm --ecosystem go --path <go-only>`
+	// must NOT abort on the missing npm surface. The user is asking
+	// for a multi-ecosystem audit; the discovered Go target should
+	// still run. Regression guard against the v0.18.0 release-prep
+	// commit where the explicit-npm error fired even when paired
+	// with another ecosystem (codex P2).
+	result := checkToFile(t,
+		"--ecosystem", "npm",
+		"--ecosystem", "go",
+		"--path", "../../../internal/packagecheck/testdata/go-clean",
+	)
+
+	require.NotNil(t, result, "multi-ecosystem check must return a result, not error out")
+	require.Len(t, result.Ecosystems, 1, "exactly one ecosystems[] entry expected (Go); npm has no surface here")
+	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {
