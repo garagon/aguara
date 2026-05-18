@@ -422,19 +422,47 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				if probe == "" {
 					probe = "."
 				}
-				if filepath.Base(probe) == "node_modules" || statDir(filepath.Join(probe, "node_modules")) {
+				// Resolve to absolute so the basename check sees
+				// the real directory name rather than ".". A user
+				// running `aguara check --ecosystem npm --path .`
+				// from INSIDE a node_modules tree would otherwise
+				// miss the installed-tree detection (filepath.Base
+				// of "." is "."), skip incident.CheckNPM entirely,
+				// and silently scan nothing.
+				resolved := probe
+				if abs, err := filepath.Abs(probe); err == nil {
+					resolved = abs
+				}
+				rootIsNodeModules := filepath.Base(resolved) == "node_modules"
+				if rootIsNodeModules || statDir(filepath.Join(resolved, "node_modules")) {
 					plan.runNPM = true
-					// Use the probe (already defaulted to ".")
-					// rather than the original (possibly empty)
-					// path. incident.CheckNPM rejects an empty
-					// path with an up-front error before any
-					// scan runs, so passing it the resolved
-					// probe matches the actual directory the
-					// existence check just confirmed.
-					plan.npmPath = probe
+					// When the root is node_modules itself, pass
+					// the RESOLVED absolute path so
+					// incident.CheckNPM's own basename check
+					// recognises it. Passing "." would otherwise
+					// hit `filepath.Base(".") == "."` and fail
+					// with "not a node_modules directory".
+					// For the parent-of-node_modules case the
+					// probe is the project root that contains
+					// node_modules and works as-is.
+					if rootIsNodeModules {
+						plan.npmPath = resolved
+					} else {
+						plan.npmPath = probe
+					}
 				}
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
-				packagecheckIDs = append(packagecheckIDs, intel.EcosystemNPM)
+				// Skip the packagecheck npm discovery when the
+				// scan root IS node_modules. incident.CheckNPM
+				// already walks the installed tree; the
+				// packagecheck recursive walk would re-traverse
+				// the same tree only for pickPnpmTarget's
+				// hasNodeModulesAncestor check to reject every
+				// path. Substantial redundant work on large
+				// installs without producing any new findings.
+				if !rootIsNodeModules {
+					packagecheckIDs = append(packagecheckIDs, intel.EcosystemNPM)
+				}
 			default:
 				osvID, ok := packagecheckEcosystems[token]
 				if !ok {
