@@ -45,6 +45,15 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"v5 unscoped + peer underscore", "lodash/4.17.21_react@18.0.0", "lodash", "4.17.21", true},
 		{"v5 scoped + peer underscore", "/@types/node/20.5.0_typescript@5.0.0", "@types/node", "20.5.0", true},
 
+		// v9+ scoped key with a SCOPED peer suffix. The "/" inside
+		// "@types/node" inflates the key's slash count to 2 and
+		// would otherwise route through the v5 fallback (splitting
+		// on the wrong slash). Pre-stripping the paren suffix
+		// keeps the modern branch active.
+		{"v9 scoped + scoped peer paren", "@commitlint/cli@19.6.1(@types/node@22.10.2)", "@commitlint/cli", "19.6.1", true},
+		{"v9 scoped + unscoped peer paren", "@vitejs/plugin-react@4.0.0(vite@4.4.4)", "@vitejs/plugin-react", "4.0.0", true},
+		{"v9 unscoped + scoped peer paren", "react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
+
 		// Rejected: malformed
 		{"bare name no version", "node-ipc", "", "", false},
 		{"empty version after @", "node-ipc@", "", "", false},
@@ -251,6 +260,43 @@ packages:
 	require.Equal(t, "lodash", refs[0].Name)
 	require.Equal(t, "react", refs[1].Name)
 	require.Equal(t, "18.2.0", refs[1].Version)
+}
+
+func TestParsePNPMLock_DeterministicOrder(t *testing.T) {
+	// Aguara advertises deterministic scans. ParsePNPMLock sorts
+	// the package keys before emitting refs so the runner's Hits
+	// and downstream Findings land in stable order across runs.
+	// Without the sort, Go's randomized map iteration would
+	// produce different JSON / terminal output between invocations
+	// on the same lockfile.
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "pnpm-lock.yaml")
+	require.NoError(t, os.WriteFile(lock, []byte(`lockfileVersion: '9.0'
+
+packages:
+  zeta@1.0.0:
+    resolution:
+      integrity: sha512-stub==
+  alpha@2.0.0:
+    resolution:
+      integrity: sha512-stub==
+  mike@3.0.0:
+    resolution:
+      integrity: sha512-stub==
+`), 0o644))
+
+	want := []string{"alpha", "mike", "zeta"}
+	for i := 0; i < 5; i++ {
+		refs, err := ParsePNPMLock(Target{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      lock,
+			Source:    "pnpm-lock.yaml",
+		})
+		require.NoError(t, err)
+		require.Len(t, refs, 3)
+		got := []string{refs[0].Name, refs[1].Name, refs[2].Name}
+		require.Equal(t, want, got, "run %d produced different order; ParsePNPMLock must be deterministic", i+1)
+	}
 }
 
 func TestParsePNPMLock_MissingFile(t *testing.T) {

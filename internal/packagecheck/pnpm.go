@@ -3,6 +3,7 @@ package packagecheck
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -61,7 +62,21 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	// peer-variant and inflate both packages_read and
 	// findings_count for compromised packages.
 	seen := make(map[string]bool, len(lock.Packages))
-	for key := range lock.Packages {
+	// Sort keys before iterating so the emitted refs land in
+	// deterministic order. Go's map iteration is randomized; the
+	// runner preserves the input order into Hits and the CLI
+	// preserves Hits order into CheckResult.Findings, so without
+	// this sort a pnpm lock with two or more matched packages
+	// would produce different JSON / terminal finding order across
+	// runs. Aguara advertises deterministic scans; the other
+	// packagecheck parsers read line-by-line and are deterministic
+	// for free.
+	keys := make([]string, 0, len(lock.Packages))
+	for k := range lock.Packages {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		name, version, ok := parsePnpmPackageKey(key)
 		if !ok {
 			continue
@@ -122,6 +137,20 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		if strings.HasPrefix(key, prefix) {
 			return "", "", false
 		}
+	}
+
+	// Strip the parens-style peer-dep suffix from the key BEFORE
+	// classifying scoped vs unscoped. v9+ encodes resolved peer
+	// deps as "name@version(peer@version)" and the peer can itself
+	// be scoped ("@commitlint/cli@19.6.1(@types/node@22.10.2)").
+	// A scoped peer adds an extra "/" to the key, which would fool
+	// the scoped slash-count heuristic into treating the key as v5
+	// slash-form and splitting on the wrong "/". The peer suffix
+	// is always after the version, so removing it pre-classification
+	// is safe; the underscore-style suffix is removed downstream
+	// from the version string itself.
+	if i := strings.IndexByte(key, '('); i >= 0 {
+		key = key[:i]
 	}
 
 	// Two pnpm key formats coexist in the wild:

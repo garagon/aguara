@@ -600,7 +600,12 @@ func singleEcoEnvLabel(token string) string {
 	case ecoPython:
 		return "Python environment"
 	case ecoNPM:
-		return "npm node_modules tree"
+		// Neutral label so both surfaces match: incident.CheckNPM
+		// scans node_modules + the pnpm .pnpm store; packagecheck
+		// scans pnpm-lock.yaml directly. A pnpm-only repo with no
+		// install would otherwise see "npm node_modules tree"
+		// when only the lockfile was read.
+		return "npm dependencies"
 	case ecoGo:
 		return "Go modules"
 	case ecoCargo:
