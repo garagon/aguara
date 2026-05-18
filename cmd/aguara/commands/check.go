@@ -331,6 +331,17 @@ func (p checkPlan) singleEcoToken() string {
 		return ecoNPM
 	}
 	if len(p.packagecheckTargets) > 0 {
+		// npm packagecheck targets (pnpm-lock.yaml today;
+		// package-lock.json / yarn.lock in follow-ups) are not in
+		// osvIDToEcoToken because npm normally flows through the
+		// incident path. Without this explicit map-back, a
+		// pnpm-only plan (no node_modules, no other lockfiles)
+		// would surface "" from singleEcoToken and the terminal
+		// formatter would fall through to the multi-ecosystem
+		// label even though the plan is single-ecosystem.
+		if p.packagecheckTargets[0].Ecosystem == intel.EcosystemNPM {
+			return ecoNPM
+		}
 		return osvIDToEcoToken[p.packagecheckTargets[0].Ecosystem]
 	}
 	// Explicit empty-discovery case: a single --ecosystem

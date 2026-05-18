@@ -913,6 +913,22 @@ func TestCheck_ResolveCheckPathArg_TableSemantics(t *testing.T) {
 
 // --- pnpm-lock.yaml coverage: npm ecosystem, packagecheck path ---
 
+func TestCheckPlan_PnpmOnlyMapsToNPMToken(t *testing.T) {
+	// pnpm-only autodetect plan (no node_modules, no other lockfiles)
+	// has a single packagecheckTarget with Ecosystem=npm. The reverse
+	// map osvIDToEcoToken does not include npm because npm normally
+	// flows through the incident path, so singleEcoToken needs the
+	// explicit npm short-circuit to return ecoNPM. Without it the
+	// terminal formatter falls through to a wrong / generic label.
+	plan, err := buildCheckPlan(nil, "../../../internal/packagecheck/testdata/pnpm-compromised")
+	require.NoError(t, err)
+	require.False(t, plan.runNPM, "fixture has no node_modules; incident.CheckNPM must not be triggered")
+	require.Len(t, plan.packagecheckTargets, 1, "fixture has exactly one pnpm-lock.yaml target")
+	require.Equal(t, "npm", plan.packagecheckTargets[0].Ecosystem)
+	require.Equal(t, ecoNPM, plan.singleEcoToken(),
+		"pnpm-only plan must report ecoNPM so the terminal label matches the pipeline that actually ran")
+}
+
 func TestCheck_PnpmLockCompromisedFixtureFiresFinding(t *testing.T) {
 	// `aguara check <pnpm-repo>` on a fresh clone (no node_modules)
 	// must detect node-ipc 9.2.3 in pnpm-lock.yaml. End-to-end

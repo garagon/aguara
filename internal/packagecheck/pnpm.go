@@ -50,11 +50,27 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	// in Go have non-deterministic iteration order so callers that
 	// depend on ordering should sort afterwards. The Runner doesn't.
 	refs := make([]PackageRef, 0, len(lock.Packages))
+
+	// Dedup on cleaned (name, version). pnpm encodes resolved
+	// peer-dep relationships into the package key, so the same
+	// underlying (name, version) can appear under multiple keys
+	// when a package is consumed with different peer-dep
+	// resolutions ("react@18.2.0(peer-a@1.0.0)" and
+	// "react@18.2.0(peer-b@2.0.0)" both strip to react@18.2.0).
+	// Without dedup here the runner would emit one Hit per
+	// peer-variant and inflate both packages_read and
+	// findings_count for compromised packages.
+	seen := make(map[string]bool, len(lock.Packages))
 	for key := range lock.Packages {
 		name, version, ok := parsePnpmPackageKey(key)
 		if !ok {
 			continue
 		}
+		composite := name + "@" + version
+		if seen[composite] {
+			continue
+		}
+		seen[composite] = true
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemNPM,
 			Name:      name,

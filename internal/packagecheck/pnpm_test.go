@@ -201,6 +201,48 @@ packages: {}
 	require.Empty(t, refs)
 }
 
+func TestParsePNPMLock_DedupsPeerResolvedDuplicates(t *testing.T) {
+	// pnpm encodes resolved peer-dep relationships into the
+	// package key, so the same (name, version) can appear under
+	// several keys when a package is consumed with different peer
+	// resolutions. Without dedup the runner would emit one Hit
+	// per peer-variant and inflate both packages_read and
+	// findings_count for compromised packages. Lock the dedup at
+	// the parser boundary so the contract is consistent regardless
+	// of which dispatcher consumes the refs.
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "pnpm-lock.yaml")
+	require.NoError(t, os.WriteFile(lock, []byte(`lockfileVersion: '9.0'
+
+packages:
+  react@18.2.0(peer-a@1.0.0):
+    resolution:
+      integrity: sha512-stub==
+  react@18.2.0(peer-b@2.0.0):
+    resolution:
+      integrity: sha512-stub==
+  react@18.2.0_react-dom@18.0.0:
+    resolution:
+      integrity: sha512-stub==
+  lodash@4.17.21:
+    resolution:
+      integrity: sha512-stub==
+`), 0o644))
+
+	refs, err := ParsePNPMLock(Target{
+		Ecosystem: intel.EcosystemNPM,
+		Path:      lock,
+		Source:    "pnpm-lock.yaml",
+	})
+	require.NoError(t, err)
+	require.Len(t, refs, 2, "three react@18.2.0 peer-variants must collapse to one ref + lodash")
+
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	require.Equal(t, "lodash", refs[0].Name)
+	require.Equal(t, "react", refs[1].Name)
+	require.Equal(t, "18.2.0", refs[1].Version)
+}
+
 func TestParsePNPMLock_MissingFile(t *testing.T) {
 	_, err := ParsePNPMLock(Target{
 		Ecosystem: intel.EcosystemNPM,
