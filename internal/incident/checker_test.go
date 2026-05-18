@@ -129,6 +129,67 @@ func TestCheckCleanPth(t *testing.T) {
 	}
 }
 
+// TestCheck_AppendsPyPIEcosystemEntry locks the per-call ecosystems[]
+// contract for the PyPI incident path. Issue #109: before this, the
+// PyPI path always emitted .Ecosystems = [] regardless of whether
+// site-packages was actually consulted, so JSON consumers reading the
+// ecosystems[] array concluded "PyPI not covered" even when packages
+// were checked.
+func TestCheck_AppendsPyPIEcosystemEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	// Add a couple of dist-info packages so PackagesRead is > 0.
+	for _, p := range []struct{ name, version string }{
+		{"requests", "2.31.0"},
+		{"urllib3", "2.0.4"},
+	} {
+		distInfo := filepath.Join(dir, p.name+"-"+p.version+".dist-info")
+		require.NoError(t, os.Mkdir(distInfo, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+			"Metadata-Version: 2.1\nName: "+p.name+"\nVersion: "+p.version+"\n",
+		), 0o644))
+	}
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+	require.Len(t, result.Ecosystems, 1,
+		"expected exactly one ecosystems[] entry for PyPI path, got %+v", result.Ecosystems)
+
+	got := result.Ecosystems[0]
+	assert.Equal(t, "PyPI", got.Ecosystem)
+	assert.Equal(t, "site-packages", got.Source)
+	assert.Equal(t, dir, got.Path, "path should be the scanned site-packages dir")
+	assert.Equal(t, 2, got.PackagesRead, "packages_read should count both dist-info packages")
+	assert.Equal(t, 0, got.FindingsCount, "no compromised packages in fixture; findings_count should be 0")
+}
+
+// TestCheck_AppendsPyPIEcosystemEntry_WithFindings pins that
+// FindingsCount counts only package-match findings, not the .pth /
+// persistence / cache findings that the PyPI Check function also
+// emits.
+func TestCheck_AppendsPyPIEcosystemEntry_WithFindings(t *testing.T) {
+	dir := t.TempDir()
+
+	// litellm 1.82.8 is a known compromised package in the embedded
+	// snapshot (see TestCheckDetectsCompromisedPackage). The match
+	// fires the package-findings branch.
+	distInfo := filepath.Join(dir, "litellm-1.82.8.dist-info")
+	require.NoError(t, os.Mkdir(distInfo, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+		"Metadata-Version: 2.1\nName: litellm\nVersion: 1.82.8\n",
+	), 0o644))
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+	require.Len(t, result.Ecosystems, 1)
+
+	got := result.Ecosystems[0]
+	assert.Equal(t, "PyPI", got.Ecosystem)
+	assert.Equal(t, 1, got.PackagesRead)
+	assert.GreaterOrEqual(t, got.FindingsCount, 1,
+		"package match against litellm 1.82.8 should produce at least one PyPI ecosystem finding")
+}
+
 func TestCheckEmptyEnvironment(t *testing.T) {
 	dir := t.TempDir()
 

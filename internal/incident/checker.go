@@ -143,6 +143,13 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 	matcher := matcherFor(opts)
 	packages := readInstalledPackages(siteDir)
 	result.PackagesRead = len(packages)
+	// pypiFindings counts findings emitted by the package-match step
+	// only. Later steps (.pth scan, persistence, cred files, caches)
+	// emit findings of their own that belong to the Python environment
+	// taxonomy but are not "PyPI ecosystem matches"; the EcosystemResult
+	// FindingsCount is per-ecosystem-match, matching the contract the
+	// packagecheck path emits for its six ecosystems.
+	pypiFindings := 0
 	for _, pkg := range packages {
 		hits := matcher.MatchPackage(intel.MatchInput{
 			Ecosystem: intel.EcosystemPyPI,
@@ -158,8 +165,23 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 				Path:        pkg.Dir,
 				Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
 			})
+			pypiFindings++
 		}
 	}
+	// Surface PyPI as an Ecosystems[] entry on the result so JSON
+	// consumers see consistent multi-ecosystem coverage data. Before
+	// this, .Ecosystems was always [] for the PyPI path; consumers
+	// reading the array would conclude PyPI was never scanned even
+	// though packages WERE checked and findings WERE emitted. Always
+	// append - even with PackagesRead=0 - so callers know the
+	// pipeline ran and consulted the directory.
+	result.Ecosystems = append(result.Ecosystems, packagecheck.EcosystemResult{
+		Ecosystem:     intel.EcosystemPyPI,
+		Path:          siteDir,
+		Source:        "site-packages",
+		PackagesRead:  len(packages),
+		FindingsCount: pypiFindings,
+	})
 
 	// 2. Scan .pth files for executable content
 	pthFiles := findPthFiles(siteDir)

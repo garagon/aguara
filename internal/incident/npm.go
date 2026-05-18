@@ -60,6 +60,10 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	matcher := matcherFor(opts)
 	packages := readInstalledNPMPackages(root)
 	result.PackagesRead = len(packages)
+	// npmFindings counts findings emitted by the npm package-match
+	// step only. Mirrors the per-ecosystem accounting the
+	// packagecheck path uses for its six ecosystems.
+	npmFindings := 0
 	for _, pkg := range packages {
 		hits := matcher.MatchPackage(intel.MatchInput{
 			Ecosystem: intel.EcosystemNPM,
@@ -75,8 +79,23 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 				Path:        pkg.Dir,
 				Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
 			})
+			npmFindings++
 		}
 	}
+	// Surface npm as an Ecosystems[] entry on the result so JSON
+	// consumers see consistent multi-ecosystem coverage data. Before
+	// this, .Ecosystems was always [] for the npm path; consumers
+	// reading the array would conclude npm was never scanned even
+	// though packages WERE checked and findings WERE emitted. Always
+	// append - even with PackagesRead=0 - so callers know the
+	// pipeline ran and consulted the directory.
+	result.Ecosystems = append(result.Ecosystems, packagecheck.EcosystemResult{
+		Ecosystem:     intel.EcosystemNPM,
+		Path:          root,
+		Source:        "node_modules",
+		PackagesRead:  len(packages),
+		FindingsCount: npmFindings,
+	})
 
 	return result, nil
 }
