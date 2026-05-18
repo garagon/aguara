@@ -256,6 +256,30 @@ func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, e
 		}
 	}
 
+	// Tri-state Status (#110). Previously the verdict was binary
+	// pass / fail, which collapsed "no findings at all" and
+	// "findings exist but no gate is enforced" into the same
+	// "pass" output. Dashboards that read only `verdict.status`
+	// would see green even when `check_criticals > 0`.
+	//
+	// The states now are:
+	//   pass     -> zero findings on either side
+	//   findings -> at least one finding, but the gate (--ci /
+	//               --fail-on) was either not set or not crossed.
+	//               exit code stays 0 so default `aguara audit` runs
+	//               do not surprise users with non-zero exits.
+	//   fail     -> gate was set and the threshold was crossed.
+	//               exit code is non-zero via ErrThresholdExceeded.
+	//
+	// The threshold logic below upgrades "findings" to "fail" when
+	// the gate trips; the exit-code path is unchanged so existing
+	// CI integrations that read ThresholdExceeded keep behaving.
+	totalFindings := v.CheckCriticals + v.CheckWarnings + v.CheckInfos +
+		v.ScanCriticals + v.ScanHighs + v.ScanMediums + v.ScanLows + v.ScanInfos
+	if totalFindings > 0 {
+		v.Status = "findings"
+	}
+
 	if threshold == "" {
 		return v, nil
 	}
