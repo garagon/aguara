@@ -65,6 +65,12 @@ func TestAuditDetectsCompromisedNPMPackage(t *testing.T) {
 	// surfaces it in the Check sub-result and the verdict
 	// reflects the critical count. The supply-chain side carries
 	// IntelSummary so the JSON consumer sees provenance.
+	//
+	// Per #110 tri-state, the default audit (no --ci, no
+	// --fail-on) must report Status="findings" when criticals
+	// exist, not "pass". This is the canonical regression guard
+	// for the v0.17.x bug where dashboards reading verdict.status
+	// saw green while check_criticals > 0.
 	dir := t.TempDir()
 	nm := filepath.Join(dir, "node_modules")
 	require.NoError(t, os.MkdirAll(filepath.Join(nm, "event-stream"), 0o755))
@@ -77,6 +83,10 @@ func TestAuditDetectsCompromisedNPMPackage(t *testing.T) {
 	result := auditToFile(t, dir)
 	require.NotEmpty(t, result.Check.Findings, "compromised event-stream@3.3.6 must surface in audit")
 	require.Greater(t, result.Verdict.CheckCriticals, 0)
+	require.Equal(t, "findings", result.Verdict.Status,
+		"default audit (no gate) with criticals present must report tri-state 'findings', not 'pass'")
+	require.False(t, result.Verdict.ThresholdExceeded,
+		"no --ci / --fail-on means no gate; ThresholdExceeded must stay false")
 }
 
 func TestAuditCIFailsOnCritical(t *testing.T) {
@@ -133,6 +143,84 @@ func TestAuditCIFailsOnCriticalHelper(t *testing.T) {
 	}
 }
 
+// TestAuditVerdictTriStateTable locks the 3x3 truth table for the
+// tri-state verdict introduced in #110. The previous semantics
+// collapsed "no findings" and "findings without a gate" into the
+// same "pass" output, which masked critical findings from any
+// dashboard that read verdict.status as the primary signal.
+func TestAuditVerdictTriStateTable(t *testing.T) {
+	cases := []struct {
+		name            string
+		check           *AuditResult
+		threshold       string
+		wantStatus      string
+		wantThresholdEx bool
+	}{
+		{
+			name:       "no findings, no threshold -> pass",
+			check:      stubAuditResult(t, 0, 0, 0, 0, 0, 0),
+			threshold:  "",
+			wantStatus: "pass",
+		},
+		{
+			name:       "no findings, --fail-on critical -> pass",
+			check:      stubAuditResult(t, 0, 0, 0, 0, 0, 0),
+			threshold:  "critical",
+			wantStatus: "pass",
+		},
+		{
+			name:       "criticals present, no threshold -> findings (the #110 bug case)",
+			check:      stubAuditResult(t, 2, 0, 0, 0, 0, 0),
+			threshold:  "",
+			wantStatus: "findings",
+		},
+		{
+			name:       "warnings only, no threshold -> findings",
+			check:      stubAuditResult(t, 0, 1, 0, 0, 0, 0),
+			threshold:  "",
+			wantStatus: "findings",
+		},
+		{
+			name:       "info only, no threshold -> findings (info still counts as visible findings)",
+			check:      stubAuditResult(t, 0, 0, 0, 0, 1, 0),
+			threshold:  "",
+			wantStatus: "findings",
+		},
+		{
+			name:            "criticals + --fail-on critical -> fail (gate crossed)",
+			check:           stubAuditResult(t, 2, 0, 0, 0, 0, 0),
+			threshold:       "critical",
+			wantStatus:      "fail",
+			wantThresholdEx: true,
+		},
+		{
+			name:       "warnings + --fail-on critical -> findings (below the gate, exit 0)",
+			check:      stubAuditResult(t, 0, 3, 0, 0, 0, 0),
+			threshold:  "critical",
+			wantStatus: "findings",
+		},
+		{
+			name:       "scan lows only + --fail-on critical -> findings (below the gate)",
+			check:      stubAuditResult(t, 0, 0, 0, 0, 0, 0), // build base
+			threshold:  "critical",
+			wantStatus: "findings",
+		},
+	}
+	// Patch the "scan lows" case by hand: stubAuditResult does not
+	// expose a lows count, so synthesise the low finding directly.
+	cases[7].check.Scan.Findings = append(cases[7].check.Scan.Findings,
+		types.Finding{Severity: scanner.SeverityLow})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := computeAuditVerdict(tc.check, tc.threshold)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStatus, v.Status, "status mismatch")
+			require.Equal(t, tc.wantThresholdEx, v.ThresholdExceeded, "threshold_exceeded mismatch")
+		})
+	}
+}
+
 func TestAuditVerdictWarningTrips(t *testing.T) {
 	// computeAuditVerdict's warning threshold must trip on
 	// either a check warning OR a scan high. Direct unit test
@@ -149,11 +237,16 @@ func TestAuditVerdictWarningTrips(t *testing.T) {
 	require.True(t, v.ThresholdExceeded, "scan high must trip warning threshold")
 }
 
-func TestAuditVerdictCriticalPassesOnWarningOnly(t *testing.T) {
+func TestAuditVerdictCriticalDoesNotTripOnWarningOnly(t *testing.T) {
+	// Threshold=critical, only a warning present: gate must not
+	// trip. Per #110 tri-state, Status is "findings" (findings
+	// exist below the gate), NOT "pass" (which would imply zero
+	// findings).
 	v, err := computeAuditVerdict(stubAuditResult(t, 0, 1, 0, 0, 0, 0), "critical")
 	require.NoError(t, err)
 	require.False(t, v.ThresholdExceeded, "single warning must not trip critical gate")
-	require.Equal(t, "pass", v.Status)
+	require.Equal(t, "findings", v.Status,
+		"tri-state: findings exist below the configured threshold, so status must be 'findings', not 'pass'")
 }
 
 func TestAuditVerdictInfoTripsOnInfoFindings(t *testing.T) {
