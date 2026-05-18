@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 Installs the latest binary to `~/.local/bin`. Customize with environment variables:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.1 sh
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
@@ -73,7 +73,7 @@ To update an existing install, rerun the installer. It downloads the selected re
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
 
 # Update/pin to a specific release
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.17.1 sh
 ```
 
 ### Alternative methods
@@ -94,7 +94,7 @@ docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
 docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
 
 # Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.17.0 scan /scan
+docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.17.1 scan /scan
 ```
 
 **From source** (requires Go 1.25+):
@@ -278,11 +278,11 @@ aguara scan --auto
 #### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.17.0
+- uses: garagon/aguara@v0.17.1
   with:
     path: .
     fail-on: high
-    version: v0.17.0
+    version: v0.17.1
 ```
 
 Both pins (the action ref AND the `version:` input) are required. The
@@ -295,12 +295,12 @@ Scans your repository, uploads findings to GitHub Code Scanning, and
 optionally fails the build:
 
 ```yaml
-- uses: garagon/aguara@v0.17.0
+- uses: garagon/aguara@v0.17.1
   with:
     path: ./mcp-server/
     severity: medium
     fail-on: high
-    version: v0.17.0
+    version: v0.17.1
 ```
 
 All inputs are optional. See [`action.yml`](action.yml) for the full list.
@@ -664,7 +664,7 @@ Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale, so we are not using it as a product signal for this release. The scanner, CLI, Docker image, and signed release artifacts remain the supported surfaces for v0.17.0.
+Aguara Watch is being reworked. The previous public observatory is stale, so we are not using it as a product signal for this release. The scanner, CLI, Docker image, and signed release artifacts remain the supported surfaces for v0.17.1.
 
 ## Go Library
 

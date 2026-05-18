@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-05-18
+
+QA backlog patch release. Four release-blocker bugs surfaced by
+end-to-end testing of v0.17.0 in Docker are fixed. No new
+analyzers, no schema changes to existing tools, no new commands.
+Verified end-to-end side-by-side against `ghcr.io/garagon/aguara:0.17.0`.
+
+### Fixed
+
+- **MCPCFG_003 leaked captured matched_text into JSON and SARIF output** (#108). The rule was missed in the original `sensitive:` flag rollout. Now carries `sensitive: true`; `RedactSensitiveFindings` scrubs `matched_text` before any output formatter sees it. Regression tests pin the YAML→runtime→output chain.
+- **`aguara check` JSON output was missing npm and PyPI entries in `ecosystems[]`** (#114, closes #109). The incident path that handles npm and PyPI initialised `Ecosystems` to an empty non-nil slice and never appended an entry of its own. Dashboards iterating `ecosystems[]` for coverage saw "npm/PyPI not covered" even when packages were checked and findings fired. Both paths now append one `EcosystemResult` per call with `ecosystem`, `path`, `source`, `packages_read`, `findings_count`. Unreadable target directories now return an explicit error instead of silently emitting a misleading "scanned 0 packages" entry.
+- **`aguara check [path]` ignored positional arguments** (#116, closes #111). `aguara check ./myrepo` silently scanned the current directory because the runtime only read `--path`. The positional form is now accepted via `cobra.MaximumNArgs(1)`; `--path` and the positional together produce an explicit `ambiguous path` error rather than silent precedence.
+- **`aguara audit` reported `verdict.status: "pass"` when criticals existed** (#117, closes #110). The verdict status is now tri-state `pass | findings | fail`: `pass` only when zero findings, `findings` when findings exist but no gate (`--ci` / `--fail-on`) was crossed (exit 0), `fail` when the gate was crossed (exit non-zero, unchanged from v0.17.0).
+
+### Backward compatibility notes
+
+- `verdict.status` in `aguara audit` output may now be `"findings"` in cases where v0.17.0 returned `"pass"`. Consumers that switch on `{"pass", "fail"}` should add a `"findings"` arm or treat it as a non-fail signal. The `"fail"` arm continues to fire on exactly the same input set; `ThresholdExceeded` is unchanged.
+- `ecosystems[]` in `aguara check` JSON may now contain entries where v0.17.0 returned `[]` for npm-only or PyPI-only paths. Consumers iterating the array unconditionally already handle this; consumers checking `len == 0` as "not scanned" should look at the per-entry data instead.
+
 ## [0.17.0] - 2026-05-17
 
 `aguara check .` now walks the dependency surface of a modern repo
