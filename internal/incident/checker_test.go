@@ -3,6 +3,7 @@ package incident
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -197,6 +198,9 @@ func TestCheck_AppendsPyPIEcosystemEntry_WithFindings(t *testing.T) {
 // distinguish from a real empty environment. The probe converts the
 // silent failure into an explicit error.
 func TestCheck_ReturnsErrorOnUnreadableSiteDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode 0o000 does not block ReadDir on Windows; the readability semantics this test covers are Unix-only")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("running as root bypasses POSIX permission checks; skip")
 	}
