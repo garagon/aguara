@@ -1,9 +1,9 @@
 <p align="center">
   <h1 align="center">Aguara</h1>
   <p align="center">
-    Security scanner for AI agent skills and MCP servers.
+    Security scanner for AI agents and software supply chains.
     <br />
-    Detect prompt injection, data exfiltration, and supply-chain attacks before they reach production.
+    Aguara checks the trust points modern projects rely on: dependencies, lockfiles, install scripts, CI workflows, MCP configs, and AI agent tools.
   </p>
 </p>
 
@@ -21,113 +21,94 @@
 <p align="center">
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#how-it-works">How It Works</a> &bull;
-  <a href="#usage">Usage</a> &bull;
-  <a href="#rules">Rules</a> &bull;
+  <a href="#what-aguara-checks">What Aguara Checks</a> &bull;
   <a href="#supply-chain-check">Supply-Chain Check</a> &bull;
-  <a href="#aguara-mcp">Aguara MCP</a> &bull;
-  <a href="#aguara-watch">Aguara Watch</a> &bull;
+  <a href="#ai-agent-and-mcp-security">AI Agent & MCP Security</a> &bull;
+  <a href="#ci-integration">CI Integration</a> &bull;
+  <a href="#rules">Rules</a> &bull;
   <a href="#contributing">Contributing</a>
 </p>
 
 https://github.com/user-attachments/assets/851333be-048f-48fa-aaf3-f8cc1d4aa594
 
+**Local-first. No SaaS account. No telemetry. No LLM calls. Signed releases.**
+
 ## Why Aguara?
 
-AI agents and MCP servers run code on your behalf. A single malicious skill file can exfiltrate credentials, inject prompts, or install backdoors. Aguara catches these threats **before deployment** with static analysis that requires no API keys, no cloud, and no LLM.
+Supply-chain attacks are not just vulnerabilities in your code. They often arrive through something your project is about to trust: a dependency version, an install script, a lockfile entry, a CI workflow, or an agent tool.
 
-- **193 detection rules across 13 categories** — prompt injection, data exfiltration, credential leaks, supply-chain attacks, MCP-specific threats, command execution, SSRF, unicode attacks, and more.
-- **7 scan analyzers** — pattern matching, GitHub Actions trust-chain detection (ci-trust), npm package metadata (pkgmeta), JavaScript payload risk (jsrisk), NLP analysis, taint tracking, and rug-pull detection work together to catch threats that any single technique would miss. Separate `aguara check` / `aguara audit` commands flag installed npm and Python environments AND lockfiles for Go, Rust, PHP/Composer, Ruby/Bundler, Java/Maven/Gradle, and .NET/NuGet against the embedded threat-intel snapshot. Built from [OSV.dev](https://osv.dev) malicious-package records plus OpenSSF Malicious Packages and hand-curated emergency advisories. Offline by default.
-- **8 decoders for encoded evasion** — base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, and C-style octal escapes. Obfuscated payloads are decoded and re-scanned automatically.
-- **NLP on markdown, JSON, and YAML** — goldmark AST analysis for markdown files, plus string extraction and classification for JSON/YAML tool descriptions. Catches MCP tool poisoning in structured configs.
-- **Cross-file toxic flow analysis** — detects dangerous capability combinations split across files in the same MCP server directory (e.g., one tool reads credentials, another sends to a webhook).
-- **Aggregate risk score** — 0-100 score with diminishing returns across findings. Available in JSON, SARIF, and terminal output.
-- **Context-aware scanning** — pass the tool name (`--tool-name Edit`) and the scanner automatically skips rules that are always false positives for that tool. Built-in exemptions for Edit, Write, WebFetch, Bash, and more.
-- **Scan profiles** — `strict` (default), `content-aware`, or `minimal` enforcement. Findings are always preserved for audit; only the verdict (clean/flag/block) changes.
-- **Evasion prevention** — NFKC normalization catches fullwidth character evasion. 8 decoders catch encoded payloads. Crypto address filtering prevents hex decoder false positives.
-- **Dynamic confidence scoring** — every finding carries a confidence level (0.50-0.95) that reflects signal quality: pattern hit ratio, classifier score, and code-block awareness.
-- **Remediation guidance** — all 193 rules include actionable fix suggestions, shown in every output format.
-- **Deterministic** — same input, same output. Every scan is reproducible.
-- **CI-ready** — JSON, SARIF, and Markdown output. GitHub Action. `--fail-on` threshold. `--changed` for incremental scans.
-- **17 MCP clients supported** — auto-discover and scan configs from Claude Desktop, Cursor, VS Code, Windsurf, and 13 more.
-- **Library API for embedding** — `WithDeduplicateMode()` preserves all cross-rule findings for verdict pipelines. `WithStateDir()` enables rug-pull detection for persistent consumers.
-- **Extensible** — write custom rules in YAML. No code required.
+Security reviews used to focus mostly on application code. Modern projects also depend on package registries, lockfiles, install scripts, CI workflows, MCP servers, and AI agent tools. Recent supply-chain incidents have shown the pattern: a legitimate package publishes a malicious version, a project installs it, and the attacker gets a chance to steal tokens, cloud credentials, CI secrets, or local files.
+
+Aguara gives teams a local check before they trust those inputs:
+
+- before running `pnpm install` on a pnpm project (Aguara reads `pnpm-lock.yaml` directly)
+- before letting CI execute install-time scripts
+- before accepting a new MCP server config
+- before letting an agent use a third-party skill or tool
+- before uploading findings to a code-scanning dashboard
+
+For dependencies, Aguara reads resolved lockfiles where it has parsers (today this is `pnpm-lock.yaml` plus Go / Rust / PHP / Ruby / Java / .NET lockfiles) and installed package trees otherwise. Plain npm with only `package-lock.json` / `yarn.lock` and no install is on the next-layer list, not shipping today.
 
 ## Installation
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
-```
-
-Installs the latest binary to `~/.local/bin`. Customize with environment variables:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.18.0 sh
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | INSTALL_DIR=/usr/local/bin sh
-```
-
-To update an existing install, rerun the installer. It downloads the selected release archive, verifies `checksums.txt`, and replaces the binary:
-
-```bash
-# Update to latest
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
-
-# Update/pin to a specific release
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.18.0 sh
-```
-
-### Alternative methods
-
-**Homebrew** (macOS/Linux):
+### Homebrew (macOS/Linux)
 
 ```bash
 brew install garagon/tap/aguara
 ```
 
-**Docker** (no install required):
+### Docker
 
 ```bash
-# Scan current directory
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan
-
-# Scan with options
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara scan /scan --severity high --format json
-
-# Use a specific version
-docker run --rm -v "$(pwd)":/scan ghcr.io/garagon/aguara:0.18.0 scan /scan
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.18.0 check /repo
 ```
 
-**From source** (requires Go 1.25+):
+The image is multi-arch (`linux/amd64` and `linux/arm64`), runs as non-root UID 10001, base images are digest-pinned, and the image is signed at the digest with Cosign plus SPDX SBOM and SLSA provenance attestations. Tag a specific release for reproducibility.
+
+### Install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
+  | VERSION=v0.18.0 sh
+```
+
+`install.sh` downloads `checksums.txt` from the release and verifies the archive's SHA256 against it, aborting if neither `sha256sum` nor `shasum` is available. This catches a tampered or corrupted archive at the registry layer, but it does not verify the Cosign signature on `checksums.txt` itself. For full keyless-signature verification on the curl-pipe path, follow up with the Cosign step in [Verifying signed releases](#verifying-signed-releases). Default install location is `~/.local/bin`. Override for CI or containers:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
+  | VERSION=v0.18.0 INSTALL_DIR=/usr/local/bin sh
+```
+
+### From source
 
 ```bash
 go install github.com/garagon/aguara/cmd/aguara@latest
 ```
 
-Pre-built binaries for Linux, macOS, and Windows are also available on the [Releases page](https://github.com/garagon/aguara/releases).
+Requires Go 1.25+. Binaries built this way report `dev` version metadata because Go does not inject release ldflags. For signed releases use Homebrew, Docker, or the install script above.
+
+Pre-built binaries for Linux, macOS, and Windows are also on the [Releases page](https://github.com/garagon/aguara/releases).
 
 ### Verifying signed releases
 
-Starting with the next release after this section landed, every release is signed with [Cosign](https://github.com/sigstore/cosign) keyless, ships an SPDX SBOM per archive, and is built with `-trimpath` for reproducibility. The container image is signed at the digest and carries SBOM + SLSA provenance attestations.
+Every release is signed with [Cosign](https://github.com/sigstore/cosign) keyless, ships an SPDX SBOM per archive, and is built with `-trimpath` for reproducibility. The container image is signed at the digest and carries SBOM + SLSA provenance attestations.
 
 **Verify the release archive**:
 
 ```bash
-VERSION=vX.Y.Z
+VERSION=v0.18.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
-# Download archive, checksums, and the cosign bundle
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/checksums.txt
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/checksums.txt.bundle
 
-# Verify checksums.txt was signed by the GitHub Actions release workflow
 cosign verify-blob \
   --bundle checksums.txt.bundle \
   --certificate-identity "https://github.com/garagon/aguara/.github/workflows/release.yml@refs/tags/${VERSION}" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   checksums.txt
 
-# Now verify the archive matches the signed checksums
 sha256sum --check --ignore-missing checksums.txt
 ```
 
@@ -155,47 +136,288 @@ docker buildx imagetools inspect ghcr.io/garagon/aguara:${VERSION#v} \
   --format '{{ json .Provenance }}' | jq .
 ```
 
-`install.sh` performs SHA256 verification automatically and aborts if `sha256sum`/`shasum` is unavailable, so the curl-pipe install path is never silently downgraded.
-
 ## Quick Start
 
-```bash
-# Am I exposed to a compromised package?
-aguara check
+Check whether the current project depends on a known compromised package:
 
-# Same, but refresh threat intel from OSV first
+```bash
+aguara check .
+```
+
+Run the full project audit for CI:
+
+```bash
+aguara audit . --ci
+```
+
+Scan AI agent skills, prompts, and MCP-related files:
+
+```bash
+aguara scan .claude/skills/ --ci
+```
+
+Discover MCP client configs on the machine:
+
+```bash
+aguara discover
+```
+
+Refresh local threat intel when you want network access:
+
+```bash
+aguara update
+aguara check . --fresh
+```
+
+By default, all checks use the threat-intel snapshot embedded in the binary. Network access is opt-in through `aguara update` or `--fresh`.
+
+## What Aguara Checks
+
+| Surface | Examples | Command |
+|---|---|---|
+| Dependencies | npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET | `aguara check .` |
+| AI agent files | skills, prompts, tool descriptions | `aguara scan <path>` |
+| MCP configs | Claude Desktop, Cursor, VS Code, Cline, others | `aguara discover`, `aguara scan --auto` |
+| CI workflows | GitHub Actions trust-chain risks | `aguara scan .github/workflows` |
+| Combined audit | dependencies + content scan | `aguara audit . --ci` |
+
+## Supply-Chain Check
+
+`aguara check .` answers a practical question: "Does this project depend on a package version that is already known to be malicious?"
+
+It checks two real-world states:
+
+1. **Before install**, when resolved versions are present in lockfiles such as `pnpm-lock.yaml`, `go.sum`, `Cargo.lock`, `composer.lock`, `Gemfile.lock`, Maven/Gradle files, or NuGet files.
+2. **After install**, when packages are already present in trees such as `node_modules`, pnpm's `.pnpm` store, or Python `site-packages`.
+
+This lets teams catch known malicious packages before executing install-time code, and audit existing projects or CI workspaces that may already contain compromised versions.
+
+Aguara compares package names and versions against an embedded threat-intel snapshot built from [OSV.dev](https://osv.dev), [OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages), and a short hand-curated list of high-priority emergency advisories. The snapshot ships inside the binary; network access is opt-in through `aguara update` or `--fresh`.
+
+### `aguara check`: am I exposed?
+
+```bash
+# Run from a repo root. Aguara finds installed npm and Python
+# environments AND lockfiles for every supported ecosystem recursively
+# under the path, then matches every declared package against the
+# snapshot.
+aguara check .
+
+# Refresh threat intel from OSV first, then check. The only check
+# mode that uses the network; the rest stay offline. --fresh
+# refreshes only the ecosystems the plan actually touches.
 aguara check --fresh
 
-# CI gate: fail if a compromised package is installed
+# CI gate: --fail-on critical, no color, exit 1 on compromised packages
 aguara check --ci
 
-# Audit: scan code + check packages, single verdict
-aguara audit
+# Constrain to specific ecosystems (repeatable or comma-separated)
+aguara check --ecosystem go,ruby
+aguara check --ecosystem maven --ecosystem nuget
 
-# Is Aguara's threat intel fresh?
-aguara status
-
-# Pull the latest threat intel for future offline checks
-aguara update
+# Machine-readable
+aguara check --format json
 ```
+
+For pnpm projects, Aguara reads `pnpm-lock.yaml` directly. You do not need to run `pnpm install` first:
 
 ```bash
-# Discover which MCP clients are configured on this machine
-aguara discover
-
-# Scan a skills directory (or any path) for content threats
-aguara scan .claude/skills/
-
-# CI mode for content scan: --fail-on high, no color
-aguara scan .claude/skills/ --ci
-
-# Auto-discover and scan all MCP configs on this machine
-aguara scan --auto
+git clone <pnpm-repo>
+cd <pnpm-repo>
+aguara check .
 ```
 
-Both `aguara check` and `aguara audit` run offline by default using the
-threat intel baked into the binary. The network is used only when you
-opt in with `--fresh` or `aguara update`.
+### Coverage by ecosystem
+
+| Ecosystem | Evidence read | Coverage |
+|---|---|---|
+| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml` | Strong malicious-package coverage. `pnpm-lock.yaml` works before install. |
+| PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage. |
+| RubyGems | `Gemfile.lock` | Strong malicious-package coverage. |
+| NuGet | `packages.lock.json`, `*.csproj`, `*.fsproj`, `*.vbproj` | Strong exact-version malicious-package coverage. |
+| Go | `go.sum`, `go.mod` | Parser ready; limited exact-version embedded matches today. |
+| crates.io | `Cargo.lock` (public registry only) | Parser ready; range-aware OSV matching deferred. |
+| Packagist | `composer.lock` | Parser ready; range-aware OSV matching deferred. |
+| Maven | `pom.xml`, `gradle.lockfile`, `gradle/dependency-locks/*` | Parser ready; range-aware OSV matching deferred. |
+
+Aguara is not a full SCA scanner yet. It focuses on known malicious-package records and high-confidence advisories. General CVE/range matching is the next layer.
+
+What `aguara check` also catches when the path includes a Python environment:
+
+- **`.pth` files with executable code** (import, subprocess, exec, eval)
+- **pip/uv/npx caches** so a compromised package in the cache surfaces even without a virtualenv (Python and npm only)
+- **Persistence backdoors** (systemd user services, sysmon artifacts)
+- **Credential files at risk** (SSH, AWS, K8s, git, npm, PyPI, databases)
+
+### Auto-detection rules
+
+In order:
+
+- If the path is or contains `node_modules`, run the installed-tree npm check (covers both flat `node_modules/<pkg>` and pnpm's `.pnpm` store).
+- Walk the path recursively for lockfiles (`pnpm-lock.yaml`, `go.sum`, `Cargo.lock`, `composer.lock`, `Gemfile.lock`, `pom.xml`, `gradle.lockfile`, `gradle/dependency-locks/*.lockfile`, `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj`). Skip `.git/`, `vendor/`, `node_modules/`, `.aguara/`, `target/`, `bin/`, `obj/`, `.gradle/`.
+- If the explicit `--path` looks like a Python install (`site-packages` / `dist-packages` basename, or contains `*.dist-info`), run the Python check.
+- If `aguara check` runs with no flags and no signals are found, fall back to global Python `site-packages` autodiscovery (legacy behaviour).
+
+An explicit `--path` with no signals returns a clean result with `"ecosystems": []` and never silently falls back to the host's global Python.
+
+### `aguara audit`: code AND packages, one verdict
+
+```bash
+aguara audit          # check + scan on the current directory
+aguara audit --ci     # CI gate: --fail-on critical, no color
+aguara audit --fresh  # refresh intel, then audit
+```
+
+`aguara audit` composes the supply-chain check and the content scan into a single verdict. JSON output carries both sub-results (`.check` and `.scan`) plus per-section counts so a dashboard can drill into either side.
+
+### `aguara status`: is my threat intel fresh?
+
+```bash
+aguara status
+```
+
+Prints the Aguara version, the embedded snapshot's generated-at date and record count, and whether a local cached snapshot exists from a prior `aguara update` run. Does no network I/O.
+
+### `aguara update`: refresh intel for future offline checks
+
+```bash
+aguara update                       # fetch every supported ecosystem, cache locally
+aguara update --ecosystem npm       # just npm
+aguara update --ecosystem go,ruby   # scope to Go + RubyGems
+```
+
+`aguara update` and `--fresh` are the only commands that use the network. The default refreshes every ecosystem the registry supports (npm, PyPI, Go, crates.io, Packagist, RubyGems, Maven, NuGet); scope with `--ecosystem` (repeatable or comma-separated). The refreshed cache lives at `~/.aguara/intel/snapshot.json`; subsequent `aguara check` runs layer it over the embedded snapshot automatically and stay offline.
+
+`aguara check --fresh` refreshes only the ecosystems the plan actually touches, so `aguara check --fresh --ecosystem maven` does not pull npm, PyPI, or the other six.
+
+If a refresh returns zero records (upstream outage, schema shift), the update is refused so cached intel cannot be silently wiped. Pass `--allow-empty` to override during initial bootstrap.
+
+### `aguara clean`: quarantine compromised Python packages
+
+> `aguara clean` is scoped to Python packages and persistence cleanup today. Multi-ecosystem remediation is deferred.
+
+```bash
+aguara clean                       # interactive confirmation
+aguara clean --yes --purge-caches  # non-interactive, also purge pip/uv caches
+aguara clean --dry-run             # preview
+```
+
+Files are quarantined to `/tmp/aguara-quarantine/`, not deleted. After cleaning, Aguara prints a credential rotation checklist for every credential file present on the system.
+
+### Advanced: explicit ecosystem and path
+
+Use these when auto-detection cannot find the environment you want to check:
+
+```bash
+aguara check --ecosystem python --path /opt/venv/lib/python3.12/site-packages/
+aguara check --ecosystem npm --path ./node_modules
+```
+
+### Threat-intel sources
+
+The embedded snapshot is built from two sources:
+
+- **Manual**: a short hand-curated list of high-priority emergency advisories. Takes display precedence when an advisory ID also appears in OSV.
+- **OSV.dev**: high-confidence records only. OpenSSF Malicious Packages IDs (the `MAL-` namespace), records with `database_specific.malicious-packages-origins`, plus keyword-qualified records that carry exact affected versions. Generic CVE / DoS records are filtered out at import time so Aguara stays focused on malicious packages, not general SCA.
+
+## AI Agent and MCP Security
+
+Aguara also scans the files that agents and MCP clients consume directly:
+
+- prompt injection and instruction override attempts
+- tool poisoning in tool descriptions and configs
+- unsafe MCP command definitions
+- hardcoded secrets and credential leaks
+- webhook, DNS, and file-based exfiltration
+- unsafe GitHub Actions trust-chain patterns
+- Unicode and encoded payload evasion
+
+```bash
+# Scan a skills directory or any path
+aguara scan .claude/skills/
+
+# Discover and scan every MCP config on this machine
+aguara scan --auto
+
+# Scan a CI workflow surface
+aguara scan .github/workflows/
+```
+
+Aguara auto-detects MCP configurations across **17 clients**: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, and JetBrains.
+
+```bash
+# List all detected MCP configs
+aguara discover
+
+# JSON output (sensitive env values are automatically redacted)
+aguara discover --format json
+```
+
+## CI Integration
+
+### GitHub Action
+
+```yaml
+- uses: garagon/aguara@v0.18.0
+  with:
+    path: .
+    fail-on: high
+    version: v0.18.0
+```
+
+Both pins (the action ref AND the `version:` input) are required. The action ref alone pins only the composite action and its install script; `version:` pins the Aguara binary the action installs. Setting both makes the workflow reproducible and dependabot-friendly: when a new release lands, the bot updates both together.
+
+Scans your repository, uploads findings to GitHub Code Scanning, and optionally fails the build:
+
+```yaml
+- uses: garagon/aguara@v0.18.0
+  with:
+    path: ./mcp-server/
+    severity: medium
+    fail-on: high
+    version: v0.18.0
+```
+
+All inputs are optional. See [`action.yml`](action.yml) for the full list.
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `path` | `./` | Path to scan |
+| `severity` | `info` | Minimum severity to report |
+| `fail-on` | _(none)_ | Fail if findings at or above this severity |
+| `format` | `sarif` | Output format: sarif, json, terminal, markdown |
+| `upload-sarif` | `true` | Upload SARIF to GitHub Code Scanning |
+| `version` | _(latest)_ | Pin a specific Aguara version |
+
+> SARIF upload requires the `security-events: write` permission and is free for public repositories.
+
+### Docker in CI
+
+```yaml
+- name: Scan for security issues
+  run: docker run --rm -v "${{ github.workspace }}:/scan:ro" ghcr.io/garagon/aguara:0.18.0 scan /scan --ci
+```
+
+### Manual / GitLab CI
+
+```yaml
+# GitHub Actions (without the action)
+- name: Scan skills for security issues
+  run: |
+    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.18.0 sh
+    aguara scan .claude/skills/ --ci
+```
+
+```yaml
+# GitLab CI
+security-scan:
+  script:
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.18.0 sh
+    - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
+  artifacts:
+    reports:
+      sast: gl-sast-report.sarif
+```
 
 ## How It Works
 
@@ -203,20 +425,15 @@ Aguara runs 6 scan analyzers sequentially on every file by default; a 7th (Rug-P
 
 | Analyzer | Engine | What it catches |
 |----------|--------|-----------------|
-| **Pattern Matcher** | Regex + Aho-Corasick matching | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern search. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, octal escapes) decode obfuscated payloads and re-scan. Code-block severity downgrade. Dynamic confidence based on pattern hit ratio. |
+| **Pattern Matcher** | Regex + Aho-Corasick | Known attack signatures, credential patterns, dangerous commands. Aho-Corasick automaton for O(n+m) multi-pattern search. 8 decoders (base64, hex, URL, Unicode escapes, HTML entities, hex escapes, base32, octal escapes) decode obfuscated payloads and re-scan. Code-block severity downgrade. Dynamic confidence based on pattern hit ratio. |
 | **CI Trust** | GitHub Actions YAML parser | `pull_request_target` chains, cache poisoning across fork boundaries, OIDC token surface paired with install/build/test, persisted-credentials checkouts on PR head refs. |
 | **PkgMeta** | `package.json` JSON parser | npm install-time lifecycle scripts plus git-sourced dependencies, optional-git deps with suspicious names, publish surfaces paired with trusted-publishing references. |
-| **JSRisk** | JavaScript single-pass scanner | Obfuscator-shape payloads, install-time daemonization via `child_process`, CI secret harvesting through real `process.env` reads plus network/registry sinks, runner-process memory pivots to extract OIDC tokens, Claude Code / VS Code workspace persistence. |
+| **JSRisk** | JavaScript single-pass scanner | Obfuscator-shape payloads, install-time daemonization via `child_process`, CI secret harvesting through real `process.env` reads plus network/registry sinks, runner-process memory pivots to extract OIDC tokens, Claude Code / VS Code workspace persistence, chain-aware DNS TXT exfil. |
 | **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting; clustered keywords score higher, sparse keywords in long text get penalized. |
 | **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations within a single file and across files in the same directory. Detects credential reads paired with webhook sends, env vars flowing to shell execution, destructive plus exec combos across MCP server tools. |
 | **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans. CLI: `--monitor` flag. Library: `WithStateDir()` for persistent consumers. |
 
-Separate `aguara check` and `aguara audit` commands inspect installed
-package trees (Python `site-packages`, npm `node_modules` including the
-pnpm `.pnpm` store) AND walk the repo recursively for Go, Rust, PHP,
-Ruby, Java, and .NET lockfiles, matching every declared package against
-the embedded threat-intel snapshot. See
-[Supply-Chain Check](#supply-chain-check) for the full surface.
+Separate `aguara check` and `aguara audit` commands inspect installed package trees (Python `site-packages`, npm `node_modules` including the pnpm `.pnpm` store) and walk the repo recursively for Go, Rust, PHP, Ruby, Java, and .NET lockfiles, matching every declared package against the embedded threat-intel snapshot. See [Supply-Chain Check](#supply-chain-check) for the full surface.
 
 All content is NFKC-normalized before scanning to prevent Unicode evasion attacks. All layers report findings with severity, dynamic confidence score (0.50-0.95), matched text, file location with context lines, and remediation guidance. An aggregate risk score (0-100) summarizes overall threat level.
 
@@ -255,97 +472,7 @@ Flags:
 | **SARIF** | `--format sarif` | GitHub Code Scanning, IDE integrations, SAST dashboards |
 | **Markdown** | `--format markdown` | GitHub Actions job summaries, PR comments |
 
-### MCP Client Discovery
-
-Aguara auto-detects MCP configurations across **17 clients**: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, and JetBrains.
-
-```bash
-# List all detected MCP configs
-aguara discover
-
-# JSON output (sensitive env values are automatically redacted)
-aguara discover --format json
-
-# Markdown output
-aguara discover --format markdown
-
-# Discover + scan in one command
-aguara scan --auto
-```
-
-### CI Integration
-
-#### GitHub Action
-
-```yaml
-- uses: garagon/aguara@v0.18.0
-  with:
-    path: .
-    fail-on: high
-    version: v0.18.0
-```
-
-Both pins (the action ref AND the `version:` input) are required. The
-action ref alone pins only the composite action and its install
-script; `version:` pins the Aguara binary the action installs. Setting
-both makes the workflow reproducible and dependabot-friendly: when
-v0.18.0 lands, the bot updates both together.
-
-Scans your repository, uploads findings to GitHub Code Scanning, and
-optionally fails the build:
-
-```yaml
-- uses: garagon/aguara@v0.18.0
-  with:
-    path: ./mcp-server/
-    severity: medium
-    fail-on: high
-    version: v0.18.0
-```
-
-All inputs are optional. See [`action.yml`](action.yml) for the full list.
-
-| Input | Default | Description |
-|-------|---------|-------------|
-| `path` | `./` | Path to scan |
-| `severity` | `info` | Minimum severity to report |
-| `fail-on` | _(none)_ | Fail if findings at or above this severity |
-| `format` | `sarif` | Output format: sarif, json, terminal, markdown |
-| `upload-sarif` | `true` | Upload SARIF to GitHub Code Scanning |
-| `version` | _(latest)_ | Pin a specific Aguara version |
-
-> **Note**: SARIF upload requires the `security-events: write` permission and is free for public repositories.
-
-#### Docker in CI
-
-```yaml
-# GitHub Actions with Docker (no install step)
-- name: Scan for security issues
-  run: docker run --rm -v "${{ github.workspace }}":/scan ghcr.io/garagon/aguara scan /scan --ci
-```
-
-#### Manual / GitLab CI
-
-```yaml
-# GitHub Actions (without the action)
-- name: Scan skills for security issues
-  run: |
-    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
-    aguara scan .claude/skills/ --ci
-```
-
-```yaml
-# GitLab CI
-security-scan:
-  script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | sh
-    - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
-  artifacts:
-    reports:
-      sast: gl-sast-report.sarif
-```
-
-### Configuration
+## Configuration
 
 Create `.aguara.yml` in your project root:
 
@@ -369,9 +496,9 @@ rule_overrides:
 
 `apply_to_tools` and `exempt_tools` are mutually exclusive per rule. They filter findings at scan time when a tool name is provided via `--tool-name` or the library API.
 
-### Inline Ignore
+### Inline ignore
 
-Suppress specific findings directly in your source files using inline comments:
+Suppress specific findings directly in source files using inline comments:
 
 ```yaml
 # aguara-ignore CRED_004
@@ -396,7 +523,12 @@ Supported directives:
 
 ## Rules
 
-193 built-in rules across 13 pattern-rule categories (what `aguara list-rules` enumerates) plus the toxic-flow chain analyzer with its own emit-time category. The table groups coverage by emit-time category for readability:
+Aguara currently exposes **219 cataloged detections** through `aguara list-rules`:
+
+- **193 embedded YAML pattern rules** across 13 categories
+- **26 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, NLP, toxic-flow, and rug-pull
+
+The table groups coverage by emit-time category for readability:
 
 | Category | Rules | What it detects |
 |----------|-------|-----------------|
@@ -419,7 +551,7 @@ See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity lev
 
 ### Remediation Guidance
 
-All 193 rules include remediation text. It appears in every output format:
+All 193 YAML rules include remediation text. It appears in every output format:
 
 - **Terminal**: always shown for CRITICAL findings, shown for all severities with `--verbose`
 - **JSON**: included in every finding object
@@ -445,7 +577,7 @@ aguara scan . --verbose
 }
 ```
 
-### Custom Rules
+### Custom rules
 
 ```yaml
 id: CUSTOM_001
@@ -479,206 +611,25 @@ Custom rules are validated at load time: unknown YAML fields are rejected, and a
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
-## Supply-Chain Check
-
-In v0.17, `aguara check .` walks the dependency surface of a modern repo
-instead of stopping at npm/Python.
-
-Aguara ships with native threat intel built from [OSV.dev](https://osv.dev)'s
-public vulnerability database and OpenSSF Malicious Packages records, plus a
-hand-curated list of high-priority emergency advisories (event-stream,
-node-ipc 2022 and 2026, litellm). Both run **offline by default** — the
-binary carries the snapshot. Runtime updates are opt-in.
-
-The check commands are organised by user intent.
-
-### `aguara check` — am I exposed?
-
-```bash
-# Run from a repo root. Aguara finds installed npm / Python environments
-# AND lockfiles for Go, Rust, PHP, Ruby, Java, and .NET recursively under
-# the path, then matches every declared package against the snapshot.
-aguara check .
-
-# Refresh threat intel from OSV first, then check. The only check mode
-# that uses the network; the rest stay offline. --fresh refreshes only
-# the ecosystems the plan actually touches.
-aguara check --fresh
-
-# CI gate: --fail-on critical, no color, exit 1 on compromised packages
-aguara check --ci
-
-# Constrain to specific ecosystems (repeatable or comma-separated)
-aguara check --ecosystem go,ruby
-aguara check --ecosystem maven --ecosystem nuget
-
-# Machine-readable
-aguara check --format json
-```
-
-What it checks:
-- **Known compromised package versions** across all supported ecosystems
-  (manual advisories + OSV malicious-package records + OpenSSF Malicious
-  Packages origins).
-- **`.pth` files with executable code** (import, subprocess, exec, eval).
-  Python-only.
-- **pip/uv/npx caches** so a compromised package in the cache surfaces
-  even without a virtualenv. Python / npm only.
-- **Persistence backdoors** (systemd user services, sysmon artifacts).
-  Python-only.
-- **Credential files at risk** (SSH, AWS, K8s, git, npm, PyPI, databases).
-  Python-only.
-
-Coverage by ecosystem:
-
-| Ecosystem | Evidence read | Coverage today |
-|---|---|---|
-| npm | `node_modules` (incl. pnpm `.pnpm` store), `pnpm-lock.yaml` | Strong malicious-package coverage; pnpm lockfile readable pre-install |
-| PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage |
-| RubyGems | `Gemfile.lock` | Strong malicious-package coverage |
-| NuGet | `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj` | Strong exact-version malicious-package coverage |
-| Go | `go.sum`, `go.mod` | Parser ready; limited exact-version embedded matches today |
-| crates.io | `Cargo.lock` (public registry only) | Parser ready; range-aware OSV matching deferred |
-| Packagist | `composer.lock` | Parser ready; range-aware OSV matching deferred |
-| Maven | `pom.xml`, `gradle.lockfile`, `gradle/dependency-locks/*` | Parser ready; range-aware OSV matching deferred |
-
-Aguara is not claiming to be a full SCA vulnerability scanner yet. v0.17
-adds offline malicious-package checks across ecosystems. General
-CVE/range matching is the next layer.
-
-For pnpm projects, Aguara reads `pnpm-lock.yaml` directly. You do not need to run `pnpm install` first:
-
-```bash
-# Works before install in pnpm repos
-git clone <pnpm-repo>
-cd <pnpm-repo>
-aguara check .
-```
-
-Auto-detection rules (in order):
-- If the path is or contains `node_modules`, run the installed-tree npm check (covers both flat `node_modules/<pkg>` and pnpm's `.pnpm` store).
-- Walk the path recursively for lockfiles (`pnpm-lock.yaml`, `go.sum`,
-  `Cargo.lock`, `composer.lock`, `Gemfile.lock`, `pom.xml`,
-  `gradle.lockfile`, `gradle/dependency-locks/*.lockfile`,
-  `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj`). Skip `.git/`,
-  `vendor/`, `node_modules/`, `.aguara/`, `target/`, `bin/`, `obj/`,
-  `.gradle/`.
-- If the explicit `--path` looks like a Python install
-  (`site-packages` / `dist-packages` basename, or contains `*.dist-info`),
-  run the Python check.
-- If `aguara check` runs with no flags and no signals are found, fall
-  back to global Python `site-packages` autodiscovery (legacy
-  behaviour).
-
-An explicit `--path` with no signals returns a clean result with
-`"ecosystems": []` and never silently falls back to the host's global
-Python.
-
-### `aguara audit` — code AND packages, one verdict
-
-```bash
-aguara audit          # check + scan on the current directory
-aguara audit --ci     # CI gate: --fail-on critical, no color
-aguara audit --fresh  # refresh intel, then audit
-```
-
-`aguara audit` composes the supply-chain check and the content scan into a
-single verdict. JSON output carries both sub-results (`.check` and `.scan`)
-plus per-section counts so a dashboard can drill into either side.
-
-### `aguara status` — is my threat intel fresh?
-
-```bash
-aguara status
-```
-
-Prints the Aguara version, the embedded snapshot's generated-at date and
-record count, and whether a local cached snapshot exists from a prior
-`aguara update` run. Does no network I/O.
-
-### `aguara update` — refresh intel for future offline checks
-
-```bash
-aguara update                       # fetch every supported ecosystem, cache locally
-aguara update --ecosystem npm       # just npm
-aguara update --ecosystem go,ruby   # scope to Go + RubyGems
-```
-
-`aguara update` and `--fresh` are the only commands that use the network.
-The default refreshes every ecosystem the registry supports (npm, PyPI,
-Go, crates.io, Packagist, RubyGems, Maven, NuGet); scope with `--ecosystem`
-(repeatable or comma-separated). The refreshed cache lives at
-`~/.aguara/intel/snapshot.json`; subsequent `aguara check` runs layer it
-over the embedded snapshot automatically and stay offline.
-
-`aguara check --fresh` refreshes only the ecosystems the plan actually
-touches, so `aguara check --fresh --ecosystem maven` does not pull npm,
-PyPI, or the other six.
-
-If a refresh returns zero records (upstream outage, schema shift), the
-update is refused so cached intel cannot be silently wiped. Pass
-`--allow-empty` to override during initial bootstrap.
-
-### `aguara clean` — quarantine compromised packages
-
-```bash
-aguara clean                       # interactive confirmation
-aguara clean --yes --purge-caches  # non-interactive, also purge pip/uv caches
-aguara clean --dry-run             # preview
-```
-
-Files are quarantined to `/tmp/aguara-quarantine/`, not deleted. After
-cleaning, Aguara prints a credential rotation checklist for every
-credential file present on the system.
-
-### Advanced: explicit ecosystem and path
-
-Use these when auto-detection cannot find the environment you want to check:
-
-```bash
-aguara check --ecosystem python --path /opt/venv/lib/python3.12/site-packages/
-aguara check --ecosystem npm --path ./node_modules
-```
-
-### Threat-intel sources
-
-The embedded snapshot is built from two sources:
-
-- **Manual** — a short hand-curated list of high-priority emergency
-  advisories. Takes display precedence when an advisory ID also appears
-  in OSV.
-- **OSV.dev** — high-confidence records only: OpenSSF Malicious Packages
-  IDs (the `MAL-` namespace), records with
-  `database_specific.malicious-packages-origins`, plus keyword-qualified
-  records that carry exact affected versions. Generic CVE / DoS records
-  are filtered out at import time so Aguara stays focused on malicious
-  packages, not general SCA.
-
-Built originally in response to the
-[litellm supply chain attack](https://github.com/garagon/aguara/releases/tag/v0.11.0)
-(March 2026), where malicious `.pth` files exfiltrated credentials and
-installed K8s backdoors. The toolset grew from that incident into the
-broader check + audit + update + status surface above.
-
 ## Aguara MCP
 
-[Aguara MCP](https://github.com/garagon/aguara-mcp) is an MCP server that gives AI agents the ability to scan skills and configurations for security threats — before installing or running them. It imports Aguara as a Go library — one `go install`, no external binary needed.
+[Aguara MCP](https://github.com/garagon/mcp-aguara) is an MCP server that lets AI agents call Aguara before they install or trust third-party tools. It imports Aguara as a Go library, so it does not shell out to a separate scanner binary.
 
-```bash
-# Install and register with Claude Code
-go install github.com/garagon/aguara-mcp@latest
-claude mcp add aguara -- aguara-mcp
-```
+The agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `explain_rule`. No network, no LLM, millisecond scans.
 
-Your agent gets 4 tools: `scan_content`, `check_mcp_config`, `list_rules`, and `explain_rule`. No network, no LLM, millisecond scans — the agent checks first, then decides.
+See the [mcp-aguara README](https://github.com/garagon/mcp-aguara) for install, the canonical binary name, and client registration (Claude Code, Cursor, Windsurf, others).
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale, so we are not using it as a product signal for this release. The scanner, CLI, Docker image, and signed release artifacts remain the supported surfaces for v0.18.0.
+Aguara Watch is being reworked. The previous public observatory is stale, so it is not a supported product surface for v0.18.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
+
+## Enterprise use
+
+Aguara is designed for local and CI use in environments where source code, prompts, configs, and dependency data cannot be uploaded to a third-party scanner.
 
 ## Go Library
 
-Aguara exposes a public Go API for embedding the scanner in other tools. [Aguara MCP](https://github.com/garagon/aguara-mcp) uses this API.
+Aguara exposes a public Go API for embedding the scanner in other tools. [Aguara MCP](https://github.com/garagon/mcp-aguara) uses this API.
 
 ```go
 import "github.com/garagon/aguara"
@@ -746,20 +697,22 @@ internal/
     toxicflow/         Taint: single-file taint tracking + cross-file correlation across directories
     rugpull/           Rug-pull: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           193 embedded rules across 13 YAML files (go:embed)
+    builtin/           193 embedded YAML rules across 13 files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, inline ignore, result aggregation
     exemptions.go      Tool exemptions, scan profiles, verdict computation
   meta/                Post-processing: configurable dedup, scoring, risk score, correlation, confidence
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader (supports tool-scoped rules)
   incident/            Incident response: compromised package detection, cleanup, quarantine
+  intel/               Threat-intel snapshot loader, matcher, embedded OSV records
+  packagecheck/        Multi-ecosystem lockfile parsers (Go, Rust, PHP, Ruby, Java, .NET, pnpm)
   state/               Persistence for rug-pull detection (CLI and library mode)
   types/               Shared types (Finding, Severity, ScanResult, Verdict, DeduplicateMode)
 ```
 
 ## Comparison
 
-Aguara is purpose-built for AI agent content. General-purpose SAST tools target application source code, not the skill files, tool descriptions, and MCP configs that agents consume.
+Aguara is purpose-built for AI agent content AND supply-chain trust points. General-purpose SAST tools target application source code, not the skill files, tool descriptions, MCP configs, and lockfiles that modern projects consume.
 
 | Feature | Aguara | Semgrep | Snyk Code | CodeQL |
 |---------|--------|---------|-----------|--------|
@@ -767,19 +720,21 @@ Aguara is purpose-built for AI agent content. General-purpose SAST tools target 
 | MCP config analysis | Yes | No | No | No |
 | Prompt injection detection | Yes (18 rules + NLP) | No | No | No |
 | Rug-pull detection | Yes | No | No | No |
-| Supply chain exfil detection | Yes (10 rules) | No | No | No |
+| Supply chain exfil detection | Yes (11 rules) | No | No | No |
+| Multi-ecosystem package check | Yes (npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET) | No | Partial | No |
+| Pre-install lockfile coverage | Yes (pnpm-lock.yaml today) | No | Partial | No |
 | Incident response (check/clean) | Yes | No | No | No |
 | Taint tracking for skills | Yes | Yes | Yes | Yes |
 | Offline / no account | Yes | Partial | No | Partial |
 | Custom YAML rules | Yes | Yes | No | No |
 | SARIF output | Yes | Yes | Yes | Yes |
-| Free & open source | Yes (Apache 2.0) | Partial | No | Partial |
+| Free and open source | Yes (Apache 2.0) | Partial | No | Partial |
 
-Aguara complements traditional SAST - use Semgrep for your app code, Aguara for your agent skills and MCP servers.
+Aguara complements traditional SAST: use Semgrep for your app code, Aguara for your agent skills, MCP servers, and dependency surface.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, adding rules, and the PR process.
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, adding rules, and the PR process.
 
 For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 
