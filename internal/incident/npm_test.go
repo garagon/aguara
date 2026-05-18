@@ -244,6 +244,38 @@ func TestCheckNPM_AppendsNPMEcosystemEntry_WithFindings(t *testing.T) {
 	}
 }
 
+// TestCheckNPM_ReturnsErrorOnUnreadableTree pins the readability-probe
+// behaviour. WalkDir swallows traversal errors and returns an empty
+// package list, so without an explicit ReadDir probe an unreadable
+// node_modules would surface as a clean-looking result with
+// ecosystems[npm].PackagesRead=0, indistinguishable from a real empty
+// tree to coverage consumers. The probe converts the silent failure
+// into an explicit error.
+func TestCheckNPM_ReturnsErrorOnUnreadableTree(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses POSIX permission checks; skip")
+	}
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(nm, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(nm, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(nm, 0o755) })
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err == nil {
+		t.Fatalf("unreadable node_modules must surface as a CheckNPM error, not a silent clean scan")
+	}
+	if result != nil {
+		t.Errorf("CheckNPM must not return a result when the directory cannot be read; got %+v", result)
+	}
+	if !strings.Contains(err.Error(), "cannot read node_modules directory") {
+		t.Errorf("error message must mention the readability failure for operators to diagnose; got %v", err)
+	}
+}
+
 func TestCheckNPM_NonExistentPath(t *testing.T) {
 	if _, err := incident.CheckNPM(incident.CheckOptions{Path: "/nonexistent/path"}); err == nil {
 		t.Errorf("expected error for nonexistent path")

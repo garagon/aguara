@@ -124,6 +124,16 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 	if siteDir == "" {
 		return nil, fmt.Errorf("no Python site-packages directory found (use --path to specify)")
 	}
+	// Probe readability before any silent reader runs. readInstalledPackages,
+	// findPthFiles, and friends swallow os.ReadDir / filepath.WalkDir errors
+	// and return nil. Without this probe, appending an ecosystems[] entry
+	// after a permission-denied read would surface "scanned 0 packages,
+	// 0 findings" - indistinguishable from a successful scan of an empty
+	// environment - and mislead dashboards that read ecosystems[] for
+	// coverage.
+	if _, err := os.ReadDir(siteDir); err != nil {
+		return nil, fmt.Errorf("check: cannot read site-packages directory %s: %w", siteDir, err)
+	}
 
 	// Initialize the result with non-nil slices so the JSON output is
 	// the stable `[]` shape (not `null`) when nothing is found.

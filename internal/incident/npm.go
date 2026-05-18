@@ -38,6 +38,17 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Probe readability before readInstalledNPMPackages runs. WalkDir
+	// swallows traversal errors and returns nil, so without this
+	// probe an unreadable node_modules (permission-denied bind mount,
+	// CI runner with reduced caps, root-owned tree) would silently
+	// produce an empty package list. Appending an ecosystems[] entry
+	// with PackagesRead=0 then misrepresents an unreadable tree as
+	// "scanned clean" to coverage consumers. Fail fast instead so
+	// the caller surfaces the access failure as an error.
+	if _, err := os.ReadDir(root); err != nil {
+		return nil, fmt.Errorf("npm check: cannot read node_modules directory %s: %w", root, err)
+	}
 
 	// Initialize the result with non-nil slices so the JSON output is
 	// the stable `[]` shape (not `null`) when nothing is found.

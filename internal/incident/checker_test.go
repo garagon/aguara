@@ -190,6 +190,26 @@ func TestCheck_AppendsPyPIEcosystemEntry_WithFindings(t *testing.T) {
 		"package match against litellm 1.82.8 should produce at least one PyPI ecosystem finding")
 }
 
+// TestCheck_ReturnsErrorOnUnreadableSiteDir pins the readability-probe
+// behaviour. Without the probe, an unreadable site-packages directory
+// would silently produce a clean-looking result with an ecosystems[]
+// entry reporting PackagesRead=0, which a dashboard could not
+// distinguish from a real empty environment. The probe converts the
+// silent failure into an explicit error.
+func TestCheck_ReturnsErrorOnUnreadableSiteDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses POSIX permission checks; skip")
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.Error(t, err, "unreadable site-packages must surface as a Check error, not a silent clean scan")
+	require.Nil(t, result, "Check must not return a result when the directory cannot be read")
+	require.Contains(t, err.Error(), "cannot read site-packages directory")
+}
+
 func TestCheckEmptyEnvironment(t *testing.T) {
 	dir := t.TempDir()
 
