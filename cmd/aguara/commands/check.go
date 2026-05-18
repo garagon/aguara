@@ -771,11 +771,19 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 	}
 	for _, hit := range runRes.Hits {
 		// Recover the CLI dispatch label from the OSV bucket so
-		// ecosystemFindingText picks the right wording. Falls back
-		// to a generic message if the ecosystem is unknown (which
-		// should never happen because packagecheckEcosystems and
-		// osvIDToEcoToken stay in sync via the same map literal).
+		// ecosystemFindingText picks the right wording.
+		// npm is intentionally absent from osvIDToEcoToken (it
+		// flows through the incident path), but pnpm-lock.yaml
+		// hits land HERE with hit.Ref.Ecosystem == EcosystemNPM,
+		// so map them back to ecoNPM explicitly. Without this,
+		// the wording would fall through to the generic
+		// "compromised package" copy instead of the npm-specific
+		// title + remediation, losing parity with the
+		// installed-tree findings.
 		ecoToken := osvIDToEcoToken[hit.Ref.Ecosystem]
+		if ecoToken == "" && hit.Ref.Ecosystem == intel.EcosystemNPM {
+			ecoToken = ecoNPM
+		}
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
@@ -854,6 +862,18 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 	case ecoNuGet:
 		return fmt.Sprintf("%s %s is a known compromised NuGet package (%s)", name, version, id),
 			fmt.Sprintf("Update %s to a fixed version in the project file or packages.lock.json and restore. Rotate secrets reachable from builds that used the compromised package.", name)
+	case ecoNPM:
+		// pnpm-lock.yaml packagecheck hits land here. Mirrors the
+		// wording incident.CheckNPM emits for installed-tree
+		// findings so the two surfaces produce consistent
+		// finding text. Remediation points at the package manager
+		// generically (npm install / pnpm install / yarn) since
+		// the hit could have come from any of the npm registry
+		// consumers, and explicitly calls out the lockfile
+		// pinning that would otherwise re-introduce the same
+		// version on the next install.
+		return fmt.Sprintf("%s %s is a known compromised npm package (%s)", name, version, id),
+			fmt.Sprintf("Remove %s@%s from the lockfile and reinstall against a fixed version. Audit recent runs of the surrounding pipeline and rotate any tokens this environment has held.", name, version)
 	default:
 		// Defensive: a packagecheck ecosystem without a wording
 		// entry still produces a usable finding rather than a
