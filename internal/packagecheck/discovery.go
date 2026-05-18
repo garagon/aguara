@@ -290,7 +290,7 @@ func pickNuGetTargets(dir string) []Target {
 }
 
 // pickPnpmTarget returns a Target for a pnpm project rooted at dir,
-// or nil when no pnpm-lock.yaml is present.
+// or nil when no pnpm-lock.yaml is present at that directory.
 //
 // pnpm installs from the npm registry, so the Target's ecosystem is
 // intel.EcosystemNPM. The Source label distinguishes it from the
@@ -299,11 +299,19 @@ func pickNuGetTargets(dir string) []Target {
 // (package-lock.json, yarn.lock) which will land as their own
 // pickers in this slice.
 //
-// node_modules is in defaultSkipDirs, so a pnpm-lock.yaml that
-// somehow ended up under node_modules (vendored copy, broken
-// extraction) is not discovered. Only the project-root lockfile
-// is considered.
+// node_modules is in defaultSkipDirs, so a nested node_modules child
+// is skipped during recursion. But when the scan root ITSELF is
+// node_modules (a legitimate npm input — `aguara check ./node_modules`
+// is documented) the skip-rule never fires (it is gated on
+// `path != root`), and Discover would walk installed package
+// contents. Any dependency that ships a pnpm-lock.yaml as a fixture
+// or dev lockfile would then produce findings unrelated to the
+// user's project. Skip when any ancestor segment is `node_modules`
+// so the recursive walk only picks up the user's actual lockfile.
 func pickPnpmTarget(dir string) []Target {
+	if hasNodeModulesAncestor(dir) {
+		return nil
+	}
 	if statRegular(filepath.Join(dir, "pnpm-lock.yaml")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
@@ -312,6 +320,23 @@ func pickPnpmTarget(dir string) []Target {
 		}}
 	}
 	return nil
+}
+
+// hasNodeModulesAncestor walks the cleaned path and reports whether
+// any segment is exactly "node_modules". Returns true even when the
+// supplied path's basename is node_modules (the scan-root case the
+// defaultSkipDirs gate misses).
+func hasNodeModulesAncestor(dir string) bool {
+	for d := filepath.Clean(dir); ; {
+		if filepath.Base(d) == "node_modules" {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
 }
 
 func statRegular(path string) bool {

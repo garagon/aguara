@@ -124,41 +124,62 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		}
 	}
 
-	// Pick the package@version separator. LastIndex is wrong: the
-	// peer-dep encoding "lodash@4.17.21_react@18.0.0" has the
-	// LAST "@" inside the peer-dep suffix, not at the package /
-	// version boundary. Correct rule:
-	//   - scoped key "@scope/pkg@1.2.3..."  -> find "@" AFTER the
-	//     first "/"; that is the boundary between name and version.
-	//   - unscoped key "node-ipc@1.2.3..."  -> find the FIRST "@";
-	//     anything later belongs to a peer-dep suffix.
-	var at int
+	// Two pnpm key formats are valid in the wild:
+	//
+	//   modern (v6+):    name@version           "@scope/pkg@1.2.3"
+	//   legacy (v5):     name/version           "@scope/pkg/1.2.3"
+	//
+	// Try the modern shape first by locating the version-separating
+	// "@". Correct rule:
+	//   - scoped key  ("@scope/pkg@1.2.3"):  find the "@" AFTER the
+	//     first "/"; that is the package/version boundary.
+	//     LastIndex would land in a peer-dep suffix instead.
+	//   - unscoped key ("node-ipc@1.2.3"):   first "@" is the
+	//     separator; anything later is a peer-dep suffix.
+	//
+	// If no "@" sits in a valid position, fall back to the legacy
+	// slash-separator shape (last "/" is the version boundary).
+	// Without this fallback, lockfileVersion 5.x projects with
+	// keys like "/lodash/4.17.21" or "/@types/node/20.5.0" would
+	// silently produce zero packages_read even when the lockfile
+	// declares compromised versions.
+	var (
+		name    string
+		version string
+	)
 	if strings.HasPrefix(key, "@") {
-		// Scoped: "@scope/pkg@1.2.3"
 		slash := strings.IndexByte(key, '/')
-		if slash < 0 {
-			// "@scope" with no "/pkg" after — invalid.
-			return "", "", false
+		if slash > 0 {
+			if rel := strings.IndexByte(key[slash:], '@'); rel >= 0 {
+				at := slash + rel
+				name = key[:at]
+				version = key[at+1:]
+			}
 		}
-		rel := strings.IndexByte(key[slash:], '@')
-		if rel < 0 {
-			// "@scope/pkg" without a version-separating "@".
-			return "", "", false
-		}
-		at = slash + rel
 	} else {
-		// Unscoped: first "@" is the version separator.
-		at = strings.IndexByte(key, '@')
-		if at <= 0 {
-			// at == -1: no "@" at all.
-			// at == 0: key starts with "@" but didn't match scoped
-			// shape above (cleared at "@"-trim above is impossible
-			// since we only TrimPrefix "/"). Belt + suspenders.
-			return "", "", false
+		if at := strings.IndexByte(key, '@'); at > 0 {
+			name = key[:at]
+			version = key[at+1:]
 		}
 	}
-	name := key[:at]
-	version := key[at+1:]
+	if name == "" {
+		// Legacy v5 fallback: last "/" splits name from version.
+		// Validate slash structure to avoid mis-classifying malformed
+		// modern keys (like "@scope/pkg" with no version) as v5:
+		//   - scoped v5 keys are "@scope/pkg/version" (2 slashes)
+		//   - unscoped v5 keys are "name/version"     (1 slash)
+		// "@scope/pkg" has 1 slash and would otherwise resolve to
+		// (name="@scope", version="pkg"), which is wrong.
+		lastSlash := strings.LastIndexByte(key, '/')
+		if lastSlash <= 0 || lastSlash == len(key)-1 {
+			return "", "", false
+		}
+		if strings.HasPrefix(key, "@") && strings.Count(key, "/") < 2 {
+			return "", "", false
+		}
+		name = key[:lastSlash]
+		version = key[lastSlash+1:]
+	}
 	if name == "" || version == "" {
 		return "", "", false
 	}

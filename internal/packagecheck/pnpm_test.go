@@ -36,12 +36,18 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"git: ref", "git:user/repo", "", "", false},
 		{"https: ref", "https://example.com/pkg", "", "", false},
 
+		// Legacy v5 slash-separator format
+		{"v5 unscoped", "/lodash/4.17.21", "lodash", "4.17.21", true},
+		{"v5 scoped", "/@types/node/20.5.0", "@types/node", "20.5.0", true},
+		{"v5 unscoped slash-only no leading", "lodash/4.17.21", "lodash", "4.17.21", true},
+
 		// Rejected: malformed
 		{"bare name no version", "node-ipc", "", "", false},
 		{"empty version after @", "node-ipc@", "", "", false},
 		{"only @", "@", "", "", false},
 		{"empty string", "", "", "", false},
 		{"bare scope without version", "@scope/pkg", "", "", false},
+		{"slash with empty version", "/lodash/", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
