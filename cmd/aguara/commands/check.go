@@ -388,9 +388,22 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				plan.pythonPath = path
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
 			case ecoNPM:
-				plan.runNPM = true
-				plan.npmPath = path
+				// Explicit `--ecosystem npm` now covers two surfaces:
+				//   1. installed-tree (node_modules + .pnpm store)
+				//      via incident.CheckNPM. Gated on node_modules
+				//      actually existing under path so a pnpm-only
+				//      repo (no install yet) does NOT error from
+				//      "no node_modules directory".
+				//   2. lockfile (pnpm-lock.yaml) via packagecheck
+				//      discovery + ParsePNPMLock. Always added for
+				//      explicit npm so the user gets the pre-install
+				//      audit surface regardless of node_modules state.
+				if path == "" || filepath.Base(path) == "node_modules" || statDir(filepath.Join(path, "node_modules")) {
+					plan.runNPM = true
+					plan.npmPath = path
+				}
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemNPM)
+				packagecheckIDs = append(packagecheckIDs, intel.EcosystemNPM)
 			default:
 				osvID, ok := packagecheckEcosystems[token]
 				if !ok {

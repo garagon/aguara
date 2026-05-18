@@ -94,6 +94,30 @@ func TestDiscover_NoGoFilesReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestDiscover_FindsPnpmLockAsNPM(t *testing.T) {
+	// pnpm-lock.yaml routes through the packagecheck path with
+	// Ecosystem=npm and Source="pnpm-lock.yaml". This is what
+	// makes `aguara check .` on a fresh clone of a pnpm repo
+	// (no node_modules yet) surface npm coverage.
+	root := filepath.Join("testdata", "pnpm-compromised")
+	targets, err := Discover(root, []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if got, want := len(targets), 1; got != want {
+		t.Fatalf("targets = %d, want %d (targets=%+v)", got, want, targets)
+	}
+	if targets[0].Ecosystem != intel.EcosystemNPM {
+		t.Errorf("ecosystem = %q, want %q", targets[0].Ecosystem, intel.EcosystemNPM)
+	}
+	if targets[0].Source != "pnpm-lock.yaml" {
+		t.Errorf("source = %q, want pnpm-lock.yaml", targets[0].Source)
+	}
+	if !strings.HasSuffix(targets[0].Path, "pnpm-lock.yaml") {
+		t.Errorf("path = %q, want suffix pnpm-lock.yaml", targets[0].Path)
+	}
+}
+
 func TestDiscover_DefaultsToAllSupportedWhenEcosystemsNil(t *testing.T) {
 	// PR #2: nil means "scan every ecosystem packagecheck knows
 	// about". Today that's Go only; future PRs flow additively

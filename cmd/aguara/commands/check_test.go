@@ -911,6 +911,65 @@ func TestCheck_ResolveCheckPathArg_TableSemantics(t *testing.T) {
 	}
 }
 
+// --- pnpm-lock.yaml coverage: npm ecosystem, packagecheck path ---
+
+func TestCheck_PnpmLockCompromisedFixtureFiresFinding(t *testing.T) {
+	// `aguara check <pnpm-repo>` on a fresh clone (no node_modules)
+	// must detect node-ipc 9.2.3 in pnpm-lock.yaml. End-to-end
+	// coverage of: discovery picks pnpm-lock.yaml as npm ecosystem,
+	// ParsePNPMLock extracts the ref, matcher hits the embedded
+	// node-ipc 9.2.3 record, finding is CRITICAL, ecosystems[]
+	// entry reports source=pnpm-lock.yaml.
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/pnpm-compromised")
+
+	require.Len(t, result.Ecosystems, 1, "exactly one ecosystems[] entry expected for pnpm-only fixture (no node_modules)")
+	got := result.Ecosystems[0]
+	require.Equal(t, "npm", got.Ecosystem)
+	require.Equal(t, "pnpm-lock.yaml", got.Source)
+	require.Contains(t, got.Path, "pnpm-lock.yaml")
+	require.GreaterOrEqual(t, got.PackagesRead, 1, "lockfile has at least one declared package")
+	require.GreaterOrEqual(t, got.FindingsCount, 1, "node-ipc@9.2.3 in the embedded compromised list must produce at least one finding")
+
+	// Find the node-ipc finding in the flat findings slice.
+	var nodeIPCFinding *incident.Finding
+	for i := range result.Findings {
+		if strings.Contains(result.Findings[i].Title, "node-ipc") {
+			nodeIPCFinding = &result.Findings[i]
+			break
+		}
+	}
+	require.NotNil(t, nodeIPCFinding, "node-ipc finding missing; got: %+v", result.Findings)
+	require.Equal(t, incident.SevCritical, nodeIPCFinding.Severity, "node-ipc 9.2.3 must be CRITICAL")
+}
+
+func TestCheck_PnpmLockCleanFixtureProducesZeroFindings(t *testing.T) {
+	// Clean pnpm fixture (lodash + @types/node, neither
+	// compromised) must produce zero findings while still emitting
+	// the ecosystems[] entry so consumers see "pipeline ran, scanned
+	// N packages, zero findings" rather than silence.
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/pnpm-clean")
+
+	require.Len(t, result.Ecosystems, 1, "exactly one ecosystems[] entry expected")
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "pnpm-lock.yaml", result.Ecosystems[0].Source)
+	require.GreaterOrEqual(t, result.Ecosystems[0].PackagesRead, 1)
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount, "clean fixture must have zero findings")
+	require.Empty(t, result.Findings, "top-level findings must be empty on clean fixture")
+}
+
+func TestCheck_ExplicitNPMEcosystemOnPnpmRepoFires(t *testing.T) {
+	// `aguara check --ecosystem npm --path <pnpm-only-repo>` must
+	// scan pnpm-lock.yaml even though there's no node_modules. The
+	// incident.CheckNPM pipeline is gated on node_modules existing;
+	// the packagecheck pnpm discovery covers the pre-install case.
+	result := checkToFile(t, "--ecosystem", "npm", "--path", "../../../internal/packagecheck/testdata/pnpm-compromised")
+
+	require.Len(t, result.Ecosystems, 1, "pnpm-only repo with --ecosystem npm: exactly one ecosystems[] entry (pnpm-lock.yaml; incident.CheckNPM correctly skipped because node_modules absent)")
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "pnpm-lock.yaml", result.Ecosystems[0].Source)
+	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "node-ipc 9.2.3 should fire")
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {

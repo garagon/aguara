@@ -110,6 +110,22 @@ func parseTarget(t Target) ([]PackageRef, error) {
 		return ParseMaven(t)
 	case intel.EcosystemNuGet:
 		return ParseNuGet(t)
+	case intel.EcosystemNPM:
+		// npm is unique in that the packagecheck path handles
+		// lockfile-style sources only (pnpm-lock.yaml today;
+		// package-lock.json / yarn.lock in follow-ups). The
+		// installed-tree npm signal (node_modules + .pnpm store)
+		// continues to flow through incident.CheckNPM, which
+		// produces its own ecosystems[] entry with
+		// Source="node_modules". Switching on Source here lets
+		// us add new npm lockfile formats without expanding the
+		// outer ecosystem switch.
+		switch t.Source {
+		case "pnpm-lock.yaml":
+			return ParsePNPMLock(t)
+		default:
+			return nil, fmt.Errorf("packagecheck: no npm parser for source %q", t.Source)
+		}
 	default:
 		return nil, fmt.Errorf("no parser for ecosystem %q", t.Ecosystem)
 	}

@@ -58,6 +58,7 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemRubyGems, pickRubyTarget},
 	{intel.EcosystemMaven, pickMavenTargets},
 	{intel.EcosystemNuGet, pickNuGetTargets},
+	{intel.EcosystemNPM, pickPnpmTarget},
 }
 
 // Discover walks root and returns one Target per lockfile / discovery
@@ -286,6 +287,31 @@ func pickNuGetTargets(dir string) []Target {
 		}
 	}
 	return out
+}
+
+// pickPnpmTarget returns a Target for a pnpm project rooted at dir,
+// or nil when no pnpm-lock.yaml is present.
+//
+// pnpm installs from the npm registry, so the Target's ecosystem is
+// intel.EcosystemNPM. The Source label distinguishes it from the
+// installed-tree npm pipeline (incident.CheckNPM with Source
+// "node_modules") and from any future npm lockfile parsers
+// (package-lock.json, yarn.lock) which will land as their own
+// pickers in this slice.
+//
+// node_modules is in defaultSkipDirs, so a pnpm-lock.yaml that
+// somehow ended up under node_modules (vendored copy, broken
+// extraction) is not discovered. Only the project-root lockfile
+// is considered.
+func pickPnpmTarget(dir string) []Target {
+	if statRegular(filepath.Join(dir, "pnpm-lock.yaml")) {
+		return []Target{{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      filepath.Join(dir, "pnpm-lock.yaml"),
+			Source:    "pnpm-lock.yaml",
+		}}
+	}
+	return nil
 }
 
 func statRegular(path string) bool {
