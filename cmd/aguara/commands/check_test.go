@@ -973,6 +973,36 @@ func TestCheck_PnpmLockCleanFixtureProducesZeroFindings(t *testing.T) {
 	require.Empty(t, result.Findings, "top-level findings must be empty on clean fixture")
 }
 
+func TestCheck_PnpmLockMiniShaiHuludAntvFiresFinding(t *testing.T) {
+	// Mini Shai-Hulud / @antv wave: `aguara check <pnpm-repo>` on a
+	// fresh clone must detect the compromised @antv/g2 5.6.8 and
+	// echarts-for-react 3.2.7 entries via the pnpm-lock.yaml path
+	// without needing pnpm install to have run. End-to-end coverage:
+	// autodetect picks pnpm-lock.yaml as npm ecosystem; parser
+	// extracts both refs; matcher hits the manual incident entries
+	// (these versions are NOT in the embedded OSV snapshot today,
+	// which is why the manual intel exists).
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/pnpm-mini-shai-hulud-antv")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "pnpm-lock.yaml", result.Ecosystems[0].Source)
+	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 2,
+		"@antv/g2 5.6.8 and echarts-for-react 3.2.7 must both fire")
+
+	titles := make([]string, 0, len(result.Findings))
+	for _, f := range result.Findings {
+		require.Equal(t, incident.SevCritical, f.Severity,
+			"all Mini Shai-Hulud findings must be CRITICAL, got %q on %q", f.Severity, f.Title)
+		titles = append(titles, f.Title)
+	}
+	joined := strings.Join(titles, " | ")
+	require.Contains(t, joined, "@antv/g2 5.6.8")
+	require.Contains(t, joined, "echarts-for-react 3.2.7")
+	require.Contains(t, joined, "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		"finding title must carry the advisory ID so dashboards can correlate")
+}
+
 func TestCheck_ExplicitNPMEcosystemOnPnpmRepoFires(t *testing.T) {
 	// `aguara check --ecosystem npm --path <pnpm-only-repo>` must
 	// scan pnpm-lock.yaml even though there's no node_modules. The
