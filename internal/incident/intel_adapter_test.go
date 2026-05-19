@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
@@ -64,6 +65,34 @@ func TestKnownCompromisedSnapshotShape(t *testing.T) {
 	for _, src := range snap.Sources {
 		require.Equal(t, intel.SourceManual, src.Kind)
 	}
+}
+
+func TestKnownCompromisedSnapshotGeneratedAtCoversFreshestEntry(t *testing.T) {
+	// The snapshot's GeneratedAt must be at or after the freshest
+	// Date string in KnownCompromised. If a new intel entry is added
+	// with a later Date but knownCompromisedGeneratedAt is not
+	// bumped, `aguara check --format json` would report an intel
+	// freshness timestamp older than the very incident it just
+	// detected, which breaks dashboards that gate on intel age.
+	snap := incident.KnownCompromisedSnapshot()
+
+	var freshest time.Time
+	var freshestEntry string
+	for _, cp := range incident.KnownCompromised {
+		if cp.Date == "" {
+			continue
+		}
+		d, err := time.Parse("2006-01-02", cp.Date)
+		require.NoErrorf(t, err, "entry %s %s has unparseable Date %q", cp.Ecosystem, cp.Name, cp.Date)
+		if d.After(freshest) {
+			freshest = d
+			freshestEntry = cp.Name + " (" + cp.Advisory + ", " + cp.Date + ")"
+		}
+	}
+	require.False(t, freshest.IsZero(), "expected at least one dated entry in KnownCompromised")
+	require.Falsef(t, snap.GeneratedAt.Before(freshest),
+		"snapshot GeneratedAt %s is older than the freshest manual entry %s; bump knownCompromisedGeneratedAt in intel_adapter.go",
+		snap.GeneratedAt.Format("2006-01-02"), freshestEntry)
 }
 
 func TestKnownCompromisedSnapshotReproducible(t *testing.T) {
