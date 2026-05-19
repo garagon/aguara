@@ -5,6 +5,54 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-05-19
+
+Patch release adding manual threat-intel coverage for the May 2026
+npm supply-chain incident affecting AntV visualization libraries
+and a small set of related packages. The embedded OSV snapshot did
+not carry these tuples at the time of release, so `aguara check`
+returned clean on installed trees and `pnpm-lock.yaml` lockfiles
+that pinned the malicious versions. v0.18.1 closes that gap.
+
+### Added
+
+- Manual `KnownCompromised` entries for the @antv wave: `@antv/g2`,
+  `@antv/g6`, `@antv/x6`, `@antv/l7`, `@antv/f2`, `@antv/data-set`,
+  `@antv/g-image-exporter`, `@antv/infographic`, plus
+  `echarts-for-react`, `timeago.js`, `size-sensor`, `canvas-nest.js`.
+  Twelve packages, 22 confirmed compromised versions. Every entry
+  is verified against `registry.npmjs.org`: the `deprecated` field
+  on the version carries an explicit security, `"risk"`, `"published
+  in error"`, or malicious-version notice from the package
+  maintainer. Versions without that registry signal are not
+  included even when third-party trackers list the package.
+- IOC metadata on the @antv advisory carrier entry for the direct
+  HTTPS exfiltration channel (`t.m-kosche.com`,
+  `/api/public/otel/v1/traces`).
+- Regression test
+  `TestKnownCompromisedSnapshotGeneratedAtCoversFreshestEntry` that
+  walks every dated entry in `KnownCompromised` and requires the
+  manual snapshot's `GeneratedAt` to be at or after the freshest
+  entry. Future intel additions that forget to bump the timestamp
+  fail the suite with a direct pointer at `intel_adapter.go`.
+
+### Changed
+
+- `knownCompromisedGeneratedAt` bumped to `2026-05-19` to cover the
+  new entries.
+
+### Compatibility
+
+Drop-in for v0.18.0. No schema changes, no flag renames, no rule
+ID changes. Consumers reading `verdict.status` and `ecosystems[]`
+continue to see the same field shapes; the @antv-affected projects
+now produce CRITICAL findings where v0.18.0 was silent.
+
+The TanStack / Mistral / UiPath wave reported in the same campaign
+is already covered by the embedded OSV snapshot (`MAL-2026-3432`
+and adjacent `MAL-2026-*` records) and is not duplicated by the
+manual intel.
+
 ## [0.18.0] - 2026-05-18
 
 `aguara check .` now reads `pnpm-lock.yaml` directly. A pnpm
