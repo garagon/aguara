@@ -5,6 +5,36 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-05-19
+
+Patch release fixing duplicate findings when `aguara check --fresh`
+pulls a refreshed OSV snapshot that has caught up to a hand-curated
+manual advisory. Without the fix, a single real-world exposure
+showed up as two findings: one for the manual advisory ID and one
+for the OSV one. `aguara check` (offline default) was unaffected
+because the embedded snapshots did not overlap.
+
+### Fixed
+
+- `aguara check` and `aguara audit` now emit one Finding per
+  `(ecosystem, name, version, path)` tuple even when multiple
+  intel records cover the same exposure. The check output layer
+  collapses duplicates to a single Finding; the matcher itself
+  keeps returning every record so correlation consumers see the
+  full set. `EmbeddedSnapshots()` returns the manual snapshot
+  first, so the curated advisory ID wins the title when both
+  manual and OSV cover the same tuple. User-facing advisory tokens
+  stay stable across `aguara check` and `aguara check --fresh`.
+
+### Compatibility
+
+Drop-in for v0.18.1. No JSON schema changes, no flag renames, no
+rule ID changes. JSON consumers that drove `findings_count` off
+the `--fresh` path will see a lower count for projects exposed to
+the AntV wave once OSV ingested the same tuples; the underlying
+exposure is identical, the count now reflects one row per real
+exposure.
+
 ## [0.18.1] - 2026-05-19
 
 Patch release adding manual threat-intel coverage for the May 2026
