@@ -124,6 +124,113 @@ var KnownCompromised = []CompromisedPackage{
 		Date:      "2022-03-07",
 		Summary:   "Historical malicious node-ipc releases (originally surfaced as the \"peacenotwar\" / RIAEvangelist incident) tied to destructive or unauthorized file-writing behavior on installs from specific geographies. Listed separately from the 2026 compromise because the payload and motivation differ.",
 	},
+
+	// --- Mini Shai-Hulud 2026 supply-chain wave (@antv) ---
+	//
+	// May 2026 campaign documented by Socket targeting AntV and a
+	// small set of related visualization packages. The malicious
+	// versions ship install-time / import-time credential-stealing
+	// payloads. Every entry below is verified against the npm
+	// registry: the registry's `deprecated` field on the version
+	// carries an explicit security, "risk", "published in error",
+	// or malicious-version notice. Versions without that registry
+	// signal are intentionally omitted even when third-party
+	// trackers list the package.
+	//
+	// The TanStack / Mistral / UiPath wave from the same campaign
+	// is already covered by the embedded OSV snapshot
+	// (MAL-2026-3432 and adjacent MAL-2026-* records) and is not
+	// duplicated here.
+	//
+	// Sources:
+	//   - https://socket.dev/blog/antv-packages-compromised
+	//   - npm registry metadata (registry.npmjs.org)
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/g2",
+		Versions:  []string{"5.5.8", "5.6.8"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; affected @antv/g2 versions were flagged by the maintainers via npm's deprecated field (reason: \"risk\"). Aligned with the @antv wave Socket reported in May 2026.",
+		IOCs: []IOC{
+			{Type: "runtime", Value: "bun"},
+			{Type: "path", Value: "setup.mjs"},
+			{Type: "endpoint", Value: "filev2.getsession.org"},
+		},
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/g6",
+		Versions:  []string{"5.2.1", "5.3.1"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags these versions as published with a compromised key.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/x6",
+		Versions:  []string{"3.2.7", "3.3.7"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; versions flagged via npm's deprecated field (reason: \"published in error\") and removed from latest dist-tag.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/l7",
+		Versions:  []string{"2.26.10", "2.27.10"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message labels these versions as malicious.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/f2",
+		Versions:  []string{"5.16.0"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags this version (reason: \"risk\").",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/data-set",
+		Versions:  []string{"0.12.8", "0.13.8"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags these versions as published in error.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "echarts-for-react",
+		Versions:  []string{"3.0.7", "3.1.7", "3.2.7"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise affecting echarts-for-react alongside the @antv wave; npm deprecated message flags these versions as published in error.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "timeago.js",
+		Versions:  []string{"4.1.2"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags this version as published in error.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "size-sensor",
+		Versions:  []string{"1.0.4", "1.1.4", "1.2.4"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags these versions as published in error.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "canvas-nest.js",
+		Versions:  []string{"2.2.4"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags this version as published in error.",
+	},
+
 }
 
 // IsCompromised checks if a package name+version is in the PyPI

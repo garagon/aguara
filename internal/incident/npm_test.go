@@ -124,6 +124,69 @@ func TestCheckNPM_NestedNodeModules(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_MiniShaiHulud_AntvWave(t *testing.T) {
+	// Mini Shai-Hulud / @antv wave: compromised versions must flag
+	// CRITICAL on an installed tree. Picks one scoped (@antv/g2)
+	// and one unscoped (echarts-for-react) package to exercise both
+	// scoped-path and unscoped-path lookup branches.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "@antv/g2", "5.6.8")
+	writeNPMPackage(t, nm, "echarts-for-react", "3.2.7")
+	writeNPMPackage(t, nm, "react", "18.3.1") // unrelated; must NOT flag
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if got := len(result.Findings); got != 2 {
+		t.Fatalf("expected 2 findings (compromised @antv/g2 5.6.8 + echarts-for-react 3.2.7), got %d: %+v", got, result.Findings)
+	}
+	for _, f := range result.Findings {
+		if f.Severity != incident.SevCritical {
+			t.Errorf("expected CRITICAL severity, got %q on %q", f.Severity, f.Title)
+		}
+	}
+	// Title should name the specific package+version+advisory so a
+	// dashboard reader can correlate without digging into Detail.
+	wantTitles := []string{
+		"@antv/g2 5.6.8 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv)",
+		"echarts-for-react 3.2.7 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv)",
+	}
+	for _, want := range wantTitles {
+		var found bool
+		for _, f := range result.Findings {
+			if f.Title == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected finding title %q not present; got %+v", want, result.Findings)
+		}
+	}
+}
+
+func TestCheckNPM_MiniShaiHulud_NeighborVersionDoesNotFalsePositive(t *testing.T) {
+	// Versions adjacent to a compromised pin must NOT flag. Guards
+	// against accidental range expansion when adding manual intel.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "@antv/g2", "5.4.8")           // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g6", "5.1.1")           // current latest, clean
+	writeNPMPackage(t, nm, "size-sensor", "1.0.3")        // current latest, clean
+	writeNPMPackage(t, nm, "@antv/data-set", "0.11.8")    // current latest, clean
+	writeNPMPackage(t, nm, "echarts-for-react", "3.0.6")  // current latest, clean
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Errorf("clean / neighbor versions must not flag, got: %+v", result.Findings)
+	}
+}
+
 func TestCheckNPM_CleanTree(t *testing.T) {
 	dir := t.TempDir()
 	nm := filepath.Join(dir, "node_modules")

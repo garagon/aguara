@@ -185,7 +185,9 @@ func KnownCompromisedSnapshot() intel.Snapshot {
 // knownCompromisedGeneratedAt is the stamp used for the manual
 // snapshot. Updated by hand when the manual list grows so consumers
 // can detect a stale embedded snapshot. Reproducible across builds.
-var knownCompromisedGeneratedAt = time.Date(2026, time.May, 15, 0, 0, 0, 0, time.UTC)
+// Must be >= the freshest Date string in KnownCompromised; a
+// regression test in intel_adapter_test.go enforces that ordering.
+var knownCompromisedGeneratedAt = time.Date(2026, time.May, 19, 0, 0, 0, 0, time.UTC)
 
 // normalizeEcosystemForIntel maps the legacy ecosystem strings used
 // by CompromisedPackage entries to the canonical intel ecosystem

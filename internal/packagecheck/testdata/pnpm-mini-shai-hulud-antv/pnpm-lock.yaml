@@ -1,0 +1,33 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+  .:
+    dependencies:
+      '@antv/g2':
+        specifier: 5.6.8
+        version: 5.6.8
+      echarts-for-react:
+        specifier: 3.2.7
+        version: 3.2.7
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+
+packages:
+  '@antv/g2@5.6.8':
+    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}
+
+  echarts-for-react@3.2.7:
+    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}
+
+  lodash@4.17.21:
+    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}
+
+snapshots:
+  '@antv/g2@5.6.8': {}
+  echarts-for-react@3.2.7: {}
+  lodash@4.17.21: {}
