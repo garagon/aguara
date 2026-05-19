@@ -7,8 +7,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/intel"
 )
 
 func writeNPMPackage(t *testing.T, root, importPath, version string) {
@@ -196,6 +198,78 @@ func TestCheckNPM_MiniShaiHulud_AntvWaveExpansion(t *testing.T) {
 		if !strings.Contains(f.Title, "SOCKET-2026-05-19-mini-shai-hulud-antv") {
 			t.Errorf("expected @antv advisory ID in title, got %q", f.Title)
 		}
+	}
+}
+
+func TestCheckNPM_CollapsesManualAndOSVDuplicate(t *testing.T) {
+	// When the matcher returns multiple advisories for the same
+	// (ecosystem, name, version, path) tuple - one from manual
+	// intel, one from a refreshed OSV snapshot - the check layer
+	// must emit exactly ONE finding, not one per advisory. The
+	// matcher itself keeps returning every record so correlation
+	// consumers see the full set; this is a check-output-layer
+	// dedup, not a matcher behaviour change.
+	//
+	// Manual must win the title because EmbeddedSnapshots() puts
+	// the manual snapshot first; advisory tokens stay stable
+	// across `aguara check` and `aguara check --fresh`.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "@antv/g2", "5.6.8")
+
+	manualSnap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		Sources:       []intel.SourceMeta{{Kind: intel.SourceManual}},
+		Records: []intel.Record{{
+			ID:        "SOCKET-2026-05-19-mini-shai-hulud-antv",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "@antv/g2",
+			Kind:      intel.KindMalicious,
+			Summary:   "manual-side advisory",
+			Versions:  []string{"5.6.8"},
+		}},
+	}
+	osvSnap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC),
+		Sources:       []intel.SourceMeta{{Kind: intel.SourceOSV}},
+		Records: []intel.Record{{
+			ID:        "MAL-2026-3973",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "@antv/g2",
+			Kind:      intel.KindMalicious,
+			Summary:   "osv-side advisory",
+			Versions:  []string{"5.6.8"},
+		}},
+	}
+
+	result, err := incident.CheckNPM(incident.CheckOptions{
+		Path: nm,
+		Intel: &incident.IntelOverride{
+			Snapshots:     []intel.Snapshot{manualSnap, osvSnap},
+			Mode:          "online",
+			SnapshotLabel: "remote-fresh",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CheckNPM error: %v", err)
+	}
+	if got := len(result.Findings); got != 1 {
+		t.Fatalf("expected exactly 1 finding (manual+OSV collapse to one exposure), got %d: %+v", got, result.Findings)
+	}
+	got := result.Findings[0]
+	if !strings.Contains(got.Title, "SOCKET-2026-05-19-mini-shai-hulud-antv") {
+		t.Errorf("manual advisory must win the title; got %q", got.Title)
+	}
+	if strings.Contains(got.Title, "MAL-2026-3973") {
+		t.Errorf("OSV advisory must not appear in title when manual is present; got %q", got.Title)
+	}
+	if got.Severity != incident.SevCritical {
+		t.Errorf("expected CRITICAL, got %q", got.Severity)
+	}
+	if len(result.Ecosystems) != 1 || result.Ecosystems[0].FindingsCount != 1 {
+		t.Errorf("ecosystems[0].findings_count must be 1, got %+v", result.Ecosystems)
 	}
 }
 

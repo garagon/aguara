@@ -82,16 +82,31 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 			Version:   pkg.Version,
 			Path:      pkg.Dir,
 		})
-		for _, hit := range hits {
-			result.Findings = append(result.Findings, Finding{
-				Severity:    SevCritical,
-				Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
-				Detail:      hit.Record.Summary,
-				Path:        pkg.Dir,
-				Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
-			})
-			npmFindings++
+		if len(hits) == 0 {
+			continue
 		}
+		// One Finding per (ecosystem, name, version, path) tuple even
+		// when multiple intel records cover the same exposure (manual
+		// snapshot + OSV record for the same package/version after
+		// OSV catches up to a hand-curated advisory). The matcher
+		// keeps returning every record so correlators can still see
+		// the full set; this output layer collapses to the single
+		// real-world exposure the user must act on.
+		//
+		// EmbeddedSnapshots() returns the manual snapshot first and
+		// the OSV snapshot second, so hits[0] picks the manual
+		// advisory ID (e.g. SOCKET-*) over the OSV one (MAL-*) when
+		// both are present, keeping the finding's advisory token
+		// stable across `aguara check` and `aguara check --fresh`.
+		hit := hits[0]
+		result.Findings = append(result.Findings, Finding{
+			Severity:    SevCritical,
+			Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+			Detail:      hit.Record.Summary,
+			Path:        pkg.Dir,
+			Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
+		})
+		npmFindings++
 	}
 	// Surface npm as an Ecosystems[] entry on the result so JSON
 	// consumers see consistent multi-ecosystem coverage data. Before
