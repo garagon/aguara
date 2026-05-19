@@ -167,16 +167,50 @@ func TestCheckNPM_MiniShaiHulud_AntvWave(t *testing.T) {
 	}
 }
 
+func TestCheckNPM_MiniShaiHulud_AntvWaveExpansion(t *testing.T) {
+	// Second-round @antv expansion: covers the additional packages
+	// added after the first hotfix landed. Same registry-attestation
+	// rule: only versions with explicit "published in error" or
+	// "compromised key" deprecation messages are included.
+	//
+	// node_modules holds one resolved version per package; the second
+	// version of @antv/infographic (0.3.19) is exercised through the
+	// snapshot parity test (TestKnownCompromisedSnapshotParity walks
+	// every Versions entry in every record).
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "@antv/g-image-exporter", "1.2.42")
+	writeNPMPackage(t, nm, "@antv/infographic", "0.4.19")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if got := len(result.Findings); got != 2 {
+		t.Fatalf("expected 2 findings (g-image-exporter 1.2.42 + infographic 0.4.19), got %d: %+v", got, result.Findings)
+	}
+	for _, f := range result.Findings {
+		if f.Severity != incident.SevCritical {
+			t.Errorf("expected CRITICAL severity, got %q on %q", f.Severity, f.Title)
+		}
+		if !strings.Contains(f.Title, "SOCKET-2026-05-19-mini-shai-hulud-antv") {
+			t.Errorf("expected @antv advisory ID in title, got %q", f.Title)
+		}
+	}
+}
+
 func TestCheckNPM_MiniShaiHulud_NeighborVersionDoesNotFalsePositive(t *testing.T) {
 	// Versions adjacent to a compromised pin must NOT flag. Guards
 	// against accidental range expansion when adding manual intel.
 	dir := t.TempDir()
 	nm := filepath.Join(dir, "node_modules")
-	writeNPMPackage(t, nm, "@antv/g2", "5.4.8")           // current latest, clean
-	writeNPMPackage(t, nm, "@antv/g6", "5.1.1")           // current latest, clean
-	writeNPMPackage(t, nm, "size-sensor", "1.0.3")        // current latest, clean
-	writeNPMPackage(t, nm, "@antv/data-set", "0.11.8")    // current latest, clean
-	writeNPMPackage(t, nm, "echarts-for-react", "3.0.6")  // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g2", "5.4.8")                   // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g6", "5.1.1")                   // current latest, clean
+	writeNPMPackage(t, nm, "size-sensor", "1.0.3")                // current latest, clean
+	writeNPMPackage(t, nm, "@antv/data-set", "0.11.8")            // current latest, clean
+	writeNPMPackage(t, nm, "echarts-for-react", "3.0.6")          // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g-image-exporter", "1.0.42")    // current latest, clean
+	writeNPMPackage(t, nm, "@antv/infographic", "0.2.19")         // current latest, clean
 
 	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
 	if err != nil {

@@ -156,6 +156,8 @@ var KnownCompromised = []CompromisedPackage{
 			{Type: "runtime", Value: "bun"},
 			{Type: "path", Value: "setup.mjs"},
 			{Type: "endpoint", Value: "filev2.getsession.org"},
+			{Type: "endpoint", Value: "t.m-kosche.com"},
+			{Type: "path", Value: "/api/public/otel/v1/traces"},
 		},
 	},
 	{
@@ -230,7 +232,22 @@ var KnownCompromised = []CompromisedPackage{
 		Date:      "2026-05-19",
 		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags this version as published in error.",
 	},
-
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/g-image-exporter",
+		Versions:  []string{"1.2.42"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags this version as published in error. The version is also anomalous relative to the package's latest stable lineage (1.0.x), consistent with the @antv wave pattern of attacker-bumped majors/minors above the legitimate latest.",
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@antv/infographic",
+		Versions:  []string{"0.3.19", "0.4.19"},
+		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
+		Date:      "2026-05-19",
+		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags these versions as published with a compromised key.",
+	},
 }
 
 // IsCompromised checks if a package name+version is in the PyPI
