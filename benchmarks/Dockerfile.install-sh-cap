@@ -6,7 +6,7 @@
 # pulls the archive + checksums from github.com; the harness wraps
 # this with `--cap-drop ALL --security-opt no-new-privileges` so the
 # test reproduces the original failure mode without granting CAP_CHOWN.
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache curl tar coreutils ca-certificates
 
