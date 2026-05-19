@@ -58,13 +58,34 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		}
 		findings := 0
 		for _, ref := range refs {
-			// Some ecosystems (Composer especially) routinely
-			// ship version strings with a leading `v` while the
-			// OSV-side record carries the bare form. We query
-			// every alias the per-ecosystem helper returns and
-			// dedupe by advisory ID so a single (ref, advisory)
-			// match never emits two Findings.
-			seen := make(map[string]struct{})
+			// One Hit per (ecosystem, name, version, path) tuple,
+			// even when multiple advisories cover the same
+			// exposure. Two reasons:
+			//
+			//   1. Some ecosystems (Composer especially) ship
+			//      version strings with a leading `v` while OSV
+			//      records carry the bare form, so we have to
+			//      query every alias the per-ecosystem helper
+			//      returns. The first alias that hits wins; we
+			//      do not walk the rest.
+			//   2. Once manual intel and OSV both cover a tuple
+			//      (e.g. a hand-curated SOCKET-* advisory plus
+			//      the upstream MAL-* record after OSV catches
+			//      up), the matcher returns both records. The
+			//      user is exposed once, not twice; collapsing
+			//      to a single Hit keeps the user-facing count
+			//      stable across `aguara check` and `aguara
+			//      check --fresh`.
+			//
+			// The matcher itself keeps returning every record so
+			// correlation layers (intel.Matcher consumers,
+			// future analyzers) can still see the full set; we
+			// dedupe here at the output boundary.
+			//
+			// EmbeddedSnapshots() returns manual first and OSV
+			// second, so matches[0] picks the manual advisory
+			// ID when both are present.
+			var selected *intel.Match
 			for _, v := range versionAliases(ref.Ecosystem, ref.Version) {
 				matches := r.Matcher.MatchPackage(intel.MatchInput{
 					Ecosystem: ref.Ecosystem,
@@ -72,14 +93,16 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 					Version:   v,
 					Path:      ref.Path,
 				})
-				for _, m := range matches {
-					if _, dup := seen[m.Record.ID]; dup {
-						continue
-					}
-					seen[m.Record.ID] = struct{}{}
-					out.Hits = append(out.Hits, Hit{Ref: ref, Record: m.Record})
-					findings++
+				if len(matches) == 0 {
+					continue
 				}
+				m := matches[0]
+				selected = &m
+				break
+			}
+			if selected != nil {
+				out.Hits = append(out.Hits, Hit{Ref: ref, Record: selected.Record})
+				findings++
 			}
 		}
 		out.Ecosystems = append(out.Ecosystems, EcosystemResult{

@@ -167,16 +167,26 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 			Version:   pkg.Version,
 			Path:      pkg.Dir,
 		})
-		for _, hit := range hits {
-			result.Findings = append(result.Findings, Finding{
-				Severity:    SevCritical,
-				Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
-				Detail:      hit.Record.Summary,
-				Path:        pkg.Dir,
-				Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
-			})
-			pypiFindings++
+		if len(hits) == 0 {
+			continue
 		}
+		// One Finding per (ecosystem, name, version, path) tuple even
+		// when multiple intel records cover the same exposure. Same
+		// rationale as the npm path: the matcher keeps returning
+		// every record for correlation, but the user is exposed once
+		// per installed package and should see one row. Manual
+		// snapshot is first in EmbeddedSnapshots(), so hits[0] picks
+		// the curated advisory when both manual and OSV cover the
+		// tuple.
+		hit := hits[0]
+		result.Findings = append(result.Findings, Finding{
+			Severity:    SevCritical,
+			Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+			Detail:      hit.Record.Summary,
+			Path:        pkg.Dir,
+			Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
+		})
+		pypiFindings++
 	}
 	// Surface PyPI as an Ecosystems[] entry on the result so JSON
 	// consumers see consistent multi-ecosystem coverage data. Before
@@ -499,10 +509,12 @@ func checkCaches(opts CheckOptions) []Finding {
 						Version:   pkg.Version,
 						Path:      path,
 					})
-					for _, hit := range hits {
-						if seen[path] {
-							break
-						}
+					// One Finding per cache path even when multiple
+					// intel records cover the same (name, version).
+					// hits[0] picks the manual advisory ID over the
+					// OSV one when both are present.
+					if len(hits) > 0 && !seen[path] {
+						hit := hits[0]
 						seen[path] = true
 						findings = append(findings, Finding{
 							Severity:    SevCritical,

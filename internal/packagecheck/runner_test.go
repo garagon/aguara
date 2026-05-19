@@ -248,6 +248,67 @@ func TestRunner_ComposerAliasDoesNotDoubleCountFinding(t *testing.T) {
 	}
 }
 
+func TestRunnerCollapsesMultipleIntelRecordsPerPackageRef(t *testing.T) {
+	// When two snapshots cover the same (ecosystem, name, version)
+	// tuple - the typical manual + OSV overlap that lands once OSV
+	// catches up to a hand-curated advisory - the runner must emit
+	// ONE Hit, not one per advisory. The matcher keeps returning
+	// every record for correlation; this is a runner-output-layer
+	// collapse that keeps user-facing counts stable across
+	// `aguara check` and `aguara check --fresh`.
+	//
+	// The first snapshot's record wins (manual before OSV), so the
+	// surfaced advisory ID stays the curated one.
+	manualSnap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Sources:       []intel.SourceMeta{{Kind: intel.SourceManual}},
+		Records: []intel.Record{{
+			ID:        "SOCKET-2026-05-19-mini-shai-hulud-antv",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "@antv/g2",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"5.6.8"},
+		}},
+	}
+	osvSnap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Sources:       []intel.SourceMeta{{Kind: intel.SourceOSV}},
+		Records: []intel.Record{{
+			ID:        "MAL-2026-3973",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "@antv/g2",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"5.6.8"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(manualSnap, osvSnap)}
+	targets, err := Discover(filepath.Join("testdata", "pnpm-mini-shai-hulud-antv"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Ecosystems) != 1 {
+		t.Fatalf("ecosystems = %d, want 1", len(res.Ecosystems))
+	}
+	// The fixture lockfile pins @antv/g2 5.6.8 + echarts-for-react 3.2.7
+	// + lodash 4.17.21. Only @antv/g2 has both snapshots covering it.
+	// echarts-for-react has no synthetic match here, so the total Hit
+	// count is exactly 1 even though MatchPackage returns two records
+	// per the matcher's correlation contract.
+	if got := len(res.Hits); got != 1 {
+		t.Fatalf("hits = %d, want 1 (manual+OSV duplicate must collapse to one); got=%+v", got, res.Hits)
+	}
+	if got := res.Ecosystems[0].FindingsCount; got != 1 {
+		t.Errorf("ecosystems[0].findings_count = %d, want 1", got)
+	}
+	if got := res.Hits[0].Record.ID; got != "SOCKET-2026-05-19-mini-shai-hulud-antv" {
+		t.Errorf("manual record must win; got record id %q", got)
+	}
+}
+
 func TestRunner_MavenSyntheticHit(t *testing.T) {
 	snap := intel.Snapshot{
 		SchemaVersion: intel.CurrentSchemaVersion,
