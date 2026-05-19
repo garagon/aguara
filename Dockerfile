@@ -1,6 +1,6 @@
 # Base images pinned by multi-arch index digest for reproducible builds.
 # Bump digests together with the tag when upgrading (e.g. alpine 3.22).
-FROM golang:1.25-alpine@sha256:5caaf1cca9dc351e13deafbc3879fd4754801acba8653fa9540cea125d01a71f AS builder
+FROM golang:1.26-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
