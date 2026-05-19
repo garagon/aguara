@@ -25,7 +25,7 @@ jobs:
 
       # setup-qemu enables cross-platform image builds via emulation. Required
       # to produce linux/arm64 manifests on the linux/amd64 GHA runner.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       # setup-buildx switches the build to the docker-container driver,
       # which is required for SBOM and SLSA provenance attestations.
