@@ -5,6 +5,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pattern prefilter no longer silently filters rules whose literal
+  evidence is hidden inside weak alternation branches or optional
+  characters.** The keyword extractor used by the Aho-Corasick
+  prefilter now treats an alternation as filterable only when every
+  branch produces at least one literal of `minKeywordLen` or more.
+  This applies to alternation groups (`(api|secret)`), top-level
+  alternations in a regex pattern (`api|secret` with no enclosing
+  parens, the form a custom rule might write directly), and nested
+  alternations. Alternations with even one weak branch contribute no
+  keywords; outer literals carry the filter when present. Optional
+  quantifiers (`?`, `*`, `{0,n}`) on a literal character now trim
+  that character from the indexed keyword, so a regex like
+  `https?://` indexes "http", not "https". Optional groups
+  (`(...)?` and friends) likewise contribute no keywords. Under
+  `match_mode: any`, a rule with any unfilterable pattern now falls
+  back to "always run" instead of being filtered on the remaining
+  patterns' literals. Concrete impact on built-in rules: `MCPCFG_003`
+  ("Hardcoded secrets in MCP env block"), `SSRF_002`, `SSRF_006`,
+  and `SSRF_009` were silently filtered out by `aguara scan` even
+  though their YAML rule self-tests passed. They now reach the regex
+  stage on every applicable file. A new
+  `TestRuleSelfTestsRunThroughMatcher` in `internal/engine/pattern/`
+  runs every built-in rule's `true_positive` through the real
+  `Matcher` (prefilter included) so future drift in keyword
+  extraction (or in custom rule authoring with top-level
+  alternations) surfaces in CI.
+
 ## [0.18.2] - 2026-05-19
 
 Patch release fixing duplicate findings when `aguara check --fresh`

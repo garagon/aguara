@@ -13,6 +13,81 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestRuleSelfTestsRunThroughMatcher is a regression test for the pattern
+// prefilter's keyword extraction. The rules-package self-test
+// (internal/rules.TestRuleSelfTest) only invokes the matcher's predicate
+// (matchesRule) directly, which bypasses the keyword prefilter. That gap
+// previously let MCPCFG_003 pass its own true_positive test even though
+// `aguara scan` silently filtered every match out at the prefilter stage
+// because every literal in pattern 2's alternation branches that the rule
+// relied on was either below minKeywordLen or hidden inside the
+// `API[_-]?KEY` branch with no extractable literal.
+//
+// This test loads every built-in rule, builds a real Matcher (prefilter
+// included), and runs each rule's true_positive examples through
+// Analyze(). Failing here means a future rule introduced a regex whose
+// literal evidence is below minKeywordLen along some alternation path AND
+// the prefilter is incorrectly skipping it.
+func TestRuleSelfTestsRunThroughMatcher(t *testing.T) {
+	rawRules, err := rules.LoadFromFS(builtin.FS())
+	require.NoError(t, err)
+
+	compiled, errs := rules.CompileAll(rawRules)
+	require.Empty(t, errs)
+
+	matcher := pattern.NewMatcher(compiled)
+	idx := make(map[string]*rules.CompiledRule, len(compiled))
+	for _, r := range compiled {
+		idx[r.ID] = r
+	}
+
+	for _, raw := range rawRules {
+		raw := raw
+		rule, ok := idx[raw.ID]
+		if !ok {
+			continue
+		}
+		t.Run(raw.ID, func(t *testing.T) {
+			for _, tp := range raw.Examples.TruePositive {
+				relPath := selfTestFilename(rule)
+				target := &scanner.Target{
+					RelPath: relPath,
+					Content: []byte(tp),
+				}
+				findings, err := matcher.Analyze(context.Background(), target)
+				require.NoError(t, err)
+				saw := false
+				for _, f := range findings {
+					if f.RuleID == raw.ID {
+						saw = true
+						break
+					}
+				}
+				require.Truef(t, saw,
+					"rule %s: true_positive %q reached the rule's matchesRule predicate but the Matcher (with prefilter) did not produce a finding. This usually means extractKeywords is over-filtering — some alternation branch produced no >=minKeywordLen literal.",
+					raw.ID, tp)
+			}
+		})
+	}
+}
+
+// selfTestFilename returns a relative path whose extension matches the
+// rule's first target, so rulesForFile returns the rule when the matcher
+// dispatches by file extension. If the rule has no targets (matches every
+// file) any extension works.
+func selfTestFilename(rule *rules.CompiledRule) string {
+	if len(rule.Targets) == 0 {
+		return "selftest.txt"
+	}
+	t := rule.Targets[0]
+	// "*.json" -> "selftest.json", "*.md" -> "selftest.md".
+	if len(t) > 2 && t[:2] == "*." {
+		return "selftest" + t[1:]
+	}
+	// Literal filename (Makefile, package.json, ...).
+	return t
+}
+
 func compileTestRule(t *testing.T, raw rules.RawRule) *rules.CompiledRule {
 	t.Helper()
 	cr, err := rules.Compile(raw)
