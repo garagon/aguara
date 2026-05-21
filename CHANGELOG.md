@@ -5,6 +5,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-05-21
+
+Patch release closing four built-in rule false negatives caused by the
+Aho-Corasick keyword prefilter trusting weak literal evidence.
+`MCPCFG_003` ("Hardcoded secrets in MCP env block") on payloads naming
+the env var `API_KEY` and `SSRF_002` / `SSRF_006` / `SSRF_009` on
+content with `http://` rather than `https://` were silently filtered
+out by `aguara scan` even though their YAML rule self-tests passed.
+The same shape also affected user-authored custom rules with top-level
+alternations like `api|secret`. No detection rule was changed; the fix
+is entirely in the prefilter's keyword extraction.
+
 ### Fixed
 
 - **Pattern prefilter no longer silently filters rules whose literal
