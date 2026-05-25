@@ -36,6 +36,31 @@ type IOC struct {
 	Value string `json:"value"`
 }
 
+// trapdoorAdvisory is the single advisory ID shared by every TrapDoor
+// campaign entry below. One ID keeps the campaign readable in output
+// and gives the matcher's same-ID version-merge a single anchor.
+const trapdoorAdvisory = "SOCKET-2026-05-24-trapdoor"
+
+// trapdoorNPMIOCs / trapdoorPyPIIOCs are the campaign indicators from
+// the Socket report, attached as metadata to each TrapDoor entry. They
+// are shared (the whole campaign uses one payload), so they live in a
+// single slice each rather than being copy-pasted per entry. IOCs are
+// metadata only: matching is by (ecosystem, name, version), so these
+// never widen detection or risk a false positive.
+var (
+	trapdoorNPMIOCs = []IOC{
+		{Type: "runtime", Value: "P-2024-001"},
+		{Type: "path", Value: "trap-core.js"},
+		{Type: "path", Value: ".cursorrules"},
+		{Type: "path", Value: "CLAUDE.md"},
+	}
+	trapdoorPyPIIOCs = []IOC{
+		{Type: "runtime", Value: "P-2024-001"},
+		{Type: "endpoint", Value: "ddjidd564.github.io"},
+		{Type: "path", Value: "defi-security-best-practices"},
+	}
+)
+
 // KnownCompromised is the embedded list of known compromised packages.
 // Updated with each Aguara release.
 //
@@ -247,6 +272,138 @@ var KnownCompromised = []CompromisedPackage{
 		Advisory:  "SOCKET-2026-05-19-mini-shai-hulud-antv",
 		Date:      "2026-05-19",
 		Summary:   "Mini Shai-Hulud-linked npm compromise; npm deprecated message flags these versions as published with a compromised key.",
+	},
+
+	// --- TrapDoor crypto-stealer campaign 2026-05-24 (npm + PyPI) ---
+	//
+	// Cross-ecosystem campaign documented by Socket (2026-05-24). The
+	// npm packages run a postinstall hook that executes a shared
+	// trap-core.js payload (developer-secret harvesting, AWS/GitHub
+	// credential validation, persistence via .cursorrules / CLAUDE.md /
+	// git + shell hooks). The PyPI packages execute on import,
+	// downloading attacker-hosted JavaScript from ddjidd564.github.io
+	// and running it through `node -e`. Campaign marker: P-2024-001.
+	//
+	// ONLY tuples with an exact OSV-confirmed malicious version are
+	// listed here. The verification harness found:
+	//   - 12 packages with exact OSV versions (5 npm @ 1.0.12,
+	//     7 PyPI @ 0.1.0/0.1.1) -- the entries below.
+	//   - 16 npm packages OSV carries as range-only (introduced:0)
+	//     after npm security-held them; no exact version exists to
+	//     pin, so they are intentionally NOT added here (range matcher
+	//     work, tracked separately).
+	//   - 6 crates.io names with no OSV record and a 404 on the
+	//     registry; crates.io is out of manual intel until exact
+	//     versions are confirmed or a behavioral Rust rule lands.
+	//
+	// Source: https://socket.dev/blog/trapdoor-crypto-stealer-npm-pypi-crates
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "build-scripts-utils",
+		Versions:  []string{"1.0.12"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; postinstall trap-core.js credential-stealer with persistence. Confirmed malicious at 1.0.12 (OSV MAL-2026-4276).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "dev-env-bootstrapper",
+		Versions:  []string{"1.0.12"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; postinstall trap-core.js credential-stealer with persistence. Confirmed malicious at 1.0.12 (OSV MAL-2026-4277).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "llm-context-compressor",
+		Versions:  []string{"1.0.12"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; postinstall trap-core.js credential-stealer with persistence. Confirmed malicious at 1.0.12 (OSV MAL-2026-4278).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "prompt-engineering-toolkit",
+		Versions:  []string{"1.0.12"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; postinstall trap-core.js credential-stealer with persistence. Confirmed malicious at 1.0.12 (OSV MAL-2026-4282).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "token-usage-tracker",
+		Versions:  []string{"1.0.12"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; postinstall trap-core.js credential-stealer with persistence. Confirmed malicious at 1.0.12 (OSV MAL-2026-4283).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "cryptowallet-safety",
+		Versions:  []string{"0.1.0"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 (OSV MAL-2026-4259).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "data-pipeline-check",
+		Versions:  []string{"0.1.0", "0.1.1"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 and 0.1.1 (OSV MAL-2026-4271).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "defi-risk-scanner",
+		Versions:  []string{"0.1.0"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 (OSV MAL-2026-4260).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "env-loader-cli",
+		Versions:  []string{"0.1.0", "0.1.1"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 and 0.1.1 (OSV MAL-2026-4272).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "eth-security-auditor",
+		Versions:  []string{"0.1.0"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 (OSV MAL-2026-4261).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "git-config-sync",
+		Versions:  []string{"0.1.0", "0.1.1"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 and 0.1.1 (OSV MAL-2026-4273).",
+		IOCs:      trapdoorPyPIIOCs,
+	},
+	{
+		Ecosystem: EcosystemPyPI,
+		Name:      "solidity-build-guard",
+		Versions:  []string{"0.1.0"},
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 (OSV MAL-2026-4262).",
+		IOCs:      trapdoorPyPIIOCs,
 	},
 }
 

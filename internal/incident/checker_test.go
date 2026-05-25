@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -271,4 +272,38 @@ func TestCheckMultipleCompromised(t *testing.T) {
 	result, err := Check(CheckOptions{Path: dir})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(result.Findings), 2, "should find both package and .pth")
+}
+
+func TestCheckDetectsTrapDoorPyPI(t *testing.T) {
+	// Two TrapDoor PyPI packages in a site-packages tree: a
+	// single-version entry (eth-security-auditor @ 0.1.0) and a
+	// multi-version entry exercised at its second version
+	// (data-pipeline-check @ 0.1.1). Both must flag CRITICAL with the
+	// campaign advisory. dist-info dirs use the wheel-style underscore
+	// name; the METADATA Name carries the canonical hyphenated form.
+	dir := t.TempDir()
+	for _, p := range []struct{ distName, metaName, version string }{
+		{"eth_security_auditor", "eth-security-auditor", "0.1.0"},
+		{"data_pipeline_check", "data-pipeline-check", "0.1.1"},
+	} {
+		distInfo := filepath.Join(dir, p.distName+"-"+p.version+".dist-info")
+		require.NoError(t, os.Mkdir(distInfo, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(distInfo, "METADATA"), []byte(
+			"Metadata-Version: 2.1\nName: "+p.metaName+"\nVersion: "+p.version+"\n",
+		), 0o644))
+	}
+
+	result, err := Check(CheckOptions{Path: dir})
+	require.NoError(t, err)
+
+	var trapdoor []Finding
+	for _, f := range result.Findings {
+		if strings.Contains(f.Title, "SOCKET-2026-05-24-trapdoor") {
+			trapdoor = append(trapdoor, f)
+		}
+	}
+	require.Len(t, trapdoor, 2, "both TrapDoor PyPI packages should flag; findings=%+v", result.Findings)
+	for _, f := range trapdoor {
+		assert.Equal(t, SevCritical, f.Severity)
+	}
 }

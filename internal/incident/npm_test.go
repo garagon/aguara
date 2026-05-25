@@ -665,3 +665,83 @@ func TestCheckNPM_IgnoresFixtureManifests(t *testing.T) {
 		t.Errorf("fixture manifests must not produce findings, got: %+v", result.Findings)
 	}
 }
+
+func TestCheckNPM_TrapDoor(t *testing.T) {
+	// TrapDoor campaign npm package at its confirmed malicious version
+	// in an installed tree must flag CRITICAL with the campaign advisory.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "dev-env-bootstrapper", "1.0.12")
+	writeNPMPackage(t, nm, "left-pad", "1.3.0") // unrelated; must NOT flag
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("expected 1 TrapDoor finding, got %d: %+v", len(result.Findings), result.Findings)
+	}
+	f := result.Findings[0]
+	if f.Severity != incident.SevCritical {
+		t.Errorf("severity = %q, want CRITICAL", f.Severity)
+	}
+	if !strings.Contains(f.Title, "dev-env-bootstrapper") || !strings.Contains(f.Title, "SOCKET-2026-05-24-trapdoor") {
+		t.Errorf("title = %q, want it to name the package and the campaign advisory", f.Title)
+	}
+}
+
+func TestCheckNPM_TrapDoor_RangeOnlyPackagesNotListed(t *testing.T) {
+	// async-pipeline-builder is part of the TrapDoor campaign, but OSV
+	// carries it range-only (introduced:0) after npm security-held it,
+	// so no exact version exists to pin and it was deliberately NOT
+	// added to manual intel. It must not flag, even at the campaign's
+	// version shape. This locks the "12 ready_exact only" scope.
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "async-pipeline-builder", "1.0.12")
+
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("range-only campaign package must not be in manual intel, got: %+v", result.Findings)
+	}
+}
+
+func TestCheckNPM_TrapDoor_DedupeManualAndOSV(t *testing.T) {
+	// Simulate `aguara check --fresh`: an OSV snapshot also carries the
+	// same tuple under its own ID (MAL-*). The matcher returns both
+	// records for correlation, but the user must see ONE finding, and
+	// it must keep the manual SOCKET advisory ID because the manual
+	// snapshot loads first (mirrors EmbeddedSnapshots() ordering).
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	writeNPMPackage(t, nm, "dev-env-bootstrapper", "1.0.12")
+
+	osv := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID:        "MAL-2026-4277",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "dev-env-bootstrapper",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"1.0.12"},
+		}},
+	}
+	override := &incident.IntelOverride{
+		Snapshots:     []intel.Snapshot{incident.KnownCompromisedSnapshot(), osv},
+		Mode:          "online",
+		SnapshotLabel: "remote-fresh",
+	}
+	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm, Intel: override})
+	if err != nil {
+		t.Fatalf("CheckNPM returned error: %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("manual + OSV for the same tuple must collapse to 1 finding, got %d: %+v", len(result.Findings), result.Findings)
+	}
+	if !strings.Contains(result.Findings[0].Title, "SOCKET-2026-05-24-trapdoor") {
+		t.Errorf("finding should keep the manual advisory ID, got title %q", result.Findings[0].Title)
+	}
+}

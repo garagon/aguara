@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Local advisories for the TrapDoor crypto-stealer campaign.** `aguara
+  check` now blocks the confirmed malicious package/version tuples from
+  the TrapDoor supply-chain campaign (Socket, 2026-05-24) under advisory
+  `SOCKET-2026-05-24-trapdoor`: 5 npm packages at `1.0.12`
+  (`build-scripts-utils`, `dev-env-bootstrapper`, `llm-context-compressor`,
+  `prompt-engineering-toolkit`, `token-usage-tracker`) and 7 PyPI packages
+  at `0.1.0`/`0.1.1` (`cryptowallet-safety`, `data-pipeline-check`,
+  `defi-risk-scanner`, `env-loader-cli`, `eth-security-auditor`,
+  `git-config-sync`, `solidity-build-guard`). Detection is offline and
+  covers pnpm lockfiles, installed npm trees, and installed Python
+  environments. Only tuples with an exact confirmed malicious version are
+  included; the campaign's range-only npm packages and its crates.io
+  packages (no exact version available yet) are intentionally not listed.
+
 ## [0.18.3] - 2026-05-21
 
 Patch release closing four built-in rule false negatives caused by the
