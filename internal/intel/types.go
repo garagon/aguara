@@ -110,9 +110,12 @@ type Record struct {
 // OSV semantics: Introduced is inclusive, Fixed is exclusive,
 // LastAffected is inclusive of the last bad version.
 //
-// VersionRange is wire-format only in the first implementation:
-// Matcher does not consult ranges. Importers should set Versions
-// instead until range support lands with tests.
+// Matcher.MatchPackage consults ranges after exact Versions, but only
+// for ecosystems whose grammar the semver engine can evaluate (npm in
+// phase 1; see ecosystemSupportsRanges and isSemverRangeType in
+// matcher.go). Ranges for unsupported ecosystems or non-semver Types
+// are ignored, so importers must still set Versions for records that
+// must match in those ecosystems.
 type VersionRange struct {
 	Type         string `json:"type,omitempty"`
 	Introduced   string `json:"introduced,omitempty"`

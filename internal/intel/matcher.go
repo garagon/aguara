@@ -1,6 +1,10 @@
 package intel
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/garagon/aguara/internal/intel/versions"
+)
 
 // MatchInput describes a single installed package to look up in
 // one or more snapshots. Path is optional metadata that the caller
@@ -106,6 +110,7 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 			}
 			if existing, ok := byID[idKey]; ok {
 				existing.Versions = unionVersions(existing.Versions, rec.Versions)
+				existing.Ranges = unionRanges(existing.Ranges, rec.Ranges)
 				continue
 			}
 			// First occurrence: take a defensive copy so a later
@@ -115,6 +120,7 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 			// rebuild.
 			recCopy := rec
 			recCopy.Versions = append([]string(nil), rec.Versions...)
+			recCopy.Ranges = append([]VersionRange(nil), rec.Ranges...)
 			byID[idKey] = &recCopy
 			m.byKey[key] = append(m.byKey[key], &recCopy)
 		}
@@ -176,12 +182,106 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 	if len(candidates) == 0 {
 		return nil
 	}
+	allowRanges := ecosystemSupportsRanges(normalizeEcosystem(in.Ecosystem))
 	var out []Match
 	for _, rec := range candidates {
-		if rec == nil || !versionMatches(*rec, in.Version) {
+		if rec == nil {
+			continue
+		}
+		// Exact version match takes priority and is checked first, so
+		// behavior for records that carry Versions is unchanged. Only
+		// when the exact check misses do we consult ranges, and only
+		// for ecosystems whose grammar the semver engine can evaluate.
+		// A record matches at most once: the continue on exact match
+		// means a record carrying both Versions and Ranges does not
+		// produce two Match entries for one installed version.
+		switch {
+		case versionMatches(*rec, in.Version):
+		case allowRanges && rangeMatches(*rec, in.Version):
+		default:
 			continue
 		}
 		out = append(out, Match{Record: *rec, Path: in.Path})
+	}
+	return out
+}
+
+// ecosystemSupportsRanges reports whether MatchPackage will evaluate
+// Record.Ranges for this normalized ecosystem. Range matching is
+// enabled only for semver ecosystems the versions engine can evaluate.
+// Phase 1 is npm only: every TrapDoor range-only record is npm, and
+// npm version ordering is semver. crates.io is also semver and can be
+// added here once it carries malicious range records; until then it
+// stays out so range matching does not widen the matched surface with
+// no current benefit. PyPI / Maven / Go are intentionally excluded
+// because their grammars are not semver.
+func ecosystemSupportsRanges(eco string) bool {
+	return eco == EcosystemNPM
+}
+
+// rangeMatches reports whether version falls in any of the record's
+// semver-evaluable ranges. Ranges whose Type the semver engine cannot
+// order are skipped; a record with no evaluable range does not match.
+func rangeMatches(rec Record, version string) bool {
+	if len(rec.Ranges) == 0 {
+		return false
+	}
+	semverRanges := make([]versions.Range, 0, len(rec.Ranges))
+	for _, r := range rec.Ranges {
+		if !isSemverRangeType(r.Type) {
+			continue
+		}
+		semverRanges = append(semverRanges, versions.Range{
+			Introduced:   r.Introduced,
+			Fixed:        r.Fixed,
+			LastAffected: r.LastAffected,
+		})
+	}
+	if len(semverRanges) == 0 {
+		return false
+	}
+	return versions.Affected(version, semverRanges)
+}
+
+// isSemverRangeType reports whether an OSV range Type can be evaluated
+// by the semver engine. OSV uses "SEMVER" for semver ranges and
+// "ECOSYSTEM" for ecosystem-defined ordering; for the npm-only phase
+// both are semver-ordered. Any other type (e.g. "GIT", "PEP440") is
+// not evaluable here and contributes no match.
+func isSemverRangeType(t string) bool {
+	switch strings.ToUpper(strings.TrimSpace(t)) {
+	case "SEMVER", "ECOSYSTEM":
+		return true
+	default:
+		return false
+	}
+}
+
+// unionRanges returns a + b with duplicate ranges removed, preserving
+// order (a first, then any new entries from b). VersionRange is a
+// comparable struct so equality dedup is exact. Used when the same
+// advisory ID appears across snapshots (manual + OSV refresh) so the
+// merged record carries every affected range, not just the first
+// snapshot's.
+func unionRanges(a, b []VersionRange) []VersionRange {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[VersionRange]struct{}, len(a)+len(b))
+	out := make([]VersionRange, 0, len(a)+len(b))
+	for _, r := range a {
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	for _, r := range b {
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
 	}
 	return out
 }
