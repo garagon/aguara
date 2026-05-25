@@ -3,6 +3,8 @@
 // supported language ecosystems (Python and npm).
 package incident
 
+import "github.com/garagon/aguara/internal/intel"
+
 // Ecosystem identifiers for CompromisedPackage entries and IsCompromised
 // lookups. The default empty value is treated as PyPI for backward
 // compatibility with releases that predate the ecosystem field.
@@ -18,13 +20,22 @@ const (
 // indicators of compromise (file paths, hashes, network endpoints) that
 // extend a detector beyond the package+version tuple.
 type CompromisedPackage struct {
-	Ecosystem string   `json:"ecosystem,omitempty"`
-	Name      string   `json:"name"`
-	Versions  []string `json:"versions"`
-	Advisory  string   `json:"advisory"`
-	Date      string   `json:"date"`
-	Summary   string   `json:"summary"`
-	IOCs      []IOC    `json:"iocs,omitempty"`
+	Ecosystem string `json:"ecosystem,omitempty"`
+	Name      string `json:"name"`
+	// Versions lists the exact affected versions. Either Versions or
+	// Ranges (or both) must be set for an entry to match anything.
+	Versions []string `json:"versions,omitempty"`
+	// Ranges lists affected version ranges for packages where no exact
+	// version list applies -- e.g. a whole-package compromise where
+	// every published version is malicious (introduced:"0"). Ranges
+	// match only for ecosystems whose grammar the runtime matcher can
+	// evaluate (npm in phase 1; see intel.EcosystemSupportsRanges). A
+	// range-only entry for an unsupported ecosystem will not match.
+	Ranges   []intel.VersionRange `json:"ranges,omitempty"`
+	Advisory string               `json:"advisory"`
+	Date     string               `json:"date"`
+	Summary  string               `json:"summary"`
+	IOCs     []IOC                `json:"iocs,omitempty"`
 }
 
 // IOC is a single indicator of compromise associated with a known-bad
@@ -40,6 +51,17 @@ type IOC struct {
 // campaign entry below. One ID keeps the campaign readable in output
 // and gives the matcher's same-ID version-merge a single anchor.
 const trapdoorAdvisory = "SOCKET-2026-05-24-trapdoor"
+
+// trapdoorWholePackageRange is the affected-range shared by the npm
+// TrapDoor packages npm security-held entirely: OSV records them as
+// introduced:"0" with no fixed version, meaning every published
+// version is malicious. The range-capable matcher (npm semver) flags
+// the package at any installed version. Shared so the 16 entries that
+// use it stay consistent. We deliberately do NOT embed the equivalent
+// OSV range corpus, which carries ~197k npm whole-package records and
+// would bloat the binary roughly 7x; the campaign's confirmed packages
+// ride the small hand-curated list instead.
+var trapdoorWholePackageRange = []intel.VersionRange{{Type: "SEMVER", Introduced: "0"}}
 
 // trapdoorNPMIOCs / trapdoorPyPIIOCs are the campaign indicators from
 // the Socket report, attached as metadata to each TrapDoor entry. They
@@ -284,14 +306,17 @@ var KnownCompromised = []CompromisedPackage{
 	// downloading attacker-hosted JavaScript from ddjidd564.github.io
 	// and running it through `node -e`. Campaign marker: P-2024-001.
 	//
-	// ONLY tuples with an exact OSV-confirmed malicious version are
-	// listed here. The verification harness found:
+	// The verification harness split the campaign into:
 	//   - 12 packages with exact OSV versions (5 npm @ 1.0.12,
-	//     7 PyPI @ 0.1.0/0.1.1) -- the entries below.
+	//     7 PyPI @ 0.1.0/0.1.1) -- the exact-version entries below.
 	//   - 16 npm packages OSV carries as range-only (introduced:0)
-	//     after npm security-held them; no exact version exists to
-	//     pin, so they are intentionally NOT added here (range matcher
-	//     work, tracked separately).
+	//     because npm security-held the whole package; every version
+	//     is malicious. These were excluded at v0.18.4 because the
+	//     matcher could not evaluate ranges. The matcher now can (npm
+	//     semver), so they are listed below as range-only entries
+	//     (Ranges: trapdoorWholePackageRange) rather than embedding
+	//     OSV's ~197k-record npm range corpus, which would bloat the
+	//     binary roughly 7x for no extra campaign coverage.
 	//   - 6 crates.io names with no OSV record and a 404 on the
 	//     registry; crates.io is out of manual intel until exact
 	//     versions are confirmed or a behavioral Rust rule lands.
@@ -404,6 +429,156 @@ var KnownCompromised = []CompromisedPackage{
 		Date:      "2026-05-24",
 		Summary:   "TrapDoor campaign PyPI package; import-time remote-JS execution via node -e from ddjidd564.github.io. Confirmed malicious at 0.1.0 (OSV MAL-2026-4262).",
 		IOCs:      trapdoorPyPIIOCs,
+	},
+
+	// TrapDoor npm packages npm security-held in their entirety: OSV
+	// records each as introduced:0 (every version malicious). Carried
+	// as range-only entries so the npm range-capable matcher flags any
+	// installed version. Confirmed by the verification harness (each
+	// cites its OSV MAL- id).
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "async-pipeline-builder",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4275 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "chain-key-validator",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4202 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "crypto-credential-scanner",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4203 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "defi-env-auditor",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4204 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "defi-threat-scanner",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4205 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "deployment-key-auditor",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4206 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "eth-wallet-sentinel",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4207 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "mnemonic-safety-check",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4208 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "model-switch-router",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4279 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "node-setup-helpers",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4280 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "project-init-tools",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4281 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "solidity-deploy-guard",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4218 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "wallet-backup-verifier",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4250 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "wallet-security-checker",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4219 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "web3-secrets-detector",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4220 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "workspace-config-loader",
+		Ranges:    trapdoorWholePackageRange,
+		Advisory:  trapdoorAdvisory,
+		Date:      "2026-05-24",
+		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4284 (introduced:0).",
+		IOCs:      trapdoorNPMIOCs,
 	},
 }
 

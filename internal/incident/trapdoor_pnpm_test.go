@@ -66,13 +66,13 @@ func TestTrapDoor_PnpmLockfileDetectedViaEmbeddedIntel(t *testing.T) {
 	}
 }
 
-// TestTrapDoor_PnpmRangeOnlyPackageNotListed confirms the scope cut
-// holds through the pnpm path too: a campaign package OSV carries
-// range-only (not added to manual intel) must not hit, even though
-// it appears in the lockfile.
-func TestTrapDoor_PnpmRangeOnlyPackageNotListed(t *testing.T) {
+// TestTrapDoor_PnpmWholePackageRangeFlagged confirms the range-only
+// TrapDoor entry is caught through the pnpm path too: a whole-package
+// (introduced:0) campaign package in a lockfile flags at any version
+// via the real embedded snapshot + the range-capable matcher.
+func TestTrapDoor_PnpmWholePackageRangeFlagged(t *testing.T) {
 	dir := t.TempDir()
-	lock := trapdoorPnpmLock("async-pipeline-builder", "1.0.12")
+	lock := trapdoorPnpmLock("async-pipeline-builder", "2.5.0") // any version matches introduced:0
 	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte(lock), 0o644); err != nil {
 		t.Fatalf("write pnpm-lock.yaml: %v", err)
 	}
@@ -86,7 +86,10 @@ func TestTrapDoor_PnpmRangeOnlyPackageNotListed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(res.Hits) != 0 {
-		t.Fatalf("range-only campaign package must not be in manual intel, got hits: %+v", res.Hits)
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected 1 pnpm hit for the whole-package range, got %d: %+v", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Record.ID != "SOCKET-2026-05-24-trapdoor" {
+		t.Errorf("hit advisory = %q, want SOCKET-2026-05-24-trapdoor", res.Hits[0].Record.ID)
 	}
 }
