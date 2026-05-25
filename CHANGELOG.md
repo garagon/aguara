@@ -5,6 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-05-25
+
+Patch release adding local threat-intel advisories for the TrapDoor
+crypto-stealer supply-chain campaign (Socket, 2026-05-24). `aguara check`
+now blocks the confirmed malicious package/version tuples offline, without
+waiting for an embedded OSV snapshot refresh. Scope is limited to the 12
+packages with an exact confirmed malicious version; the campaign's
+range-only npm packages and its crates.io packages are intentionally not
+listed because no exact malicious version is available for them yet. No
+detection rules or analyzers changed.
+
 ### Added
 
 - **Local advisories for the TrapDoor crypto-stealer campaign.** `aguara
