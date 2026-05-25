@@ -690,22 +690,32 @@ func TestCheckNPM_TrapDoor(t *testing.T) {
 	}
 }
 
-func TestCheckNPM_TrapDoor_RangeOnlyPackagesNotListed(t *testing.T) {
-	// async-pipeline-builder is part of the TrapDoor campaign, but OSV
-	// carries it range-only (introduced:0) after npm security-held it,
-	// so no exact version exists to pin and it was deliberately NOT
-	// added to manual intel. It must not flag, even at the campaign's
-	// version shape. This locks the "12 ready_exact only" scope.
-	dir := t.TempDir()
-	nm := filepath.Join(dir, "node_modules")
-	writeNPMPackage(t, nm, "async-pipeline-builder", "1.0.12")
+func TestCheckNPM_TrapDoor_WholePackageRangeFlagsAnyVersion(t *testing.T) {
+	// async-pipeline-builder is a TrapDoor package npm security-held in
+	// its entirety (OSV introduced:0). It is now carried as a range-only
+	// manual entry, so the range-capable matcher flags it at ANY
+	// installed version, not just one pinned version. (At v0.18.4 it was
+	// excluded because the matcher could not evaluate ranges.)
+	for _, version := range []string{"1.0.12", "2.5.0", "0.0.1"} {
+		dir := t.TempDir()
+		nm := filepath.Join(dir, "node_modules")
+		writeNPMPackage(t, nm, "async-pipeline-builder", version)
+		writeNPMPackage(t, nm, "left-pad", "1.3.0") // unrelated; must NOT flag
 
-	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
-	if err != nil {
-		t.Fatalf("CheckNPM returned error: %v", err)
-	}
-	if len(result.Findings) != 0 {
-		t.Fatalf("range-only campaign package must not be in manual intel, got: %+v", result.Findings)
+		result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+		if err != nil {
+			t.Fatalf("CheckNPM returned error: %v", err)
+		}
+		if len(result.Findings) != 1 {
+			t.Fatalf("version %s: expected 1 finding, got %d: %+v", version, len(result.Findings), result.Findings)
+		}
+		f := result.Findings[0]
+		if f.Severity != incident.SevCritical {
+			t.Errorf("version %s: severity = %q, want CRITICAL", version, f.Severity)
+		}
+		if !strings.Contains(f.Title, "async-pipeline-builder") || !strings.Contains(f.Title, "SOCKET-2026-05-24-trapdoor") {
+			t.Errorf("version %s: title = %q, want package + advisory", version, f.Title)
+		}
 	}
 }
 

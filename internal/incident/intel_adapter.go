@@ -167,6 +167,7 @@ func KnownCompromisedSnapshot() intel.Snapshot {
 			Severity: "critical",
 			Summary:  cp.Summary,
 			Versions: append([]string(nil), cp.Versions...),
+			Ranges:   append([]intel.VersionRange(nil), cp.Ranges...),
 			IOCs:     convertIOCs(cp.IOCs),
 		})
 	}
