@@ -350,3 +350,130 @@ func TestMatcherPEP503TrailingSeparator(t *testing.T) {
 	require.Equal(t, "foo-bar", intel.PEP503Normalize("foo..bar"))
 	require.Equal(t, "foo-bar", intel.PEP503Normalize("foo__bar"))
 }
+
+// --- range matching (PR 2) ---
+
+func TestMatcherRangeOnlyNPMWholePackage(t *testing.T) {
+	// The TrapDoor shape: a malicious npm record with no exact
+	// versions, only an introduced:0 open range. Every installed
+	// version must match.
+	m := buildMatcher(t, intel.Record{
+		ID:        "MAL-2026-4275",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "async-pipeline-builder",
+		Kind:      intel.KindMalicious,
+		Ranges:    []intel.VersionRange{{Type: "SEMVER", Introduced: "0"}},
+	})
+	for _, v := range []string{"1.0.12", "0.0.1", "9.9.9"} {
+		hit := m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "async-pipeline-builder", Version: v})
+		require.Len(t, hit, 1, "version %s should match introduced:0 whole-package range", v)
+		require.Equal(t, "MAL-2026-4275", hit[0].Record.ID)
+	}
+}
+
+func TestMatcherRangeFixedBoundaryExclusive(t *testing.T) {
+	m := buildMatcher(t, intel.Record{
+		ID:        "MAL-RANGE",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "pkg",
+		Kind:      intel.KindMalicious,
+		Ranges:    []intel.VersionRange{{Type: "SEMVER", Introduced: "1.0.0", Fixed: "1.0.13"}},
+	})
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.12"}), 1)
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.13"}), "fixed is exclusive")
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "0.9.9"}), "below introduced")
+}
+
+func TestMatcherExactAndRangeSameRecordNoDuplicate(t *testing.T) {
+	// A record carrying both an exact Version and an overlapping
+	// Range must produce exactly one Match for a version that
+	// satisfies both: exact takes priority and the record is not
+	// double-counted.
+	m := buildMatcher(t, intel.Record{
+		ID:        "MAL-BOTH",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "pkg",
+		Kind:      intel.KindMalicious,
+		Versions:  []string{"1.0.12"},
+		Ranges:    []intel.VersionRange{{Type: "SEMVER", Introduced: "0"}},
+	})
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.12"}), 1,
+		"exact+range on one record must yield one match, not two")
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "2.0.0"}), 1,
+		"range-only hit on the same record still yields one match")
+}
+
+func TestMatcherRangeIgnoredForUnsupportedEcosystem(t *testing.T) {
+	// PyPI is not a semver range ecosystem in phase 1; a PyPI
+	// range-only record must not match (PEP 440 support is future).
+	m := buildMatcher(t, intel.Record{
+		ID:        "OSV-PYPI-RANGE",
+		Ecosystem: intel.EcosystemPyPI,
+		Name:      "somepkg",
+		Kind:      intel.KindMalicious,
+		Ranges:    []intel.VersionRange{{Type: "ECOSYSTEM", Introduced: "0"}},
+	})
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemPyPI, Name: "somepkg", Version: "0.1.0"}),
+		"PyPI range-only must not match until PEP 440 support lands")
+}
+
+func TestMatcherRangeUnsupportedTypeNoMatch(t *testing.T) {
+	m := buildMatcher(t, intel.Record{
+		ID:        "MAL-GIT",
+		Ecosystem: intel.EcosystemNPM,
+		Name:      "pkg",
+		Kind:      intel.KindMalicious,
+		Ranges:    []intel.VersionRange{{Type: "GIT", Introduced: "0"}},
+	})
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.0"}),
+		"a non-semver range type must not be evaluated")
+}
+
+func TestMatcherMergesRangesAcrossSnapshots(t *testing.T) {
+	// Same advisory ID in two snapshots, each carrying a different
+	// range. The merged record must match versions covered by either.
+	snap1 := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "MAL-MERGE", Ecosystem: intel.EcosystemNPM, Name: "pkg", Kind: intel.KindMalicious,
+		Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "1.0.0", Fixed: "2.0.0"}},
+	}}}
+	snap2 := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "MAL-MERGE", Ecosystem: intel.EcosystemNPM, Name: "pkg", Kind: intel.KindMalicious,
+		Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "3.0.0", Fixed: "4.0.0"}},
+	}}}
+	m := intel.NewMatcher(snap1, snap2)
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.5.0"}), 1, "first range")
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "3.5.0"}), 1, "second range (merged)")
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "2.5.0"}), "gap between merged ranges")
+}
+
+func TestMatcherWithdrawnTombstoneRetractsRangeRecord(t *testing.T) {
+	live := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "MAL-RETRACT", Ecosystem: intel.EcosystemNPM, Name: "pkg", Kind: intel.KindMalicious,
+		Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "0"}},
+	}}}
+	tomb := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "MAL-RETRACT", Ecosystem: intel.EcosystemNPM, Name: "pkg", Withdrawn: true,
+	}}}
+	m := intel.NewMatcher(live, tomb)
+	require.Empty(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.0"}),
+		"a withdrawn tombstone must retract the live range record")
+}
+
+func TestMatcherDistinctIDsExactAndRangeBothMatch(t *testing.T) {
+	// Manual exact advisory + OSV range advisory for the same npm
+	// tuple, distinct IDs. Both surface at the matcher layer
+	// (provenance); the output layer collapses them to one finding.
+	// Manual snapshot loads first, so it keeps display priority.
+	manual := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "SOCKET-2026-05-24-trapdoor", Ecosystem: intel.EcosystemNPM, Name: "dev-env-bootstrapper",
+		Kind: intel.KindCompromised, Versions: []string{"1.0.12"},
+	}}}
+	osv := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, Records: []intel.Record{{
+		ID: "MAL-2026-4277", Ecosystem: intel.EcosystemNPM, Name: "dev-env-bootstrapper",
+		Kind: intel.KindMalicious, Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "0"}},
+	}}}
+	m := intel.NewMatcher(manual, osv)
+	hit := m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "dev-env-bootstrapper", Version: "1.0.12"})
+	require.Len(t, hit, 2, "distinct IDs (manual exact + OSV range) both surface at the matcher layer")
+	require.Equal(t, "SOCKET-2026-05-24-trapdoor", hit[0].Record.ID, "manual advisory keeps first/display priority")
+}
