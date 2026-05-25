@@ -40,7 +40,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # cosign-installer v4 defaults to cosign v3, whose new bundle
+          # format and GoReleaser interop are not yet validated against
+          # our signing flow. Pin the last v2.x (v2.6.3) so the installer
+          # action update carries no signing-behavior change; a cosign v3
+          # migration is a separate, deliberate PR.
+          cosign-release: "v2.6.3"
 
       - uses: docker/metadata-action@v5
         id: meta
