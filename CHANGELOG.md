@@ -5,6 +5,42 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-05-25
+
+Range-aware malicious-package matching plus static behavioral detection
+for confirmed TrapDoor-style payloads. This extends Aguara from exact
+incident advisories into version-range matching for supported semver
+ecosystems and deterministic detection of two payload shapes from the
+TrapDoor campaign. It is range + behavioral coverage for the confirmed
+TrapDoor surfaces, not full coverage of the campaign.
+
+### Added
+
+- **Range-aware matching for supported semver ecosystems (npm).** The
+  intel matcher now evaluates OSV-style version ranges, not just exact
+  versions, for ecosystems whose grammar a semver engine can resolve
+  (npm in this release). `aguara check` now flags the 16 npm TrapDoor
+  packages npm security-held in their entirety (OSV records them as
+  `introduced:0`, every version malicious) at any installed version,
+  offline, across installed npm trees and pnpm lockfiles. These ride
+  hand-curated range-only advisories under `SOCKET-2026-05-24-trapdoor`;
+  the rule deliberately does not embed OSV's full npm range corpus.
+- **`PY_IMPORTTIME_REMOTE_JS_001`** (supply-chain, CRITICAL): detects a
+  Python package that, at install or import time (`setup.py` /
+  `__init__.py`), downloads remote JavaScript and runs it through Node
+  (`node -e` / `--eval`). Requires the fetch of a `.js` payload and the
+  Node eval together; mentions of Node or JavaScript in docs do not
+  trip it.
+- **`RS_BUILD_WALLET_EXFIL_001`** (supply-chain, CRITICAL): detects a
+  Cargo build script (`build.rs`) that reads crypto wallet/keystore
+  material (Sui / Move / Solana / Aptos) and sends it over the network.
+  Requires an actual keystore read plus a network exfil sink; a build
+  that only compiles native code or only reads a path does not fire.
+
+Both behavioral rules are static pattern detections and do not execute
+package code. Analyzer-level data-flow hardening for each is tracked as
+follow-up work.
+
 ## [0.18.4] - 2026-05-25
 
 Patch release adding local threat-intel advisories for the TrapDoor
