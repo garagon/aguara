@@ -96,7 +96,12 @@ jobs:
       - name: Sign manifest (Cosign keyless)
         run: |
           set -euo pipefail
-          cosign sign-blob --yes \
+          # --new-bundle-format writes the self-contained Sigstore
+          # protobuf bundle (cert + signature + Rekor inclusion proof),
+          # which the in-process verifier (sigstore-go, v0.21.0 PR 1)
+          # consumes. The legacy {base64Signature,cert,rekorBundle}
+          # format is not parseable by sigstore-go.
+          cosign sign-blob --yes --new-bundle-format \
             --bundle dist/generated_intel.meta.json.bundle \
             dist/generated_intel.meta.json
           test -f dist/generated_intel.meta.json.bundle
