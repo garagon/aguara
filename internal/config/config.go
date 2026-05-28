@@ -51,6 +51,7 @@ type Config struct {
 	DisableRules  []string                `yaml:"disable_rules,omitempty"`
 	RuleOverrides map[string]RuleOverride `yaml:"rule_overrides,omitempty"`
 	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
+	Baseline      string                  `yaml:"baseline,omitempty"`
 }
 
 // Load reads the .aguara.yml or .aguara.yaml config file from the given path.

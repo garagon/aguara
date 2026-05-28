@@ -264,16 +264,43 @@ func (v Verdict) String() string {
 	}
 }
 
+// BaselineSummary describes how a scan baseline partitioned the findings,
+// so terminal/JSON consumers understand why the gate passed even when
+// findings are present. Set only when a baseline was applied (3A: output
+// still carries every finding; the baseline affects the gate only).
+type BaselineSummary struct {
+	// Applied is always true when this struct is present.
+	Applied bool `json:"applied"`
+	// Path is the baseline file the run was diffed against.
+	Path string `json:"path,omitempty"`
+	// Total is the number of findings before baseline partitioning.
+	Total int `json:"total"`
+	// New is the number of baselineable findings NOT present in the
+	// baseline. It excludes non-baselineable findings.
+	New int `json:"new"`
+	// Baselined is the number of findings suppressed from the gate
+	// because their fingerprint was already in the baseline.
+	Baselined int `json:"baselined"`
+	// NonBaselineable is the number of findings that can never be
+	// baselined (Sensitive / credential-leak) and are always reported.
+	NonBaselineable int `json:"non_baselineable"`
+	// GateCount is the number of findings that still count toward the CI
+	// threshold: New + NonBaselineable. Provided so dashboards do not
+	// have to add the two themselves.
+	GateCount int `json:"gate_count"`
+}
+
 // ScanResult holds the complete results of a scan.
 type ScanResult struct {
-	Findings     []Finding     `json:"findings"`
-	FilesScanned int           `json:"files_scanned"`
-	RulesLoaded  int           `json:"rules_loaded"`
-	Verdict      Verdict       `json:"verdict"`
-	RiskScore    float64       `json:"risk_score"`
-	ToolName     string        `json:"tool_name,omitempty"`
-	Duration     time.Duration `json:"-"`
-	Target       string        `json:"-"`
+	Findings     []Finding        `json:"findings"`
+	FilesScanned int              `json:"files_scanned"`
+	RulesLoaded  int              `json:"rules_loaded"`
+	Verdict      Verdict          `json:"verdict"`
+	RiskScore    float64          `json:"risk_score"`
+	ToolName     string           `json:"tool_name,omitempty"`
+	Baseline     *BaselineSummary `json:"baseline,omitempty"`
+	Duration     time.Duration    `json:"-"`
+	Target       string           `json:"-"`
 }
 
 // MarshalJSON implements custom JSON marshaling so Duration serializes
