@@ -142,6 +142,34 @@ func SupportedEcosystems() []string {
 	return out
 }
 
+// EcosystemsFromSources recovers the canonical OSV bucket names present
+// in a snapshot's SourceMeta slice, returned in SupportedEcosystems
+// registry order so the list is stable and deduplicated. Sources whose
+// Name does not follow the "osv.dev/<bucket>" convention (test
+// fixtures, the manual source) are skipped silently. Used to populate
+// the embedded-snapshot sidecar metadata.
+func EcosystemsFromSources(sources []SourceMeta) []string {
+	const prefix = "osv.dev/"
+	present := map[string]bool{}
+	for _, src := range sources {
+		if !strings.HasPrefix(src.Name, prefix) {
+			continue
+		}
+		canon := CanonicaliseEcosystem(strings.TrimPrefix(src.Name, prefix))
+		if canon == "" {
+			continue
+		}
+		present[canon] = true
+	}
+	out := make([]string, 0, len(present))
+	for _, eco := range SupportedEcosystems() {
+		if present[eco] {
+			out = append(out, eco)
+		}
+	}
+	return out
+}
+
 // SupportedEcosystemsHint renders the supported-ecosystem list the
 // way an error message wants to show it. Each entry is the
 // canonical ID; non-trivial aliases trail in parentheses so the

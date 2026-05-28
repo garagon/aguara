@@ -1,0 +1,4 @@
+# The embedded advisory snapshot is a deterministic gzipped-JSON blob.
+# Treat it as binary so git never tries to diff or merge it; its
+# human-reviewable summary lives in generated_intel.meta.json.
+internal/incident/generated_intel.json.gz binary

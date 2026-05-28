@@ -280,6 +280,10 @@ type ecosystemReport struct {
 	// Sizes
 	ZipCompressedBytes   int64 `json:"zip_compressed_bytes"`
 	ZipDecompressedBytes int64 `json:"zip_decompressed_bytes"`
+	// GeneratedSourceBytes is the size of the deterministic gzipped-JSON
+	// snapshot blob this ecosystem's kept records contribute to the
+	// embedded intel (intel.EncodeSnapshotGZIP). JSON tag kept stable
+	// for the downstream architecture-decision script.
 	GeneratedSourceBytes int64 `json:"generated_source_bytes"`
 	// Record counts: read top-to-bottom for the funnel.
 	TotalRecords             int `json:"total_records"`
@@ -353,11 +357,11 @@ func measure(job measureJob) (ecosystemReport, error) {
 	r.ParseDurationMS = time.Since(parseStart).Milliseconds()
 
 	// Sort kept records into the canonical (ecosystem, name, ID)
-	// order osvimport.RenderGoSource expects so the size estimate
-	// matches a real generated file byte-for-byte.
+	// order the generator emits so the size estimate matches a real
+	// embedded blob byte-for-byte.
 	osvimport.SortRecords(kept)
 
-	renderStart := time.Now()
+	encodeStart := time.Now()
 	snap := intel.Snapshot{
 		SchemaVersion: intel.CurrentSchemaVersion,
 		GeneratedAt:   time.Date(2026, time.May, 16, 0, 0, 0, 0, time.UTC),
@@ -370,15 +374,12 @@ func measure(job measureJob) (ecosystemReport, error) {
 		}},
 		Records: kept,
 	}
-	src, err := osvimport.RenderGoSource(snap, osvimport.RenderConfig{
-		Package: "incident",
-		VarName: "EmbeddedIntelSnapshot_" + sanitizeForGoIdent(job.ecosystem),
-	})
+	gz, err := intel.EncodeSnapshotGZIP(snap)
 	if err != nil {
-		return r, fmt.Errorf("render snapshot: %w", err)
+		return r, fmt.Errorf("encode snapshot: %w", err)
 	}
-	r.GeneratedSourceBytes = int64(len(src))
-	r.RenderDurationMS = time.Since(renderStart).Milliseconds()
+	r.GeneratedSourceBytes = int64(len(gz))
+	r.RenderDurationMS = time.Since(encodeStart).Milliseconds()
 
 	return r, nil
 }
@@ -397,26 +398,9 @@ func readZipEntry(entry *zip.File) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(rc, cap))
 }
 
-// sanitizeForGoIdent turns an OSV ecosystem string into something
-// usable as a Go identifier suffix. OSV publishes "crates.io" with
-// a dot, "RubyGems" with mixed case; the renderer needs a plain
-// identifier so the variable name compiles.
-func sanitizeForGoIdent(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
-}
-
 func renderMarkdown(w io.Writer, reports []ecosystemReport) error {
 	var buf bytes.Buffer
-	fmt.Fprintln(&buf, "| Ecosystem | Zip (MB) | Total | Matched | Withdrawn | Ranges-only | Neither | Kept (final) | Gen. source (MB) | Parse (s) |")
+	fmt.Fprintln(&buf, "| Ecosystem | Zip (MB) | Total | Matched | Withdrawn | Ranges-only | Neither | Kept (final) | Gz blob (MB) | Parse (s) |")
 	fmt.Fprintln(&buf, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for _, r := range reports {
 		fmt.Fprintf(&buf, "| %s | %.1f | %d | %d | %d | %d | %d | **%d** | %.2f | %.1f |\n",

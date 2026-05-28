@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-17T00:00:00Z",
+  "record_count": 23926,
+  "source_count": 8,
+  "ecosystems": [
+    "npm",
+    "PyPI",
+    "Go",
+    "crates.io",
+    "Packagist",
+    "RubyGems",
+    "Maven",
+    "NuGet"
+  ],
+  "json_sha256": "a1aa27337de34848a595de3c5cc0dd95f386fa7683755579ba367bc9ca6d09ab",
+  "gzip_sha256": "474c3716fdbec28732985a474d74ce4fd1317108173308beb3f66457b150a7cb",
+  "json_bytes": 7605747,
+  "gzip_bytes": 1016882
+}

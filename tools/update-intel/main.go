@@ -1,5 +1,7 @@
-// Command update-intel regenerates internal/incident/generated_intel.go
-// from one or more OSV.dev all.zip dumps.
+// Command update-intel regenerates the embedded advisory snapshot
+// (internal/incident/generated_intel.json.gz plus its
+// generated_intel.meta.json sidecar) from one or more OSV.dev all.zip
+// dumps.
 //
 // Production invocation reads zip dumps from local disk (the maintainer
 // downloads them out-of-band via curl/wget) so the importer never
@@ -16,14 +18,17 @@
 //	    --from-zip ./osv-rubygems.zip  --ecosystem RubyGems \
 //	    --from-zip ./osv-maven.zip     --ecosystem Maven \
 //	    --from-zip ./osv-nuget.zip     --ecosystem NuGet \
-//	    --out internal/incident/generated_intel.go
+//	    --out internal/incident/generated_intel.json.gz
+//
+// The snapshot is written as deterministic gzipped JSON (see
+// intel.EncodeSnapshotGZIP); the sidecar metadata records record
+// counts, ecosystems, and content hashes so a regeneration is
+// reviewable even though the blob is binary.
 //
 // A regeneration that forgets one of the 8 pairs is caught by
 // TestEmbeddedSnapshotCoversAllEightEcosystems in
 // internal/incident: the test asserts every SupportedEcosystems()
-// entry has a SourceMeta in the snapshot. The header in the
-// generated file is derived from snap.Sources so it always lists
-// the ecosystems actually present.
+// entry has a SourceMeta in the snapshot.
 //
 // The flag pairs --from-zip / --ecosystem are positional: the Nth
 // zip is interpreted under the Nth ecosystem filter. Mismatched
@@ -32,6 +37,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -57,19 +63,15 @@ func main() {
 	var (
 		zips        multiFlag
 		ecosystems  multiFlag
-		outPath     string
-		packageName string
-		varName     string
-		genTime     string
-		allowEmpty  bool
+		outPath    string
+		genTime    string
+		allowEmpty bool
 	)
 
 	fs := flag.NewFlagSet("update-intel", flag.ContinueOnError)
 	fs.Var(&zips, "from-zip", "Path to an OSV ecosystem all.zip (repeatable; pair with --ecosystem)")
 	fs.Var(&ecosystems, "ecosystem", "OSV ecosystem for the matching --from-zip (repeatable; e.g. npm, PyPI)")
-	fs.StringVar(&outPath, "out", "internal/incident/generated_intel.go", "Path to the generated Go file to write")
-	fs.StringVar(&packageName, "package", "incident", "Go package the generated file declares")
-	fs.StringVar(&varName, "var", "EmbeddedIntelSnapshot", "Exported variable name in the generated file")
+	fs.StringVar(&outPath, "out", "internal/incident/generated_intel.json.gz", "Path to the gzipped-JSON snapshot blob to write (a .meta.json sidecar is written alongside)")
 	fs.StringVar(&genTime, "generated-at", "", "Override the snapshot timestamp (RFC3339; defaults to now). Use this for reproducible builds.")
 	fs.BoolVar(&allowEmpty, "allow-empty", false, "Allow an ecosystem to produce zero records (default: error). Use only for initial bootstrap.")
 
@@ -134,14 +136,23 @@ func main() {
 	}
 	osvimport.SortRecords(merged.Records)
 
-	source, err := osvimport.RenderGoSource(merged, osvimport.RenderConfig{
-		Package: packageName,
-		VarName: varName,
-	})
+	jsonBytes, err := intel.MarshalSnapshotJSON(merged)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "update-intel: render: %v\n", err)
+		fmt.Fprintf(os.Stderr, "update-intel: marshal json: %v\n", err)
 		os.Exit(1)
 	}
+	gz, err := intel.EncodeSnapshotGZIP(merged)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update-intel: encode: %v\n", err)
+		os.Exit(1)
+	}
+	meta := intel.BuildSnapshotMeta(merged, jsonBytes, gz)
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update-intel: marshal meta: %v\n", err)
+		os.Exit(1)
+	}
+	metaJSON = append(metaJSON, '\n')
 
 	absOut, err := filepath.Abs(outPath)
 	if err != nil {
@@ -152,12 +163,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "update-intel: mkdir %s: %v\n", filepath.Dir(absOut), err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile(absOut, []byte(source), 0o644); err != nil {
+	if err := os.WriteFile(absOut, gz, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "update-intel: write %s: %v\n", absOut, err)
 		os.Exit(1)
 	}
+	metaOut := metaPathFor(absOut)
+	if err := os.WriteFile(metaOut, metaJSON, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "update-intel: write %s: %v\n", metaOut, err)
+		os.Exit(1)
+	}
 
-	fmt.Fprintf(os.Stderr, "update-intel: wrote %d records to %s\n", len(merged.Records), absOut)
+	fmt.Fprintf(os.Stderr, "update-intel: wrote %d records (%d gz bytes) to %s and metadata to %s\n",
+		len(merged.Records), len(gz), absOut, metaOut)
+}
+
+// metaPathFor returns the sidecar metadata path for a blob path: it
+// swaps a trailing ".json.gz" for ".meta.json", or appends ".meta.json"
+// for any other extension so the two files always travel together.
+func metaPathFor(blobPath string) string {
+	if strings.HasSuffix(blobPath, ".json.gz") {
+		return strings.TrimSuffix(blobPath, ".json.gz") + ".meta.json"
+	}
+	return blobPath + ".meta.json"
 }
 
 // importOne opens a single OSV zip, reads its full size, and feeds
