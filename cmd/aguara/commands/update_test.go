@@ -226,6 +226,34 @@ func TestRunUpdateRejectsTamperedBundleAndDoesNotWrite(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "tampered bundle must not write the cache")
 }
 
+func TestRunUpdateTamperedDoesNotClobberExistingCache(t *testing.T) {
+	// The central no-partial-write promise: a failed verification must
+	// leave a previously cached snapshot byte-identical.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	intelDir := filepath.Join(home, ".aguara", "intel")
+	require.NoError(t, os.MkdirAll(intelDir, 0o700))
+	snapPath := filepath.Join(intelDir, "snapshot.json")
+	existing := []byte(`{"schema_version":1,"generated_at":"2026-01-01T00:00:00Z","sources":[],"records":[]}` + "\n")
+	require.NoError(t, os.WriteFile(snapPath, existing, 0o600))
+	before, err := os.ReadFile(snapPath)
+	require.NoError(t, err)
+
+	resetFlags()
+	t.Cleanup(resetFlags)
+	prevURL := intelBundleBaseURL
+	intelBundleBaseURL = serveSignedBundle(t, true) // tampered blob
+	t.Cleanup(func() { intelBundleBaseURL = prevURL })
+
+	rootCmd.SetArgs([]string{"update", "-o", filepath.Join(t.TempDir(), "out.txt")})
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	require.Error(t, rootCmd.Execute(), "tampered bundle must fail verification")
+
+	after, err := os.ReadFile(snapPath)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "existing cache must be byte-identical after a failed verification")
+}
+
 func TestAssertOutputNotShadowingStore(t *testing.T) {
 	storeDir := t.TempDir()
 	snapshotPath := filepath.Join(storeDir, "snapshot.json")

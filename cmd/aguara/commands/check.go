@@ -1108,6 +1108,12 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 // This is the only place the CLI touches the network for `check`.
 // Returning nil keeps the default-check contract intact: no flags,
 // no network.
+//
+// LEGACY (pending follow-up): a --fresh refresh here still calls
+// intel.Update, which fetches raw OSV over TLS WITHOUT a signature
+// check. `aguara update` already migrated to verified signed bundles
+// (PR 2); check / audit --fresh are not yet migrated, so --fresh here
+// trusts OSV transport only until that follow-up lands.
 func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.IntelOverride, error) {
 	store, storeErr := intel.DefaultStore()
 	if storeErr != nil {

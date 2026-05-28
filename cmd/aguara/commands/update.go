@@ -42,8 +42,10 @@ the expected publisher identity and the manifest against the blob, and
 only then writes the snapshot to ~/.aguara/intel/snapshot.json.
 
 The bundle is produced from OSV.dev by the intel-publish workflow and
-signed there; the runtime only ever trusts a verified, signed bundle and
-never fetches OSV directly. A bundle that fails verification is not used.
+signed there; the update command only trusts a verified, signed bundle
+and does not fetch OSV directly. A bundle that fails verification is not
+used. (check / audit --fresh still use the legacy direct-OSV path until a
+follow-up migrates them to verified bundles.)
 
 This command is the only place 'aguara update' touches the network.
 Default 'aguara check' invocations stay offline.
