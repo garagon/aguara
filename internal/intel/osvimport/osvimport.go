@@ -9,9 +9,9 @@
 //
 // This package is pure: it does no I/O of its own. ImportFromZip
 // (in zip.go) is a small helper that reads OSV's all.zip dumps and
-// feeds Import. RenderGoSource (in render.go) serialises the
-// resulting snapshot back into Go source so it can be compiled into
-// the binary as the embedded snapshot.
+// feeds Import; SortRecords (in sort.go) puts records in the canonical
+// order the generator emits. The resulting snapshot is serialised to
+// the embedded binary blob by intel.EncodeSnapshotGZIP.
 package osvimport
 
 import (

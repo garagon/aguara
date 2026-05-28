@@ -221,7 +221,7 @@ func normalizeEcosystemForIntel(eco string) string {
 func EmbeddedSnapshots() []intel.Snapshot {
 	return []intel.Snapshot{
 		KnownCompromisedSnapshot(),
-		EmbeddedIntelSnapshot,
+		EmbeddedIntelSnapshot(),
 	}
 }
 

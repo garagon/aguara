@@ -19,8 +19,9 @@ import (
 // SourceMeta block lists every supported ecosystem so the
 // regeneration step actually consumed all 8 zips.
 func TestEmbeddedSnapshotCoversAllEightEcosystems(t *testing.T) {
+	snap := EmbeddedIntelSnapshot()
 	seen := map[string]bool{}
-	for _, src := range EmbeddedIntelSnapshot.Sources {
+	for _, src := range snap.Sources {
 		// SourceMeta.Name is rendered as "osv.dev/<lowercase
 		// bucket>" by update-intel; map it back to the canonical
 		// bucket for the assertion.
@@ -46,7 +47,7 @@ func TestEmbeddedSnapshotCoversAllEightEcosystems(t *testing.T) {
 	}
 	for _, want := range intel.SupportedEcosystems() {
 		if !seen[want] {
-			t.Errorf("embedded snapshot missing source for ecosystem %s (snapshot Sources=%+v)", want, EmbeddedIntelSnapshot.Sources)
+			t.Errorf("embedded snapshot missing source for ecosystem %s (snapshot Sources=%+v)", want, snap.Sources)
 		}
 	}
 }
@@ -64,7 +65,7 @@ func TestEmbeddedSnapshotCoversAllEightEcosystems(t *testing.T) {
 // so the parser-ready tier can stay honest.
 func TestEmbeddedSnapshotHasRecordsForStrongCoverageEcosystems(t *testing.T) {
 	counts := map[string]int{}
-	for _, rec := range EmbeddedIntelSnapshot.Records {
+	for _, rec := range EmbeddedIntelSnapshot().Records {
 		counts[rec.Ecosystem]++
 	}
 	strong := []string{intel.EcosystemNPM, intel.EcosystemPyPI, intel.EcosystemRubyGems, intel.EcosystemNuGet}
