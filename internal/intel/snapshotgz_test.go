@@ -123,7 +123,19 @@ func TestBuildSnapshotMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	meta := BuildSnapshotMeta(snap, jsonBytes, gz)
+	meta := BuildSnapshotMeta(snap, jsonBytes, gz, "generated_intel.json.gz", "v9.9.9")
+	if meta.ManifestSchema != ManifestSchema {
+		t.Errorf("manifest_schema = %d, want %d", meta.ManifestSchema, ManifestSchema)
+	}
+	if meta.BundleSchemaVersion != snap.SchemaVersion {
+		t.Errorf("bundle_schema_version = %d, want %d", meta.BundleSchemaVersion, snap.SchemaVersion)
+	}
+	if meta.Blob != "generated_intel.json.gz" {
+		t.Errorf("blob = %q, want generated_intel.json.gz", meta.Blob)
+	}
+	if meta.ToolVersion != "v9.9.9" {
+		t.Errorf("tool_version = %q, want v9.9.9", meta.ToolVersion)
+	}
 	if meta.RecordCount != len(snap.Records) {
 		t.Errorf("record_count = %d, want %d", meta.RecordCount, len(snap.Records))
 	}

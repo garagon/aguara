@@ -64,10 +64,18 @@ func TestEmbeddedIntelMetaMatchesBlob(t *testing.T) {
 	if meta.SourceCount != len(snap.Sources) {
 		t.Errorf("source_count mismatch: meta=%d snapshot=%d", meta.SourceCount, len(snap.Sources))
 	}
-	if meta.SchemaVersion != snap.SchemaVersion {
-		t.Errorf("schema_version mismatch: meta=%d snapshot=%d", meta.SchemaVersion, snap.SchemaVersion)
+	if meta.BundleSchemaVersion != snap.SchemaVersion {
+		t.Errorf("bundle_schema_version mismatch: meta=%d snapshot=%d", meta.BundleSchemaVersion, snap.SchemaVersion)
 	}
 	if !meta.GeneratedAt.Equal(snap.GeneratedAt) {
 		t.Errorf("generated_at mismatch: meta=%s snapshot=%s", meta.GeneratedAt, snap.GeneratedAt)
+	}
+	// Signed-manifest contract fields (PR 0): the committed embedded
+	// manifest must carry the manifest schema and name its blob.
+	if meta.ManifestSchema != intel.ManifestSchema {
+		t.Errorf("manifest_schema = %d, want %d", meta.ManifestSchema, intel.ManifestSchema)
+	}
+	if meta.Blob != "generated_intel.json.gz" {
+		t.Errorf("blob = %q, want generated_intel.json.gz", meta.Blob)
 	}
 }

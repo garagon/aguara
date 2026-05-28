@@ -63,9 +63,10 @@ func main() {
 	var (
 		zips        multiFlag
 		ecosystems  multiFlag
-		outPath    string
-		genTime    string
-		allowEmpty bool
+		outPath     string
+		genTime     string
+		toolVersion string
+		allowEmpty  bool
 	)
 
 	fs := flag.NewFlagSet("update-intel", flag.ContinueOnError)
@@ -73,6 +74,7 @@ func main() {
 	fs.Var(&ecosystems, "ecosystem", "OSV ecosystem for the matching --from-zip (repeatable; e.g. npm, PyPI)")
 	fs.StringVar(&outPath, "out", "internal/incident/generated_intel.json.gz", "Path to the gzipped-JSON snapshot blob to write (a .meta.json sidecar is written alongside)")
 	fs.StringVar(&genTime, "generated-at", "", "Override the snapshot timestamp (RFC3339; defaults to now). Use this for reproducible builds.")
+	fs.StringVar(&toolVersion, "tool-version", "", "aguara version that produced the bundle, recorded in the manifest (e.g. v0.21.0). The intel-publish workflow sets this; leave empty for the committed embedded manifest.")
 	fs.BoolVar(&allowEmpty, "allow-empty", false, "Allow an ecosystem to produce zero records (default: error). Use only for initial bootstrap.")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -146,7 +148,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "update-intel: encode: %v\n", err)
 		os.Exit(1)
 	}
-	meta := intel.BuildSnapshotMeta(merged, jsonBytes, gz)
+	meta := intel.BuildSnapshotMeta(merged, jsonBytes, gz, filepath.Base(outPath), toolVersion)
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "update-intel: marshal meta: %v\n", err)
