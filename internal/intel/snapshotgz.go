@@ -67,10 +67,18 @@ func EncodeSnapshotGZIP(snap Snapshot) ([]byte, error) {
 // schema-version checks as Store.Load, so a corrupted blob or one
 // written by a newer binary fails loudly rather than mis-loading.
 func DecodeSnapshotGZIP(data []byte) (Snapshot, error) {
-	raw, err := decompressGzip(data)
+	raw, err := DecompressGZIP(data)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	return DecodeSnapshotJSON(raw)
+}
+
+// DecodeSnapshotJSON decodes the decompressed canonical JSON of a
+// snapshot and enforces the schema-version check. Exposed so a verified
+// fresh bundle can be decoded from already-decompressed bytes (whose
+// digest the manifest pins) without gunzipping twice.
+func DecodeSnapshotJSON(raw []byte) (Snapshot, error) {
 	var snap Snapshot
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		return Snapshot{}, fmt.Errorf("intel: decode snapshot json: %w", err)
@@ -85,11 +93,12 @@ func DecodeSnapshotGZIP(data []byte) (Snapshot, error) {
 	return snap, nil
 }
 
-// decompressGzip inflates data with the MaxSnapshotBytes cap applied to
+// DecompressGZIP inflates data with the MaxSnapshotBytes cap applied to
 // the decompressed size, so a malformed or hostile blob cannot cause
 // unbounded allocation. +1 byte distinguishes "exactly the cap" from
-// "exceeded the cap".
-func decompressGzip(data []byte) ([]byte, error) {
+// "exceeded the cap". Exposed so a fresh-bundle verifier can hash the
+// decompressed bytes against the manifest's json_sha256.
+func DecompressGZIP(data []byte) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("intel: gzip reader: %w", err)

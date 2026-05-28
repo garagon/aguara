@@ -98,6 +98,33 @@ func TestVerifyAndParseFailsClosedOnBadSignature(t *testing.T) {
 	}
 }
 
+// TestVerifyAndDecodeRealFixture is the full end-to-end gate against a
+// real signed bundle + its matching blob from the intel-latest release:
+// signature + identity + manifest content checks + decode, all offline.
+func TestVerifyAndDecodeRealFixture(t *testing.T) {
+	m := readFixture(t, "valid_manifest.json")
+	b := readFixture(t, "valid_bundle.sigstore.json")
+	blob := readFixture(t, "valid_blob.json.gz")
+	snap, err := VerifyAndDecode(m, b, blob)
+	if err != nil {
+		t.Fatalf("real signed bundle must verify and decode, got: %v", err)
+	}
+	if len(snap.Records) == 0 {
+		t.Fatal("decoded snapshot has no records")
+	}
+}
+
+func TestVerifyAndDecodeRejectsTamperedBlob(t *testing.T) {
+	m := readFixture(t, "valid_manifest.json")
+	b := readFixture(t, "valid_bundle.sigstore.json")
+	blob := readFixture(t, "valid_blob.json.gz")
+	tampered := append([]byte{}, blob...)
+	tampered[len(tampered)/2] ^= 0xFF // flip a byte: digest no longer matches the manifest
+	if _, err := VerifyAndDecode(m, b, tampered); err == nil {
+		t.Fatal("expected VerifyAndDecode to reject a blob whose digest does not match the signed manifest")
+	}
+}
+
 // corruptSignature flips a byte in the bundle's message signature so the
 // cryptographic check must fail, while leaving the bundle structurally
 // parseable.

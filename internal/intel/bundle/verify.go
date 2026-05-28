@@ -119,6 +119,9 @@ func parseManifest(manifestBytes []byte) (intel.SnapshotMeta, error) {
 	if err := json.Unmarshal(manifestBytes, &m); err != nil {
 		return intel.SnapshotMeta{}, fmt.Errorf("bundle: parse manifest: %w", err)
 	}
+	if m.ManifestSchema < 1 {
+		return intel.SnapshotMeta{}, fmt.Errorf("bundle: manifest_schema missing or invalid (%d); a signed manifest must declare its schema", m.ManifestSchema)
+	}
 	if m.ManifestSchema > intel.ManifestSchema {
 		return intel.SnapshotMeta{}, fmt.Errorf("bundle: manifest_schema %d is newer than this build supports (%d); upgrade aguara",
 			m.ManifestSchema, intel.ManifestSchema)
