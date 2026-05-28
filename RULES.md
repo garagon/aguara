@@ -231,9 +231,9 @@ Detected by the toxic-flow analyzer (Go engine, not YAML rules).
 
 | Rule | Severity | Description |
 |------|----------|-------------|
-| TOXIC_001 | HIGH | User input flows to dangerous sink without sanitization |
-| TOXIC_002 | HIGH | Environment variable flows to shell execution |
-| TOXIC_003 | HIGH | API response flows to code execution |
+| TOXIC_001 | HIGH | Sensitive source co-occurs with a dangerous sink in one skill |
+| TOXIC_002 | HIGH | Environment-variable read co-occurs with shell execution |
+| TOXIC_003 | HIGH | External API response co-occurs with code execution |
 
 ---
 

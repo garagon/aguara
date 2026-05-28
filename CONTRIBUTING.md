@@ -38,7 +38,7 @@ internal/
     pattern/           Layer 1: regex/contains matcher + base64/hex decoder
     nlp/               Layer 2: goldmark AST walker, keyword classifier
     rugpull/           Rug-pull detection analyzer
-    toxicflow/         Taint tracking: source -> sink flow analysis
+    toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           193 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
