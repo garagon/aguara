@@ -279,6 +279,14 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	}
 
 	fmt.Fprintf(w, "  %s\n", strings.Join(parts, " \u00b7 "))
+
+	if b := result.Baseline; b != nil && b.Applied {
+		line := fmt.Sprintf("baseline: %d new \u00b7 %d baselined", b.New, b.Baselined)
+		if b.NonBaselineable > 0 {
+			line += fmt.Sprintf(" \u00b7 %d non-baselineable (always reported)", b.NonBaselineable)
+		}
+		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
+	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 }
 

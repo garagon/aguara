@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/garagon/aguara/discover"
+	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/config"
-	"github.com/garagon/aguara/internal/update"
 	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/jsrisk"
 	"github.com/garagon/aguara/internal/engine/nlp"
@@ -26,20 +26,23 @@ import (
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/state"
 	"github.com/garagon/aguara/internal/types"
+	"github.com/garagon/aguara/internal/update"
 )
 
 var (
-	flagFailOn      string
-	flagCI          bool
-	flagVerbose     bool
-	flagChanged     bool
-	flagMonitor     bool
-	flagStatePath   string
-	flagAuto        bool
-	flagMaxFileSize string
-	flagToolName    string
-	flagProfile     string
-	flagNoRedact    bool
+	flagFailOn        string
+	flagCI            bool
+	flagVerbose       bool
+	flagChanged       bool
+	flagMonitor       bool
+	flagStatePath     string
+	flagAuto          bool
+	flagMaxFileSize   string
+	flagToolName      string
+	flagProfile       string
+	flagNoRedact      bool
+	flagBaseline      string
+	flagWriteBaseline string
 )
 
 var scanCmd = &cobra.Command{
@@ -69,6 +72,8 @@ func init() {
 	scanCmd.Flags().StringVar(&flagToolName, "tool-name", "", "Tool context for false-positive reduction (e.g. Bash, Edit, WebFetch)")
 	scanCmd.Flags().StringVar(&flagProfile, "profile", "", "Scan profile: strict (default), content-aware, minimal")
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
+	scanCmd.Flags().StringVar(&flagBaseline, "baseline", "", "Gate only on findings NOT in this baseline file (fails closed if missing/malformed)")
+	scanCmd.Flags().StringVar(&flagWriteBaseline, "write-baseline", "", "Write current findings as a baseline to this file and exit 0 (skips sensitive findings)")
 	// Runtime errors (ErrThresholdExceeded after a successful scan,
 	// network failures on --auto) should not trigger Cobra's
 	// flag-usage block: a CI log that already says
@@ -81,6 +86,9 @@ func init() {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	if err := validateBaselineFlags(); err != nil {
+		return err
+	}
 	if flagAuto {
 		return runAutoScan(cmd)
 	}
@@ -107,6 +115,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	cfg := loadScanConfig(cmd, targetPath)
 	applyCIDefaults()
+
+	// .aguara.yml `baseline:` feeds --baseline when the flag is unset
+	// and we are not establishing a new baseline.
+	if cfg.Baseline != "" && !cmd.Flags().Changed("baseline") && flagWriteBaseline == "" {
+		flagBaseline = cfg.Baseline
+	}
 
 	minSev, err := parseSeverityFlag()
 	if err != nil {
@@ -143,11 +157,51 @@ func runScan(cmd *cobra.Command, args []string) error {
 		types.RedactSensitiveFindings(result.Findings)
 	}
 
+	// Baseline runs after redaction. Only non-baselineable findings are
+	// redacted (Baselineable mirrors the redaction predicate), so every
+	// fingerprint is computed from intact, non-secret matched text.
+	gateFindings := result.Findings
+	if flagWriteBaseline != "" {
+		written, skipped, err := baseline.Write(flagWriteBaseline, result.Findings, Version)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "baseline: wrote %d fingerprint(s) to %s", written, flagWriteBaseline)
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "; %d sensitive finding(s) skipped (remain non-baselineable)", skipped)
+		}
+		fmt.Fprintln(os.Stderr)
+	} else if flagBaseline != "" {
+		set, err := baseline.Load(flagBaseline)
+		if err != nil {
+			return err
+		}
+		var summary types.BaselineSummary
+		gateFindings, summary = baseline.Apply(result.Findings, set, flagBaseline)
+		result.Baseline = &summary
+	}
+
 	if err := writeOutput(result); err != nil {
 		return err
 	}
 
-	return checkFailOnThreshold(result)
+	// Writing a baseline establishes accepted state; it never gates.
+	if flagWriteBaseline != "" {
+		return nil
+	}
+	return checkFailOnThresholdFindings(gateFindings)
+}
+
+// validateBaselineFlags enforces the baseline flag contract before any
+// scanning happens, so a misuse fails fast.
+func validateBaselineFlags() error {
+	if flagBaseline != "" && flagWriteBaseline != "" {
+		return fmt.Errorf("--baseline and --write-baseline are mutually exclusive")
+	}
+	if flagAuto && (flagBaseline != "" || flagWriteBaseline != "") {
+		return fmt.Errorf("baseline flags are not supported with --auto")
+	}
+	return nil
 }
 
 func runAutoScan(cmd *cobra.Command) error {
@@ -595,6 +649,14 @@ func parseProfileFlag() (scanner.ScanProfile, error) {
 var ErrThresholdExceeded = fmt.Errorf("findings exceed severity threshold")
 
 func checkFailOnThreshold(result *scanner.ScanResult) error {
+	return checkFailOnThresholdFindings(result.Findings)
+}
+
+// checkFailOnThresholdFindings gates on the provided findings slice. The
+// baseline path passes the post-baseline gate set here while the full
+// finding list still goes to output (3A: output shows everything, the
+// baseline affects the gate only).
+func checkFailOnThresholdFindings(findings []scanner.Finding) error {
 	if flagFailOn == "" {
 		return nil
 	}
@@ -602,7 +664,7 @@ func checkFailOnThreshold(result *scanner.ScanResult) error {
 	if err != nil {
 		return fmt.Errorf("invalid --fail-on: %w", err)
 	}
-	for _, f := range result.Findings {
+	for _, f := range findings {
 		if f.Severity >= threshold {
 			return ErrThresholdExceeded
 		}

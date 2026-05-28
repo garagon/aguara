@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/scanner"
 )
 
@@ -58,12 +59,13 @@ type sarifMessage struct {
 }
 
 type sarifResult struct {
-	RuleID     string          `json:"ruleId"`
-	RuleIndex  int             `json:"ruleIndex"`
-	Level      string          `json:"level"`
-	Message    sarifMessage    `json:"message"`
-	Locations  []sarifLocation `json:"locations"`
-	Properties map[string]any  `json:"properties,omitempty"`
+	RuleID              string            `json:"ruleId"`
+	RuleIndex           int               `json:"ruleIndex"`
+	Level               string            `json:"level"`
+	Message             sarifMessage      `json:"message"`
+	Locations           []sarifLocation   `json:"locations"`
+	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties          map[string]any    `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
@@ -123,6 +125,15 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 					},
 				},
 			},
+		}
+		// Emit a stable fingerprint for baselineable findings so
+		// GitHub code-scanning (and external baseline tooling) can
+		// de-dupe across runs. Sensitive / credential-leak findings are
+		// non-baselineable and intentionally carry no fingerprint.
+		if baseline.Baselineable(finding) {
+			r.PartialFingerprints = map[string]string{
+				baseline.FingerprintKey: string(baseline.ComputeFingerprint(finding)),
+			}
 		}
 		props := map[string]any{}
 		if finding.InCodeBlock {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
@@ -19,6 +20,7 @@ var (
 	flagAuditFailOn     string
 	flagAuditFresh      bool
 	flagAuditAllowStale bool
+	flagAuditBaseline   string
 )
 
 var auditCmd = &cobra.Command{
@@ -43,6 +45,7 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
 	auditCmd.Flags().BoolVar(&flagAuditFresh, "fresh", false, "Refresh threat intel before the audit (network opt-in)")
 	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
+	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -58,11 +61,11 @@ func init() {
 // into either side; the verdict + summary fields are convenience
 // for terminal output and CI gates.
 type AuditResult struct {
-	Target  string                 `json:"target"`
-	Check   *incident.CheckResult  `json:"check"`
-	Scan    *scanner.ScanResult    `json:"scan"`
-	Verdict AuditVerdict           `json:"verdict"`
-	Intel   incident.IntelSummary  `json:"intel"`
+	Target  string                `json:"target"`
+	Check   *incident.CheckResult `json:"check"`
+	Scan    *scanner.ScanResult   `json:"scan"`
+	Verdict AuditVerdict          `json:"verdict"`
+	Intel   incident.IntelSummary `json:"intel"`
 }
 
 // AuditVerdict is the single-line summary the CLI prints under
@@ -130,7 +133,27 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		Scan:   scanResult,
 		Intel:  checkResult.Intel,
 	}
+
+	// Baseline applies to the SCAN side only; package (check) findings
+	// always gate. Output keeps every scan finding (3A) plus a baseline
+	// summary; the verdict tallies only the post-baseline gate set, so
+	// we swap the scan findings for the verdict computation and restore
+	// the full list before emitting.
+	scanGate := scanResult.Findings
+	if flagAuditBaseline != "" {
+		set, err := baseline.Load(flagAuditBaseline)
+		if err != nil {
+			return err
+		}
+		var summary types.BaselineSummary
+		scanGate, summary = baseline.Apply(scanResult.Findings, set, flagAuditBaseline)
+		scanResult.Baseline = &summary
+	}
+
+	fullScan := scanResult.Findings
+	scanResult.Findings = scanGate
 	verdict, vErr := computeAuditVerdict(result, flagAuditFailOn)
+	scanResult.Findings = fullScan
 	if vErr != nil {
 		// An invalid --fail-on value must error rather than
 		// silently disable the gate. scan / check both do the
@@ -183,6 +206,11 @@ func applyAuditCIDefaults() {
 // the verdict / --fail-on threshold filter what matters.
 func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
 	cfg := loadScanConfig(cmd, targetPath)
+
+	// .aguara.yml `baseline:` feeds audit's --baseline when unset.
+	if cfg.Baseline != "" && !cmd.Flags().Changed("baseline") {
+		flagAuditBaseline = cfg.Baseline
+	}
 
 	compiled, err := loadAndCompileRules(cfg)
 	if err != nil {
@@ -396,4 +424,3 @@ func writeAuditTerminal(result *AuditResult) error {
 		result.Verdict.ScanCriticals, result.Verdict.ScanHighs)
 	return nil
 }
-
