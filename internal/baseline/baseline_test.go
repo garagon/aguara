@@ -42,6 +42,28 @@ func TestFingerprintDistinguishesOccurrences(t *testing.T) {
 	}
 }
 
+func TestFingerprintDistinguishesAnalyzers(t *testing.T) {
+	// Two analyzers emitting the same rule ID for the same span must
+	// not collapse to one fingerprint.
+	a := finding("R1", "a.md", "danger")
+	a.Analyzer = "pattern"
+	b := finding("R1", "a.md", "danger")
+	b.Analyzer = "nlp-injection"
+	if ComputeFingerprint(a) == ComputeFingerprint(b) {
+		t.Fatal("different analyzers collapsed to one fingerprint")
+	}
+}
+
+func TestFingerprintNormalizesPathSeparators(t *testing.T) {
+	// A baseline written on Windows (backslash paths) must match a scan
+	// on a slash-path OS for the same logical file.
+	win := finding("R1", `src\app\evil.md`, "danger")
+	nix := finding("R1", "src/app/evil.md", "danger")
+	if ComputeFingerprint(win) != ComputeFingerprint(nix) {
+		t.Fatal("path separators changed the fingerprint; ToSlash normalization missing")
+	}
+}
+
 func TestBaselineablePredicate(t *testing.T) {
 	if !Baselineable(finding("R1", "a.md", "x")) {
 		t.Fatal("plain finding should be baselineable")
@@ -153,12 +175,17 @@ func TestApplyPartitions(t *testing.T) {
 	if summary.Baselined != 1 {
 		t.Errorf("Baselined = %d, want 1 (known)", summary.Baselined)
 	}
+	// New counts only baselineable findings not in the baseline; the
+	// sensitive finding is non-baselineable and must NOT inflate New.
+	if summary.New != 1 {
+		t.Errorf("New = %d, want 1 (fresh only)", summary.New)
+	}
 	if summary.NonBaselineable != 1 {
 		t.Errorf("NonBaselineable = %d, want 1 (sensitive)", summary.NonBaselineable)
 	}
-	// Gate set = fresh + sensitive (known is suppressed).
-	if summary.New != 2 || len(gate) != 2 {
-		t.Errorf("New = %d / gate len %d, want 2 (fresh + always-reported sensitive)", summary.New, len(gate))
+	// GateCount = New + NonBaselineable = fresh + sensitive.
+	if summary.GateCount != 2 || len(gate) != 2 {
+		t.Errorf("GateCount = %d / gate len %d, want 2", summary.GateCount, len(gate))
 	}
 	for _, g := range gate {
 		if ComputeFingerprint(g) == ComputeFingerprint(known) && Baselineable(g) {

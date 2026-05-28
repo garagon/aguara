@@ -275,16 +275,19 @@ type BaselineSummary struct {
 	Path string `json:"path,omitempty"`
 	// Total is the number of findings before baseline partitioning.
 	Total int `json:"total"`
-	// New is the number of findings that still count toward the gate
-	// (not in the baseline, plus all non-baselineable findings).
+	// New is the number of baselineable findings NOT present in the
+	// baseline. It excludes non-baselineable findings.
 	New int `json:"new"`
 	// Baselined is the number of findings suppressed from the gate
 	// because their fingerprint was already in the baseline.
 	Baselined int `json:"baselined"`
 	// NonBaselineable is the number of findings that can never be
 	// baselined (Sensitive / credential-leak) and are always reported.
-	// It is a subset of New.
 	NonBaselineable int `json:"non_baselineable"`
+	// GateCount is the number of findings that still count toward the CI
+	// threshold: New + NonBaselineable. Provided so dashboards do not
+	// have to add the two themselves.
+	GateCount int `json:"gate_count"`
 }
 
 // ScanResult holds the complete results of a scan.

@@ -51,6 +51,7 @@ func resetFlags() {
 	flagAuditFresh = false
 	flagAuditAllowStale = false
 	flagAuditBaseline = ""
+	flagAuditWriteBaseline = ""
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.

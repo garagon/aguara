@@ -50,18 +50,32 @@ func Baselineable(f types.Finding) bool {
 // Fingerprint is a stable, redaction-safe identifier for a finding.
 type Fingerprint string
 
-// ComputeFingerprint derives a fingerprint from the rule ID, file path,
-// and normalized matched text. Line and column are deliberately
-// excluded so the fingerprint survives line churn (a finding that moves
-// from line 5 to line 50 keeps the same fingerprint). The matched-text
-// component keeps distinct findings of the same rule in the same file
-// distinct, so baselining one occurrence does not silence a genuinely
-// new one. Only call on Baselineable findings.
+// ComputeFingerprint derives a fingerprint from the rule ID, analyzer,
+// slash-normalized file path, and normalized matched text. Line and
+// column are deliberately excluded so the fingerprint survives line
+// churn (a finding that moves from line 5 to line 50 keeps the same
+// fingerprint). The analyzer is included so two analyzers that emit the
+// same rule ID for the same span stay distinct; the path is
+// slash-normalized so a baseline written on Windows matches a scan run
+// on Linux/macOS CI. The matched-text component keeps distinct findings
+// of the same rule in the same file distinct, so baselining one
+// occurrence does not silence a genuinely new one. Only call on
+// Baselineable findings.
 func ComputeFingerprint(f types.Finding) Fingerprint {
 	h := sha256.New()
 	// NUL separators so field boundaries cannot be forged by content.
-	fmt.Fprintf(h, "%s\x00%s\x00%s", f.RuleID, f.FilePath, normalizeSnippet(f.MatchedText))
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s",
+		f.RuleID, f.Analyzer, slashPath(f.FilePath), normalizeSnippet(f.MatchedText))
 	return Fingerprint(hex.EncodeToString(h.Sum(nil)))
+}
+
+// slashPath normalizes path separators to forward slashes
+// unconditionally (filepath.ToSlash semantics, but cross-OS: it also
+// rewrites backslashes when run on a non-Windows host). This makes a
+// baseline written on Windows match a scan run on Linux/macOS CI for the
+// same logical file.
+func slashPath(p string) string {
+	return strings.ReplaceAll(p, "\\", "/")
 }
 
 // normalizeSnippet collapses runs of whitespace to a single space and
@@ -162,6 +176,7 @@ func Apply(findings []types.Finding, set *Set, path string) (gate []types.Findin
 	summary = types.BaselineSummary{Applied: true, Path: path, Total: len(findings)}
 	for _, f := range findings {
 		if !Baselineable(f) {
+			// Always reported; counted separately, never folded into New.
 			summary.NonBaselineable++
 			gate = append(gate, f)
 			continue
@@ -170,8 +185,12 @@ func Apply(findings []types.Finding, set *Set, path string) (gate []types.Findin
 			summary.Baselined++
 			continue
 		}
+		summary.New++
 		gate = append(gate, f)
 	}
-	summary.New = len(gate)
+	// GateCount is everything that still counts toward the CI threshold:
+	// genuinely new baselineable findings plus the always-reported
+	// non-baselineable ones.
+	summary.GateCount = summary.New + summary.NonBaselineable
 	return gate, summary
 }

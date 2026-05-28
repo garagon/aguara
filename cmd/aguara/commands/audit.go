@@ -15,12 +15,13 @@ import (
 )
 
 var (
-	flagAuditPath       string
-	flagAuditCI         bool
-	flagAuditFailOn     string
-	flagAuditFresh      bool
-	flagAuditAllowStale bool
-	flagAuditBaseline   string
+	flagAuditPath          string
+	flagAuditCI            bool
+	flagAuditFailOn        string
+	flagAuditFresh         bool
+	flagAuditAllowStale    bool
+	flagAuditBaseline      string
+	flagAuditWriteBaseline string
 )
 
 var auditCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	auditCmd.Flags().BoolVar(&flagAuditFresh, "fresh", false, "Refresh threat intel before the audit (network opt-in)")
 	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
+	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -84,6 +86,9 @@ type AuditVerdict struct {
 }
 
 func runAudit(cmd *cobra.Command, args []string) error {
+	if flagAuditBaseline != "" && flagAuditWriteBaseline != "" {
+		return fmt.Errorf("--baseline and --write-baseline are mutually exclusive")
+	}
 	applyAuditCIDefaults()
 
 	target := flagAuditPath
@@ -135,12 +140,27 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Baseline applies to the SCAN side only; package (check) findings
-	// always gate. Output keeps every scan finding (3A) plus a baseline
-	// summary; the verdict tallies only the post-baseline gate set, so
-	// we swap the scan findings for the verdict computation and restore
-	// the full list before emitting.
+	// always gate exactly as today. Output keeps every scan finding (3A)
+	// plus a baseline summary; the verdict tallies only the post-baseline
+	// scan gate set, so we swap the scan findings for the verdict
+	// computation and restore the full list before emitting.
 	scanGate := scanResult.Findings
-	if flagAuditBaseline != "" {
+	switch {
+	case flagAuditWriteBaseline != "":
+		written, skipped, err := baseline.Write(flagAuditWriteBaseline, scanResult.Findings, Version)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "baseline: wrote %d fingerprint(s) to %s", written, flagAuditWriteBaseline)
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "; %d sensitive finding(s) skipped (remain non-baselineable)", skipped)
+		}
+		fmt.Fprintln(os.Stderr)
+		// Establishing a scan baseline accepts all current scan findings,
+		// so the scan side contributes nothing to the gate. The check
+		// side still gates: package findings are never baselineable.
+		scanGate = nil
+	case flagAuditBaseline != "":
 		set, err := baseline.Load(flagAuditBaseline)
 		if err != nil {
 			return err
@@ -207,8 +227,9 @@ func applyAuditCIDefaults() {
 func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
 	cfg := loadScanConfig(cmd, targetPath)
 
-	// .aguara.yml `baseline:` feeds audit's --baseline when unset.
-	if cfg.Baseline != "" && !cmd.Flags().Changed("baseline") {
+	// .aguara.yml `baseline:` feeds audit's --baseline when unset and we
+	// are not establishing a new baseline.
+	if cfg.Baseline != "" && !cmd.Flags().Changed("baseline") && flagAuditWriteBaseline == "" {
 		flagAuditBaseline = cfg.Baseline
 	}
 
