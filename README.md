@@ -430,7 +430,7 @@ Aguara runs 6 scan analyzers sequentially on every file by default; a 7th (Rug-P
 | **PkgMeta** | `package.json` JSON parser | npm install-time lifecycle scripts plus git-sourced dependencies, optional-git deps with suspicious names, publish surfaces paired with trusted-publishing references. |
 | **JSRisk** | JavaScript single-pass scanner | Obfuscator-shape payloads, install-time daemonization via `child_process`, CI secret harvesting through real `process.env` reads plus network/registry sinks, runner-process memory pivots to extract OIDC tokens, Claude Code / VS Code workspace persistence, chain-aware DNS TXT exfil. |
 | **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting; clustered keywords score higher, sparse keywords in long text get penalized. |
-| **Taint Tracker** | Source-to-sink flow analysis | Dangerous capability combinations within a single file and across files in the same directory. Detects credential reads paired with webhook sends, env vars flowing to shell execution, destructive plus exec combos across MCP server tools. |
+| **Toxic Flow** | Capability correlation | Dangerous capability combinations within a single file and across files in the same directory. Surfaces credential reads co-occurring with webhook sends, env-var reads alongside shell execution, destructive plus exec combos across MCP server tools. |
 | **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans. CLI: `--monitor` flag. Library: `WithStateDir()` for persistent consumers. |
 
 Separate `aguara check` and `aguara audit` commands inspect installed package trees (Python `site-packages`, npm `node_modules` including the pnpm `.pnpm` store) and walk the repo recursively for Go, Rust, PHP, Ruby, Java, and .NET lockfiles, matching every declared package against the embedded threat-intel snapshot. See [Supply-Chain Check](#supply-chain-check) for the full surface.
@@ -545,7 +545,7 @@ The table groups coverage by emit-time category for readability:
 | Third-Party Content | 10 | eval with external data, unsafe deserialization, missing SRI, HTTP downgrade |
 | Unicode Attack | 10 | RTL override, bidi, homoglyphs, zero-width sequences, normalization bypass |
 | Supply Chain Exfil | 11 | Credential file reads, .pth executable code, bulk env collection, K8s secrets access, systemd persistence, archive+POST exfil, Session-Network endpoints |
-| Toxic Flow | 3 + cross-file | Single-file taint tracking plus cross-file correlation across MCP server directories |
+| Toxic Flow | 3 + cross-file | Single-file source/sink co-occurrence plus cross-file capability correlation across MCP server directories |
 
 See [RULES.md](RULES.md) for the complete rule catalog with IDs and severity levels.
 
@@ -694,7 +694,7 @@ internal/
     pkgmeta/           PkgMeta: package.json parser, npm lifecycle / git source / publish-surface chains
     jsrisk/            JSRisk: .js / .mjs / .cjs scanner, obfuscation / daemonization / CI-secret-harvest / runner-pivot / agent-persistence
     nlp/               NLP: markdown AST + JSON/YAML string extraction, proximity-weighted classifier
-    toxicflow/         Taint: single-file taint tracking + cross-file correlation across directories
+    toxicflow/         Toxic Flow: single-file source/sink co-occurrence + cross-file capability correlation across directories
     rugpull/           Rug-pull: SHA256 change detection (CLI --monitor, library WithStateDir)
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           193 embedded YAML rules across 13 files (go:embed)
@@ -724,7 +724,7 @@ Aguara is purpose-built for AI agent content AND supply-chain trust points. Gene
 | Multi-ecosystem package check | Yes (npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET) | No | Partial | No |
 | Pre-install lockfile coverage | Yes (pnpm-lock.yaml today) | No | Partial | No |
 | Incident response (check/clean) | Yes | No | No | No |
-| Taint tracking for skills | Yes | Yes | Yes | Yes |
+| Source/sink risk correlation for skills | Yes | Yes | Yes | Yes |
 | Offline / no account | Yes | Partial | No | Partial |
 | Custom YAML rules | Yes | Yes | No | No |
 | SARIF output | Yes | Yes | Yes | Yes |

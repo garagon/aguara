@@ -187,7 +187,7 @@ Severity is an integer: 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL.
 | `unicode-attack` | 7 | RTL override, bidi, homoglyphs, tag characters |
 | `indirect-injection` | 6 | Fetch-and-follow, remote config, email-as-instructions |
 | `third-party-content` | 5 | Mutable raw content, unvalidated API responses |
-| `toxic-flow` | 3 | User input to dangerous sinks, taint tracking |
+| `toxic-flow` | 3 | Source/sink co-occurrence: sensitive sources alongside dangerous sinks |
 | `rug-pull` | 1 | Tool description changed with dangerous content (requires `--monitor`) |
 
 Use `aguara list-rules` to see all rules. Use `aguara explain <id>` for patterns and examples.
@@ -229,7 +229,7 @@ Aguara runs four analysis engines in sequence on each file:
 |---|---|---|---|
 | Pattern Matcher | `pattern` | All files | Regex/contains matching against YAML rules. Includes base64/hex decoder. |
 | NLP Injection | `nlp-injection` | `.md`, `.txt` only | Goldmark AST walker. Detects hidden instructions in comments, code/heading mismatches, authority claims, credential+network combos. |
-| Toxic Flow | `toxicflow` | All files | Taint tracking: detects dangerous source-to-sink flows (user input to exec, env vars to shell, API data to eval). |
+| Toxic Flow | `toxicflow` | All files | Capability correlation: surfaces risky source/sink combinations (private-data read alongside exec, env-var read alongside shell, external response alongside eval). |
 | Rug-Pull | `rugpull` | All files | Compares file hashes against previous scan state. Only active with `--monitor`. |
 
 ### Scoring
