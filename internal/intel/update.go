@@ -109,9 +109,14 @@ type EcosystemResult struct {
 //     failure does not poison the others; the function returns the
 //     first error)
 //
-// The HTTP path is opt-in: nothing in the binary calls Update
-// unless the user explicitly runs `aguara update` or `aguara check
-// --fresh`. Default checks remain offline.
+// The HTTP path is opt-in: Update fetches raw OSV dumps directly.
+//
+// LEGACY: as of PR 2, `aguara update` no longer calls this -- it fetches
+// a signed bundle and verifies it (see cmd/aguara/commands/update.go).
+// Update is retained as library API and is still the path behind
+// `check / audit --fresh` until a follow-up migrates those to verified
+// signed bundles too. Until then, --fresh trusts OSV over TLS without a
+// signature check.
 func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if opts.Importer == nil {
 		return nil, fmt.Errorf("intel update: Importer is required (CLI must wire osvimport.ImportFromZip)")

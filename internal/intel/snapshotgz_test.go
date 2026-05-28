@@ -108,7 +108,7 @@ func TestDecodeSnapshotGZIPEnforcesSizeCap(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip close: %v", err)
 	}
-	if _, err := decompressGzip(buf.Bytes()); err == nil {
+	if _, err := DecompressGZIP(buf.Bytes()); err == nil {
 		t.Fatal("expected size-cap error on oversized decompressed payload")
 	}
 }
