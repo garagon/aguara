@@ -5,6 +5,43 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-05-28
+
+Scan baseline / diff mode plus a smaller, more maintainable embedded
+advisory snapshot. No detection-engine changes and no change to advisory
+coverage or runtime matching behavior.
+
+### Added
+
+- **Scan baseline / diff mode.** `aguara scan --baseline <file>` gates
+  only on findings that are not already recorded in a baseline, so CI can
+  adopt Aguara on an existing repository without failing on pre-existing
+  findings. `--write-baseline <file>` records the current findings as
+  accepted. `aguara audit --baseline` / `--write-baseline` apply to the
+  scan half only; known-malicious package (check) findings always gate.
+  Fingerprints are line-independent (they survive line churn) and
+  per-occurrence (distinct findings in one file stay distinct).
+  Secret-bearing findings are never baselineable and are always reported.
+  Baseline metadata is surfaced in the terminal footer, the JSON
+  `baseline` summary, and SARIF `partialFingerprints`. `.aguara.yml`
+  accepts a `baseline:` key.
+
+### Changed
+
+- **Embedded advisory snapshot is now compressed.** The build-time OSV
+  snapshot ships as gzipped JSON via `go:embed` instead of a generated Go
+  literal, alongside a committed `generated_intel.meta.json` sidecar
+  (record count, ecosystems, content hashes) that keeps a regeneration
+  reviewable. Snapshot contents and runtime matching are unchanged; the
+  binary is roughly 11 MB smaller. `aguara update` and
+  `tools/update-intel` now emit the gzipped bundle plus the sidecar.
+- **Documentation describes the toxic-flow analyzer as capability
+  correlation / source-sink co-occurrence** rather than taint tracking,
+  to match what the analyzer actually does.
+
+The intel schema version and the on-disk update-cache format are
+unchanged.
+
 ## [0.19.0] - 2026-05-25
 
 Range-aware malicious-package matching plus static behavioral detection

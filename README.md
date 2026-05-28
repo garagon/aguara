@@ -69,14 +69,14 @@ The image is multi-arch (`linux/amd64` and `linux/arm64`), runs as non-root UID 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.19.0 sh
+  | VERSION=v0.20.0 sh
 ```
 
 `install.sh` downloads `checksums.txt` from the release and verifies the archive's SHA256 against it, aborting if neither `sha256sum` nor `shasum` is available. This catches a tampered or corrupted archive at the registry layer, but it does not verify the Cosign signature on `checksums.txt` itself. For full keyless-signature verification on the curl-pipe path, follow up with the Cosign step in [Verifying signed releases](#verifying-signed-releases). Default install location is `~/.local/bin`. Override for CI or containers:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.19.0 INSTALL_DIR=/usr/local/bin sh
+  | VERSION=v0.20.0 INSTALL_DIR=/usr/local/bin sh
 ```
 
 ### From source
@@ -96,7 +96,7 @@ Every release is signed with [Cosign](https://github.com/sigstore/cosign) keyles
 **Verify the release archive**:
 
 ```bash
-VERSION=v0.19.0
+VERSION=v0.20.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
@@ -358,11 +358,11 @@ aguara discover --format json
 ### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.19.0
+- uses: garagon/aguara@v0.20.0
   with:
     path: .
     fail-on: high
-    version: v0.19.0
+    version: v0.20.0
 ```
 
 Both pins (the action ref AND the `version:` input) are required. The action ref alone pins only the composite action and its install script; `version:` pins the Aguara binary the action installs. Setting both makes the workflow reproducible and dependabot-friendly: when a new release lands, the bot updates both together.
@@ -370,12 +370,12 @@ Both pins (the action ref AND the `version:` input) are required. The action ref
 Scans your repository, uploads findings to GitHub Code Scanning, and optionally fails the build:
 
 ```yaml
-- uses: garagon/aguara@v0.19.0
+- uses: garagon/aguara@v0.20.0
   with:
     path: ./mcp-server/
     severity: medium
     fail-on: high
-    version: v0.19.0
+    version: v0.20.0
 ```
 
 All inputs are optional. See [`action.yml`](action.yml) for the full list.
@@ -404,7 +404,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitHub Actions (without the action)
 - name: Scan skills for security issues
   run: |
-    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.19.0 sh
+    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.20.0 sh
     aguara scan .claude/skills/ --ci
 ```
 
@@ -412,7 +412,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitLab CI
 security-scan:
   script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.19.0 sh
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.20.0 sh
     - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
@@ -621,7 +621,7 @@ See the [mcp-aguara README](https://github.com/garagon/mcp-aguara) for install, 
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale, so it is not a supported product surface for v0.19.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
+Aguara Watch is being reworked. The previous public observatory is stale, so it is not a supported product surface for v0.20.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
 
 ## Enterprise use
 
