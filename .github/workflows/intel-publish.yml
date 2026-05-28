@@ -1,0 +1,133 @@
+name: Intel Publish
+
+# Publishes a signed advisory-intel bundle (the same artifact aguara
+# embeds at build time) to the rolling `intel-latest` release, so a
+# future `aguara update` / `--fresh` can fetch and verify it. This
+# workflow is the trust root for fresh intel: the manifest is signed
+# with Cosign keyless under this workflow's OIDC identity on main
+# (.github/workflows/intel-publish.yml@refs/heads/main).
+#
+# PR 0 scope: generator + publish + signing only. No runtime consumer
+# yet; aguara update / --fresh continue to fetch raw OSV until the
+# verifier lands (v0.21.0 PRs 1-3). End-to-end is validated post-merge
+# via a manual dispatch on main (a branch dispatch signs under a
+# different ref and will fail the in-workflow verify gate by design).
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC. Malicious-package intel does not move
+    # fast enough to warrant daily churn; manual dispatch covers urgency.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  # id-token: write is required for Cosign keyless signing via Sigstore +
+  # GitHub OIDC. The token never leaves the runner.
+  id-token: write
+
+# Never run two publishes at once; the rolling release assets are
+# overwritten in place.
+concurrency:
+  group: intel-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch-depth 0 so `git describe` can derive a provenance
+          # string for the manifest's tool_version.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download OSV dumps
+        run: |
+          set -euo pipefail
+          mkdir -p osv
+          for eco in npm PyPI Go crates.io Packagist RubyGems Maven NuGet; do
+            echo "downloading ${eco}"
+            curl -fsSL --retry 3 --retry-delay 2 --max-time 300 \
+              -o "osv/${eco}.zip" \
+              "https://storage.googleapis.com/osv-vulnerabilities/${eco}/all.zip"
+          done
+
+      - name: Generate intel bundle + manifest
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          VER="$(git describe --tags --always --dirty)"
+          # --allow-empty: some ecosystems (Go, crates.io, Packagist,
+          # Maven) legitimately yield zero malicious-package records; the
+          # snapshot still ships their SourceMeta so the 8-ecosystem
+          # coverage invariant holds.
+          go run ./tools/update-intel \
+            --from-zip osv/npm.zip        --ecosystem npm \
+            --from-zip osv/PyPI.zip       --ecosystem PyPI \
+            --from-zip osv/Go.zip         --ecosystem Go \
+            --from-zip osv/crates.io.zip  --ecosystem crates.io \
+            --from-zip osv/Packagist.zip  --ecosystem Packagist \
+            --from-zip osv/RubyGems.zip   --ecosystem RubyGems \
+            --from-zip osv/Maven.zip      --ecosystem Maven \
+            --from-zip osv/NuGet.zip      --ecosystem NuGet \
+            --out dist/generated_intel.json.gz \
+            --tool-version "${VER}" \
+            --allow-empty
+          test -f dist/generated_intel.json.gz
+          test -f dist/generated_intel.meta.json
+          echo "--- manifest ---"
+          cat dist/generated_intel.meta.json
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin the last cosign v2.x to match release.yml / docker.yml;
+          # a v3 migration is a separate deliberate change.
+          cosign-release: "v2.6.3"
+
+      - name: Sign manifest (Cosign keyless)
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle dist/generated_intel.meta.json.bundle \
+            dist/generated_intel.meta.json
+          test -f dist/generated_intel.meta.json.bundle
+
+      - name: Verify manifest signature against expected identity
+        # In-workflow gate: the manifest must verify under the pinned
+        # identity (this workflow on main) before we publish. A run on
+        # any other ref fails here by design.
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --bundle dist/generated_intel.meta.json.bundle \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/intel-publish.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            dist/generated_intel.meta.json
+
+      - name: Publish to rolling intel-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view intel-latest >/dev/null 2>&1; then
+            gh release create intel-latest \
+              --title "Advisory intel bundle (rolling)" \
+              --notes "Signed advisory-intel bundle, refreshed automatically by the intel-publish workflow. This is NOT a product release; see the tagged releases for aguara versions." \
+              --prerelease \
+              --latest=false \
+              --target "${GITHUB_SHA}"
+          fi
+          gh release upload intel-latest \
+            dist/generated_intel.json.gz \
+            dist/generated_intel.meta.json \
+            dist/generated_intel.meta.json.bundle \
+            --clobber
