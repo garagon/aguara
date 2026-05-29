@@ -1065,6 +1065,71 @@ func TestCheck_ExplicitNPMWithOtherEcosystemSkipsLegacyError(t *testing.T) {
 	require.Equal(t, "Go", result.Ecosystems[0].Ecosystem)
 }
 
+// --- package-lock.json coverage: npm ecosystem, packagecheck path ---
+
+func TestCheckPlan_PackageLockOnlyMapsToNPMToken(t *testing.T) {
+	// A package-lock.json-only repo (no node_modules, no other
+	// lockfiles) autodetects to a single npm packagecheck target and
+	// must report ecoNPM from singleEcoToken, same as the pnpm path.
+	plan, err := buildCheckPlan(nil, "../../../internal/packagecheck/testdata/package-lock-compromised")
+	require.NoError(t, err)
+	require.False(t, plan.runNPM, "fixture has no node_modules; incident.CheckNPM must not be triggered")
+	require.Len(t, plan.packagecheckTargets, 1, "fixture has exactly one package-lock.json target")
+	require.Equal(t, "npm", plan.packagecheckTargets[0].Ecosystem)
+	require.Equal(t, "package-lock.json", plan.packagecheckTargets[0].Source)
+	require.Equal(t, ecoNPM, plan.singleEcoToken())
+}
+
+func TestCheck_PackageLockCompromisedFixtureFiresFinding(t *testing.T) {
+	// `aguara check <npm-repo>` on a fresh clone (package-lock.json,
+	// no node_modules) must detect node-ipc 9.2.3. End-to-end: autodetect
+	// picks package-lock.json as npm ecosystem, ParsePackageLock extracts
+	// the ref, matcher hits the embedded node-ipc record, ecosystems[]
+	// entry reports source=package-lock.json.
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/package-lock-compromised")
+
+	require.Len(t, result.Ecosystems, 1, "exactly one ecosystems[] entry expected (package-lock.json; no node_modules)")
+	got := result.Ecosystems[0]
+	require.Equal(t, "npm", got.Ecosystem)
+	require.Equal(t, "package-lock.json", got.Source)
+	require.Contains(t, got.Path, "package-lock.json")
+	require.Equal(t, 2, got.PackagesRead, "node-ipc + lodash declared in the lockfile")
+	require.GreaterOrEqual(t, got.FindingsCount, 1, "node-ipc@9.2.3 must produce at least one finding")
+
+	var nodeIPCFinding *incident.Finding
+	for i := range result.Findings {
+		if strings.Contains(result.Findings[i].Title, "node-ipc") {
+			nodeIPCFinding = &result.Findings[i]
+			break
+		}
+	}
+	require.NotNil(t, nodeIPCFinding, "node-ipc finding missing; got: %+v", result.Findings)
+	require.Equal(t, incident.SevCritical, nodeIPCFinding.Severity, "node-ipc 9.2.3 must be CRITICAL")
+}
+
+func TestCheck_PackageLockCleanFixtureProducesZeroFindings(t *testing.T) {
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/package-lock-clean")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "package-lock.json", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "lodash + @types/node")
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount, "clean fixture must have zero findings")
+	require.Empty(t, result.Findings)
+}
+
+func TestCheck_ExplicitNPMOnPackageLockOnlyRepoFires(t *testing.T) {
+	// Product check from the P3 spec: `aguara check --ecosystem npm
+	// --path <fresh clone with only package-lock.json>` must scan the
+	// lockfile (no node_modules required) and report source=package-lock.json.
+	result := checkToFile(t, "--ecosystem", "npm", "--path", "../../../internal/packagecheck/testdata/package-lock-compromised")
+
+	require.Len(t, result.Ecosystems, 1, "package-lock-only repo with --ecosystem npm: one ecosystems[] entry")
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "package-lock.json", result.Ecosystems[0].Source)
+	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "node-ipc 9.2.3 should fire")
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {

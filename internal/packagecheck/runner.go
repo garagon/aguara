@@ -146,6 +146,8 @@ func parseTarget(t Target) ([]PackageRef, error) {
 		switch t.Source {
 		case "pnpm-lock.yaml":
 			return ParsePNPMLock(t)
+		case "package-lock.json":
+			return ParsePackageLock(t)
 		default:
 			return nil, fmt.Errorf("packagecheck: no npm parser for source %q", t.Source)
 		}
