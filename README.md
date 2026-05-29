@@ -41,13 +41,13 @@ Security reviews used to focus mostly on application code. Modern projects also 
 
 Aguara gives teams a local check before they trust those inputs:
 
-- before running `pnpm install` on a pnpm project (Aguara reads `pnpm-lock.yaml` directly)
+- before running `npm install` or `pnpm install` (Aguara reads `package-lock.json` and `pnpm-lock.yaml` directly, no install needed)
 - before letting CI execute install-time scripts
 - before accepting a new MCP server config
 - before letting an agent use a third-party skill or tool
 - before uploading findings to a code-scanning dashboard
 
-For dependencies, Aguara reads resolved lockfiles where it has parsers (today this is `pnpm-lock.yaml` plus Go / Rust / PHP / Ruby / Java / .NET lockfiles) and installed package trees otherwise. Plain npm with only `package-lock.json` / `yarn.lock` and no install is on the next-layer list, not shipping today.
+For dependencies, Aguara reads resolved lockfiles where it has parsers (today this is `pnpm-lock.yaml`, `package-lock.json`, plus Go / Rust / PHP / Ruby / Java / .NET lockfiles) and installed package trees otherwise. So a freshly cloned npm or pnpm project can be checked before any install runs. `yarn.lock` is the next-layer parser, not shipping today.
 
 ## Installation
 

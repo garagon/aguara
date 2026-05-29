@@ -59,6 +59,7 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemMaven, pickMavenTargets},
 	{intel.EcosystemNuGet, pickNuGetTargets},
 	{intel.EcosystemNPM, pickPnpmTarget},
+	{intel.EcosystemNPM, pickPackageLockTarget},
 }
 
 // Discover walks root and returns one Target per lockfile / discovery
@@ -317,6 +318,32 @@ func pickPnpmTarget(dir string) []Target {
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "pnpm-lock.yaml"),
 			Source:    "pnpm-lock.yaml",
+		}}
+	}
+	return nil
+}
+
+// pickPackageLockTarget returns a Target for an npm project rooted at
+// dir, or nil when no package-lock.json is present. Like
+// pickPnpmTarget it installs from the npm registry (Ecosystem =
+// intel.EcosystemNPM) and carries Source="package-lock.json" so the
+// runner dispatches to ParsePackageLock and the per-target
+// EcosystemResult distinguishes it from the pnpm-lock.yaml and
+// installed-tree (node_modules) npm surfaces.
+//
+// The same node_modules-ancestor guard pnpm uses applies: a
+// package-lock.json shipped as a dependency fixture inside a
+// node_modules tree must not be picked up when the scan root is (or
+// sits under) node_modules.
+func pickPackageLockTarget(dir string) []Target {
+	if hasNodeModulesAncestor(dir) {
+		return nil
+	}
+	if statRegular(filepath.Join(dir, "package-lock.json")) {
+		return []Target{{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      filepath.Join(dir, "package-lock.json"),
+			Source:    "package-lock.json",
 		}}
 	}
 	return nil
