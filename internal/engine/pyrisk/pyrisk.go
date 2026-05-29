@@ -53,14 +53,21 @@ var (
 	// urllib...urlopen(...).read(), etc. Group 1 is the call argument(s).
 	fetchCallRe = regexp.MustCompile(`(?i)(?:requests\.get|httpx\.get|urllib\.request\.urlopen|urllib\.request\.urlretrieve|\burlopen|\burlretrieve)\s*\(([^)]*)\)\s*\.\s*(?:text|read|content)\b`)
 
-	// nodeEvalArgvRe matches the argv form: "node", "-e"/"--eval", PAYLOAD
-	// where PAYLOAD is a bare identifier (a variable). A string literal
-	// payload (an inline script) is intentionally not bound here.
-	nodeEvalArgvRe = regexp.MustCompile(`(?i)["']node["']\s*,\s*["'](?:-e|--eval)["']\s*,\s*([A-Za-z_]\w*)\b`)
+	// nodeEvalArgvRe matches an EXECUTION of node -e in argv form:
+	// subprocess.run/call/check_call/check_output/Popen(["node", "-e", PAYLOAD]).
+	// The execution call is required so merely BUILDING a command list
+	// (cmd = ["node", "-e", payload]) does not count -- a CRITICAL rule
+	// must see the payload actually run. PAYLOAD must be a bare identifier
+	// (a variable); an inline string-literal script is not bound here.
+	// (cmd = [...] then subprocess.run(cmd) is intentionally out of scope:
+	// it would need a separate command-variable binding hop.)
+	nodeEvalArgvRe = regexp.MustCompile(`(?i)subprocess\.(?:run|call|check_call|check_output|Popen)\s*\(\s*\[\s*["']node["']\s*,\s*["'](?:-e|--eval)["']\s*,\s*([A-Za-z_]\w*)\b`)
 
-	// nodeEvalShellRe matches os.system("node -e " + PAYLOAD) and similar
-	// string-concatenation shell forms; group 1 is the concatenated var.
-	nodeEvalShellRe = regexp.MustCompile(`(?i)node\s+(?:-e|--eval)\b[^"']*["']\s*\+\s*([A-Za-z_]\w*)\b`)
+	// nodeEvalShellRe matches an EXECUTION of node -e in shell-string
+	// form: os.system("node -e " + PAYLOAD). The os.system call is
+	// required so building a command string without running it does not
+	// count; group 1 is the concatenated var.
+	nodeEvalShellRe = regexp.MustCompile(`(?i)os\.system\s*\(\s*["']node\s+(?:-e|--eval)\b[^"']*["']\s*\+\s*([A-Za-z_]\w*)\b`)
 
 	// identRe extracts bare identifiers referenced on a RHS, for taint
 	// propagation (a hop is "this assignment references a tainted var").
