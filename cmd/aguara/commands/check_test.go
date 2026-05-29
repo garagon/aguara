@@ -1154,6 +1154,66 @@ func TestCheck_PackageLockAliasCatchesRealPackage(t *testing.T) {
 	}
 }
 
+// --- yarn.lock (classic v1) coverage: npm ecosystem, packagecheck path ---
+
+func TestCheckPlan_YarnLockOnlyMapsToNPMToken(t *testing.T) {
+	plan, err := buildCheckPlan(nil, "../../../internal/packagecheck/testdata/yarn-lock-compromised")
+	require.NoError(t, err)
+	require.False(t, plan.runNPM, "fixture has no node_modules; incident.CheckNPM must not be triggered")
+	require.Len(t, plan.packagecheckTargets, 1, "fixture has exactly one yarn.lock target")
+	require.Equal(t, "npm", plan.packagecheckTargets[0].Ecosystem)
+	require.Equal(t, "yarn.lock", plan.packagecheckTargets[0].Source)
+	require.Equal(t, ecoNPM, plan.singleEcoToken())
+}
+
+func TestCheck_YarnLockCompromisedFixtureFiresFinding(t *testing.T) {
+	// `aguara check <yarn-repo>` on a fresh clone (yarn.lock, no
+	// node_modules) must detect node-ipc 9.2.3. End-to-end: autodetect
+	// picks yarn.lock as npm ecosystem, ParseYarnLock extracts the
+	// ref, matcher hits the embedded node-ipc record.
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/yarn-lock-compromised")
+
+	require.Len(t, result.Ecosystems, 1)
+	got := result.Ecosystems[0]
+	require.Equal(t, "npm", got.Ecosystem)
+	require.Equal(t, "yarn.lock", got.Source)
+	require.Contains(t, got.Path, "yarn.lock")
+	require.Equal(t, 2, got.PackagesRead, "node-ipc + lodash declared in the lockfile")
+	require.GreaterOrEqual(t, got.FindingsCount, 1, "node-ipc@9.2.3 must produce at least one finding")
+
+	var nodeIPCFinding *incident.Finding
+	for i := range result.Findings {
+		if strings.Contains(result.Findings[i].Title, "node-ipc") {
+			nodeIPCFinding = &result.Findings[i]
+			break
+		}
+	}
+	require.NotNil(t, nodeIPCFinding, "node-ipc finding missing; got: %+v", result.Findings)
+	require.Equal(t, incident.SevCritical, nodeIPCFinding.Severity, "node-ipc 9.2.3 must be CRITICAL")
+}
+
+func TestCheck_YarnLockCleanFixtureProducesZeroFindings(t *testing.T) {
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/yarn-lock-clean")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "yarn.lock", result.Ecosystems[0].Source)
+	require.Equal(t, 2, result.Ecosystems[0].PackagesRead, "lodash + @types/node")
+	require.Equal(t, 0, result.Ecosystems[0].FindingsCount, "clean fixture must have zero findings")
+	require.Empty(t, result.Findings)
+}
+
+func TestCheck_ExplicitNPMOnYarnLockOnlyRepoFires(t *testing.T) {
+	// `aguara check --ecosystem npm --path <yarn.lock-only repo>` must
+	// scan the lockfile (no node_modules required).
+	result := checkToFile(t, "--ecosystem", "npm", "--path", "../../../internal/packagecheck/testdata/yarn-lock-compromised")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "npm", result.Ecosystems[0].Ecosystem)
+	require.Equal(t, "yarn.lock", result.Ecosystems[0].Source)
+	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "node-ipc 9.2.3 should fire")
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {
