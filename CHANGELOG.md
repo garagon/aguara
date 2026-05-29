@@ -5,6 +5,51 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-05-29
+
+Check more npm projects before install, and reduce false positives on
+two high-risk install-script rules. `aguara check` now reads
+`package-lock.json` and `yarn.lock` (classic) pre-install, alongside the
+existing `pnpm-lock.yaml` support, and two co-presence rules become
+flow-sensitive bindings. Detection coverage, offline-by-default
+behavior, and rule IDs are unchanged.
+
+### Added
+
+- **Pre-install npm coverage for `package-lock.json`.** `aguara check`
+  reads `package-lock.json` on a freshly cloned npm project, before
+  `npm install` has created `node_modules`. It parses lockfile versions
+  1, 2, and 3, resolves npm aliases (`"alias": "npm:real@ver"`) to the
+  real registry package, and conservatively skips local / git /
+  workspace / aliased entries it cannot map with confidence to a
+  registry (name, version). Exact and npm range advisories both apply.
+- **Pre-install npm coverage for `yarn.lock` (classic v1).** The same
+  pre-install audit for Yarn classic projects, with the same
+  conservative skip rules. A Yarn Berry (v2+) lockfile is detected and
+  reported with a clear error instead of being parsed, so a Berry repo
+  is never silently treated as audited. Berry parsing is a future layer.
+
+So a freshly cloned npm, pnpm, or Yarn classic project can be checked
+before any install runs.
+
+### Changed
+
+- **Flow-sensitive binding for two high-risk rules.**
+  `PY_IMPORTTIME_REMOTE_JS_001` (Python install hooks that fetch and
+  `node -e` remote JavaScript) and `RS_BUILD_WALLET_EXFIL_001` (Cargo
+  `build.rs` scripts that read wallet/keystore material and send it)
+  moved from co-presence pattern rules to dedicated flow-sensitive
+  analyzers. They now fire only when the source value reaches the
+  execution or exfiltration sink within one or two hops, instead of when
+  the two halves merely co-occur in the same file. This cuts false
+  positives on both rules; the rule IDs and severity are unchanged.
+
+### Deprecated
+
+- `intel.Update` (the library helper that fetched OSV directly) is now
+  marked deprecated in favor of the signed-bundle refresh path added in
+  0.21.0. The API is retained for compatibility and no CLI path uses it.
+
 ## [0.21.0] - 2026-05-28
 
 Trusted fresh threat intel. `aguara update` and `--fresh` checks now

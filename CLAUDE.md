@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.15.0 (2026-05-13). 193 rules, 13 categories, 7 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, NLP, toxicflow, rugpull) plus the `aguara check --ecosystem {python,npm}` incident command, ~750 tests, 0 lint issues.
+Aguara v0.22.0 (2026-05-29). 193 YAML rules + 28 analyzer-emitted (221 cataloged), 13 categories, 9 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic, and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -56,17 +56,19 @@ Aguara is a deterministic static security scanner for AI agent skills and MCP se
 
 Root package re-exports types from `internal/types` and exposes: `Scan()`, `ScanContent()`, `ListRules()`, `ExplainRule()`, `Discover()`. Used by external consumers like `aguara-mcp`. Functional options pattern (`WithMinSeverity()`, `WithWorkers()`, etc.).
 
-### Analysis Pipeline (6 default analyzers + rug-pull when --monitor is set, run sequentially per file)
+### Analysis Pipeline (8 default analyzers + rug-pull when --monitor is set, run sequentially per file)
 
 1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
 2. **CI Trust** (`internal/engine/ci/`) - YAML parser for `.github/workflows/*.yml`. Detects `pull_request_target` pwn-request chains, cache poisoning, OIDC token surface, and persisted-credentials checkouts. Emits `GHA_PWN_REQUEST_001` / `GHA_CACHE_001` / `GHA_OIDC_001` / `GHA_CHECKOUT_001`.
 3. **PkgMeta** (`internal/engine/pkgmeta/`) - JSON parser for `package.json`. Detects npm install-time lifecycle scripts paired with git-sourced dependencies, optional-git deps, and publish-surface chains. Emits `NPM_LIFECYCLE_GIT_001` / `NPM_OPTIONAL_GIT_001` / `NPM_PUBLISH_SURFACE_001`.
 4. **JSRisk** (`internal/engine/jsrisk/`) - Single-pass JavaScript scanner for `.js`/`.mjs`/`.cjs`. Detects obfuscator-shape payloads, install-time daemonization, CI secret harvesting, runner process-memory pivots, and Claude Code/VS Code persistence. Emits `JS_OBF_001` / `JS_DAEMON_001` / `JS_CI_SECRET_HARVEST_001` / `JS_PROC_MEM_OIDC_001` / `AGENT_PERSISTENCE_001`.
-5. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
-6. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file source/sink co-occurrence + cross-file capability correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
-7. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
+5. **PyRisk** (`internal/engine/pyrisk/`) - Flow-sensitive single-pass scanner for `setup.py`/`__init__.py`. Binds a remote-JS fetch to a `node -e`/`--eval` execution sink (≤2 hops, taint cleared on safe reassignment). Emits `PY_IMPORTTIME_REMOTE_JS_001` (moved from a co-presence YAML rule in v0.22.0).
+6. **RSBuild** (`internal/engine/rsbuild/`) - Flow-sensitive single-pass scanner for `build.rs`. Binds a wallet/keystore read to a network send sink (the tainted value must reach a send/body argument; ≤2 hops). Emits `RS_BUILD_WALLET_EXFIL_001` (moved from a co-presence YAML rule in v0.22.0).
+7. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
+8. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file source/sink co-occurrence + cross-file capability correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
+9. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
-All seven implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first six run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check --ecosystem npm` (`internal/incident/npm.go`) is a separate command-line entry point, not part of the scan pipeline.
+All nine implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first eight run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
 
 ### Key Package Relationships
 
