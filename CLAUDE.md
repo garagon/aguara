@@ -148,12 +148,12 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 193)
+- Rule count (currently 193 YAML / 221 cataloged)
 - Test count (currently ~750)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.15.0)
+- Version number (currently v0.22.0)
 
 Use `Grep` to find all occurrences before updating.
 

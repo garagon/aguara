@@ -11,8 +11,8 @@ Check more npm projects before install, and reduce false positives on
 two high-risk install-script rules. `aguara check` now reads
 `package-lock.json` and `yarn.lock` (classic) pre-install, alongside the
 existing `pnpm-lock.yaml` support, and two co-presence rules become
-flow-sensitive bindings. Detection coverage, offline-by-default
-behavior, and rule IDs are unchanged.
+flow-sensitive bindings. Rule IDs, severities, and offline-by-default
+behavior are unchanged.
 
 ### Added
 
