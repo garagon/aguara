@@ -1084,26 +1084,25 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 }
 
 // resolveCheckIntel builds the IntelOverride the check pipeline
-// should consume. ecosystems scopes a --fresh refresh to only the
-// OSV buckets the plan actually touches (a `--ecosystem maven`
-// user does NOT want a --fresh to pull npm + PyPI just because
-// those happened to be the legacy intel.Update default). An empty
-// ecosystems list leaves intel.Update's default behaviour intact
-// (all supported ecosystems in v0.17).
+// should consume. ecosystems is the set of OSV buckets the plan
+// touches; it scopes WHICH ecosystems the check looks at. A non-empty
+// list also means there is something to check, so --fresh is worth a
+// network fetch (the fetched signed bundle always covers all supported
+// ecosystems regardless).
 //
 // The logic is:
 //
-//  1. If --fresh was passed, run intel.Update for `ecosystems`;
-//     on success save to local Store and override with
-//     [embedded..., refreshed]. IntelSummary.Mode = "online",
-//     Snapshot = "remote-fresh".
-//  2. If --fresh failed AND --allow-stale was passed, fall back
-//     to a local-only or embedded-only override and continue.
-//  3. If --fresh was NOT passed AND a local snapshot exists,
-//     layer it over the embedded snapshots. Mode stays "offline";
-//     Snapshot = "local".
+//  1. If --fresh was passed, fetch + verify Aguara's signed advisory
+//     bundle (fetchVerifiedSnapshot); on success save it to the local
+//     Store via SaveVerified and override with [embedded..., refreshed].
+//     IntelSummary.Mode = "online", Snapshot = "remote-fresh".
+//  2. If --fresh failed AND --allow-stale was passed, fall back ONLY to
+//     a previously verified local snapshot; error if none is cached.
+//  3. If --fresh was NOT passed AND a previously verified local snapshot
+//     exists, layer it over the embedded snapshots. Mode stays
+//     "offline"; Snapshot = "local-verified".
 //  4. Otherwise, return nil so the check uses the cached embedded
-//     matcher (the legacy default path).
+//     matcher (the default offline path).
 //
 // This is the only place the CLI touches the network for `check`.
 // Returning nil keeps the default-check contract intact: no flags,
@@ -1124,13 +1123,10 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 
 	if flagCheckFresh && len(ecosystems) == 0 {
 		// --fresh on an empty plan (e.g. `aguara check --fresh
-		// --path <empty-dir>` autodetect that found nothing)
-		// has nothing to refresh. We skip the network entirely
-		// rather than fall through to intel.Update's empty-
-		// default behaviour, which would refresh every supported
-		// ecosystem just to satisfy a check that will produce
-		// zero findings. The local / embedded snapshot is the
-		// safe answer.
+		// --path <empty-dir>` autodetect that found nothing) has
+		// nothing to check, so there is no point fetching the bundle
+		// over the network. The local / embedded snapshot is the safe
+		// answer.
 		return localOrEmbeddedOverride(store), nil
 	}
 
