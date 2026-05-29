@@ -34,9 +34,9 @@ prompt injection, credential leaks, etc.) together, and report a
 single combined verdict.
 
 Default audits stay offline -- they use the same embedded threat intel
-the standalone 'aguara check' uses. Pass --fresh to refresh OSV intel
-before the audit. Pass --ci to fail-on critical with no color (the
-default for unattended CI runs).`,
+the standalone 'aguara check' uses. Pass --fresh to refresh from Aguara's
+signed advisory bundle (verified before use) before the audit. Pass --ci
+to fail-on critical with no color (the default for unattended CI runs).`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runAudit,
 }
@@ -47,7 +47,7 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
 	auditCmd.Flags().BoolVar(&flagAuditFresh, "fresh", false, "Refresh threat intel from Aguara's signed advisory bundle before the audit (network opt-in)")
 	auditCmd.Flags().BoolVar(&flagAuditInsecure, "insecure-intel", false, "Skip advisory-bundle signature verification (also requires AGUARA_INSECURE_INTEL=1; mirrors / air-gapped / tests only; manifest + blob digests are still checked)")
-	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
+	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "If --fresh fails, fall back to previously verified local intel (errors if none is cached)")
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
 	// Runtime errors (ErrThresholdExceeded after the verdict

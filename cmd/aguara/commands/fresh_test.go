@@ -110,22 +110,38 @@ func TestCheckFreshTamperedBundleErrorsAndDoesNotWrite(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "failed verification must not write the cache")
 }
 
-func TestCheckFreshAllowStaleUsesExistingCache(t *testing.T) {
+func TestCheckFreshAllowStaleUsesVerifiedCache(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Seed a previously verified local cache.
-	intelDir := filepath.Join(home, ".aguara", "intel")
-	require.NoError(t, os.MkdirAll(intelDir, 0o700))
 	snapPath := storeSnapshotPath(home)
-	existing := []byte(`{"schema_version":1,"generated_at":"2026-01-01T00:00:00Z","sources":[],"records":[]}` + "\n")
-	require.NoError(t, os.WriteFile(snapPath, existing, 0o600))
 
-	// Fresh fails (tampered), but --allow-stale falls back to the cache.
+	// First, a successful --fresh writes a VERIFIED cache (snapshot +
+	// provenance marker).
+	require.NoError(t, runCheckFresh(t, t.TempDir(), serveSignedBundle(t, false)))
+	before, err := os.ReadFile(snapPath)
+	require.NoError(t, err)
+
+	// Now --fresh fails (tampered); --allow-stale falls back to the
+	// previously verified cache without overwriting it.
 	require.NoError(t, runCheckFresh(t, t.TempDir(), serveSignedBundle(t, true), "--allow-stale"))
-
 	after, err := os.ReadFile(snapPath)
 	require.NoError(t, err)
-	require.Equal(t, existing, after, "fallback must not overwrite the existing verified cache")
+	require.Equal(t, before, after, "fallback must not overwrite the verified cache")
+}
+
+func TestCheckFreshAllowStaleRejectsUnverifiedLegacyCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Seed a raw snapshot.json with NO provenance marker -- e.g. a cache
+	// left by the legacy direct-OSV path or a hand-written file. It must
+	// NOT be trusted as "previously verified".
+	intelDir := filepath.Join(home, ".aguara", "intel")
+	require.NoError(t, os.MkdirAll(intelDir, 0o700))
+	require.NoError(t, os.WriteFile(storeSnapshotPath(home),
+		[]byte(`{"schema_version":1,"generated_at":"2026-01-01T00:00:00Z","sources":[],"records":[]}`+"\n"), 0o600))
+
+	err := runCheckFresh(t, t.TempDir(), serveSignedBundle(t, true), "--allow-stale")
+	require.Error(t, err, "--allow-stale must reject an unverified (markerless) local snapshot")
 }
 
 func TestCheckFreshAllowStaleWithoutCacheErrors(t *testing.T) {

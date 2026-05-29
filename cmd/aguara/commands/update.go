@@ -43,8 +43,8 @@ only then writes the snapshot to ~/.aguara/intel/snapshot.json.
 The bundle is produced from OSV.dev by the intel-publish workflow and
 signed there; the update command only trusts a verified, signed bundle
 and does not fetch OSV directly. A bundle that fails verification is not
-used. (check / audit --fresh still use the legacy direct-OSV path until a
-follow-up migrates them to verified bundles.)
+used. 'aguara check --fresh' and 'aguara audit --fresh' use the same
+verified bundle.
 
 This command is the only place 'aguara update' touches the network.
 Default 'aguara check' invocations stay offline.
@@ -107,7 +107,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("aguara update: verified bundle has 0 records; refusing to overwrite cached intel (pass --allow-empty to save anyway)")
 	}
 
-	if err := store.Save(snap); err != nil {
+	// SaveVerified writes a provenance marker so a later --allow-stale
+	// fallback can prove this cache came from a verified signed bundle.
+	if err := store.SaveVerified(snap); err != nil {
 		return fmt.Errorf("aguara update: save snapshot: %w", err)
 	}
 
