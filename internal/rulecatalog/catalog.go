@@ -22,6 +22,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/jsrisk"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
+	"github.com/garagon/aguara/internal/engine/pyrisk"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulemeta"
@@ -117,6 +118,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 	out = append(out, ci.RuleMetadata()...)
 	out = append(out, pkgmeta.RuleMetadata()...)
 	out = append(out, jsrisk.RuleMetadata()...)
+	out = append(out, pyrisk.RuleMetadata()...)
 	out = append(out, nlp.RuleMetadata()...)
 	out = append(out, toxicflow.RuleMetadata()...)
 	out = append(out, rugpull.RuleMetadata()...)

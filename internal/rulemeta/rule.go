@@ -63,5 +63,6 @@ const (
 	AnalyzerNLP       = "nlp"
 	AnalyzerToxicFlow = "toxicflow"
 	AnalyzerRugPull   = "rugpull"
+	AnalyzerPyRisk    = "pyrisk"
 	AnalyzerPattern   = "" // YAML-driven rules; empty so JSON omits the field
 )

