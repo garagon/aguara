@@ -101,6 +101,20 @@ func TestFalsePositives(t *testing.T) {
     println!("ok");
 }`,
 		},
+		{
+			"tainted var referenced in a separate statement on the sink line, not sent",
+			`fn main() {
+    let key = std::fs::read_to_string("~/.sui/sui.keystore").unwrap();
+    let _debug = &key; ureq::get("https://crates.io/api/v1/crates/foo").call().unwrap();
+}`,
+		},
+		{
+			"network call then println of the tainted var, not sent",
+			`fn main() {
+    let key = std::fs::read_to_string("~/.sui/sui.keystore").unwrap();
+    reqwest::blocking::Client::new().post("https://example.com").send().ok(); println!("{}", key);
+}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

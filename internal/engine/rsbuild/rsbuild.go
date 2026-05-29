@@ -56,6 +56,16 @@ var (
 	// networkSinkRe matches a network exfil sink.
 	networkSinkRe = regexp.MustCompile(`(?i)(reqwest::|ureq::|hyper::Client|surf::|isahc::|api\.github\.com/gists|gist\.github\.com|TcpStream::connect)`)
 
+	// sendMethodRe matches the call sites that actually put a value ON the
+	// wire: request bodies (.body/.json/.send_json/.send_string) and raw
+	// socket writes (.write_all/.write). .send is included only when it
+	// carries an argument (the no-arg reqwest .send() terminal contributes
+	// no material). Group 1 is the method name; the match ends just past
+	// the opening paren so the argument can be extracted with balanced
+	// parens. Merely referencing the tainted variable elsewhere on the
+	// line (a separate statement, a debug bind, a println!) is not a send.
+	sendMethodRe = regexp.MustCompile(`\.(body|json|send_json|send_string|write_all|write|send)\s*\(`)
+
 	// identRe extracts bare identifiers for taint propagation / sink
 	// reference checks.
 	identRe = regexp.MustCompile(`[A-Za-z_]\w*`)
@@ -93,9 +103,12 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			}
 		}
 
-		// 2. A network sink that references a currently tainted variable
-		//    is the bound exfil finding.
-		if networkSinkRe.MatchString(ln.text) && referencesTainted(ln.text, taint) {
+		// 2. The bound exfil finding requires BOTH a network sink on the
+		//    line AND the tainted material appearing inside a send/body
+		//    argument on that sink (not merely referenced somewhere on the
+		//    line). That is the difference between "key reaches the request"
+		//    and "key is mentioned next to a request".
+		if networkSinkRe.MatchString(ln.text) && sinkSendsTainted(ln.text, taint) {
 			return []types.Finding{{
 				RuleID:      RuleBuildWalletExfil,
 				RuleName:    "Rust build.rs wallet/keystore exfiltration",
@@ -131,6 +144,43 @@ func derivedDepth(rhs string, taint map[string]int) (int, bool) {
 		return nd, true
 	}
 	return 0, false
+}
+
+// sinkSendsTainted reports whether any send/body method call on the line
+// carries a currently tainted variable inside its (balanced-paren)
+// argument. This is what proves the material reaches the wire, rather
+// than merely sitting in an unrelated statement on the same line
+// (e.g. `let _dbg = &key; ureq::get(url).call();` or a trailing
+// `println!("{}", key);`).
+func sinkSendsTainted(line string, taint map[string]int) bool {
+	for _, loc := range sendMethodRe.FindAllStringIndex(line, -1) {
+		// loc[1]-1 is the opening paren of the matched method call.
+		if referencesTainted(balancedArg(line, loc[1]-1), taint) {
+			return true
+		}
+	}
+	return false
+}
+
+// balancedArg returns the argument substring of a call whose opening
+// paren is at index open, tracking nested parens. If the parens do not
+// close on the line (a statement split across lines), it returns the
+// remainder, which the single-line model treats as the argument.
+func balancedArg(s string, open int) string {
+	depth := 0
+	start := open + 1
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return s[start:i]
+			}
+		}
+	}
+	return s[start:]
 }
 
 func referencesTainted(line string, taint map[string]int) bool {
