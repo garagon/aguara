@@ -11,10 +11,15 @@ import (
 )
 
 // yarnVersionRe matches the resolved-version line in a yarn classic
-// (v1) entry body: two-space indented `version "x.y.z"`. yarn v1
-// always quotes the value; yarn Berry uses `version: x.y.z` (no
-// quotes) and is rejected before this runs.
-var yarnVersionRe = regexp.MustCompile(`^\s+version\s+"([^"]+)"`)
+// (v1) entry body. The indent is anchored to EXACTLY two spaces, which
+// is the block-body level yarn v1 always emits. Nested sub-block
+// entries (under `dependencies:` / `optionalDependencies:`) sit at four
+// spaces, so a dependency literally named `version` with an exact range
+// cannot be mistaken for the block's own resolved version even when the
+// block has no top-level version line. yarn v1 always quotes the value;
+// yarn Berry uses `version: x.y.z` (no quotes) and is rejected before
+// this runs.
+var yarnVersionRe = regexp.MustCompile(`^  version\s+"([^"]+)"`)
 
 // yarnNonRegistryProtocols are descriptor range protocols that mark a
 // dependency as resolved from somewhere other than the public npm
@@ -54,8 +59,11 @@ var yarnNonRegistryProtocols = []string{
 //
 // Yarn Berry (v2+) yarn.lock is a different, YAML-shaped grammar with a
 // `__metadata:` block. The v1 line parser would misread it, so a Berry
-// file is detected and declined (returns no refs) rather than guessed
-// at; Berry support is a separate parser.
+// file is detected and rejected with a clear error rather than parsed.
+// Returning an empty result would let a Berry repo pass `aguara check
+// --ci` with zero packages read, which is too quiet: the user would not
+// learn their lockfile went unaudited. Failing loudly is the honest
+// signal until a Berry parser lands.
 //
 // Conservative by design, mirroring ParsePackageLock: an entry is
 // emitted only when it maps with confidence to a registry tuple. Any
@@ -71,11 +79,10 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 	content := string(data)
 
 	// Berry detection. A v2+ yarn.lock opens with a `__metadata:`
-	// block; v1 never has one. Declining here keeps the v1 parser from
-	// misreading Berry's `version: x.y.z` (unquoted) and `resolution:`
-	// grammar and emitting garbage.
+	// block; v1 never has one. Fail loudly rather than parse: a silent
+	// empty result would let a Berry repo look audited when it was not.
 	if strings.Contains(content, "__metadata:") {
-		return nil, nil
+		return nil, fmt.Errorf("yarn Berry lockfile detected; yarn.lock v2+ is not parsed yet (only yarn classic v1 is supported)")
 	}
 
 	seen := map[string]bool{}
@@ -180,7 +187,9 @@ func yarnHeaderNameAndRegistry(header string) (name string, registry bool) {
 // yarnDescriptorParse splits a yarn descriptor (`name@range`, optionally
 // quoted) into its name and range. Scoped names keep their leading '@';
 // the separating '@' is the first one after the scope. Returns ok=false
-// for a descriptor with no name/range separator.
+// for a descriptor with no name/range separator, an empty name, or an
+// empty range (`foo@`) — all invalid shapes the conservative parser
+// must skip rather than treat as a registry package.
 func yarnDescriptorParse(desc string) (name, rng string, ok bool) {
 	desc = strings.TrimSpace(desc)
 	desc = strings.Trim(desc, `"`)
@@ -200,7 +209,11 @@ func yarnDescriptorParse(desc string) (name, rng string, ok bool) {
 			return "", "", false
 		}
 	}
-	return desc[:at], desc[at+1:], true
+	name, rng = desc[:at], desc[at+1:]
+	if name == "" || rng == "" {
+		return "", "", false
+	}
+	return name, rng, true
 }
 
 // yarnRegistryRange reports whether a descriptor range resolves from the
