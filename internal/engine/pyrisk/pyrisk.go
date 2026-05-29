@@ -67,80 +67,98 @@ var (
 	identRe = regexp.MustCompile(`[A-Za-z_]\w*`)
 )
 
+// maxHops bounds taint propagation (the source itself is depth 0; a
+// node -e on a var up to 2 derivation hops away binds).
+const maxHops = 2
+
 // Analyze reports PY_IMPORTTIME_REMOTE_JS_001 when a node -e payload is
-// bound (<=2 hops) to a remote-JavaScript fetch in the same file.
+// bound (<= maxHops) to a remote-JavaScript fetch in the same file.
+//
+// The analysis is a single in-order, flow-sensitive pass: variable taint
+// is updated as assignments are seen (and CLEARED when a variable is
+// reassigned to something that does not trace back to a fetch), and a
+// sink is evaluated against the taint state at the point the sink
+// appears. This way a sink before the fetch, a tainted variable later
+// overwritten by a safe literal, and a same-named-but-safe variable at
+// the sink all correctly do NOT fire.
 func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.Finding, error) {
 	if !isTarget(target) || len(target.Content) == 0 {
 		return nil, nil
 	}
 
-	lines := codeLines(string(target.Content))
-
-	// Pass 1: classify assignments.
-	//   jsURLVars: var assigned a .js / campaign-host string literal.
-	//   tainted:   var assigned directly from a JS fetch (the source).
+	// taint[var] = hop depth (0 = the fetch result itself). Absence means
+	// untainted. jsURLVars[var] = assigned a .js / campaign-host literal.
+	taint := map[string]int{}
 	jsURLVars := map[string]bool{}
-	tainted := map[string]bool{}
-	for _, ln := range lines {
-		m := assignRe.FindStringSubmatch(ln.text)
-		if m == nil {
-			continue
-		}
-		lhs, rhs := m[1], m[2]
-		if isJSFetch(rhs, jsURLVars) {
-			tainted[lhs] = true
-			continue
-		}
-		if jsURLLiteralRe.MatchString(rhs) && isStringLiteralAssign(rhs) {
-			jsURLVars[lhs] = true
-		}
-	}
 
-	// Pass 2: propagate taint up to two hops. `b = <expr referencing a>`
-	// taints b when a is tainted (covers b = a, b = decode(a),
-	// b = a.replace(...), etc.).
-	for hop := 0; hop < 2; hop++ {
-		changed := false
-		for _, ln := range lines {
-			m := assignRe.FindStringSubmatch(ln.text)
-			if m == nil {
-				continue
-			}
+	for _, ln := range codeLines(string(target.Content)) {
+		// 1. Apply an assignment's effect on taint state first, so a
+		//    reassignment on this line is reflected before any sink on
+		//    the same line is evaluated.
+		if m := assignRe.FindStringSubmatch(ln.text); m != nil {
 			lhs, rhs := m[1], m[2]
-			if tainted[lhs] {
-				continue
-			}
-			if referencesTainted(rhs, tainted) {
-				tainted[lhs] = true
-				changed = true
+			switch {
+			case isJSFetch(rhs, jsURLVars):
+				taint[lhs] = 0
+				delete(jsURLVars, lhs)
+			default:
+				if d, ok := derivedDepth(rhs, taint); ok {
+					// 1- or 2-hop derivation of a currently tainted var.
+					taint[lhs] = d
+					delete(jsURLVars, lhs)
+				} else {
+					// Reassigned to something that does not trace back to
+					// a fetch: clear any prior taint on this variable.
+					delete(taint, lhs)
+					if isStringLiteralAssign(rhs) && jsURLLiteralRe.MatchString(rhs) {
+						jsURLVars[lhs] = true
+					} else {
+						delete(jsURLVars, lhs)
+					}
+				}
 			}
 		}
-		if !changed {
-			break
-		}
-	}
 
-	// Pass 3: a node -e sink whose payload variable is tainted is the
-	// bound finding.
-	for _, ln := range lines {
-		payload := nodeEvalPayloadVar(ln.text)
-		if payload == "" || !tainted[payload] {
-			continue
+		// 2. A node -e sink whose payload variable is tainted RIGHT NOW
+		//    is the bound finding.
+		if payload := nodeEvalPayloadVar(ln.text); payload != "" {
+			if _, ok := taint[payload]; ok {
+				return []types.Finding{{
+					RuleID:      RulePyImportTimeRemoteJS,
+					RuleName:    "PyPI import-time remote JavaScript execution",
+					Severity:    types.SeverityCritical,
+					Category:    "supply-chain",
+					Description: "A remote JavaScript payload fetched at install/import time is passed to node -e: the value executed traces back to the download.",
+					FilePath:    target.RelPath,
+					Line:        ln.num,
+					MatchedText: strings.TrimSpace(ln.text),
+					Remediation: "Remove the remote fetch and Node execution from package import/setup code. Packages must never download and run remote code at install or import time. Audit the host for credential exposure and rotate any tokens reachable from the build or import environment.",
+					Analyzer:    AnalyzerName,
+				}}, nil
+			}
 		}
-		return []types.Finding{{
-			RuleID:      RulePyImportTimeRemoteJS,
-			RuleName:    "PyPI import-time remote JavaScript execution",
-			Severity:    types.SeverityCritical,
-			Category:    "supply-chain",
-			Description: "A remote JavaScript payload fetched at install/import time is passed to node -e: the value executed traces back to the download.",
-			FilePath:    target.RelPath,
-			Line:        ln.num,
-			MatchedText: strings.TrimSpace(ln.text),
-			Remediation: "Remove the remote fetch and Node execution from package import/setup code. Packages must never download and run remote code at install or import time. Audit the host for credential exposure and rotate any tokens reachable from the build or import environment.",
-			Analyzer:    AnalyzerName,
-		}}, nil
 	}
 	return nil, nil
+}
+
+// derivedDepth reports the taint depth lhs would take if rhs derives from
+// a currently tainted variable (the shallowest referenced taint + 1),
+// and whether that is within the hop limit. Returns ok=false when rhs
+// references no tainted variable or the derivation would exceed maxHops.
+func derivedDepth(rhs string, taint map[string]int) (int, bool) {
+	best := -1
+	for _, id := range identRe.FindAllString(rhs, -1) {
+		if d, ok := taint[id]; ok && (best == -1 || d < best) {
+			best = d
+		}
+	}
+	if best == -1 {
+		return 0, false
+	}
+	if nd := best + 1; nd <= maxHops {
+		return nd, true
+	}
+	return 0, false
 }
 
 // isJSFetch reports whether rhs is a remote-JavaScript fetch: a fetch
@@ -158,16 +176,6 @@ func isJSFetch(rhs string, jsURLVars map[string]bool) bool {
 	}
 	for _, id := range identRe.FindAllString(arg, -1) {
 		if jsURLVars[id] {
-			return true
-		}
-	}
-	return false
-}
-
-// referencesTainted reports whether any identifier on rhs is tainted.
-func referencesTainted(rhs string, tainted map[string]bool) bool {
-	for _, id := range identRe.FindAllString(rhs, -1) {
-		if tainted[id] {
 			return true
 		}
 	}
