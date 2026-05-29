@@ -35,6 +35,23 @@ func VerifyAndDecode(manifestBytes, bundleBytes, blobBytes []byte) (intel.Snapsh
 	return checkManifestAgainstBlob(meta, blobBytes)
 }
 
+// DecodeUnverified parses and content-validates the manifest against the
+// blob WITHOUT verifying the Sigstore signature or publisher identity. It
+// still enforces manifest_schema (present + supported), the blob name,
+// the gzip/json digests + sizes, and the snapshot decode -- it only skips
+// the cryptographic trust check.
+//
+// This backs --insecure-intel, which is gated behind both a flag and an
+// env var at the CLI and is intended only for mirrors, air-gapped
+// re-hosting, and tests. It must never be reachable from config.
+func DecodeUnverified(manifestBytes, blobBytes []byte) (intel.Snapshot, error) {
+	meta, err := parseManifest(manifestBytes)
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
+	return checkManifestAgainstBlob(meta, blobBytes)
+}
+
 // checkManifestAgainstBlob runs the content checks (steps 3-6 above)
 // that bind a verified manifest to the downloaded blob. Split from the
 // signature path so the content invariants can be unit-tested
