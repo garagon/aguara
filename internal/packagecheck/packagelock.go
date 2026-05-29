@@ -40,7 +40,16 @@ var nonRegistryResolvedPrefixes = []string{
 // the JSON decoder ignores them. The install graph in v2/v3 lives
 // entirely in the flat `packages` map keys, so there is nothing to
 // recurse into.
+//
+// Name is set by npm only when the installed directory name differs
+// from the real package name, which is exactly the alias case
+// (`"foo": "npm:real-pkg@1.2.3"`): the key carries the alias
+// `node_modules/foo` while Name carries `real-pkg`. The resolved
+// Version is a plain semver in that case, so the npm: version-prefix
+// skip never fires; the parser uses Name to match the real registry
+// package instead of emitting the alias as if it were one.
 type plPackagesEntry struct {
+	Name     string `json:"name"`
 	Version  string `json:"version"`
 	Resolved string `json:"resolved"`
 	Link     bool   `json:"link"`
@@ -96,6 +105,12 @@ type packageLock struct {
 //     git: / ssh:) all skip the entry;
 //   - a missing or empty version skips the entry.
 //
+// Aliased installs (`"alias": "npm:real-pkg@1.2.3"`) are resolved to
+// the real registry package via the v2/v3 entry's `name` field, so
+// the alias is never emitted as a package and a compromised package
+// hidden behind an alias is still matched. An alias whose `name` is
+// not a usable npm identifier is skipped rather than guessed at.
+//
 // Skipping loses coverage on those entries; the alternative — guessing
 // a registry version for a git or aliased dependency — would invent a
 // false match against an npm advisory. Better to under-report than to
@@ -143,6 +158,22 @@ func ParsePackageLock(target Target) ([]PackageRef, error) {
 			name, ok := packageLockName(key)
 			if !ok {
 				continue
+			}
+			// Alias resolution. When the entry's Name disagrees with
+			// the directory name from the key, the dependency was
+			// installed under an alias (`"alias": "npm:real@ver"`).
+			// The real registry package is Name; map to it so a
+			// compromised package aliased to an innocuous-looking
+			// directory is still caught, and the alias is never
+			// emitted as a package in its own right. If Name is not a
+			// usable npm name we cannot map with certainty, so skip
+			// rather than guess.
+			if entry.Name != "" && entry.Name != name {
+				real, valid := validNPMName(entry.Name)
+				if !valid {
+					continue
+				}
+				name = real
 			}
 			if !registryEntry(entry.Link, entry.Version, entry.Resolved) {
 				continue

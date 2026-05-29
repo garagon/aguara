@@ -1130,6 +1130,30 @@ func TestCheck_ExplicitNPMOnPackageLockOnlyRepoFires(t *testing.T) {
 	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "node-ipc 9.2.3 should fire")
 }
 
+func TestCheck_PackageLockAliasCatchesRealPackage(t *testing.T) {
+	// A dependency aliased as `"safe-ipc": "npm:node-ipc@9.2.3"` must
+	// be caught as the real node-ipc 9.2.3, not slip through under the
+	// innocuous alias directory name. End-to-end through the matcher.
+	result := checkToFile(t, "../../../internal/packagecheck/testdata/package-lock-alias")
+
+	require.Len(t, result.Ecosystems, 1)
+	require.Equal(t, "package-lock.json", result.Ecosystems[0].Source)
+	require.Equal(t, 1, result.Ecosystems[0].PackagesRead, "one alias entry resolves to one real package")
+	require.GreaterOrEqual(t, result.Ecosystems[0].FindingsCount, 1, "aliased node-ipc 9.2.3 must still fire")
+
+	var nodeIPCFinding *incident.Finding
+	for i := range result.Findings {
+		if strings.Contains(result.Findings[i].Title, "node-ipc") {
+			nodeIPCFinding = &result.Findings[i]
+			break
+		}
+	}
+	require.NotNil(t, nodeIPCFinding, "aliased dependency must be reported as node-ipc; got: %+v", result.Findings)
+	for _, f := range result.Findings {
+		require.NotContains(t, f.Title, "safe-ipc", "the alias name must never appear as a package")
+	}
+}
+
 // --- Issue #109: npm and PyPI emit ecosystems[] entries on the incident path ---
 
 func TestCheckExplicitNPM_AppendsEcosystemsEntry(t *testing.T) {

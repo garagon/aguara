@@ -182,6 +182,48 @@ func TestParsePackageLock_SkipsNonRegistrySources(t *testing.T) {
 	require.Equal(t, []string{"clean@1.0.0"}, refSet(refs))
 }
 
+func TestParsePackageLock_AliasMapsToRealPackage(t *testing.T) {
+	// `"safe-ipc": "npm:node-ipc@9.2.3"` installs node-ipc under the
+	// alias directory node_modules/safe-ipc. The v2/v3 entry carries
+	// the real package in `name`. The parser must emit the REAL
+	// package (node-ipc@9.2.3), never the alias (safe-ipc@9.2.3),
+	// otherwise a compromised package hidden behind an innocuous alias
+	// would slip through and the alias would be reported as a package
+	// that does not exist in the registry.
+	refs, err := ParsePackageLock(writeLock(t, `{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "myapp", "version": "1.0.0" },
+	    "node_modules/safe-ipc": {
+	      "name": "node-ipc",
+	      "version": "9.2.3",
+	      "resolved": "https://registry.npmjs.org/node-ipc/-/node-ipc-9.2.3.tgz"
+	    }
+	  }
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"node-ipc@9.2.3"}, refSet(refs))
+}
+
+func TestParsePackageLock_AliasWithUnusableNameSkipped(t *testing.T) {
+	// An alias whose `name` is not a usable npm identifier cannot be
+	// mapped with certainty, so the entry is skipped rather than
+	// emitting the alias.
+	refs, err := ParsePackageLock(writeLock(t, `{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "myapp", "version": "1.0.0" },
+	    "node_modules/weird": {
+	      "name": "not/a/valid/name",
+	      "version": "1.0.0",
+	      "resolved": "https://registry.npmjs.org/whatever/-/whatever-1.0.0.tgz"
+	    }
+	  }
+	}`))
+	require.NoError(t, err)
+	require.Empty(t, refSet(refs))
+}
+
 func TestParsePackageLock_V1SkipsNonRegistryButRecursesChildren(t *testing.T) {
 	// A v1 git-sourced parent is skipped, but its registry children
 	// are still audited (recursion is unconditional on the parent's
