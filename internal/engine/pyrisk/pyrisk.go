@@ -247,10 +247,14 @@ func codeLines(src string) []codeLine {
 				}
 			}
 		}
-		line = stripLineComment(line)
-		if strings.TrimSpace(line) == "" {
+		line = strings.TrimSpace(stripLineComment(line))
+		if line == "" {
 			continue
 		}
+		// Store the de-indented line so assignment matching (^name = ...)
+		// works inside try:, def, with, and other indented blocks, which
+		// are common in setup.py / __init__.py. The original line number
+		// is preserved for the finding.
 		out = append(out, codeLine{num: i + 1, text: line})
 	}
 	return out
