@@ -111,13 +111,13 @@ type EcosystemResult struct {
 //
 // The HTTP path is opt-in: Update fetches raw OSV dumps directly.
 //
-// LEGACY: no aguara CLI path calls Update anymore. `aguara update`,
-// `check --fresh`, and `audit --fresh` all fetch Aguara's signed
-// advisory bundle and verify it (cmd/aguara/commands/freshintel.go).
+// Deprecated: Update fetches raw OSV over TLS and performs NO signature
+// verification. No aguara CLI path uses it anymore: `aguara update`,
+// `check --fresh`, and `audit --fresh` fetch Aguara's signed advisory
+// bundle and verify it before use (cmd/aguara/commands/freshintel.go).
 // Update is retained only as library API for external consumers and may
-// be deprecated in a future release; it performs NO signature
-// verification (it trusts raw OSV over TLS), so it must not be wired
-// back into a trusted runtime path.
+// be removed in a future major version; it must not be wired back into a
+// trusted runtime path.
 func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if opts.Importer == nil {
 		return nil, fmt.Errorf("intel update: Importer is required (CLI must wire osvimport.ImportFromZip)")

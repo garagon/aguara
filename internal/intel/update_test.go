@@ -1,3 +1,5 @@
+//lint:file-ignore SA1019 This file intentionally exercises intel.Update, the deprecated raw-OSV refresh library API, to keep its behaviour covered while it remains exported.
+
 package intel_test
 
 import (
