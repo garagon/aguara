@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
-	"github.com/garagon/aguara/internal/intel/osvimport"
 	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +22,7 @@ var (
 	flagCheckCI          bool
 	flagCheckFresh       bool
 	flagCheckAllowStale  bool
+	flagCheckInsecure    bool
 )
 
 const (
@@ -103,8 +101,9 @@ Supported values (case-insensitive):
   maven  (alias: java)
   nuget  (aliases: dotnet, csharp)
 
-The known-bad list ships embedded with the binary; --fresh refreshes
-only the ecosystems actually being checked.`,
+The known-bad list ships embedded with the binary; --fresh refreshes it
+from Aguara's signed advisory bundle (verified before use), which covers
+all supported ecosystems.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runCheck,
 }
@@ -114,8 +113,9 @@ func init() {
 	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
-	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel before checking (network opt-in)")
-	checkCmd.Flags().BoolVar(&flagCheckAllowStale, "allow-stale", false, "Continue with cached/embedded intel if --fresh refresh fails")
+	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel from Aguara's signed advisory bundle before checking (network opt-in)")
+	checkCmd.Flags().BoolVar(&flagCheckAllowStale, "allow-stale", false, "If --fresh fails, fall back to previously verified local intel (errors if none is cached)")
+	checkCmd.Flags().BoolVar(&flagCheckInsecure, "insecure-intel", false, "Skip advisory-bundle signature verification (also requires AGUARA_INSECURE_INTEL=1; mirrors / air-gapped / tests only; manifest + blob digests are still checked)")
 	// Runtime errors (ErrThresholdExceeded after --ci, --fresh
 	// network failures) should not trigger Cobra's flag-usage
 	// block: a CI log that prints "Error: findings exceed severity
@@ -1109,11 +1109,11 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 // Returning nil keeps the default-check contract intact: no flags,
 // no network.
 //
-// LEGACY (pending follow-up): a --fresh refresh here still calls
-// intel.Update, which fetches raw OSV over TLS WITHOUT a signature
-// check. `aguara update` already migrated to verified signed bundles
-// (PR 2); check / audit --fresh are not yet migrated, so --fresh here
-// trusts OSV transport only until that follow-up lands.
+// A --fresh refresh fetches Aguara's signed advisory bundle and verifies
+// it (signature + identity + manifest/blob digests) before trusting it,
+// via the shared fetchVerifiedSnapshot path. ecosystems still scopes
+// WHICH ecosystems the check looks at, but the fetched bundle always
+// covers all of them.
 func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.IntelOverride, error) {
 	store, storeErr := intel.DefaultStore()
 	if storeErr != nil {
@@ -1138,25 +1138,38 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 		ctx, cancel := context.WithTimeout(ctx, intel.DefaultHTTPTimeout)
 		defer cancel()
 
-		res, err := intel.Update(ctx, intel.UpdateOptions{
-			Importer:   osvUpdateAdapter,
-			Stderr:     os.Stderr,
-			Ecosystems: ecosystems,
-		})
+		insecure, ierr := resolveInsecureIntel(flagCheckInsecure)
+		if ierr != nil {
+			return nil, ierr
+		}
+
+		// Shared trust-root path: fetch + verify the signed advisory
+		// bundle (same as `aguara update`). A verification failure is
+		// fatal; we never trust an unverified fetch.
+		snap, err := fetchVerifiedSnapshot(ctx, intelBundleBaseURL, insecure)
 		if err != nil {
 			if !flagCheckAllowStale {
-				return nil, fmt.Errorf("--fresh refresh failed: %w (pass --allow-stale to fall back to cached intel)", err)
+				return nil, fmt.Errorf("--fresh refresh failed: %w (pass --allow-stale to fall back to previously verified local intel)", err)
 			}
-			fmt.Fprintf(os.Stderr, "warning: --fresh refresh failed (%v); falling back to cached intel\n", err)
-			return localOrEmbeddedOverride(store), nil
+			// --allow-stale: fall back ONLY to a previously verified
+			// local cache. If none exists, error rather than silently
+			// dropping to embedded -- the user asked for fresh intel.
+			ov := localOrEmbeddedOverride(store)
+			if ov == nil {
+				return nil, fmt.Errorf("--fresh refresh failed (%w) and no previously verified local intel is cached", err)
+			}
+			fmt.Fprintf(os.Stderr, "warning: --fresh refresh failed (%v); falling back to previously verified local intel\n", err)
+			return ov, nil
 		}
 		if store != nil {
-			if saveErr := store.Save(res.Snapshot); saveErr != nil {
+			// SaveVerified writes a provenance marker so a later
+			// --allow-stale can prove the cache was verified.
+			if saveErr := store.SaveVerified(snap); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: --fresh: save snapshot failed: %v\n", saveErr)
 			}
 		}
 		snaps := append([]intel.Snapshot{}, incident.EmbeddedSnapshots()...)
-		snaps = append(snaps, res.Snapshot)
+		snaps = append(snaps, snap)
 		return &incident.IntelOverride{
 			Snapshots:     snaps,
 			Mode:          "online",
@@ -1167,20 +1180,23 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 	return localOrEmbeddedOverride(store), nil
 }
 
-// localOrEmbeddedOverride returns an override layered over the
-// embedded snapshots when a local snapshot exists, or nil when no
-// local snapshot is found. Returning nil for the no-local case
-// keeps the cached default matcher in play -- no per-check
-// allocation, no behavioural change for the default `aguara check`
-// invocation.
+// localOrEmbeddedOverride returns an override layered over the embedded
+// snapshots when a PREVIOUSLY VERIFIED local snapshot exists, or nil
+// otherwise. "Verified" means written by a successful signed-bundle
+// refresh (SaveVerified wrote a matching provenance marker); a legacy or
+// hand-written snapshot.json with no marker is ignored. Returning nil
+// keeps the cached embedded matcher in play for the default `aguara
+// check`; the --allow-stale path treats nil as a hard error instead.
 func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
 	if store == nil {
 		return nil
 	}
-	snap, err := store.Load()
+	snap, err := store.LoadVerified()
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "warning: local intel snapshot unreadable: %v\n", err)
+			// A present-but-unverified or mismatched marker is worth
+			// surfacing; a plain "no verified cache" stays quiet.
+			fmt.Fprintf(os.Stderr, "warning: no usable verified local intel: %v\n", err)
 		}
 		return nil
 	}
@@ -1189,19 +1205,8 @@ func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
 	return &incident.IntelOverride{
 		Snapshots:     snaps,
 		Mode:          "offline",
-		SnapshotLabel: "local",
+		SnapshotLabel: "local-verified",
 	}
-}
-
-// osvUpdateAdapter is the production wiring of intel.UpdateOptions.Importer
-// to osvimport.ImportFromZip. Mirrors the adapter in update.go so the
-// two CLI surfaces (`aguara update` and `aguara check --fresh`) share
-// one importer hook.
-func osvUpdateAdapter(r io.ReaderAt, size int64, ecosystems []string, generatedAt time.Time) (intel.Snapshot, error) {
-	return osvimport.ImportFromZip(r, size, osvimport.Options{
-		Ecosystems:  ecosystems,
-		GeneratedAt: generatedAt,
-	})
 }
 
 // checkSeverityRank orders Finding.Severity strings against the

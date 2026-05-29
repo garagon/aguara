@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -44,6 +45,29 @@ func TestCheckManifestAgainstBlobValid(t *testing.T) {
 	}
 	if len(snap.Records) != 1 || snap.Records[0].ID != "MAL-2026-1" {
 		t.Fatalf("unexpected decoded snapshot: %+v", snap.Records)
+	}
+}
+
+func TestDecodeUnverifiedStillChecksContent(t *testing.T) {
+	// DecodeUnverified skips the signature but must still enforce the
+	// manifest/blob content checks.
+	meta, gz := validTriple(t)
+	mb, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	snap, err := DecodeUnverified(mb, gz)
+	if err != nil {
+		t.Fatalf("valid manifest/blob must decode unverified, got: %v", err)
+	}
+	if len(snap.Records) == 0 {
+		t.Fatal("expected decoded records")
+	}
+	// A tampered blob is still rejected even without signature checking.
+	bad := append([]byte{}, gz...)
+	bad[len(bad)/2] ^= 0xFF
+	if _, err := DecodeUnverified(mb, bad); err == nil {
+		t.Fatal("DecodeUnverified must still reject a blob that does not match the manifest digest")
 	}
 }
 

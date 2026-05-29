@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
-	"github.com/garagon/aguara/internal/intel/bundle"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +19,7 @@ var (
 	flagUpdateTimeout    time.Duration
 	flagUpdateEcosystems []string
 	flagUpdateAllowEmpty bool
+	flagUpdateInsecure   bool
 )
 
 // defaultIntelBundleBaseURL is where the signed advisory-intel bundle is
@@ -44,8 +43,8 @@ only then writes the snapshot to ~/.aguara/intel/snapshot.json.
 The bundle is produced from OSV.dev by the intel-publish workflow and
 signed there; the update command only trusts a verified, signed bundle
 and does not fetch OSV directly. A bundle that fails verification is not
-used. (check / audit --fresh still use the legacy direct-OSV path until a
-follow-up migrates them to verified bundles.)
+used. 'aguara check --fresh' and 'aguara audit --fresh' use the same
+verified bundle.
 
 This command is the only place 'aguara update' touches the network.
 Default 'aguara check' invocations stay offline.
@@ -61,6 +60,7 @@ func init() {
 	// supported ecosystem, so a partial fetch is not possible.
 	updateCmd.Flags().StringSliceVar(&flagUpdateEcosystems, "ecosystem", nil, "Ignored: the signed bundle covers all supported ecosystems (a partial fetch is not possible)")
 	updateCmd.Flags().BoolVar(&flagUpdateAllowEmpty, "allow-empty", false, "Save a 0-record snapshot anyway (defaults to error so a bad publish cannot wipe cached intel)")
+	updateCmd.Flags().BoolVar(&flagUpdateInsecure, "insecure-intel", false, "Skip advisory-bundle signature verification (also requires AGUARA_INSECURE_INTEL=1; mirrors / air-gapped / tests only; manifest + blob digests are still checked)")
 	// Runtime errors (HTTP failures, verification failures) should not
 	// trigger Cobra's flag-usage block. Same rationale as scan / check.
 	updateCmd.SilenceUsage = true
@@ -83,19 +83,20 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stderr, "aguara update: --ecosystem is ignored for signed bundles; the published bundle covers all supported ecosystems")
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), flagUpdateTimeout)
-	defer cancel()
-
-	manifest, bundleBytes, blob, err := fetchSignedBundle(ctx, http.DefaultClient, intelBundleBaseURL)
+	insecure, err := resolveInsecureIntel(flagUpdateInsecure)
 	if err != nil {
 		return fmt.Errorf("aguara update: %w", err)
 	}
 
-	// Verify EVERYTHING before anything is written: signature + pinned
-	// identity, manifest schema, blob name, gzip/json digests + sizes,
-	// and bundle_schema_version against the decoded snapshot. A failure
-	// here means the cache is left untouched (no partial writes).
-	snap, err := bundle.VerifyAndDecode(manifest, bundleBytes, blob)
+	ctx, cancel := context.WithTimeout(cmd.Context(), flagUpdateTimeout)
+	defer cancel()
+
+	// Fetch + verify EVERYTHING before anything is written: signature +
+	// pinned identity (unless --insecure-intel), manifest schema, blob
+	// name, gzip/json digests + sizes, and bundle_schema_version against
+	// the decoded snapshot. A failure leaves the cache untouched (no
+	// partial writes).
+	snap, err := fetchVerifiedSnapshot(ctx, intelBundleBaseURL, insecure)
 	if err != nil {
 		return fmt.Errorf("aguara update: %w", err)
 	}
@@ -106,52 +107,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("aguara update: verified bundle has 0 records; refusing to overwrite cached intel (pass --allow-empty to save anyway)")
 	}
 
-	if err := store.Save(snap); err != nil {
+	// SaveVerified writes a provenance marker so a later --allow-stale
+	// fallback can prove this cache came from a verified signed bundle.
+	if err := store.SaveVerified(snap); err != nil {
 		return fmt.Errorf("aguara update: save snapshot: %w", err)
 	}
 
 	return writeUpdateOutput(snap, store.Dir)
-}
-
-// fetchSignedBundle downloads the manifest, its Sigstore bundle, and the
-// gzipped snapshot blob from baseURL. Each download is capped at
-// intel.MaxHTTPBodyBytes so a hostile or runaway response cannot exhaust
-// memory. It performs no verification; the caller verifies before trust.
-func fetchSignedBundle(ctx context.Context, client *http.Client, baseURL string) (manifest, bundleBytes, blob []byte, err error) {
-	get := func(name string) ([]byte, error) {
-		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/"+name, nil)
-		if rerr != nil {
-			return nil, rerr
-		}
-		req.Header.Set("User-Agent", "aguara-update/1.0 (+https://github.com/garagon/aguara)")
-		resp, rerr := client.Do(req)
-		if rerr != nil {
-			return nil, fmt.Errorf("fetch %s: %w", name, rerr)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("fetch %s: http %d %s", name, resp.StatusCode, resp.Status)
-		}
-		data, rerr := io.ReadAll(io.LimitReader(resp.Body, intel.MaxHTTPBodyBytes+1))
-		if rerr != nil {
-			return nil, fmt.Errorf("read %s: %w", name, rerr)
-		}
-		if int64(len(data)) > intel.MaxHTTPBodyBytes {
-			return nil, fmt.Errorf("%s exceeds %d byte cap", name, intel.MaxHTTPBodyBytes)
-		}
-		return data, nil
-	}
-
-	if manifest, err = get("generated_intel.meta.json"); err != nil {
-		return nil, nil, nil, err
-	}
-	if bundleBytes, err = get("generated_intel.meta.json.bundle"); err != nil {
-		return nil, nil, nil, err
-	}
-	if blob, err = get(bundle.ExpectedBlobName); err != nil {
-		return nil, nil, nil, err
-	}
-	return manifest, bundleBytes, blob, nil
 }
 
 // updateOutput is the JSON-stable shape `aguara update --format json`

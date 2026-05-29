@@ -1,6 +1,8 @@
 package intel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,18 @@ type Store struct {
 // status.json (recording last update attempt + error) will land
 // in the runtime-update PR; the current Store keeps state in-memory.
 const snapshotFileName = "snapshot.json"
+
+// verifiedMarkerFileName is the provenance marker written next to the
+// snapshot by SaveVerified. Its presence + matching digest is what marks
+// a local snapshot as "previously verified by a signed bundle".
+const verifiedMarkerFileName = "verified.json"
+
+// verifiedMarker binds a local snapshot to a successful signature
+// verification by recording the SHA-256 of the exact snapshot bytes.
+type verifiedMarker struct {
+	SnapshotSHA256 string    `json:"snapshot_sha256"`
+	VerifiedAt     time.Time `json:"verified_at"`
+}
 
 // MaxSnapshotBytes caps the size of any snapshot Store will Load
 // from disk. Snapshots are user-trusted data after `aguara update`
@@ -64,6 +78,9 @@ func DefaultStore() (*Store, error) {
 
 // snapshotPath returns the path to the on-disk snapshot file.
 func (s *Store) snapshotPath() string { return filepath.Join(s.Dir, snapshotFileName) }
+
+// verifiedMarkerPath returns the path to the provenance marker.
+func (s *Store) verifiedMarkerPath() string { return filepath.Join(s.Dir, verifiedMarkerFileName) }
 
 // ensureDir creates s.Dir with permissions readable+writable only
 // by the current user, never by group or world. The snapshot is
@@ -126,48 +143,91 @@ func (s *Store) Load() (*Snapshot, error) {
 // a struct that cannot serialise (e.g. an exotic time) errors out
 // before the on-disk file is touched.
 func (s *Store) Save(snap Snapshot) error {
+	data, err := s.marshalForSave(snap)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureDir(); err != nil {
+		return fmt.Errorf("intel store: mkdir: %w", err)
+	}
+	return s.atomicWrite(s.snapshotPath(), data)
+}
+
+// SaveVerified persists snap AND a provenance marker (verified.json)
+// recording that this snapshot came from a signature-verified advisory
+// bundle. The marker binds to the snapshot by SHA-256 of the exact bytes
+// written, so a later hand-edit or swap of snapshot.json invalidates it.
+// LoadVerified (and therefore --allow-stale) trusts a local snapshot only
+// when this marker is present and matches; a legacy or hand-written
+// snapshot.json with no marker is treated as unverified.
+//
+// The snapshot is written first, then the marker, so a torn write leaves
+// at worst a snapshot with a missing/mismatched marker -- which reads as
+// "unverified", the safe outcome.
+func (s *Store) SaveVerified(snap Snapshot) error {
+	data, err := s.marshalForSave(snap)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureDir(); err != nil {
+		return fmt.Errorf("intel store: mkdir: %w", err)
+	}
+	if err := s.atomicWrite(s.snapshotPath(), data); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	marker := verifiedMarker{
+		SnapshotSHA256: hex.EncodeToString(sum[:]),
+		VerifiedAt:     time.Now().UTC(),
+	}
+	markerData, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return fmt.Errorf("intel store: marshal verified marker: %w", err)
+	}
+	return s.atomicWrite(s.verifiedMarkerPath(), markerData)
+}
+
+// marshalForSave validates the schema and serialises snap, applying the
+// size cap. Shared by Save and SaveVerified so both write identical bytes.
+func (s *Store) marshalForSave(snap Snapshot) ([]byte, error) {
 	if snap.SchemaVersion == 0 {
 		snap.SchemaVersion = CurrentSchemaVersion
 	}
 	if snap.SchemaVersion > CurrentSchemaVersion {
-		return fmt.Errorf("intel store: refusing to save schema v%d (this binary writes v%d)",
+		return nil, fmt.Errorf("intel store: refusing to save schema v%d (this binary writes v%d)",
 			snap.SchemaVersion, CurrentSchemaVersion)
 	}
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
-		return fmt.Errorf("intel store: marshal: %w", err)
+		return nil, fmt.Errorf("intel store: marshal: %w", err)
 	}
 	if int64(len(data)) > MaxSnapshotBytes {
-		return fmt.Errorf("intel store: snapshot serialises to %d bytes, exceeds %d cap",
+		return nil, fmt.Errorf("intel store: snapshot serialises to %d bytes, exceeds %d cap",
 			len(data), MaxSnapshotBytes)
 	}
+	return data, nil
+}
 
-	if err := s.ensureDir(); err != nil {
-		return fmt.Errorf("intel store: mkdir: %w", err)
-	}
-
-	dst := s.snapshotPath()
-	tmp, err := os.CreateTemp(s.Dir, ".snapshot-*.json")
+// atomicWrite writes data to dst via a temp file in the same directory,
+// fsynced and chmod 0600, then renamed over dst. A concurrent reader sees
+// only the old or the new file, never a half-written one.
+func (s *Store) atomicWrite(dst string, data []byte) error {
+	tmp, err := os.CreateTemp(s.Dir, ".intel-*.tmp")
 	if err != nil {
 		return fmt.Errorf("intel store: tempfile: %w", err)
 	}
 	tmpName := tmp.Name()
-	cleanup := func() {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-	}
-
-	if _, err := tmp.Write(data); err != nil {
-		cleanup()
 		return fmt.Errorf("intel store: write %s: %w", tmpName, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		cleanup()
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("intel store: fsync %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
-		// Close may report errors deferred from earlier writes;
-		// surface them rather than silently dropping the snapshot.
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("intel store: close %s: %w", tmpName, err)
 	}
@@ -180,6 +240,50 @@ func (s *Store) Save(snap Snapshot) error {
 		return fmt.Errorf("intel store: rename %s -> %s: %w", tmpName, dst, err)
 	}
 	return nil
+}
+
+// LoadVerified loads the snapshot ONLY if the provenance marker is present
+// and matches it byte-for-byte. It returns os.ErrNotExist when there is no
+// snapshot or no marker (so callers can treat "no verified intel" the same
+// as "no intel"), and a distinct error when a marker exists but does not
+// match the snapshot (tamper / partial write).
+func (s *Store) LoadVerified() (*Snapshot, error) {
+	data, err := os.ReadFile(s.snapshotPath())
+	if err != nil {
+		return nil, err // includes os.ErrNotExist
+	}
+	if int64(len(data)) > MaxSnapshotBytes {
+		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", MaxSnapshotBytes)
+	}
+	markerData, err := os.ReadFile(s.verifiedMarkerPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Snapshot present but no provenance marker: treat as
+			// not-verified (legacy / hand-written cache).
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("intel store: read verified marker: %w", err)
+	}
+	var marker verifiedMarker
+	if err := json.Unmarshal(markerData, &marker); err != nil {
+		return nil, fmt.Errorf("intel store: decode verified marker: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	if marker.SnapshotSHA256 != hex.EncodeToString(sum[:]) {
+		return nil, fmt.Errorf("intel store: snapshot does not match its verified marker (cache was modified after verification)")
+	}
+	var snap Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("intel store: decode %s: %w", s.snapshotPath(), err)
+	}
+	if snap.SchemaVersion == 0 {
+		snap.SchemaVersion = CurrentSchemaVersion
+	}
+	if snap.SchemaVersion > CurrentSchemaVersion {
+		return nil, fmt.Errorf("intel store: snapshot schema v%d is newer than this binary (v%d); upgrade aguara",
+			snap.SchemaVersion, CurrentSchemaVersion)
+	}
+	return &snap, nil
 }
 
 // Status returns the current Store status. It never fails: missing

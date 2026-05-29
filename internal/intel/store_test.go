@@ -185,3 +185,46 @@ func TestStoreSaveOverwritesAtomically(t *testing.T) {
 	require.Len(t, got.Records, 1)
 	require.Equal(t, "second", got.Records[0].ID)
 }
+
+func TestStoreSaveVerifiedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := &intel.Store{Dir: dir}
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, time.May, 28, 0, 0, 0, 0, time.UTC),
+		Records:       []intel.Record{{ID: "MAL-1", Ecosystem: "npm", Name: "x", Kind: intel.KindMalicious, Summary: "s", Versions: []string{"1.0.0"}}},
+	}
+	require.NoError(t, s.SaveVerified(snap))
+
+	// The provenance marker must exist alongside the snapshot.
+	require.FileExists(t, filepath.Join(dir, "verified.json"))
+
+	got, err := s.LoadVerified()
+	require.NoError(t, err)
+	require.Len(t, got.Records, 1)
+	require.Equal(t, "MAL-1", got.Records[0].ID)
+}
+
+func TestStoreLoadVerifiedRejectsMissingMarker(t *testing.T) {
+	dir := t.TempDir()
+	s := &intel.Store{Dir: dir}
+	// Plain Save writes the snapshot but NO provenance marker (legacy
+	// path). LoadVerified must treat it as not-verified.
+	require.NoError(t, s.Save(intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion}))
+	_, err := s.LoadVerified()
+	require.ErrorIs(t, err, os.ErrNotExist, "a markerless snapshot must read as not-verified")
+}
+
+func TestStoreLoadVerifiedRejectsTamperedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	s := &intel.Store{Dir: dir}
+	require.NoError(t, s.SaveVerified(intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records:       []intel.Record{{ID: "MAL-1", Ecosystem: "npm", Name: "x", Kind: intel.KindMalicious, Summary: "s", Versions: []string{"1.0.0"}}},
+	}))
+	// Hand-edit snapshot.json after verification: the marker no longer matches.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "snapshot.json"),
+		[]byte(`{"schema_version":1,"sources":[],"records":[]}`+"\n"), 0o600))
+	_, err := s.LoadVerified()
+	require.Error(t, err, "a snapshot edited after verification must fail LoadVerified")
+}
