@@ -5,6 +5,51 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-05-28
+
+Trusted fresh threat intel. `aguara update` and `--fresh` checks now
+refresh from a signed advisory bundle that Aguara publishes and verifies
+before use, instead of fetching OSV directly. Detection rules, advisory
+coverage, and offline-by-default behavior are unchanged.
+
+### Added
+
+- **Signed advisory bundles for `--fresh` / `aguara update`.** Aguara
+  publishes a signed advisory bundle (the same snapshot it embeds) on a
+  schedule. `aguara update`, `aguara check --fresh`, and
+  `aguara audit --fresh` fetch that bundle and verify it in-process
+  before trusting it: Sigstore signature + the expected publisher
+  identity, then the manifest against the blob (schema, name, sizes,
+  SHA-256 digests) and a schema-compatible decode. A bundle that fails
+  any check is never used and never written to the cache (no partial
+  writes). Verification is offline (the Sigstore trusted root is
+  embedded).
+- **`--insecure-intel`** (on `update` / `check` / `audit`): skips only
+  the signature/identity check for mirrors, air-gapped hosts, and tests.
+  It requires both the flag and `AGUARA_INSECURE_INTEL=1`, is never read
+  from config, prints a warning on every run, and still enforces the
+  manifest/blob digest and schema checks.
+
+### Changed
+
+- **`--fresh` no longer fetches OSV directly.** It refreshes from
+  Aguara's signed advisory bundle, which covers all supported
+  ecosystems. OSV is consumed and signed in the publishing workflow, not
+  at runtime.
+- **`--allow-stale` falls back only to previously verified local
+  intel.** A successful verified refresh records a provenance marker; on
+  a failed refresh, `--allow-stale` reuses the local cache only when that
+  marker is present and matches the snapshot, and errors otherwise
+  rather than silently using unverified data.
+
+### Upgrade note
+
+A local snapshot cached by an older version has no verification marker,
+so it is ignored by default and by `--allow-stale`. This is intentional:
+unverified cached intel is not trusted. Run `aguara update` once after
+upgrading to seed the verified local cache. Default `aguara check` keeps
+working offline against the binary's embedded snapshot in the meantime.
+
 ## [0.20.0] - 2026-05-28
 
 Scan baseline / diff mode plus a smaller, more maintainable embedded
