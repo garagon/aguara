@@ -19,6 +19,8 @@ import (
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
+	"github.com/garagon/aguara/internal/engine/pyrisk"
+	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulecatalog"
@@ -435,6 +437,12 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	// exfil sinks, runner-process memory access, and Claude / VS Code
 	// persistence references.
 	s.RegisterAnalyzer(jsrisk.New())
+	// pyrisk binds a remote-JS fetch to a node -e/--eval execution sink in
+	// Python install hooks; rsbuild binds a wallet/keystore read to a
+	// network sink in Cargo build scripts. Both replace the retired
+	// co-presence YAML rules, so they must run in the library path too.
+	s.RegisterAnalyzer(pyrisk.New())
+	s.RegisterAnalyzer(rsbuild.New())
 	// NLP and ToxicFlow are stateless, cheap to instantiate
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -580,6 +588,8 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	s.RegisterAnalyzer(ci.New())
 	s.RegisterAnalyzer(pkgmeta.New())
 	s.RegisterAnalyzer(jsrisk.New())
+	s.RegisterAnalyzer(pyrisk.New())
+	s.RegisterAnalyzer(rsbuild.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())

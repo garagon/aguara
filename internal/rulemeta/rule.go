@@ -64,5 +64,6 @@ const (
 	AnalyzerToxicFlow = "toxicflow"
 	AnalyzerRugPull   = "rugpull"
 	AnalyzerPyRisk    = "pyrisk"
+	AnalyzerRSBuild   = "rsbuild"
 	AnalyzerPattern   = "" // YAML-driven rules; empty so JSON omits the field
 )
