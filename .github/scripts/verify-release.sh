@@ -107,7 +107,10 @@ info "docker version: ${DOCKER_VERSION}"
 # image regresses to a single platform.
 PLATFORM="linux/${ARCH}"
 SBOM_JSON=$(docker buildx imagetools inspect "${IMAGE}:${VERSION_STRIPPED}" --format '{{json .SBOM}}')
-echo "$SBOM_JSON" | jq -e --arg p "$PLATFORM" \
+# Use printf, not echo: a valid SPDX SBOM can contain backslash escapes
+# (e.g. in CPE / PURL strings), and echo may interpret those escapes and
+# corrupt the JSON before jq parses it, causing a false "malformed" error.
+printf '%s' "$SBOM_JSON" | jq -e --arg p "$PLATFORM" \
     'if has($p) then .[$p].SPDX.SPDXID == "SPDXRef-DOCUMENT"
      else .SPDX.SPDXID == "SPDXRef-DOCUMENT" end' >/dev/null \
     || err "Docker image SBOM (SPDX) missing or malformed for ${PLATFORM}"
