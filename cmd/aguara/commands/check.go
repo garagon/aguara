@@ -331,9 +331,9 @@ func (p checkPlan) singleEcoToken() string {
 		return ecoNPM
 	}
 	if len(p.packagecheckTargets) > 0 {
-		// npm packagecheck targets (pnpm-lock.yaml and
-		// package-lock.json today; yarn.lock in a follow-up) are not
-		// in osvIDToEcoToken because npm normally flows through the
+		// npm packagecheck targets (pnpm-lock.yaml, package-lock.json,
+		// and yarn.lock classic today) are not in osvIDToEcoToken
+		// because npm normally flows through the
 		// incident path. Without this explicit map-back, a
 		// pnpm-only plan (no node_modules, no other lockfiles)
 		// would surface "" from singleEcoToken and the terminal
@@ -512,8 +512,8 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 		// empty result would silently hide the path mistake. We
 		// allow the empty result ONLY when at least one npm signal
 		// was discovered: runNPM (installed tree) or a packagecheck
-		// npm target (pnpm-lock.yaml or package-lock.json today;
-		// yarn.lock when it lands).
+		// npm target (pnpm-lock.yaml, package-lock.json, or yarn.lock
+		// classic today).
 		//
 		// Scope the error to npm-only invocations. When npm is
 		// combined with any other ecosystem the user is asking for
@@ -534,7 +534,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 					root = "."
 				}
 				return checkPlan{}, fmt.Errorf(
-					"npm check: %s has no node_modules tree and no pnpm-lock.yaml / package-lock.json; pass the path to a project with one or remove --ecosystem npm",
+					"npm check: %s has no node_modules tree and no pnpm-lock.yaml / package-lock.json / yarn.lock; pass the path to a project with one or remove --ecosystem npm",
 					root,
 				)
 			}

@@ -60,6 +60,7 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemNuGet, pickNuGetTargets},
 	{intel.EcosystemNPM, pickPnpmTarget},
 	{intel.EcosystemNPM, pickPackageLockTarget},
+	{intel.EcosystemNPM, pickYarnLockTarget},
 }
 
 // Discover walks root and returns one Target per lockfile / discovery
@@ -344,6 +345,27 @@ func pickPackageLockTarget(dir string) []Target {
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "package-lock.json"),
 			Source:    "package-lock.json",
+		}}
+	}
+	return nil
+}
+
+// pickYarnLockTarget returns a Target for a yarn project rooted at
+// dir, or nil when no yarn.lock is present. yarn installs from the npm
+// registry (Ecosystem = intel.EcosystemNPM); Source="yarn.lock" routes
+// the runner to ParseYarnLock and keeps the per-target EcosystemResult
+// distinct from the pnpm-lock.yaml / package-lock.json / node_modules
+// npm surfaces. The same node_modules-ancestor guard pnpm and
+// package-lock use applies.
+func pickYarnLockTarget(dir string) []Target {
+	if hasNodeModulesAncestor(dir) {
+		return nil
+	}
+	if statRegular(filepath.Join(dir, "yarn.lock")) {
+		return []Target{{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      filepath.Join(dir, "yarn.lock"),
+			Source:    "yarn.lock",
 		}}
 	}
 	return nil
