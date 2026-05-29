@@ -60,7 +60,7 @@ brew install garagon/tap/aguara
 ### Docker
 
 ```bash
-docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.19.0 check /repo
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.22.0 check /repo
 ```
 
 The image is multi-arch (`linux/amd64` and `linux/arm64`), runs as non-root UID 10001, base images are digest-pinned, and the image is signed at the digest with Cosign plus SPDX SBOM and SLSA provenance attestations. Tag a specific release for reproducibility.
@@ -69,14 +69,14 @@ The image is multi-arch (`linux/amd64` and `linux/arm64`), runs as non-root UID 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.21.0 sh
+  | VERSION=v0.22.0 sh
 ```
 
 `install.sh` downloads `checksums.txt` from the release and verifies the archive's SHA256 against it, aborting if neither `sha256sum` nor `shasum` is available. This catches a tampered or corrupted archive at the registry layer, but it does not verify the Cosign signature on `checksums.txt` itself. For full keyless-signature verification on the curl-pipe path, follow up with the Cosign step in [Verifying signed releases](#verifying-signed-releases). Default install location is `~/.local/bin`. Override for CI or containers:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.21.0 INSTALL_DIR=/usr/local/bin sh
+  | VERSION=v0.22.0 INSTALL_DIR=/usr/local/bin sh
 ```
 
 ### From source
@@ -96,7 +96,7 @@ Every release is signed with [Cosign](https://github.com/sigstore/cosign) keyles
 **Verify the release archive**:
 
 ```bash
-VERSION=v0.21.0
+VERSION=v0.22.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
@@ -358,11 +358,11 @@ aguara discover --format json
 ### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.21.0
+- uses: garagon/aguara@v0.22.0
   with:
     path: .
     fail-on: high
-    version: v0.21.0
+    version: v0.22.0
 ```
 
 Both pins (the action ref AND the `version:` input) are required. The action ref alone pins only the composite action and its install script; `version:` pins the Aguara binary the action installs. Setting both makes the workflow reproducible and dependabot-friendly: when a new release lands, the bot updates both together.
@@ -370,12 +370,12 @@ Both pins (the action ref AND the `version:` input) are required. The action ref
 Scans your repository, uploads findings to GitHub Code Scanning, and optionally fails the build:
 
 ```yaml
-- uses: garagon/aguara@v0.21.0
+- uses: garagon/aguara@v0.22.0
   with:
     path: ./mcp-server/
     severity: medium
     fail-on: high
-    version: v0.21.0
+    version: v0.22.0
 ```
 
 All inputs are optional. See [`action.yml`](action.yml) for the full list.
@@ -395,7 +395,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 
 ```yaml
 - name: Scan for security issues
-  run: docker run --rm -v "${{ github.workspace }}:/scan:ro" ghcr.io/garagon/aguara:0.19.0 scan /scan --ci
+  run: docker run --rm -v "${{ github.workspace }}:/scan:ro" ghcr.io/garagon/aguara:0.22.0 scan /scan --ci
 ```
 
 ### Manual / GitLab CI
@@ -404,7 +404,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitHub Actions (without the action)
 - name: Scan skills for security issues
   run: |
-    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.21.0 sh
+    curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.22.0 sh
     aguara scan .claude/skills/ --ci
 ```
 
@@ -412,7 +412,7 @@ All inputs are optional. See [`action.yml`](action.yml) for the full list.
 # GitLab CI
 security-scan:
   script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.21.0 sh
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.22.0 sh
     - aguara scan .claude/skills/ --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
@@ -421,7 +421,7 @@ security-scan:
 
 ## How It Works
 
-Aguara runs 6 scan analyzers sequentially on every file by default; a 7th (Rug-Pull) joins when `--monitor` is enabled and a state store is configured. Each catches a different class of attack:
+Aguara runs 8 scan analyzers sequentially on every file by default; a 9th (Rug-Pull) joins when `--monitor` is enabled and a state store is configured. Each catches a different class of attack:
 
 | Analyzer | Engine | What it catches |
 |----------|--------|-----------------|
@@ -429,11 +429,13 @@ Aguara runs 6 scan analyzers sequentially on every file by default; a 7th (Rug-P
 | **CI Trust** | GitHub Actions YAML parser | `pull_request_target` chains, cache poisoning across fork boundaries, OIDC token surface paired with install/build/test, persisted-credentials checkouts on PR head refs. |
 | **PkgMeta** | `package.json` JSON parser | npm install-time lifecycle scripts plus git-sourced dependencies, optional-git deps with suspicious names, publish surfaces paired with trusted-publishing references. |
 | **JSRisk** | JavaScript single-pass scanner | Obfuscator-shape payloads, install-time daemonization via `child_process`, CI secret harvesting through real `process.env` reads plus network/registry sinks, runner-process memory pivots to extract OIDC tokens, Claude Code / VS Code workspace persistence, chain-aware DNS TXT exfil. |
+| **PyRisk** | Python install-hook scanner | Python install hooks (`setup.py` / `__init__.py`) that fetch remote JavaScript and run it through a `node -e` / `--eval` execution sink. Flow-sensitive: the executed value must trace back, in one or two hops, to the fetch. |
+| **RSBuild** | Cargo build-script scanner | Cargo build scripts (`build.rs`) that read wallet or keystore material and send it to a network sink. Flow-sensitive: the value reaching the request body must trace back, in one or two hops, to the keystore read. |
 | **NLP Analyzer** | Goldmark AST + JSON/YAML extraction | Prompt injection in markdown structure, plus tool poisoning in JSON/YAML description fields. Keyword classification with proximity weighting; clustered keywords score higher, sparse keywords in long text get penalized. |
 | **Toxic Flow** | Capability correlation | Dangerous capability combinations within a single file and across files in the same directory. Surfaces credential reads co-occurring with webhook sends, env-var reads alongside shell execution, destructive plus exec combos across MCP server tools. |
 | **Rug-Pull Detector** | SHA256 hash tracking | Tool descriptions that change between scans. CLI: `--monitor` flag. Library: `WithStateDir()` for persistent consumers. |
 
-Separate `aguara check` and `aguara audit` commands inspect installed package trees (Python `site-packages`, npm `node_modules` including the pnpm `.pnpm` store) and walk the repo recursively for Go, Rust, PHP, Ruby, Java, and .NET lockfiles, matching every declared package against the embedded threat-intel snapshot. See [Supply-Chain Check](#supply-chain-check) for the full surface.
+Separate `aguara check` and `aguara audit` commands inspect installed package trees (Python `site-packages`, npm `node_modules` including the pnpm `.pnpm` store), read npm lockfiles pre-install (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock` classic), and walk the repo recursively for Go, Rust, PHP, Ruby, Java, and .NET lockfiles, matching every declared package against the embedded threat-intel snapshot. See [Supply-Chain Check](#supply-chain-check) for the full surface.
 
 All content is NFKC-normalized before scanning to prevent Unicode evasion attacks. All layers report findings with severity, dynamic confidence score (0.50-0.95), matched text, file location with context lines, and remediation guidance. An aggregate risk score (0-100) summarizes overall threat level.
 
@@ -523,10 +525,10 @@ Supported directives:
 
 ## Rules
 
-Aguara currently exposes **219 cataloged detections** through `aguara list-rules`:
+Aguara currently exposes **221 cataloged detections** through `aguara list-rules`:
 
 - **193 embedded YAML pattern rules** across 13 categories
-- **26 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, NLP, toxic-flow, and rug-pull
+- **28 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
 
 The table groups coverage by emit-time category for readability:
 
@@ -621,7 +623,7 @@ See the [mcp-aguara README](https://github.com/garagon/mcp-aguara) for install, 
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale, so it is not a supported product surface for v0.21.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
+Aguara Watch is being reworked. The previous public observatory is stale, so it is not a supported product surface for v0.22.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
 
 ## Enterprise use
 
