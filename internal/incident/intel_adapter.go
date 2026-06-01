@@ -188,7 +188,7 @@ func KnownCompromisedSnapshot() intel.Snapshot {
 // can detect a stale embedded snapshot. Reproducible across builds.
 // Must be >= the freshest Date string in KnownCompromised; a
 // regression test in intel_adapter_test.go enforces that ordering.
-var knownCompromisedGeneratedAt = time.Date(2026, time.May, 24, 0, 0, 0, 0, time.UTC)
+var knownCompromisedGeneratedAt = time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
 
 // normalizeEcosystemForIntel maps the legacy ecosystem strings used
 // by CompromisedPackage entries to the canonical intel ecosystem
