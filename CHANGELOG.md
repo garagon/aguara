@@ -5,6 +5,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-06-01
+
+Offline detection for the Red Hat / Miasma npm compromise reported on
+2026-06-01. `aguara check` and `aguara audit` flag the affected
+`@redhat-cloud-services/*` packages by exact package and version, with no
+package execution and no registry lookup during the scan. This is a
+focused incident-response patch; rule IDs, severities, and
+offline-by-default behavior are otherwise unchanged.
+
+### Added
+
+- **Red Hat / Miasma npm compromise intel.** Adds the advisory
+  `AIKIDO-2026-06-01-redhat-miasma` to the built-in known-compromised
+  list, covering the 32 affected `@redhat-cloud-services/*` packages and
+  the malicious versions enumerated in the public report. The malicious
+  releases declared a `preinstall` hook running `node index.js` and
+  shipped an obfuscated install-time payload that harvested CI/OIDC
+  tokens, npm/PyPI publish tokens, cloud credentials, Vault tokens,
+  kubeconfig, SSH/GPG keys, Docker registry credentials, and `.env`
+  files, published via GitHub Actions OIDC trusted-publishing abuse.
+  Detection works across `node_modules`, `package-lock.json`,
+  `pnpm-lock.yaml`, and `yarn.lock` (classic). Matching is exact by
+  (ecosystem, package, version), so neighbouring clean releases stay
+  clean.
+
 ## [0.22.0] - 2026-05-29
 
 Check more npm projects before install, and reduce false positives on
