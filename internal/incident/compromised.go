@@ -83,6 +83,35 @@ var (
 	}
 )
 
+// miasmaAdvisory is the single advisory ID shared by every entry in
+// the Red Hat / @redhat-cloud-services compromise below. One ID keeps
+// the campaign readable in output and anchors the matcher's same-ID
+// version merge.
+const miasmaAdvisory = "AIKIDO-2026-06-01-redhat-miasma"
+
+// miasmaSummary is the shared summary for every Miasma entry. The
+// finding title already names the specific package+version+advisory,
+// so the summary carries the campaign behaviour rather than per-package
+// detail. Shared so the 32 entries stay consistent.
+const miasmaSummary = "Red Hat @redhat-cloud-services/* npm compromise (\"Miasma\", a Mini Shai-Hulud derivative). " +
+	"Affected versions declare a preinstall hook running `node index.js`, executing an obfuscated ~4.2 MB " +
+	"credential-stealing payload that sweeps CI/OIDC tokens (GITHUB_TOKEN, ACTIONS_RUNTIME_TOKEN), npm/PyPI " +
+	"publish tokens, AWS/GCP/Azure cloud credentials, HashiCorp Vault tokens, kubeconfig, SSH and GPG keys, " +
+	"Docker registry credentials, and .env files. Published via GitHub Actions OIDC trusted-publishing abuse."
+
+// miasmaIOCs are the campaign indicators from the Aikido report,
+// attached as metadata to each Miasma entry. IOCs are metadata only:
+// matching is by (ecosystem, name, version), so these never widen
+// detection or risk a false positive.
+var miasmaIOCs = []IOC{
+	{Type: "runtime", Value: "Miasma"},
+	{Type: "runtime", Value: "Mini Shai-Hulud"},
+	{Type: "path", Value: "index.js"},
+	{Type: "lifecycle", Value: "preinstall"},
+	{Type: "credential-target", Value: "GITHUB_TOKEN"},
+	{Type: "credential-target", Value: "ACTIONS_RUNTIME_TOKEN"},
+}
+
 // KnownCompromised is the embedded list of known compromised packages.
 // Updated with each Aguara release.
 //
@@ -579,6 +608,319 @@ var KnownCompromised = []CompromisedPackage{
 		Date:      "2026-05-24",
 		Summary:   "TrapDoor campaign npm package; whole package malicious (npm security-held, every version). Confirmed via OSV MAL-2026-4284 (introduced:0).",
 		IOCs:      trapdoorNPMIOCs,
+	},
+
+	// --- Red Hat / Miasma 2026-06-01 npm compromise (@redhat-cloud-services) ---
+	//
+	// Campaign documented by Aikido (2026-06-01): a compromised Red Hat
+	// developer account pushed malicious orphan commits to the
+	// @redhat-cloud-services repositories, which published malicious
+	// versions across 32 packages via GitHub Actions OIDC
+	// trusted-publishing abuse (a CI workflow requests an `id-token:
+	// write` token and publishes with it). Each malicious version
+	// declares `"preinstall": "node index.js"` and ships an obfuscated
+	// ~4.2 MB credential-stealing payload ("Miasma", a Mini Shai-Hulud
+	// derivative).
+	//
+	// Coverage note: Aikido's report headlines "96 malicious versions
+	// across 32 packages" but its body enumerates 63 specific
+	// package@version tuples (the 32 packages below). Those 63 are the
+	// only versions we can verify, so they are the only ones listed.
+	// We deliberately do NOT synthesise the ~33 unenumerated versions
+	// and do NOT widen to a range-only whole-package match: the
+	// legitimate @redhat-cloud-services packages have many clean
+	// releases, so a guessed range would false-positive real installs.
+	// A neighbour version (e.g. chrome@2.3.0) must stay clean. If the
+	// full list is later published, extend the Versions slices here.
+	//
+	// Source: https://www.aikido.dev/blog/red-hat-npm-packages-compromised-credential-stealing-worm
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/chrome",
+		Versions:  []string{"2.3.1", "2.3.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/compliance-client",
+		Versions:  []string{"4.0.3", "4.0.4"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/config-manager-client",
+		Versions:  []string{"5.0.4", "5.0.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/entitlements-client",
+		Versions:  []string{"4.0.11", "4.0.12"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/eslint-config-redhat-cloud-services",
+		Versions:  []string{"3.2.1", "3.2.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components",
+		Versions:  []string{"7.7.2", "7.7.3"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-advisor-components",
+		Versions:  []string{"3.8.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-config",
+		Versions:  []string{"6.11.3", "6.11.4"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-config-utilities",
+		Versions:  []string{"4.11.2", "4.11.3"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-notifications",
+		Versions:  []string{"6.9.2", "6.9.3"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-remediations",
+		Versions:  []string{"4.9.2", "4.9.3"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-testing",
+		Versions:  []string{"1.2.1", "1.2.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-translations",
+		Versions:  []string{"4.4.1", "4.4.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/frontend-components-utilities",
+		Versions:  []string{"7.4.1", "7.4.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/hcc-feo-mcp",
+		Versions:  []string{"0.3.1", "0.3.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/hcc-kessel-mcp",
+		Versions:  []string{"0.3.1", "0.3.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/hcc-pf-mcp",
+		Versions:  []string{"0.6.1", "0.6.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/host-inventory-client",
+		Versions:  []string{"5.0.3", "5.0.4"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/insights-client",
+		Versions:  []string{"4.0.4", "4.0.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/integrations-client",
+		Versions:  []string{"6.0.4", "6.0.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/javascript-clients-shared",
+		Versions:  []string{"2.0.8", "2.0.9"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/notifications-client",
+		Versions:  []string{"6.1.4", "6.1.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/patch-client",
+		Versions:  []string{"4.0.4", "4.0.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/quickstarts-client",
+		Versions:  []string{"4.0.11", "4.0.12"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/rbac-client",
+		Versions:  []string{"9.0.3", "9.0.4"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/remediations-client",
+		Versions:  []string{"4.0.4", "4.0.5"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/rule-components",
+		Versions:  []string{"4.7.2", "4.7.3"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/sources-client",
+		Versions:  []string{"3.0.10", "3.0.11"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/topological-inventory-client",
+		Versions:  []string{"3.0.10", "3.0.11"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/tsc-transform-imports",
+		Versions:  []string{"1.2.2"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/types",
+		Versions:  []string{"3.6.1", "3.6.2", "3.6.4"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
+	},
+	{
+		Ecosystem: EcosystemNPM,
+		Name:      "@redhat-cloud-services/vulnerabilities-client",
+		Versions:  []string{"2.1.8", "2.1.9"},
+		Advisory:  miasmaAdvisory,
+		Date:      "2026-06-01",
+		Summary:   miasmaSummary,
+		IOCs:      miasmaIOCs,
 	},
 }
 
