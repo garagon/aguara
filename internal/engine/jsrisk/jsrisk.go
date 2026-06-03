@@ -44,12 +44,13 @@ const AnalyzerName = "jsrisk"
 
 // Rule IDs emitted by this analyzer.
 const (
-	RuleObfuscation       = "JS_OBF_001"
-	RuleDaemon            = "JS_DAEMON_001"
-	RuleCISecretHarvest   = "JS_CI_SECRET_HARVEST_001"
-	RuleProcMemOIDC       = "JS_PROC_MEM_OIDC_001"
-	RuleAgentPersistence  = "AGENT_PERSISTENCE_001"
-	RuleDNSTXTExfil       = "JS_DNS_TXT_EXFIL_001"
+	RuleObfuscation      = "JS_OBF_001"
+	RuleDaemon           = "JS_DAEMON_001"
+	RuleCISecretHarvest  = "JS_CI_SECRET_HARVEST_001"
+	RuleProcMemOIDC      = "JS_PROC_MEM_OIDC_001"
+	RuleAgentPersistence = "AGENT_PERSISTENCE_001"
+	RuleDNSTXTExfil      = "JS_DNS_TXT_EXFIL_001"
+	RuleBunSecondStage   = "JS_BUN_SECOND_STAGE_001"
 )
 
 // Detection thresholds. Chosen to leave room for ordinary minified
@@ -135,7 +136,6 @@ var detachedTrueRe = regexp.MustCompile(`(?i)` + propertyBoundary + `["']?detach
 // `"stdio": ['ignore'`) at a property boundary.
 var stdioIgnoredRe = regexp.MustCompile(`(?i)` + propertyBoundary + `["']?stdio["']?\s*:\s*(?:['"]ignore['"]|\[\s*['"]ignore['"])`)
 
-
 // --- metrics ---
 
 // metrics holds the once-computed signals for the current file. Line
@@ -190,6 +190,15 @@ type metrics struct {
 	// straight to CRITICAL.
 	HasNodeIPCIOC bool
 	NodeIPCMatch  string
+
+	// Bun second-stage chain (JS_BUN_SECOND_STAGE_001). HasBunExecution
+	// is true when the file runs the Bun runtime through a bound
+	// child_process / execa / shelljs call. Execution alone never fires; a
+	// strong partner (obfuscator shape, CI/cloud secret read, or a
+	// network-call sink) is required, so the partner cannot be faked by a
+	// documentation string.
+	HasBunExecution bool
+	LineBun         int
 }
 
 // computeMetrics walks the content once, tracking line numbers and
@@ -286,6 +295,15 @@ func computeMetrics(content []byte) *metrics {
 	// child_process. Used by JS_OBF_001 severity escalation only.
 	m.HasChildProcess = hasChildProcessInvocation(content)
 	m.HasProcessEnv = bytes.Contains(lower, []byte("process.env"))
+
+	// Bun execution: a bound child_process / execa / shelljs call running
+	// bun, detected on COMMENT-STRIPPED code so a documented command is
+	// never mistaken for a launch. The gate (detectBunSecondStage) pairs
+	// this with a strong partner; execution alone never fires.
+	if line := bunExecutionSite(stripJSCommentsPreservingOffsets(content)); line > 0 {
+		m.HasBunExecution = true
+		m.LineBun = line
+	}
 
 	// CI / cloud secret reads come in three forms: direct member access
 	// (process.env.NAME), bracket access (process.env['NAME']), and
@@ -525,6 +543,82 @@ func hasChildProcessInvocation(content []byte) bool {
 	return len(collectChildProcessCalls(content)) > 0
 }
 
+// bunExecutionSite returns the 1-based line of the first REAL Bun runtime
+// launch in already-comment-stripped code, or 0. Execution is recognized
+// only at bound call sites: a child_process call (spawn/exec/execFile/fork
+// via collectChildProcessCalls) whose args run bun, an execa(...) call
+// running bun, or a shelljs `.exec(...)` running a bun command in a file
+// that imports shelljs. An unrelated `db.exec('bun run x')`, a
+// user-defined helper named exec/spawn, and documented commands therefore
+// do not register. Call-site starts inside a string literal are skipped
+// (a stringified example is not a call).
+func bunExecutionSite(code []byte) int {
+	strs := jsStringInteriors(code)
+	inString := func(i int) bool {
+		for _, r := range strs {
+			if r[0] > i {
+				break
+			}
+			if i >= r[0] && i < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+	best := -1
+	consider := func(start int) {
+		if start < 0 || inString(start) {
+			return
+		}
+		if best < 0 || start < best {
+			best = start
+		}
+	}
+
+	// Real child_process calls whose arguments launch bun on a payload:
+	// the program-literal form spawn("bun", ["./x.mjs"]) and the
+	// command-string form exec("bun run ./x"). Bound via
+	// collectChildProcessCalls (receiver alias or destructured), so a
+	// user-defined function named spawn/exec does not count.
+	for _, site := range collectChildProcessCalls(code) {
+		if callRunsBun(code[site.Start:site.ArgsStart], extractCallArgs(code, site.ArgsStart)) {
+			consider(site.Start)
+		}
+	}
+	// execa('bun', ['./x.mjs']) / execaCommand('bun run ./x').
+	for _, loc := range execaCallRe.FindAllIndex(code, -1) {
+		if callRunsBun(code[loc[0]:loc[1]], extractCallArgs(code, loc[1])) {
+			consider(loc[0])
+		}
+	}
+	// shelljs .exec("bun run ..."), bound to a real shelljs receiver: an
+	// inline require('shelljs').exec(...) or an alias bound to shelljs.
+	for _, loc := range shelljsInlineExecRe.FindAllIndex(code, -1) {
+		if bunCommandStrRe.Match(extractCallArgs(code, loc[1])) {
+			consider(loc[0])
+		}
+	}
+	shelljsAliases := map[string]bool{}
+	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
+		shelljsAliases[string(code[mm[2]:mm[3]])] = true
+	}
+	for _, mm := range shelljsAliasESMRe.FindAllSubmatchIndex(code, -1) {
+		shelljsAliases[string(code[mm[2]:mm[3]])] = true
+	}
+	if len(shelljsAliases) > 0 {
+		for _, mm := range aliasExecCallRe.FindAllSubmatchIndex(code, -1) {
+			if shelljsAliases[string(code[mm[2]:mm[3]])] &&
+				bunCommandStrRe.Match(extractCallArgs(code, mm[1])) {
+				consider(mm[0])
+			}
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	return lineOf(code, best)
+}
+
 // findNetworkAliasSink walks imports of http/https/net and reports
 // the line of the first <alias>.<method>(...) call against any of
 // the imported aliases. The alias set is built from real require/
@@ -641,8 +735,13 @@ var inlineRequireReceiverRe = regexp.MustCompile(
 //	let _cp = require("node:child_process")
 //
 // Submatch 1 is the local name.
+// childProcessAliasAssignRe binds a local name to child_process. It
+// accepts both the leading-declarator form (`const cp = require(...)`) and
+// a declarator-continuation / sequence form (`const fs = ..., cp =
+// require(...)`), so a multi-declarator const still binds the alias. The
+// `= require('child_process')` tail keeps it from matching anything else.
 var childProcessAliasAssignRe = regexp.MustCompile(
-	`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
+	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
 )
 
 // childProcessAliasESMRe captures the local variable bound via an
@@ -685,8 +784,8 @@ var childProcessESMDestructureRe = regexp.MustCompile(
 // these names.
 var cpMethodNames = map[string]bool{
 	"spawn": true, "spawnSync": true,
-	"fork":    true,
-	"exec":    true, "execSync": true,
+	"fork": true,
+	"exec": true, "execSync": true,
 	"execFile": true, "execFileSync": true,
 }
 
@@ -734,9 +833,8 @@ const jsIdentBoundary = `(?:^|[^A-Za-z0-9_$.])`
 // take the substring before `:` (if present) as the source name.
 var envDestructureRe = regexp.MustCompile(`\{\s*([^}]+?)\s*\}\s*=\s*process\.env\b`)
 
-
 // procMemDynamicSubRe matches the quote-wrapped subpath token used by
-// dynamic forms: `'/mem'`, `"/maps"`, `` `/cmdline` ``, and the
+// dynamic forms: `'/mem'`, `"/maps"`, “ `/cmdline` “, and the
 // template-interpolation closing form `}/mem`. The leading set
 // includes `}` so template literals (`/proc/${pid}/mem`) match.
 var procMemDynamicSubRe = regexp.MustCompile("[}'\"\x60]/(mem|maps|cmdline)['\"\x60}]")
@@ -816,7 +914,6 @@ var httpModuleAliasESMRe = regexp.MustCompile(
 	`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?(?:http|https|net)['"]`,
 )
 
-
 var publishSinkNeedles = []string{
 	"registry.npmjs.org",
 	"/-/npm/v1/tokens",
@@ -834,6 +931,71 @@ var sessionSinkNeedles = []string{
 	"seed2.getsession.org",
 	"seed3.getsession.org",
 }
+
+// A Bun launch only counts as a second stage when it runs a local PAYLOAD:
+// a path, a .js/.cjs/.mjs file, or an inline -e/--eval. Bare subcommands --
+// `bun test`, `bun --version`, `bun run build` (a package script name, no
+// path) -- are ordinary project usage and must not register, per the spec.
+//
+//   - bunProgramRe: first argument is the literal "bun" program
+//     (spawn("bun", ...)). Anchored with ^ so a quoted "bun" appearing
+//     only as DATA (spawn("echo", ["bun"])) does not match.
+//   - bunPayloadTargetRe: a quoted path / .js file, or a -e/--eval flag,
+//     anywhere in the args -- the suspicious target a bun program runs.
+//   - bunCommandStrRe: the single-string command form bun [run] <path|.js>
+//     or bun -e/--eval, used for exec("bun ...") and shelljs .exec(...).
+var (
+	bunProgramRe       = regexp.MustCompile(`(?i)^\s*['"` + "`" + `]bun['"` + "`" + `]`)
+	bunPayloadTargetRe = regexp.MustCompile(`(?i)['"` + "`" + `](?:\.{0,2}/[^\s'"` + "`" + `]+|[a-z0-9_.@/-]*\.[cm]?js)['"` + "`" + `]|['"` + "`" + `]--eval['"` + "`" + `]|['"` + "`" + `]-e['"` + "`" + `]`)
+	bunCommandStrRe    = regexp.MustCompile(`(?i)\bbun\s+(?:(?:run\s+)?(?:\.{0,2}/[^\s'"` + "`" + `]+|[a-z0-9_.@/-]*\.[cm]?js\b)|--eval\b|-e\b)`)
+)
+
+// cpMethodAtEndRe captures the method identifier immediately before the
+// opening paren of a call (the last name in a `cp.spawn(` /
+// `require('child_process').exec(` / `execa(` prefix).
+var cpMethodAtEndRe = regexp.MustCompile(`([A-Za-z]+)\s*\(\s*$`)
+
+// bunShellMethods are the process APIs that take a whole shell COMMAND as
+// one string argument; for these, a `bun run ./x` anywhere in the command
+// string is a launch. Every other API (spawn / spawnSync / execFile /
+// execFileSync / fork / execa) takes the program as its FIRST argument and
+// the rest as data, so `bun` must be that first program argument.
+var bunShellMethods = map[string]bool{
+	"exec": true, "execsync": true,
+	"execacommand": true, "execacommandsync": true,
+}
+
+// callRunsBun reports whether a process call launches Bun on a local
+// payload. `prefix` is the call text up to and including the opening paren
+// (used to recover the method); `args` is the argument list. Shell-command
+// APIs match a bun command string; program APIs require "bun" as the first
+// program argument plus a payload target, so `spawn("echo", ["bun run x"])`
+// (bun only as data) does not match.
+func callRunsBun(prefix, args []byte) bool {
+	method := ""
+	if mm := cpMethodAtEndRe.FindSubmatch(prefix); mm != nil {
+		method = strings.ToLower(string(mm[1]))
+	}
+	if bunShellMethods[method] {
+		return bunCommandStrRe.Match(args)
+	}
+	return bunProgramRe.Match(args) && bunPayloadTargetRe.Match(args)
+}
+
+// execa is an unambiguous library name, so an execa(...) call is a real
+// process launch.
+var execaCallRe = regexp.MustCompile(`(?i)\bexeca(?:sync|command|commandsync)?\s*\(`)
+
+// shelljs binding. `.exec(...)` is only a shell launch when its receiver
+// is a name bound to shelljs (or an inline require('shelljs').exec(...)),
+// so an unrelated `db.exec('bun run x')` in a shelljs-importing file is
+// NOT treated as a shell command. Mirrors the child_process alias logic.
+var (
+	shelljsAliasAssignRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)`)
+	shelljsAliasESMRe    = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"` + "`" + `]shelljs['"` + "`" + `]`)
+	shelljsInlineExecRe  = regexp.MustCompile(`(?i)require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)\s*\.\s*exec\s*\(`)
+	aliasExecCallRe      = regexp.MustCompile(`\b([A-Za-z_$][\w$]*)\s*\.\s*exec\s*\(`)
+)
 
 // ciSecretEnvVars are GHA / cloud env var names whose value is the
 // secret. A real read goes through process.env (see envReadRe); the
@@ -1362,12 +1524,12 @@ var fsWriteBareCallRe = regexp.MustCompile(
 // fsWriteMethodNames is the canonical list of fs write method names
 // accepted as staging anchors. Kept in sync with the regexes above.
 var fsWriteMethodNames = map[string]bool{
-	"writeFile":     true,
-	"writeFileSync": true,
-	"appendFile":    true,
+	"writeFile":      true,
+	"writeFileSync":  true,
+	"appendFile":     true,
 	"appendFileSync": true,
-	"writeSync":     true,
-	"outputFile":    true,
+	"writeSync":      true,
+	"outputFile":     true,
 	"outputFileSync": true,
 }
 
@@ -1411,8 +1573,10 @@ var osModuleAliasESMRe = regexp.MustCompile(
 
 // osModuleAliasESMCombinedRe captures the DEFAULT alias in
 // combined ESM imports of the os module:
-//   import os, { platform } from 'os'
-//   import os, * as osNs from 'os'
+//
+//	import os, { platform } from 'os'
+//	import os, * as osNs from 'os'
+//
 // Submatch 1 is the default identifier. The trailing clause is
 // captured separately by osModuleAliasESMRe and osDestructureESMRe.
 var osModuleAliasESMCombinedRe = regexp.MustCompile(
@@ -1438,7 +1602,8 @@ var fsModuleAliasESMRe = regexp.MustCompile(
 
 // fsModuleAliasESMCombinedRe captures the DEFAULT alias in combined
 // ESM imports of the fs / fs-extra / fs/promises modules:
-//   import fs, { writeFileSync } from 'fs'
+//
+//	import fs, { writeFileSync } from 'fs'
 var fsModuleAliasESMCombinedRe = regexp.MustCompile(
 	`import\s+([A-Za-z_$][\w$]*)\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]+\})\s+from\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]`,
 )
@@ -1613,7 +1778,83 @@ func detect(path string, m *metrics, content []byte) []types.Finding {
 	if f := detectDNSTXTExfil(path, m, content); f != nil {
 		out = append(out, *f)
 	}
+	if f := detectBunSecondStage(path, m); f != nil {
+		out = append(out, *f)
+	}
 	return out
+}
+
+// hasObfuscatorShape reports whether the file carries an
+// obfuscator-specific signal (hex identifier density, dispatcher-call
+// density, or a while(!![]) loop). It mirrors the obfuscator-specific
+// half of detectObfuscation's gate and is used as a Bun second-stage
+// partner. JS_OBF_001 may also fire independently; the two findings are
+// complementary (one names the runtime, one the payload shape).
+func (m *metrics) hasObfuscatorShape() bool {
+	return m.HexIdentifierCount > hexIdentifierThreshold ||
+		m.DispatcherCallCount > dispatcherCallThreshold ||
+		m.HasWhileTruePattern
+}
+
+// detectBunSecondStage emits JS_BUN_SECOND_STAGE_001 when a file uses the
+// Bun runtime as a second stage. Bun execution ALONE never fires (that
+// would flag ordinary Bun projects); a partner signal is required:
+// Bun download, obfuscator shape, a CI/cloud secret read, an exfil sink,
+// or a staged-payload write. Severity is HIGH for the chain, CRITICAL
+// when a CI/cloud secret read AND an exfil sink are both present (the
+// credential-theft-via-Bun-loader shape). Informational partners like a
+// bare process.env read are deliberately NOT sufficient: ordinary Bun
+// apps read env vars, so the credential partner is the CI/cloud-specific
+// secret signal only.
+func detectBunSecondStage(path string, m *metrics) *types.Finding {
+	if !m.HasBunExecution {
+		return nil
+	}
+	// Require a STRONG partner: a structural / call-bound signal, not a
+	// string-presence one. Obfuscator shape is structural; the CI/cloud
+	// secret read is bound to a real process.env.SECRET access; the
+	// network sink is bound to a fetch()/http.request() call. String-only
+	// signals (a download URL, a chmod/writeFileSync mention, a registry
+	// host) are deliberately NOT sufficient on their own: separating a
+	// documented mention from a real one needs data-flow we do not do, so
+	// the gate stays on the signals that cannot be faked by a doc string.
+	strongPartner := m.hasObfuscatorShape() || m.HasCISecretRead || m.HasNetworkSink
+	if !strongPartner {
+		return nil
+	}
+	// CRITICAL is the credential-theft-via-Bun-loader shape: a real secret
+	// read AND an exfil sink. The secret read is the strong anchor, so the
+	// (weaker, needle-based) publish / GitHub / session hosts are accepted
+	// here only as the sink half alongside it.
+	sink := m.HasNetworkSink || m.HasPublishSink || m.HasGitHubGraphQLSink || m.HasSessionSink
+	sev := types.SeverityHigh
+	if m.HasCISecretRead && sink {
+		sev = types.SeverityCritical
+	}
+	line := m.LineBun
+	if line == 0 {
+		line = 1
+	}
+	return &types.Finding{
+		RuleID:   RuleBunSecondStage,
+		RuleName: "Bun second-stage execution",
+		Severity: sev,
+		Category: "supply-chain",
+		Description: "JavaScript runs the Bun runtime as a second stage alongside a " +
+			"supply-chain signal: an obfuscator-shape payload, a CI/cloud secret read, or a " +
+			"network exfil sink. The Red Hat/Miasma worm used a Node preinstall hook to " +
+			"download a pinned Bun and execute its heavier second stage outside the Node " +
+			"runtime to dodge Node-focused monitoring.",
+		FilePath:    path,
+		Line:        line,
+		MatchedText: "bun runtime execution + supply-chain partner signal",
+		Analyzer:    AnalyzerName,
+		Confidence:  0.85,
+		Remediation: "A package that shells out to Bun during install is almost never " +
+			"legitimate. Inspect the file in a clean clone, identify what the Bun stage " +
+			"executes, rotate any credentials reachable from the environment it ran in, and " +
+			"pin the dependency to a reviewed version (install with --ignore-scripts).",
+	}
 }
 
 // jsStringInteriors returns sorted, non-overlapping byte ranges
