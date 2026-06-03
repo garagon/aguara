@@ -39,6 +39,26 @@ func RuleMetadata() []rulemeta.Rule {
 				"the dependency mandatory so its install behaviour is auditable.",
 		},
 		{
+			ID:       RuleLocalJSLifecycle,
+			Name:     "npm lifecycle script executes local JavaScript",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerPkgMeta,
+			Description: "package.json defines an install-time lifecycle script (preinstall, " +
+				"install, postinstall, preprepare, prepare, postprepare, prepublish, prepack, " +
+				"postpack) whose body runs Node or Bun on local JavaScript: node index.js, " +
+				"node ./scripts/setup.mjs, node -e/--eval, bun run x, or bun ./setup.mjs. npm " +
+				"runs these hooks automatically on install, so executing the package's own JS " +
+				"is the first hop of supply-chain droppers like the Red Hat/Miasma worm, which " +
+				"shipped a preinstall hook running node index.js. Detection walks the parsed " +
+				"scripts object, so a same-named key elsewhere in the manifest and brace-bearing " +
+				"shell expansions in sibling scripts do not cause a false positive or a miss.",
+			Remediation: "Install-time code execution should be unnecessary for most packages. " +
+				"Read the referenced script in a clean clone before installing, prefer packages " +
+				"with no install/preinstall/postinstall hooks, pin the dependency to a reviewed " +
+				"version, and install with --ignore-scripts where possible.",
+		},
+		{
 			ID:       RulePublishSurface,
 			Name:     "publishConfig + install/build/test + trusted publishing reference",
 			Severity: "HIGH",

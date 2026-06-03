@@ -39,3 +39,6 @@ coverage.out
 *.pem
 *.key
 /.nanostack/
+
+# Local Go build cache (created by sandboxed builds)
+.gocache/

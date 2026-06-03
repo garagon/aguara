@@ -33,17 +33,33 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		mode = MatchAll
 	}
 
+	// Split `targets` into positive globs and `!`-prefixed exclusions.
+	// Positive globs drive ext-indexing in the matcher; exclusions are
+	// applied at match time so a rule scoped to *.json can opt out of a
+	// specific file (e.g. package.json) owned by a more specific rule.
+	var targets, excludeTargets []string
+	for _, t := range raw.Targets {
+		if strings.HasPrefix(t, "!") {
+			if ex := strings.TrimPrefix(t, "!"); ex != "" {
+				excludeTargets = append(excludeTargets, ex)
+			}
+			continue
+		}
+		targets = append(targets, t)
+	}
+
 	compiled := &CompiledRule{
-		ID:          raw.ID,
-		Name:        raw.Name,
-		Description: raw.Description,
-		Severity:    sev,
-		Category:    raw.Category,
-		Targets:     raw.Targets,
-		MatchMode:   mode,
-		Sensitive:   raw.Sensitive,
-		Remediation: raw.Remediation,
-		Examples:    raw.Examples,
+		ID:             raw.ID,
+		Name:           raw.Name,
+		Description:    raw.Description,
+		Severity:       sev,
+		Category:       raw.Category,
+		Targets:        targets,
+		ExcludeTargets: excludeTargets,
+		MatchMode:      mode,
+		Sensitive:      raw.Sensitive,
+		Remediation:    raw.Remediation,
+		Examples:       raw.Examples,
 	}
 
 	for i, p := range raw.Patterns {

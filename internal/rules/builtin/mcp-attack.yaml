@@ -156,10 +156,10 @@ examples:
 ---
 id: MCP_008
 name: "Server manifest tampering"
-description: "Detects lifecycle hooks with shell commands in server manifests"
+description: "Detects lifecycle hooks with shell commands in MCP server manifests (preinstall, postinstall, init_script, on_start, on_connect, preload, lifecycle). package.json is excluded via the !package.json target: install-time JS execution in package.json is owned by SUPPLY_026 (supply-chain) so an ordinary npm package does not draw an mcp-attack finding, while a non-package.json manifest (e.g. an MCP tool manifest) with a tampered lifecycle hook is still caught here."
 severity: CRITICAL
 category: mcp-attack
-targets: ["*.json", "*.yaml", "*.yml"]
+targets: ["*.json", "*.yaml", "*.yml", "!package.json"]
 match_mode: any
 remediation: "Remove shell commands from lifecycle hooks. Pin server versions and verify manifest integrity with checksums."
 patterns:
