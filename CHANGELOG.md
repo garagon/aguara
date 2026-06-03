@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-06-03
+
+### Fixed
+
+- Completes offline detection for the Red Hat/Miasma npm compromise. Aguara now covers the full OSV/GHSA-confirmed set of affected `@redhat-cloud-services/*` package versions, so `aguara check` and `aguara audit` can catch the incident across installed dependencies and npm lockfiles without executing package code or querying a registry during the scan.
+
+### Notes
+
+- This is an intel-only patch. Matching remains exact by package and version; clean neighbouring releases stay clean.
+
 ## [0.22.1] - 2026-06-01
 
 Offline detection for the Red Hat / Miasma npm compromise reported on
