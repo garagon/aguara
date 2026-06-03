@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
@@ -26,14 +27,18 @@ func init() {
 
 func runStatus(cmd *cobra.Command, args []string) error {
 	w := os.Stdout
+	now := time.Now().UTC()
 
 	fmt.Fprintf(w, "Aguara %s (commit %s)\n\n", Version, Commit)
 
 	fmt.Fprintf(w, "Threat intel:\n")
 	for _, snap := range incident.EmbeddedSnapshots() {
 		label := snapshotLabel(snap)
-		fmt.Fprintf(w, "  Embedded (%s): %s, %d records\n",
-			label, snap.GeneratedAt.Format("2006-01-02"), len(snap.Records))
+		// Embedded intel ships with the binary: show its age for
+		// provenance, never a stale warning.
+		fmt.Fprintf(w, "  Embedded (%s): %s (%s), %d records\n",
+			label, snap.GeneratedAt.Format("2006-01-02"),
+			humanizeAgeDays(ageDaysSince(snap.GeneratedAt, now)), len(snap.Records))
 	}
 
 	store, err := intel.DefaultStore()
@@ -47,10 +52,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	st := store.Status()
 	switch {
 	case st.HasSnapshot:
-		fmt.Fprintf(w, "  Local:    %s, %d records (%s)\n",
+		ageDays := ageDaysSince(st.GeneratedAt, now)
+		fmt.Fprintf(w, "  Local:    %s (%s), %d records (%s)\n",
 			st.GeneratedAt.Format("2006-01-02 15:04 UTC"),
-			st.RecordCount, st.Path,
+			humanizeAgeDays(ageDays), st.RecordCount, st.Path,
 		)
+		// The local cache is user-fetched, so it can be stale (unlike
+		// embedded). Same 30-day policy as check/audit; informational.
+		if ageDays > intelStaleAfterDays {
+			fmt.Fprintf(w, "            %s\n", intelStaleNote())
+		}
 	case st.LastUpdateErr != "":
 		fmt.Fprintf(w, "  Local:    error reading %s: %s\n", st.Path, st.LastUpdateErr)
 	default:

@@ -115,6 +115,13 @@ func intelSummaryFor(opts CheckOptions) IntelSummary {
 			sources = append(sources, kind)
 		}
 	}
+	// When the override names a specific snapshot (e.g. the local
+	// verified cache), report THAT snapshot's age rather than the newest
+	// across the layered set. Otherwise a stale local cache would look
+	// fresh whenever the embedded layer underneath it is newer.
+	if opts.Intel != nil && !opts.Intel.GeneratedAt.IsZero() {
+		generatedAt = opts.Intel.GeneratedAt
+	}
 	return IntelSummary{
 		Mode:        mode,
 		Snapshot:    label,

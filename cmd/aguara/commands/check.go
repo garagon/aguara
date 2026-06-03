@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
@@ -16,13 +17,13 @@ import (
 )
 
 var (
-	flagCheckPath        string
-	flagCheckEcosystems  []string
-	flagCheckFailOn      string
-	flagCheckCI          bool
-	flagCheckFresh       bool
-	flagCheckAllowStale  bool
-	flagCheckInsecure    bool
+	flagCheckPath       string
+	flagCheckEcosystems []string
+	flagCheckFailOn     string
+	flagCheckCI         bool
+	flagCheckFresh      bool
+	flagCheckAllowStale bool
+	flagCheckInsecure   bool
 )
 
 const (
@@ -148,6 +149,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	applyIntelFreshness(&result.Intel, time.Now().UTC())
 
 	if flagFormat == "json" {
 		if err := writeCheckJSON(result); err != nil {
@@ -165,10 +167,10 @@ func runCheck(cmd *cobra.Command, args []string) error {
 // resolveCheckPathArg picks the effective scan path from the positional
 // argument or the --path flag and rejects ambiguous combinations.
 //
-//   no positional, no --path  -> "" (legacy default: site-packages auto-discovery)
-//   no positional, --path X   -> X
-//   positional X, no --path   -> X
-//   positional X, --path Y    -> explicit error (ambiguity)
+//	no positional, no --path  -> "" (legacy default: site-packages auto-discovery)
+//	no positional, --path X   -> X
+//	positional X, no --path   -> X
+//	positional X, --path Y    -> explicit error (ambiguity)
 //
 // The explicit-error case is the deliberate choice this command makes
 // vs the silent flag-wins semantics 'audit' uses. Picking one form
@@ -220,7 +222,7 @@ func applyCheckCIDefaults() {
 // resolveCheckIntel uses that list to scope a --fresh refresh to
 // only what the user is checking.
 type checkPlan struct {
-	rootPath          string // the path the user passed (may be "")
+	rootPath            string // the path the user passed (may be "")
 	runPython           bool
 	pythonPath          string
 	runNPM              bool
@@ -974,6 +976,11 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
 	}
 
+	// Provenance line: which intel answered this scan, and how old it is.
+	// Suppressed under --ci to keep stdout to findings (a stale local
+	// cache still earns a stderr note inside printIntelFreshness).
+	printIntelFreshness(result.Intel, flagCheckCI)
+
 	if len(result.Findings) == 0 {
 		green := "\033[32m"
 		reset := "\033[0m"
@@ -1170,6 +1177,7 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 			Snapshots:     snaps,
 			Mode:          "online",
 			SnapshotLabel: "remote-fresh",
+			GeneratedAt:   snap.GeneratedAt,
 		}, nil
 	}
 
@@ -1202,6 +1210,9 @@ func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
 		Snapshots:     snaps,
 		Mode:          "offline",
 		SnapshotLabel: "local-verified",
+		// Age must reflect the local cache, not the (possibly newer)
+		// embedded layer beneath it, so a stale cache reads as stale.
+		GeneratedAt: snap.GeneratedAt,
 	}
 }
 

@@ -175,3 +175,44 @@ func TestKnownCompromisedSnapshotKindCompromised(t *testing.T) {
 			rec.ID, rec.Name, rec.Kind)
 	}
 }
+
+// TestIntelSummaryForOverride_LabeledTimestampWinsOverNewerEmbedded locks
+// the freshness coherence fix: when a local verified cache is layered over
+// newer embedded snapshots, the summary must report the LOCAL cache's age
+// (so a stale cache reads as stale), not the newer embedded timestamp.
+func TestIntelSummaryForOverride_LabeledTimestampWinsOverNewerEmbedded(t *testing.T) {
+	oldCache := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	newerEmbedded := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	ov := &incident.IntelOverride{
+		Snapshots: []intel.Snapshot{
+			{GeneratedAt: newerEmbedded, Sources: []intel.SourceMeta{{Kind: intel.SourceManual}}},
+			{GeneratedAt: oldCache, Sources: []intel.SourceMeta{{Kind: intel.SourceOSV}}},
+		},
+		Mode:          "offline",
+		SnapshotLabel: "local-verified",
+		GeneratedAt:   oldCache,
+	}
+	got := incident.IntelSummaryForOverride(ov)
+	require.Equal(t, "local-verified", got.Snapshot)
+	require.Truef(t, got.GeneratedAt.Equal(oldCache),
+		"summary GeneratedAt must be the labeled local cache %s, not the newer embedded %s; got %s",
+		oldCache.Format("2006-01-02"), newerEmbedded.Format("2006-01-02"), got.GeneratedAt.Format("2006-01-02"))
+}
+
+// TestIntelSummaryForOverride_FallsBackToNewestWhenUnset confirms the
+// embedded path (no per-label timestamp) still uses the newest snapshot.
+func TestIntelSummaryForOverride_FallsBackToNewestWhenUnset(t *testing.T) {
+	oldSnap := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	newerSnap := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	ov := &incident.IntelOverride{
+		Snapshots: []intel.Snapshot{
+			{GeneratedAt: oldSnap, Sources: []intel.SourceMeta{{Kind: intel.SourceManual}}},
+			{GeneratedAt: newerSnap, Sources: []intel.SourceMeta{{Kind: intel.SourceOSV}}},
+		},
+		SnapshotLabel: "embedded",
+	}
+	got := incident.IntelSummaryForOverride(ov)
+	require.Truef(t, got.GeneratedAt.Equal(newerSnap),
+		"unset override GeneratedAt must fall back to newest snapshot %s; got %s",
+		newerSnap.Format("2006-01-02"), got.GeneratedAt.Format("2006-01-02"))
+}

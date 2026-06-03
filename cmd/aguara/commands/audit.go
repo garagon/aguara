@@ -128,6 +128,10 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("audit: check phase: %w", err)
 	}
+	// Set age/stale once on the check result; the AuditResult copies this
+	// IntelSummary and the nested Check pointer shares it, so JSON and
+	// terminal stay consistent.
+	applyIntelFreshness(&checkResult.Intel, time.Now().UTC())
 
 	// 2. Run the content scan.
 	scanResult, err := auditRunScan(cmd, target)
@@ -435,9 +439,13 @@ func writeAuditTerminal(result *AuditResult) error {
 		}
 	}
 
-	fmt.Printf("\n%sIntel:%s mode=%s snapshot=%s sources=%v generated=%s\n",
-		bold, reset, result.Intel.Mode, result.Intel.Snapshot,
-		result.Intel.Sources, result.Intel.GeneratedAt.Format(time.DateOnly))
+	// Provenance line, unified with `aguara check`. Suppressed under --ci
+	// (stdout stays verdict + findings); a stale local cache still notes
+	// to stderr inside printIntelFreshness.
+	if !flagAuditCI {
+		fmt.Println()
+	}
+	printIntelFreshness(result.Intel, flagAuditCI)
 
 	verdictColor := green
 	if result.Verdict.ThresholdExceeded {
