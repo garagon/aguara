@@ -80,8 +80,14 @@ type IntelSummary struct {
 	Mode        string    `json:"mode"`
 	Snapshot    string    `json:"snapshot"`
 	GeneratedAt time.Time `json:"generated_at"`
-	Sources     []string  `json:"sources"`
-	Stale       bool      `json:"stale"`
+	// AgeDays is the whole-day age of GeneratedAt. Filled by the CLI
+	// (the freshness policy lives there), 0 when unset.
+	AgeDays int      `json:"age_days"`
+	Sources []string `json:"sources"`
+	// Stale is true only for a user-fetched local/verified cache older
+	// than the CLI's threshold; embedded intel is never stale. Set by the
+	// CLI. Informational only: it never affects exit codes or verdicts.
+	Stale bool `json:"stale"`
 }
 
 // InstalledPackage is a package parsed from dist-info METADATA.
@@ -112,7 +118,15 @@ type CheckOptions struct {
 type IntelOverride struct {
 	Snapshots     []intel.Snapshot
 	Mode          string // "offline" | "online"
-	SnapshotLabel string // "embedded" | "local" | "remote-fresh"
+	SnapshotLabel string // "embedded" | "local" | "local-verified" | "remote-fresh"
+	// GeneratedAt is the timestamp of the snapshot the SnapshotLabel
+	// names (e.g. the local verified cache), not the newest snapshot in
+	// the set. When a local/fetched cache is layered over the (possibly
+	// newer) embedded snapshots, the summary's age must reflect the
+	// labeled cache so a stale local cache is reported as stale even
+	// when the embedded layer is fresher. Zero -> intelSummaryFor falls
+	// back to the newest GeneratedAt across Snapshots.
+	GeneratedAt time.Time
 }
 
 // Check scans a Python environment for compromised packages and artifacts.
