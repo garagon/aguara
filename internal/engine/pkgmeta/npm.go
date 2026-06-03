@@ -29,9 +29,48 @@ const AnalyzerName = "pkgmeta"
 
 // Rule IDs emitted by this analyzer.
 const (
-	RuleLifecycleGit    = "NPM_LIFECYCLE_GIT_001"
-	RuleOptionalGit     = "NPM_OPTIONAL_GIT_001"
-	RulePublishSurface  = "NPM_PUBLISH_SURFACE_001"
+	RuleLifecycleGit     = "NPM_LIFECYCLE_GIT_001"
+	RuleOptionalGit      = "NPM_OPTIONAL_GIT_001"
+	RulePublishSurface   = "NPM_PUBLISH_SURFACE_001"
+	RuleLocalJSLifecycle = "SUPPLY_026"
+)
+
+// localJSLifecycleKeys are the lifecycle hooks where a package running its
+// own JavaScript is the supply-chain risk. preinstall/install/postinstall
+// and the prepare family run automatically during `npm install`;
+// prepublish runs on install for git deps; prepack/postpack are pack/
+// publish-time but kept here because running local JS at pack time is the
+// same execute-on-the-maintainer risk. The Red Hat/Miasma dropper shipped
+// a preinstall hook running `node index.js`.
+var localJSLifecycleKeys = []string{
+	"preinstall", "install", "postinstall",
+	"preprepare", "prepare", "postprepare",
+	"prepublish", "prepack", "postpack",
+}
+
+// Script-value classifiers for SUPPLY_026. They run against the PARSED
+// script string (not the raw JSON), so a brace-bearing shell expansion in a
+// sibling script and a same-named key outside the scripts object can never
+// cause a miss or a false positive — the failure modes a flat regex over
+// package.json has.
+var (
+	// node running a local JS file: `node … x.js|.cjs|.mjs`. `[^"']*`
+	// (not `[^\s'"]*`) lets flags sit between node and the entrypoint, so
+	// `node --require dotenv/config ./index.js` still matches; it stays
+	// quote-bounded so it does not run past the script value. `node
+	// --version` has no .js and does not match.
+	reNodeLocalJS = regexp.MustCompile(`(?i)\bnode\s+[^"']*\.[cm]?js\b`)
+	// node running an extensionless local path entrypoint: `node
+	// ./scripts/setup`, `node dist/main`, `node /tmp/x` (node executes
+	// extensionless files as JS). Requires a path separator in a non-flag
+	// argument so `node --version` and bare subcommand-style words do not
+	// match. Flags before the entrypoint are allowed.
+	reNodeLocalPath = regexp.MustCompile(`(?i)\bnode\s+(?:--?\S+\s+)*[^\s"'-][^\s"']*/`)
+	// node inline eval.
+	reNodeEval = regexp.MustCompile(`(?i)\bnode\s+(?:--eval|-e)\b`)
+	// bun second stage: run, a local JS file (flags allowed before it),
+	// or inline eval.
+	reBunExec = regexp.MustCompile(`(?i)\bbun\s+(?:run\b|--eval\b|-e\b|[^"']*\.[cm]?js\b)`)
 )
 
 // Analyzer implements scanner.Analyzer for npm package metadata.
@@ -561,7 +600,68 @@ func detect(pkg *manifest) []types.Finding {
 	if f := detectPublishSurface(pkg); f != nil {
 		out = append(out, *f)
 	}
+	out = append(out, detectLocalJSLifecycle(pkg)...)
 	return out
+}
+
+// detectLocalJSLifecycle emits SUPPLY_026 for each lifecycle script whose
+// body runs Node or Bun on local JavaScript (a .js/.cjs/.mjs file or an
+// -e/--eval inline payload). This is the analyzer home for the rule that
+// previously lived as a flat YAML regex: walking the parsed scripts map
+// is structurally correct where a regex over the raw manifest is not.
+func detectLocalJSLifecycle(pkg *manifest) []types.Finding {
+	if len(pkg.Scripts) == 0 {
+		return nil
+	}
+	var findings []types.Finding
+	for _, key := range localJSLifecycleKeys {
+		body, ok := pkg.Scripts[key]
+		if !ok {
+			continue
+		}
+		body = strings.TrimSpace(body)
+		runtime := localJSRuntime(body)
+		if runtime == "" {
+			continue
+		}
+		findings = append(findings, types.Finding{
+			RuleID:   RuleLocalJSLifecycle,
+			RuleName: "npm lifecycle script executes local JavaScript",
+			Severity: types.SeverityHigh,
+			Category: "supply-chain",
+			Description: "package.json runs " + runtime + " on local JavaScript from the `" + key +
+				"` lifecycle script, which npm executes automatically during install. " +
+				"Install-time execution of a package's own JS is the first hop of supply-chain " +
+				"droppers; the Red Hat/Miasma worm shipped a preinstall hook running `node index.js`.",
+			FilePath: pkg.path,
+			// Scope the line lookup to the scripts object so a same-named
+			// key elsewhere (a dependency or config key called "install")
+			// does not anchor the finding to an unrelated earlier line.
+			Line:        findDepLine(pkg.raw, "scripts", key),
+			MatchedText: key + " = " + body,
+			Analyzer:    AnalyzerName,
+			Confidence:  0.9,
+			Remediation: "Install-time code execution should be unnecessary for most packages. " +
+				"Read the referenced script in a clean clone before installing, prefer packages " +
+				"with no install/preinstall/postinstall hooks, pin the dependency to a reviewed " +
+				"version, and install with --ignore-scripts where possible.",
+		})
+	}
+	return findings
+}
+
+// localJSRuntime returns "node" or "bun" when body runs that runtime on
+// local JS (a file or an inline -e/--eval payload), or "" otherwise. node
+// --version, husky install, npx-only, and build/test commands return "".
+func localJSRuntime(body string) string {
+	switch {
+	case reNodeLocalJS.MatchString(body), reNodeEval.MatchString(body), reNodeLocalPath.MatchString(body):
+		return "node"
+	case reBunExec.MatchString(body):
+		return "bun"
+	default:
+		return ""
+	}
 }
 
 // detectLifecycleGit emits NPM_LIFECYCLE_GIT_001 for each git-sourced
@@ -647,7 +747,7 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 				"). Optional dependencies install silently when resolution succeeds, so a " +
 				"mutable git ref here is a quieter supply-chain entry point than the same " +
 				"shape in dependencies.",
-			FilePath:    pkg.path,
+			FilePath: pkg.path,
 			// Per-dep line anchor, scoped to optionalDependencies so a
 			// dep name that also appears as the package "name" or as a
 			// script key does not anchor to the wrong line.

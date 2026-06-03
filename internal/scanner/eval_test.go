@@ -203,7 +203,11 @@ func buildScenarios(testdataDir string) []benchmarkScenario {
 		"mcp-tool-poisoning":     {"MCP_001", "MCP_005", "MCP_006", "MCP_008", "PROMPT_INJECTION_001", "SUPPLY_003"},
 		"prompt-injection-basic": {"PROMPT_INJECTION_001", "PROMPT_INJECTION_005", "PROMPT_INJECTION_006", "PROMPT_INJECTION_008"},
 		"ssrf-metadata":          {"SSRF_001", "SSRF_003", "SSRF_004", "SSRF_005", "SSRF_007"},
-		"supply-chain-attack":    {"SUPPLY_002", "SUPPLY_003", "SUPPLY_006", "SUPPLY_007", "SUPPLY_008", "MCP_008"},
+		// MCP_008 (manifest tampering) is intentionally NOT expected here:
+		// the lifecycle hook lives in package.json, which is owned by the
+		// supply-chain rules (SUPPLY_001/026). MCP_008 now excludes
+		// package.json via its !package.json target.
+		"supply-chain-attack":    {"SUPPLY_001", "SUPPLY_002", "SUPPLY_003", "SUPPLY_006", "SUPPLY_007", "SUPPLY_008"},
 		"unicode-obfuscation":    {"UNI_001", "UNI_002", "UNI_003", "UNI_004", "UNI_005", "UNI_006", "UNI_007"},
 	}
 

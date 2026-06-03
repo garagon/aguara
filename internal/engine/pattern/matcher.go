@@ -15,7 +15,6 @@ import (
 // ctxRadius is the number of context lines before and after a match.
 const ctxRadius = 3
 
-
 // Matcher implements the Analyzer interface using compiled pattern rules.
 // Rules are pre-grouped by target extension for fast lookup.
 // Contains patterns use Aho-Corasick multi-pattern matching for O(n+m) search.
@@ -182,7 +181,34 @@ func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
 	if rules, ok := m.byExt[base]; ok {
 		result = append(result, rules...)
 	}
-	return result
+
+	// Apply `!`-prefixed exclude targets: a rule scoped broadly (e.g.
+	// *.json) can carve out a file owned by a more specific rule
+	// (e.g. !package.json). Filter in place; order is preserved.
+	kept := result[:0]
+	for _, r := range result {
+		if len(r.ExcludeTargets) > 0 && fileMatchesAnyGlob(r.ExcludeTargets, relPath, base) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
+// fileMatchesAnyGlob reports whether relPath or its basename matches any
+// of the globs. Used for `!`-prefixed exclude targets; the simple
+// filepath.Match path is enough for the literal-filename and `*.ext`
+// exclusions rules use (no `**` support needed here).
+func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
+	for _, g := range globs {
+		if matched, _ := filepath.Match(g, relPath); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(g, base); matched {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {

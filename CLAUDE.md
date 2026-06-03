@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.22.0 (2026-05-29). 193 YAML rules + 28 analyzer-emitted (221 cataloged), 13 categories, 9 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic, and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.22.0 (2026-05-29). 193 YAML rules + 29 analyzer-emitted (222 cataloged), 13 categories, 9 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic, and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -148,7 +148,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 193 YAML / 221 cataloged)
+- Rule count (currently 193 YAML / 222 cataloged)
 - Test count (currently ~750)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)

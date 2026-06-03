@@ -32,6 +32,42 @@ func TestCompileValidRule(t *testing.T) {
 	require.Equal(t, "hello world", compiled.Patterns[1].Value) // lowercased
 }
 
+func TestCompileTargetNegation(t *testing.T) {
+	// `!`-prefixed targets are split into ExcludeTargets; positive globs
+	// stay in Targets. Order between positive and negative is irrelevant.
+	raw := rules.RawRule{
+		ID:        "TEST_NEG",
+		Name:      "Negation",
+		Severity:  "HIGH",
+		Category:  "test",
+		MatchMode: "any",
+		Targets:   []string{"*.json", "!package.json", "*.yaml", "!"},
+		Patterns:  []rules.RawPattern{{Type: rules.PatternContains, Value: "x"}},
+	}
+	compiled, err := rules.Compile(raw)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.json", "*.yaml"}, compiled.Targets)
+	// bare "!" is ignored (no filename), only "package.json" is excluded.
+	require.Equal(t, []string{"package.json"}, compiled.ExcludeTargets)
+}
+
+func TestCompileNoNegationUnchanged(t *testing.T) {
+	// A rule with no `!` entries keeps Targets intact and has no exclusions.
+	raw := rules.RawRule{
+		ID:        "TEST_PLAIN",
+		Name:      "Plain",
+		Severity:  "HIGH",
+		Category:  "test",
+		MatchMode: "any",
+		Targets:   []string{"*.json", "*.yaml"},
+		Patterns:  []rules.RawPattern{{Type: rules.PatternContains, Value: "x"}},
+	}
+	compiled, err := rules.Compile(raw)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.json", "*.yaml"}, compiled.Targets)
+	require.Empty(t, compiled.ExcludeTargets)
+}
+
 func TestCompileMatchAll(t *testing.T) {
 	raw := rules.RawRule{
 		ID:        "TEST_002",

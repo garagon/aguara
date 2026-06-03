@@ -1072,8 +1072,11 @@ func TestFindingsHaveStableFields(t *testing.T) {
 		if f.Category != "supply-chain" {
 			t.Errorf("finding %s: category = %q, want supply-chain", f.RuleID, f.Category)
 		}
-		if !strings.HasPrefix(f.RuleID, "NPM_") {
-			t.Errorf("finding ruleID %q should have NPM_ prefix", f.RuleID)
+		// pkgmeta emits the NPM_* chain rules plus SUPPLY_026 (npm
+		// lifecycle runs local JS), which was moved here from a flat
+		// YAML rule.
+		if !strings.HasPrefix(f.RuleID, "NPM_") && f.RuleID != RuleLocalJSLifecycle {
+			t.Errorf("finding ruleID %q should be an NPM_* rule or %s", f.RuleID, RuleLocalJSLifecycle)
 		}
 		if f.Confidence == 0 {
 			t.Errorf("finding %s: confidence should be > 0", f.RuleID)
@@ -1084,5 +1087,77 @@ func TestFindingsHaveStableFields(t *testing.T) {
 		if f.FilePath != "package.json" {
 			t.Errorf("finding %s: file path = %q, want package.json", f.RuleID, f.FilePath)
 		}
+	}
+}
+
+// TestLocalJSLifecycle_SUPPLY026 covers the rule moved here from a flat
+// YAML regex. Walking the parsed scripts map fixes the two failure modes
+// the regex had: a `}` in a sibling script value (brace case) and a
+// same-named key outside the scripts object (FP case).
+func TestLocalJSLifecycle_SUPPLY026(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"preinstall node file", `{"scripts":{"preinstall":"node index.js"}}`, true},
+		{"install node mjs", `{"scripts":{"install":"node ./scripts/setup.mjs"}}`, true},
+		{"postinstall node cjs", `{"scripts":{"postinstall":"node scripts/install.cjs"}}`, true},
+		{"preinstall node inline eval", `{"scripts":{"preinstall":"node -e \"require('child_process').exec('id')\""}}`, true},
+		{"prepare bun run", `{"scripts":{"prepare":"bun run index.js"}}`, true},
+		{"postinstall bun file", `{"scripts":{"postinstall":"bun ./setup.mjs"}}`, true},
+		{"preprepare node (bypass key)", `{"scripts":{"preprepare":"node x.js"}}`, true},
+		{"shell-prefixed node", `{"scripts":{"postinstall":"cd lib && node build.js"}}`, true},
+		{"node with flags before file", `{"scripts":{"postinstall":"node --require dotenv/config ./index.js"}}`, true},
+		{"extensionless node path", `{"scripts":{"preinstall":"node ./scripts/setup"}}`, true},
+		{"extensionless bare relative path", `{"scripts":{"postinstall":"node dist/main"}}`, true},
+		// codex #2: a brace-bearing shell expansion in an earlier script
+		// must not hide a later malicious hook (the regex `[^}]*` failed here).
+		{"brace in sibling script", `{"scripts":{"prebuild":"echo ${npm_package_name}","postinstall":"node index.js"}}`, true},
+		// false positives
+		{"build is not a lifecycle hook", `{"scripts":{"build":"node index.js"}}`, false},
+		{"test is not a lifecycle hook", `{"scripts":{"test":"node test.js"}}`, false},
+		{"husky", `{"scripts":{"postinstall":"husky install"}}`, false},
+		{"only-allow", `{"scripts":{"preinstall":"npx only-allow pnpm"}}`, false},
+		{"node version probe", `{"scripts":{"postinstall":"node --version"}}`, false},
+		// codex #2 FP: lifecycle-named key OUTSIDE the scripts object.
+		{"install key under config", `{"config":{"install":"node index.js"}}`, false},
+		{"no scripts at all", `{"name":"x","version":"1.0.0"}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := hasRule(analyze(t, "package.json", c.content), RuleLocalJSLifecycle)
+			if got != c.want {
+				t.Errorf("SUPPLY_026 present = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestLocalJSLifecycle_LineAnchoredToScripts locks the line anchor to the
+// scripts entry, not a same-named key earlier in the manifest.
+func TestLocalJSLifecycle_LineAnchoredToScripts(t *testing.T) {
+	content := "{\n" + // line 1
+		"  \"dependencies\": {\n" + // 2
+		"    \"install\": \"^1.0.0\"\n" + // 3 (decoy: dep named "install")
+		"  },\n" + // 4
+		"  \"scripts\": {\n" + // 5
+		"    \"install\": \"node index.js\"\n" + // 6 (the real hook)
+		"  }\n" + // 7
+		"}" // 8
+	findings := analyze(t, "package.json", content)
+	var line int
+	found := false
+	for _, f := range findings {
+		if f.RuleID == RuleLocalJSLifecycle {
+			line, found = f.Line, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected SUPPLY_026, got %+v", findings)
+	}
+	if line != 6 {
+		t.Errorf("SUPPLY_026 line = %d, want 6 (scripts entry, not the dep on line 3)", line)
 	}
 }

