@@ -231,30 +231,32 @@ func computeMetrics(content []byte) *metrics {
 	}
 	_ = lineNum // suppress unused warning; the variable documents the loop
 
-	// Regex passes count occurrences over the full content. FindAllIndex
-	// with the cap argument keeps memory bounded if a file is pathological.
-	hex := hexIdentifierRe.FindAllIndex(content, hexIdentifierThreshold*2)
-	m.HexIdentifierCount = len(hex)
-	disp := dispatcherCallRe.FindAllIndex(content, dispatcherCallThreshold*2)
-	m.DispatcherCallCount = len(disp)
-	m.HasWhileTruePattern = bytes.Contains(content, []byte("while(!![])")) ||
-		bytes.Contains(content, []byte("while (!![])"))
+	// Shared lexical view: comments + regex-literal bodies masked, string
+	// interiors known. Every signal below scans view.Code so a commented
+	// or regex-literal occurrence never counts; code-token signals also
+	// skip matches inside string literals (a call keyword or env read in a
+	// string is data, not code). Computed once.
+	view := newJSLexicalView(content)
+	code := view.Code
 
-	// Earliest line of an obfuscator-specific signal anchors JS_OBF_001.
-	if m.HasWhileTruePattern {
-		idx := bytes.Index(content, []byte("while(!![])"))
-		if idx < 0 {
-			idx = bytes.Index(content, []byte("while (!![])"))
-		}
-		if idx >= 0 {
-			m.LineObfSpecific = lineOf(content, idx)
-		}
+	// Obfuscator signals. Counted over masked code; identifiers/calls that
+	// land inside a string literal are example data, not the payload, so
+	// they are filtered out. The cap is applied to CODE-TOKEN matches (via
+	// countCodeTokenMatches), not raw matches, so a real payload preceded
+	// by many stringified _0x examples is still counted.
+	hexCount, hexFirst := countCodeTokenMatches(view, hexIdentifierRe, hexIdentifierThreshold)
+	m.HexIdentifierCount = hexCount
+	dispCount, dispFirst := countCodeTokenMatches(view, dispatcherCallRe, dispatcherCallThreshold)
+	m.DispatcherCallCount = dispCount
+	if idx := whileTrueIndex(view); idx >= 0 {
+		m.HasWhileTruePattern = true
+		m.LineObfSpecific = lineOf(code, idx)
 	}
-	if m.LineObfSpecific == 0 && m.HexIdentifierCount > hexIdentifierThreshold && len(hex) > 0 {
-		m.LineObfSpecific = lineOf(content, hex[0][0])
+	if m.LineObfSpecific == 0 && m.HexIdentifierCount > hexIdentifierThreshold && hexFirst >= 0 {
+		m.LineObfSpecific = lineOf(code, hexFirst)
 	}
-	if m.LineObfSpecific == 0 && m.DispatcherCallCount > dispatcherCallThreshold && len(disp) > 0 {
-		m.LineObfSpecific = lineOf(content, disp[0][0])
+	if m.LineObfSpecific == 0 && m.DispatcherCallCount > dispatcherCallThreshold && dispFirst >= 0 {
+		m.LineObfSpecific = lineOf(code, dispFirst)
 	}
 
 	// Network / publish / GitHub / session sinks. The network regex is
@@ -263,44 +265,72 @@ func computeMetrics(content []byte) *metrics {
 	// Aliased http/https/net imports are discovered separately so a
 	// payload like `const h = require('https'); h.request(...)` still
 	// counts as a network sink.
-	lower := bytes.ToLower(content)
-	if loc := networkSinkRe.FindIndex(content); loc != nil {
+	// Length-preserving ASCII fold so offsets in lowerCode line up with
+	// view.Code (and the call-argument ranges). bytes.ToLower is
+	// Unicode-aware and could shift offsets on non-ASCII input.
+	lowerCode := asciiLowerBytes(code)
+	// Child_process call sites and execa matches are computed once and
+	// reused by the child_process flag, Bun execution, and (only when
+	// needed) host-needle binding.
+	cpCalls := collectChildProcessCalls(code)
+	execaMatches := execaCallRe.FindAllIndex(code, -1)
+	shelljsCalls := collectShelljsExecCalls(code)
+
+	// Network sink: the fetch()/http.request() CALL keyword must be real
+	// code, not inside a string ("fetch('x')") or a regex (/fetch\(/).
+	// Streamed so a file full of stringified `fetch(` examples does not
+	// force materializing every match.
+	if loc := firstCodeTokenIndex(view, networkSinkRe); loc >= 0 {
 		m.HasNetworkSink = true
-		m.LineNetworkSink = lineOf(content, loc[0])
+		m.LineNetworkSink = lineOf(code, loc)
 	}
 	if !m.HasNetworkSink {
-		if line := findNetworkAliasSink(content); line > 0 {
+		if line := findNetworkAliasSink(code); line > 0 {
 			m.HasNetworkSink = true
 			m.LineNetworkSink = line
 		}
 	}
+	// Host data indicators (registry / GitHub GraphQL / session) are broad
+	// PARTNER signals matched by presence on comment-masked code: a
+	// commented mention no longer counts, but a host in any string still
+	// does. They are deliberately NOT bound to a modeled HTTP-client call:
+	// binding by client whitelist loses real exfil through unmodeled
+	// clients (request, superagent, ky, internal wrappers), and these
+	// needles only matter as a partner to a real secret read anyway.
+	// (Call-bound host matching with a sound abstraction is a possible
+	// future refinement, not a per-client list.)
 	for _, n := range publishSinkNeedles {
-		if bytes.Contains(lower, []byte(n)) {
+		if bytes.Contains(lowerCode, []byte(n)) {
 			m.HasPublishSink = true
+			break
 		}
 	}
 	for _, n := range githubGraphQLNeedles {
-		if bytes.Contains(lower, []byte(n)) {
+		if bytes.Contains(lowerCode, []byte(n)) {
 			m.HasGitHubGraphQLSink = true
+			break
 		}
 	}
 	for _, n := range sessionSinkNeedles {
-		if bytes.Contains(lower, []byte(n)) {
+		if bytes.Contains(lowerCode, []byte(n)) {
 			m.HasSessionSink = true
+			break
 		}
 	}
-	// HasChildProcess is true when the file contains either a
-	// receiver-bound child_process method call (require chain or known
-	// alias) or a bare invocation whose name was destructured from
-	// child_process. Used by JS_OBF_001 severity escalation only.
-	m.HasChildProcess = hasChildProcessInvocation(content)
-	m.HasProcessEnv = bytes.Contains(lower, []byte("process.env"))
+	// HasChildProcess: a real receiver-bound or destructured child_process
+	// call, with the call keyword in code (not a stringified example).
+	for _, site := range cpCalls {
+		if view.CodeTokenAt(site.Start) {
+			m.HasChildProcess = true
+			break
+		}
+	}
+	m.HasProcessEnv = hasCodeToken(view, lowerCode, "process.env")
 
 	// Bun execution: a bound child_process / execa / shelljs call running
-	// bun, detected on COMMENT-STRIPPED code so a documented command is
-	// never mistaken for a launch. The gate (detectBunSecondStage) pairs
-	// this with a strong partner; execution alone never fires.
-	if line := bunExecutionSite(stripJSCommentsPreservingOffsets(content)); line > 0 {
+	// bun on masked code. The gate (detectBunSecondStage) pairs this with a
+	// strong partner; execution alone never fires.
+	if line := bunExecutionSite(view, cpCalls, execaMatches, shelljsCalls); line > 0 {
 		m.HasBunExecution = true
 		m.LineBun = line
 	}
@@ -313,24 +343,32 @@ func computeMetrics(content []byte) *metrics {
 		for _, n := range ciSecretEnvVars {
 			if name == n && !m.HasCISecretRead {
 				m.HasCISecretRead = true
-				m.LineCISecret = lineOf(content, idx)
+				m.LineCISecret = lineOf(code, idx)
 				m.CISecretMatched = n
 				return
 			}
 		}
 	}
-	for _, match := range envReadRe.FindAllSubmatchIndex(content, -1) {
+	// process.env.SECRET reads must be real code: a `process.env.GITHUB_TOKEN`
+	// inside a string or comment is documentation, not a read.
+	for _, match := range envReadRe.FindAllSubmatchIndex(code, -1) {
 		if m.HasCISecretRead {
 			break
 		}
-		checkSecretName(string(content[match[2]:match[3]]), match[0])
+		if !matchInCode(view, match) {
+			continue
+		}
+		checkSecretName(string(code[match[2]:match[3]]), match[0])
 	}
 	if !m.HasCISecretRead {
-		for _, match := range envDestructureRe.FindAllSubmatchIndex(content, -1) {
+		for _, match := range envDestructureRe.FindAllSubmatchIndex(code, -1) {
 			if m.HasCISecretRead {
 				break
 			}
-			nameList := string(content[match[2]:match[3]])
+			if !matchInCode(view, match) {
+				continue
+			}
+			nameList := string(code[match[2]:match[3]])
 			for _, raw := range strings.Split(nameList, ",") {
 				entry := strings.TrimSpace(raw)
 				// Aliased entries take the form `NAME: alias`; the
@@ -346,13 +384,14 @@ func computeMetrics(content []byte) *metrics {
 		}
 	}
 	// Cloud metadata endpoints and on-disk credential paths are
-	// identified by literal-string presence; they are unambiguous IPs /
-	// filesystem paths that do not appear as env var names.
+	// unambiguous IPs / filesystem paths. They live inside string
+	// arguments, so they are matched on comment-masked code (a commented
+	// mention does not count) but not string-guarded.
 	for _, n := range ciSecretLiteralNeedles {
-		if i := bytes.Index(content, []byte(n)); i >= 0 {
+		if i := bytes.Index(code, []byte(n)); i >= 0 {
 			m.HasCISecretRead = true
 			if m.LineCISecret == 0 {
-				m.LineCISecret = lineOf(content, i)
+				m.LineCISecret = lineOf(code, i)
 				m.CISecretMatched = n
 			}
 		}
@@ -360,9 +399,9 @@ func computeMetrics(content []byte) *metrics {
 
 	// Daemonization is computed inline so the chain options (detached,
 	// stdio:ignore, .unref()) are tied to a real child_process call,
-	// not satisfied by any object literal elsewhere in the file. See
-	// findDaemonChain for the per-invocation proximity walk.
-	if line, ok := findDaemonChain(content); ok {
+	// not satisfied by any object literal elsewhere in the file. Runs on
+	// masked code so a commented example does not satisfy it.
+	if line, ok := findDaemonChain(code); ok {
 		m.HasDaemonChain = true
 		m.LineDaemon = line
 	}
@@ -373,39 +412,41 @@ func computeMetrics(content []byte) *metrics {
 	// like `'/proc/' + pid + '/mem'` while filtering out files that
 	// reference /proc/stat in one place and an unrelated 'cmdline'
 	// identifier elsewhere.
-	m.LineProcMem = findProcMemPair(content)
+	m.LineProcMem = findProcMemPair(code)
 	m.HasProcMemAccess = m.LineProcMem > 0
-	m.HasOIDCTokenEnv = bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_TOKEN")) ||
-		bytes.Contains(content, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
-	m.HasRunnerWorker = bytes.Contains(content, []byte("Runner.Worker"))
+	m.HasOIDCTokenEnv = bytes.Contains(code, []byte("ACTIONS_ID_TOKEN_REQUEST_TOKEN")) ||
+		bytes.Contains(code, []byte("ACTIONS_ID_TOKEN_REQUEST_URL"))
+	m.HasRunnerWorker = bytes.Contains(code, []byte("Runner.Worker"))
 
-	// Agent persistence references. The standalone needles are all
-	// inside .claude/ and each fire on their own (Claude Code's
-	// auto-execution surface). VS Code persistence is gated on the
-	// pair below: tasks.json + runOn:folderOpen.
+	// Agent persistence references. Matched on comment-masked code so a
+	// commented .claude/ mention does not count; the path lives inside a
+	// string argument of a write/read, so it is not string-guarded.
+	// (Tighter write/read-call binding for these paths is a documented
+	// follow-up; see PR notes.) VS Code persistence is gated on the pair
+	// tasks.json + runOn:folderOpen.
 	for _, n := range agentPersistenceNeedles {
-		if i := bytes.Index(content, []byte(n)); i >= 0 {
+		if i := bytes.Index(code, []byte(n)); i >= 0 {
 			m.HasClaudePersistence = true
 			if m.LineAgentPath == 0 {
-				m.LineAgentPath = lineOf(content, i)
+				m.LineAgentPath = lineOf(code, i)
 				m.AgentPathMatched = n
 			}
 		}
 	}
-	if bytes.Contains(content, []byte(".vscode/tasks.json")) {
-		if loc := runOnFolderOpenRe.FindIndex(content); loc != nil {
+	if bytes.Contains(code, []byte(".vscode/tasks.json")) {
+		if loc := runOnFolderOpenRe.FindIndex(code); loc != nil {
 			m.HasVSCodePersistence = true
 			if m.LineAgentPath == 0 {
-				m.LineAgentPath = lineOf(content, loc[0])
+				m.LineAgentPath = lineOf(code, loc[0])
 				m.AgentPathMatched = ".vscode/tasks.json + runOn: folderOpen"
 			}
 		}
 	}
 
 	// DNS TXT exfil signals. The detector requires a real resolveTxt
-	// invocation; a bare reference to the string "resolveTxt" does not
-	// satisfy any of the regexes here.
-	if line := findDNSTXTSink(content); line > 0 {
+	// invocation; it already strips comments and gates on string interiors
+	// internally, so masked code passes through unchanged.
+	if line := findDNSTXTSink(code); line > 0 {
 		m.HasDNSTXTSink = true
 		m.LineDNSTXT = line
 	}
@@ -427,7 +468,7 @@ func computeMetrics(content []byte) *metrics {
 	// detectDNSTXTExfil only runs when HasDNSTXTSink is true; the
 	// recomputation cost is amortized over actual chain candidates.
 	for _, n := range nodeIPCIOCNeedles {
-		if bytes.Contains(content, []byte(n)) {
+		if bytes.Contains(code, []byte(n)) {
 			m.HasNodeIPCIOC = true
 			if m.NodeIPCMatch == "" {
 				m.NodeIPCMatch = n
@@ -537,12 +578,6 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 	return sites
 }
 
-// hasChildProcessInvocation reports whether the file contains any
-// real child_process invocation. Used by JS_OBF_001 severity escalation.
-func hasChildProcessInvocation(content []byte) bool {
-	return len(collectChildProcessCalls(content)) > 0
-}
-
 // bunExecutionSite returns the 1-based line of the first REAL Bun runtime
 // launch in already-comment-stripped code, or 0. Execution is recognized
 // only at bound call sites: a child_process call (spawn/exec/execFile/fork
@@ -552,22 +587,14 @@ func hasChildProcessInvocation(content []byte) bool {
 // user-defined helper named exec/spawn, and documented commands therefore
 // do not register. Call-site starts inside a string literal are skipped
 // (a stringified example is not a call).
-func bunExecutionSite(code []byte) int {
-	strs := jsStringInteriors(code)
-	inString := func(i int) bool {
-		for _, r := range strs {
-			if r[0] > i {
-				break
-			}
-			if i >= r[0] && i < r[1] {
-				return true
-			}
-		}
-		return false
-	}
+// bunExecutionSite takes the shared lexical view plus the already-computed
+// child_process call sites and execa call matches (so it does not re-scan
+// the file), and returns the line of the first real Bun payload launch.
+func bunExecutionSite(view jsLexicalView, cpCalls []cpCallSite, execaMatches [][]int, shelljsCalls []cpCallSite) int {
+	code := view.Code
 	best := -1
 	consider := func(start int) {
-		if start < 0 || inString(start) {
+		if start < 0 || view.InString(start) {
 			return
 		}
 		if best < 0 || start < best {
@@ -580,43 +607,55 @@ func bunExecutionSite(code []byte) int {
 	// command-string form exec("bun run ./x"). Bound via
 	// collectChildProcessCalls (receiver alias or destructured), so a
 	// user-defined function named spawn/exec does not count.
-	for _, site := range collectChildProcessCalls(code) {
+	for _, site := range cpCalls {
 		if callRunsBun(code[site.Start:site.ArgsStart], extractCallArgs(code, site.ArgsStart)) {
 			consider(site.Start)
 		}
 	}
 	// execa('bun', ['./x.mjs']) / execaCommand('bun run ./x').
-	for _, loc := range execaCallRe.FindAllIndex(code, -1) {
+	for _, loc := range execaMatches {
 		if callRunsBun(code[loc[0]:loc[1]], extractCallArgs(code, loc[1])) {
 			consider(loc[0])
 		}
 	}
-	// shelljs .exec("bun run ..."), bound to a real shelljs receiver: an
-	// inline require('shelljs').exec(...) or an alias bound to shelljs.
-	for _, loc := range shelljsInlineExecRe.FindAllIndex(code, -1) {
-		if bunCommandStrRe.Match(extractCallArgs(code, loc[1])) {
-			consider(loc[0])
-		}
-	}
-	shelljsAliases := map[string]bool{}
-	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
-		shelljsAliases[string(code[mm[2]:mm[3]])] = true
-	}
-	for _, mm := range shelljsAliasESMRe.FindAllSubmatchIndex(code, -1) {
-		shelljsAliases[string(code[mm[2]:mm[3]])] = true
-	}
-	if len(shelljsAliases) > 0 {
-		for _, mm := range aliasExecCallRe.FindAllSubmatchIndex(code, -1) {
-			if shelljsAliases[string(code[mm[2]:mm[3]])] &&
-				bunCommandStrRe.Match(extractCallArgs(code, mm[1])) {
-				consider(mm[0])
-			}
+	// shelljs .exec("bun run ..."), bound to a real shelljs receiver.
+	for _, site := range shelljsCalls {
+		if bunCommandStrRe.Match(extractCallArgs(code, site.ArgsStart)) {
+			consider(site.Start)
 		}
 	}
 	if best < 0 {
 		return 0
 	}
 	return lineOf(code, best)
+}
+
+// collectShelljsExecCalls returns the call sites of real shelljs `.exec(...)`
+// invocations: an inline require('shelljs').exec(...) or an alias bound to
+// shelljs. Used both to detect a Bun command run via shelljs and to bind
+// host data indicators (a publish/exfil URL inside sh.exec('...')).
+func collectShelljsExecCalls(code []byte) []cpCallSite {
+	var sites []cpCallSite
+	for _, loc := range shelljsInlineExecRe.FindAllIndex(code, -1) {
+		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+	}
+	aliases := map[string]bool{}
+	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
+		aliases[string(code[mm[2]:mm[3]])] = true
+	}
+	for _, mm := range shelljsAliasESMRe.FindAllSubmatchIndex(code, -1) {
+		aliases[string(code[mm[2]:mm[3]])] = true
+	}
+	if len(aliases) > 0 {
+		for _, mm := range aliasExecCallRe.FindAllSubmatchIndex(code, -1) {
+			if aliases[string(code[mm[2]:mm[3]])] {
+				// mm[2] is the alias identifier start (mm[0] is the leading
+				// boundary char from jsIdentBoundary); anchor the site there.
+				sites = append(sites, cpCallSite{Start: mm[2], ArgsStart: mm[1]})
+			}
+		}
+	}
+	return sites
 }
 
 // findNetworkAliasSink walks imports of http/https/net and reports
@@ -994,7 +1033,7 @@ var (
 	shelljsAliasAssignRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)`)
 	shelljsAliasESMRe    = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"` + "`" + `]shelljs['"` + "`" + `]`)
 	shelljsInlineExecRe  = regexp.MustCompile(`(?i)require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)\s*\.\s*exec\s*\(`)
-	aliasExecCallRe      = regexp.MustCompile(`\b([A-Za-z_$][\w$]*)\s*\.\s*exec\s*\(`)
+	aliasExecCallRe      = regexp.MustCompile(jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*exec\s*\(`)
 )
 
 // ciSecretEnvVars are GHA / cloud env var names whose value is the
@@ -2050,6 +2089,186 @@ func insideStringInterior(ranges [][2]int, idx int) bool {
 		} else {
 			return true
 		}
+	}
+	return false
+}
+
+// jsLexicalView is a single, offset-preserving lexical pass over a JS
+// file, shared by every jsrisk signal so a match in a comment, regex
+// literal, or example string does not raise a finding.
+//
+//   - Code is content with comments AND regex-literal bodies masked to
+//     spaces (via stripJSCommentsPreservingOffsets). Offsets and line
+//     numbers match the original, so lineOf(view.Code, idx) is correct.
+//   - StringRanges are the string interiors of Code (sorted, from
+//     jsStringInteriors), with `${...}` template expressions treated as
+//     code.
+//
+// Signals scan Code, so a commented or regex-literal occurrence never
+// counts. CODE-TOKEN signals (a call keyword, an env read, an obfuscator
+// identifier) additionally skip matches whose offset is InString, since a
+// call keyword inside a string literal is data, not a call. DATA-indicator
+// needles (URLs, credential paths) deliberately do NOT use InString: they
+// live legitimately inside the string arguments of real calls.
+//
+// This is a lexical view only: no scope analysis, AST, or taint.
+type jsLexicalView struct {
+	Code         []byte
+	StringRanges [][2]int
+}
+
+func newJSLexicalView(content []byte) jsLexicalView {
+	code := stripJSCommentsPreservingOffsets(content)
+	return jsLexicalView{Code: code, StringRanges: jsStringInteriors(code)}
+}
+
+// InString reports whether the byte offset falls inside a string interior
+// of the masked code.
+func (v jsLexicalView) InString(idx int) bool {
+	return insideStringInterior(v.StringRanges, idx)
+}
+
+// CodeTokenAt reports whether a signal match at idx is a real code token:
+// not masked away (Code is already comment/regex-free) and not inside a
+// string literal. Use for call keywords, env reads, obfuscator idents.
+func (v jsLexicalView) CodeTokenAt(idx int) bool {
+	return idx >= 0 && !v.InString(idx)
+}
+
+// matchInCode reports whether a regex match [start,end] is real code, not
+// inside a string literal. It tests the start AND start+1, not the end:
+//   - Some jsrisk regexes carry a leading identifier-boundary char
+//     (jsIdentBoundary, up to 1 byte) that, for a stringified call like
+//     "fetch('x')", is the string's opening quote -- OUTSIDE the interior
+//     -- while the real keyword (start+1) is inside it. Testing start+1
+//     catches that.
+//   - The end is unreliable for env reads: `process.env['NAME']` ends
+//     inside the quoted KEY, which is a legitimate string in real code.
+//
+// So the construct is "stringified" only when its first keyword byte
+// (start or start+1) lies in a string interior.
+func matchInCode(view jsLexicalView, m []int) bool {
+	if view.InString(m[0]) {
+		return false
+	}
+	if m[0]+1 < len(view.Code) && view.InString(m[0]+1) {
+		return false
+	}
+	return true
+}
+
+// countCodeTokenMatches streams matches of re through view.Code (one at a
+// time via FindIndex on the unscanned suffix, never materializing every
+// match), counts those that are real code tokens up to threshold+1, and
+// returns that count plus the offset of the first code-token match (or
+// -1). Streaming caps on code-token matches rather than raw matches, so
+// any number of stringified examples before the real payload is skipped
+// without exhausting a budget, while memory stays O(1).
+func countCodeTokenMatches(view jsLexicalView, re *regexp.Regexp, threshold int) (int, int) {
+	code := view.Code
+	count, first := 0, -1
+	for pos := 0; pos < len(code); {
+		loc := re.FindIndex(code[pos:])
+		if loc == nil {
+			break
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		if matchInCode(view, []int{start, end}) {
+			if first < 0 {
+				first = start
+			}
+			count++
+			if count > threshold {
+				break
+			}
+		}
+		if end > start {
+			pos = end
+		} else {
+			pos = start + 1
+		}
+	}
+	return count, first
+}
+
+// firstCodeTokenIndex streams matches of re and returns the start offset
+// of the first real-code match (not in a string), or -1, without
+// materializing every match (a file full of stringified `fetch(` examples
+// imposes no large allocation).
+func firstCodeTokenIndex(view jsLexicalView, re *regexp.Regexp) int {
+	code := view.Code
+	for pos := 0; pos < len(code); {
+		loc := re.FindIndex(code[pos:])
+		if loc == nil {
+			return -1
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		if matchInCode(view, []int{start, end}) {
+			return start
+		}
+		if end > start {
+			pos = end
+		} else {
+			pos = start + 1
+		}
+	}
+	return -1
+}
+
+// asciiLowerBytes returns a length-preserving lowercase copy: only A-Z are
+// folded, every other byte is left as-is. Unlike bytes.ToLower (which is
+// Unicode-aware and can change byte length), this keeps offsets identical
+// to the input, so offsets computed in the folded copy still line up with
+// view.Code and the call-argument ranges. The sink needles are ASCII.
+func asciiLowerBytes(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// whileTrueIndex returns the offset of the first `while(!![])` /
+// `while (!![])` in code that is a code token, or -1.
+func whileTrueIndex(view jsLexicalView) int {
+	best := -1
+	for _, lit := range []string{"while(!![])", "while (!![])"} {
+		needle := []byte(lit)
+		for from := 0; from < len(view.Code); {
+			i := bytes.Index(view.Code[from:], needle)
+			if i < 0 {
+				break
+			}
+			abs := from + i
+			if view.CodeTokenAt(abs) {
+				if best < 0 || abs < best {
+					best = abs
+				}
+				break
+			}
+			from = abs + 1
+		}
+	}
+	return best
+}
+
+// hasCodeToken reports whether the lowercase literal occurs in lowerCode as
+// a code token (not inside a string literal).
+func hasCodeToken(view jsLexicalView, lowerCode []byte, literal string) bool {
+	needle := []byte(literal)
+	for from := 0; from < len(lowerCode); {
+		i := bytes.Index(lowerCode[from:], needle)
+		if i < 0 {
+			return false
+		}
+		abs := from + i
+		if view.CodeTokenAt(abs) {
+			return true
+		}
+		from = abs + 1
 	}
 	return false
 }
