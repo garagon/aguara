@@ -622,22 +622,28 @@ var KnownCompromised = []CompromisedPackage{
 	// ~4.2 MB credential-stealing payload ("Miasma", a Mini Shai-Hulud
 	// derivative).
 	//
-	// Coverage note: Aikido's report headlines "96 malicious versions
-	// across 32 packages" but its body enumerates 63 specific
-	// package@version tuples (the 32 packages below). Those 63 are the
-	// only versions we can verify, so they are the only ones listed.
-	// We deliberately do NOT synthesise the ~33 unenumerated versions
-	// and do NOT widen to a range-only whole-package match: the
-	// legitimate @redhat-cloud-services packages have many clean
-	// releases, so a guessed range would false-positive real installs.
-	// A neighbour version (e.g. chrome@2.3.0) must stay clean. If the
-	// full list is later published, extend the Versions slices here.
+	// Coverage note: Aikido's initial report headlined "96 malicious
+	// versions across 32 packages" but its body enumerated only 63
+	// specific tuples. The full enumeration of all 96 versions is now
+	// published as machine-readable OSV / GitHub Security Advisory
+	// records (source: ghsa-malware), so every version below is taken
+	// directly from OSV rather than synthesised. Each malicious version
+	// is an exact (ecosystem, name, version) pin: we do NOT widen to a
+	// range-only whole-package match, because the legitimate
+	// @redhat-cloud-services packages have many clean releases and a
+	// guessed range would false-positive real installs. A neighbour
+	// version (e.g. chrome@2.3.0, or the clean gap types@3.6.3) must
+	// stay clean. To refresh: query api.osv.dev/v1/query per package and
+	// take affected[].versions verbatim.
 	//
-	// Source: https://www.aikido.dev/blog/red-hat-npm-packages-compromised-credential-stealing-worm
+	// Sources:
+	//   - https://api.osv.dev/v1/query (npm, @redhat-cloud-services/*; ghsa-malware)
+	//   - https://www.microsoft.com/en-us/security/blog/2026/06/02/preinstall-persistence-inside-red-hat-npm-miasma-credential-stealing-campaign/
+	//   - https://www.aikido.dev/blog/red-hat-npm-packages-compromised-credential-stealing-worm
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/chrome",
-		Versions:  []string{"2.3.1", "2.3.2"},
+		Versions:  []string{"2.3.1", "2.3.2", "2.3.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -646,7 +652,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/compliance-client",
-		Versions:  []string{"4.0.3", "4.0.4"},
+		Versions:  []string{"4.0.3", "4.0.4", "4.0.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -655,7 +661,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/config-manager-client",
-		Versions:  []string{"5.0.4", "5.0.5"},
+		Versions:  []string{"5.0.4", "5.0.5", "5.0.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -664,7 +670,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/entitlements-client",
-		Versions:  []string{"4.0.11", "4.0.12"},
+		Versions:  []string{"4.0.11", "4.0.12", "4.0.14"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -673,7 +679,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/eslint-config-redhat-cloud-services",
-		Versions:  []string{"3.2.1", "3.2.2"},
+		Versions:  []string{"3.2.1", "3.2.2", "3.2.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -682,7 +688,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components",
-		Versions:  []string{"7.7.2", "7.7.3"},
+		Versions:  []string{"7.7.2", "7.7.3", "7.7.5"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -691,7 +697,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-advisor-components",
-		Versions:  []string{"3.8.2"},
+		Versions:  []string{"3.8.2", "3.8.4", "3.8.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -700,7 +706,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-config",
-		Versions:  []string{"6.11.3", "6.11.4"},
+		Versions:  []string{"6.11.3", "6.11.4", "6.11.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -709,7 +715,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-config-utilities",
-		Versions:  []string{"4.11.2", "4.11.3"},
+		Versions:  []string{"4.11.2", "4.11.3", "4.11.5"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -718,7 +724,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-notifications",
-		Versions:  []string{"6.9.2", "6.9.3"},
+		Versions:  []string{"6.9.2", "6.9.3", "6.9.5"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -727,7 +733,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-remediations",
-		Versions:  []string{"4.9.2", "4.9.3"},
+		Versions:  []string{"4.9.2", "4.9.3", "4.9.5"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -736,7 +742,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-testing",
-		Versions:  []string{"1.2.1", "1.2.2"},
+		Versions:  []string{"1.2.1", "1.2.2", "1.2.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -745,7 +751,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-translations",
-		Versions:  []string{"4.4.1", "4.4.2"},
+		Versions:  []string{"4.4.1", "4.4.2", "4.4.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -754,7 +760,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/frontend-components-utilities",
-		Versions:  []string{"7.4.1", "7.4.2"},
+		Versions:  []string{"7.4.1", "7.4.2", "7.4.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -763,7 +769,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/hcc-feo-mcp",
-		Versions:  []string{"0.3.1", "0.3.2"},
+		Versions:  []string{"0.3.1", "0.3.2", "0.3.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -772,7 +778,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/hcc-kessel-mcp",
-		Versions:  []string{"0.3.1", "0.3.2"},
+		Versions:  []string{"0.3.1", "0.3.2", "0.3.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -781,7 +787,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/hcc-pf-mcp",
-		Versions:  []string{"0.6.1", "0.6.2"},
+		Versions:  []string{"0.6.1", "0.6.2", "0.6.4"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -790,7 +796,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/host-inventory-client",
-		Versions:  []string{"5.0.3", "5.0.4"},
+		Versions:  []string{"5.0.3", "5.0.4", "5.0.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -799,7 +805,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/insights-client",
-		Versions:  []string{"4.0.4", "4.0.5"},
+		Versions:  []string{"4.0.4", "4.0.5", "4.0.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -808,7 +814,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/integrations-client",
-		Versions:  []string{"6.0.4", "6.0.5"},
+		Versions:  []string{"6.0.4", "6.0.5", "6.0.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -817,7 +823,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/javascript-clients-shared",
-		Versions:  []string{"2.0.8", "2.0.9"},
+		Versions:  []string{"2.0.8", "2.0.9", "2.0.11"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -826,7 +832,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/notifications-client",
-		Versions:  []string{"6.1.4", "6.1.5"},
+		Versions:  []string{"6.1.4", "6.1.5", "6.1.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -835,7 +841,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/patch-client",
-		Versions:  []string{"4.0.4", "4.0.5"},
+		Versions:  []string{"4.0.4", "4.0.5", "4.0.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -844,7 +850,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/quickstarts-client",
-		Versions:  []string{"4.0.11", "4.0.12"},
+		Versions:  []string{"4.0.11", "4.0.12", "4.0.14"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -853,7 +859,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/rbac-client",
-		Versions:  []string{"9.0.3", "9.0.4"},
+		Versions:  []string{"9.0.3", "9.0.4", "9.0.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -862,7 +868,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/remediations-client",
-		Versions:  []string{"4.0.4", "4.0.5"},
+		Versions:  []string{"4.0.4", "4.0.5", "4.0.7"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -871,7 +877,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/rule-components",
-		Versions:  []string{"4.7.2", "4.7.3"},
+		Versions:  []string{"4.7.2", "4.7.3", "4.7.5"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -880,7 +886,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/sources-client",
-		Versions:  []string{"3.0.10", "3.0.11"},
+		Versions:  []string{"3.0.10", "3.0.11", "3.0.13"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -889,7 +895,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/topological-inventory-client",
-		Versions:  []string{"3.0.10", "3.0.11"},
+		Versions:  []string{"3.0.10", "3.0.11", "3.0.13"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -898,7 +904,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/tsc-transform-imports",
-		Versions:  []string{"1.2.2"},
+		Versions:  []string{"1.2.2", "1.2.4", "1.2.6"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
@@ -916,7 +922,7 @@ var KnownCompromised = []CompromisedPackage{
 	{
 		Ecosystem: EcosystemNPM,
 		Name:      "@redhat-cloud-services/vulnerabilities-client",
-		Versions:  []string{"2.1.8", "2.1.9"},
+		Versions:  []string{"2.1.8", "2.1.9", "2.1.11"},
 		Advisory:  miasmaAdvisory,
 		Date:      "2026-06-01",
 		Summary:   miasmaSummary,
