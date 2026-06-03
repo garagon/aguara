@@ -119,9 +119,10 @@ func TestMiasma_YarnLockHit(t *testing.T) {
 func TestMiasma_NeighborVersionClean(t *testing.T) {
 	dir := t.TempDir()
 	nm := filepath.Join(dir, "node_modules")
-	writeNPMPackage(t, nm, "@redhat-cloud-services/chrome", "2.3.0")      // clean neighbor
-	writeNPMPackage(t, nm, "@redhat-cloud-services/rbac-client", "9.0.2") // clean neighbor
-	writeNPMPackage(t, nm, "@redhat-cloud-services/types", "3.6.3")       // clean gap between pinned versions
+	writeNPMPackage(t, nm, "@redhat-cloud-services/chrome", "2.3.0")                        // clean neighbor
+	writeNPMPackage(t, nm, "@redhat-cloud-services/rbac-client", "9.0.2")                   // clean neighbor
+	writeNPMPackage(t, nm, "@redhat-cloud-services/types", "3.6.3")                         // clean gap between pinned versions
+	writeNPMPackage(t, nm, "@redhat-cloud-services/frontend-components-utilities", "7.4.3") // clean gap between 7.4.2 and 7.4.4
 
 	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
 	if err != nil {
@@ -147,6 +148,62 @@ func TestMiasma_CleanSimilarScopeClean(t *testing.T) {
 	}
 	if len(result.Findings) != 0 {
 		t.Errorf("clean / similar-name packages must not flag, got: %+v", result.Findings)
+	}
+}
+
+// TestMiasma_NewVersionsFire covers the versions added from the OSV /
+// GitHub Security Advisory enumeration (the third malicious version per
+// package, beyond the 63 originally enumerated by Aikido). Each must
+// flag CRITICAL with the Miasma advisory.
+func TestMiasma_NewVersionsFire(t *testing.T) {
+	cases := []struct{ name, version string }{
+		{"@redhat-cloud-services/frontend-components-utilities", "7.4.4"},
+		{"@redhat-cloud-services/chrome", "2.3.4"},
+		{"@redhat-cloud-services/tsc-transform-imports", "1.2.6"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"@"+tc.version, func(t *testing.T) {
+			dir := t.TempDir()
+			nm := filepath.Join(dir, "node_modules")
+			writeNPMPackage(t, nm, tc.name, tc.version)
+
+			result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+			if err != nil {
+				t.Fatalf("CheckNPM error: %v", err)
+			}
+			if got := len(result.Findings); got != 1 {
+				t.Fatalf("expected 1 finding, got %d: %+v", got, result.Findings)
+			}
+			f := result.Findings[0]
+			if f.Severity != incident.SevCritical {
+				t.Errorf("expected CRITICAL, got %q", f.Severity)
+			}
+			want := tc.name + " " + tc.version + " is a known compromised npm package (" + miasmaAdvisory + ")"
+			if f.Title != want {
+				t.Errorf("title = %q, want %q", f.Title, want)
+			}
+		})
+	}
+}
+
+// TestMiasma_AdvisoryVersionCount locks the full Microsoft/OSV
+// enumeration: 32 packages, 96 malicious versions under the single
+// Miasma advisory. Guards against an accidental drop or a future
+// regen that silently changes the surface.
+func TestMiasma_AdvisoryVersionCount(t *testing.T) {
+	pkgs, versions := 0, 0
+	for _, p := range incident.KnownCompromised {
+		if p.Advisory != miasmaAdvisory {
+			continue
+		}
+		pkgs++
+		versions += len(p.Versions)
+	}
+	if pkgs != 32 {
+		t.Errorf("Miasma package count = %d, want 32", pkgs)
+	}
+	if versions != 96 {
+		t.Errorf("Miasma version count = %d, want 96", versions)
 	}
 }
 
