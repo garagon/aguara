@@ -3125,3 +3125,345 @@ func TestGitHubC2(t *testing.T) {
 		})
 	}
 }
+
+func TestHostTamper(t *testing.T) {
+	cases := []struct {
+		name, content string
+		rule          string // expected rule ID, "" = neither tamper rule should fire
+		crit          bool
+	}{
+		// --- JS_SUDOERS_TAMPER_001 true positives ---
+		{
+			name:    "fs appendFile to sudoers.d with NOPASSWD grant -> CRITICAL",
+			content: "const fs = require('fs');\nfs.appendFileSync('/etc/sudoers.d/miasma', 'user ALL=(ALL) NOPASSWD:ALL');\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			name:    "shell tee to sudoers.d with grant content -> CRITICAL",
+			content: "require('child_process').execSync(\"echo 'u ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/x\");\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			name:    "shell append to sudoers, no grant, no partner -> HIGH",
+			content: "require('child_process').execSync('echo somecfg >> /etc/sudoers.d/x');\n",
+			rule:    RuleSudoersTamper, crit: false,
+		},
+		{
+			name:    "fs write to sudoers, no grant, + Bun partner -> CRITICAL",
+			content: "const fs = require('fs');\nrequire('child_process').spawn('bun', ['./s.mjs']);\nfs.writeFileSync('/etc/sudoers.d/x', cfg);\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		// --- JS_HOST_TRUST_TAMPER_001 true positives ---
+		{
+			name:    "fs write to ld.so.preload standalone -> HIGH",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/ld.so.preload', '/tmp/libx.so');\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		{
+			name:    "fs append to /etc/hosts with sensitive domain -> HIGH",
+			content: "const fs = require('fs');\nfs.appendFileSync('/etc/hosts', '1.2.3.4 api.github.com');\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		{
+			name:    "shelljs sed -i resolv.conf + AWS secret -> CRITICAL",
+			content: "const sh = require('shelljs');\nconst k = process.env.AWS_SECRET_ACCESS_KEY;\nsh.exec(\"sed -i 's/a/b/' /etc/resolv.conf\");\n",
+			rule:    RuleHostTrustTamper, crit: true,
+		},
+		{
+			name:    "fs write to sshd_config standalone -> HIGH",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/ssh/sshd_config', cfg);\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		// --- false positives ---
+		{
+			name:    "sudoers mentioned only in a comment",
+			content: "// writes /etc/sudoers.d/x with NOPASSWD\nconst x = 1;\n",
+			rule:    "",
+		},
+		{
+			name:    "doc string of fs.writeFileSync to sudoers (no real call)",
+			content: "const doc = \"fs.writeFileSync('/etc/sudoers', x)\";\nconsole.log(doc);\n",
+			rule:    "",
+		},
+		{
+			name:    "visudo -c validation only is not a write",
+			content: "require('child_process').execSync('visudo -c /etc/sudoers');\n",
+			rule:    "",
+		},
+		{
+			name:    "chmod 440 sudoers.d without a write",
+			content: "require('child_process').execSync('chmod 440 /etc/sudoers.d/x');\n",
+			rule:    "",
+		},
+		{
+			name:    "sudo apt-get install is not host tampering",
+			content: "require('child_process').execSync('sudo apt-get install -y curl');\n",
+			rule:    "",
+		},
+		{
+			name:    "fs.readFileSync /etc/hosts is a read, not a write",
+			content: "const fs = require('fs');\nconst h = fs.readFileSync('/etc/hosts', 'utf8');\n",
+			rule:    "",
+		},
+		{
+			name:    "local wrapper writeFileSync to sudoers not bound to fs",
+			content: "const writer = makeWriter();\nwriter.writeFileSync('/etc/sudoers', x);\n",
+			rule:    "",
+		},
+		{
+			name:    "db.exec redirect to sudoers not child_process/shelljs",
+			content: "const db = getDb();\ndb.exec(\"echo x >> /etc/sudoers\");\n",
+			rule:    "",
+		},
+		{
+			name:    "fs append to /etc/hosts without sensitive domain or partner",
+			content: "const fs = require('fs');\nfs.appendFileSync('/etc/hosts', '127.0.0.1 localdev');\n",
+			rule:    "",
+		},
+		{
+			// codex round 1 #1: execFileSync is a program API (no shell), so a
+			// redirect-looking string in its argv is a literal argument, not a
+			// write to sudoers.
+			name:    "execFileSync with redirect-looking arg is not a shell write",
+			content: "const cp = require('child_process');\ncp.execFileSync('echo', ['x ALL=(ALL) NOPASSWD:ALL >> /etc/sudoers.d/x']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 1 #2: a prefix-sharing path (/etc/sudoers.bak) is a
+			// different file and must not match the /etc/sudoers token.
+			name:    "fs write to /etc/sudoers.bak is not the sudoers file",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/sudoers.bak', 'backup');\n",
+			rule:    "",
+		},
+		{
+			// codex round 1 #2: /etc/hosts.allow is not /etc/hosts.
+			name:    "fs write to /etc/hosts.allow is not the hosts file",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/hosts.allow', 'ALL: 10.0.0.0/8');\n",
+			rule:    "",
+		},
+		{
+			// codex round 2 #2: a destructured-RENAMED execSync still reports
+			// its source method, so a real shell write is not missed.
+			name:    "destructured renamed execSync shell write to sudoers -> CRITICAL",
+			content: "const { execSync: run } = require('child_process');\nrun(\"echo 'u ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/x\");\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 2 #1: only the first (command) argument is shell-
+			// interpreted; a redirect-looking string in the options/env object
+			// is not a write.
+			name:    "execSync redirect-looking string in options env is not a write",
+			content: "const cp = require('child_process');\ncp.execSync('true', { env: { NOTE: 'x >> /etc/sudoers.d/x' } });\n",
+			rule:    "",
+		},
+		{
+			// codex round 3 #3: spawn('sh', ['-c', '<script>']) runs a shell,
+			// so a redirect in the script argument is a real write.
+			name:    "spawnSync sh -c shell write to sudoers -> CRITICAL",
+			content: "const cp = require('child_process');\ncp.spawnSync('sh', ['-c', \"echo 'u ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/x\"]);\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 3 #2: a child_process binding that only appears
+			// inside a doc string must not register a real object's .exec as a
+			// shell write.
+			name:    "child_process binding inside a doc string is not a real binding",
+			content: "const help = \"const cp = require('child_process')\";\nconst cp = { exec: (s) => s };\ncp.exec('echo x >> /etc/sudoers.d/x');\n",
+			rule:    "",
+		},
+		{
+			// codex round 4 #2: a fixture/temp path that merely contains
+			// /etc/... mid-path is not the host surface.
+			name:    "fs write to /tmp/etc/ld.so.preload (mid-path) is not the host file",
+			content: "const fs = require('fs');\nfs.writeFileSync('/tmp/etc/ld.so.preload', x);\n",
+			rule:    "",
+		},
+		{
+			// codex round 4 #1: 'sh'/'-c' as literal argv data to a non-shell
+			// program (echo) is not a shell invocation.
+			name:    "spawn echo with sh -c as argv data is not a shell write",
+			content: "const cp = require('child_process');\ncp.spawn('echo', ['sh', '-c', 'x >> /etc/sudoers.d/y']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 5 #1: execa('sh', ['-c', ...]) runs a shell.
+			name:    "execa sh -c shell write to sudoers + grant -> CRITICAL",
+			content: "const { execa } = require('execa');\nawait execa('sh', ['-c', \"echo 'u ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/x\"]);\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 5 #1: execaCommand('sh -c "..."') runs a shell.
+			name:    "execaCommand sh -c shell write to ld.so.preload -> HIGH",
+			content: "const { execaCommand } = require('execa');\nawait execaCommand(\"sh -c 'echo /tmp/x.so > /etc/ld.so.preload'\");\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		{
+			// codex round 5 #1: a plain execa (no shell) does not interpret a
+			// redirect-looking argument.
+			name:    "plain execa with redirect-looking arg is not a shell write",
+			content: "const { execa } = require('execa');\nawait execa('echo', ['x >> /etc/sudoers.d/y']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 5 #2: a quoted redirect target is still a real write.
+			name:    "shell tee to quoted ld.so.preload path -> HIGH",
+			content: "require('child_process').execSync('cat x | tee \"/etc/ld.so.preload\"');\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		{
+			// codex round 6 #1: a sed -i against a mid-path /tmp/etc/... is not
+			// the host file.
+			name:    "shell sed -i against /tmp/etc/ld.so.preload (mid-path) is not the host file",
+			content: "require('child_process').execSync(\"sed -i 's/a/b/' /tmp/etc/ld.so.preload\");\n",
+			rule:    "",
+		},
+		{
+			// codex round 6 #2: clustered shell flags (bash -lc) still run the
+			// command string.
+			name:    "spawnSync bash -lc shell write to sudoers -> CRITICAL",
+			content: "const cp = require('child_process');\ncp.spawnSync('bash', ['-lc', \"echo 'u ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/x\"]);\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 6 #3: a sensitive domain in an UNRELATED part of the
+			// shell command (a curl) does not bind to the /etc/hosts write;
+			// without a strong partner it must not fire.
+			name:    "shell hosts write + unrelated github curl (no partner) is not a write",
+			content: "require('child_process').execSync(\"echo '127.0.0.1 local' >> /etc/hosts; curl https://github.com/x\");\n",
+			rule:    "",
+		},
+		{
+			// codex round 7 #1: only the argument right after -c is the shell
+			// script; a redirect in a later positional param ($1) is not run.
+			name:    "spawn sh -c with redirect in a positional param is not a write",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['-c', 'echo ok', '_', 'echo x >> /etc/sudoers.d/y']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 7 #1: same for a clustered -lc flag.
+			name:    "execa bash -lc with redirect in a positional param is not a write",
+			content: "const { execa } = require('execa');\nawait execa('bash', ['-lc', 'echo ok', 'echo x >> /etc/sudoers.d/y']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 7 #2: a hostname that merely contains a sensitive
+			// token as a substring (notgithub.com) is a different domain.
+			name:    "fs hosts write with notgithub.com substring is not a sensitive domain",
+			content: "const fs = require('fs');\nfs.appendFileSync('/etc/hosts', '127.0.0.1 notgithub.com.local');\n",
+			rule:    "",
+		},
+		{
+			// codex round 8: a sensitive domain only in the options argument
+			// (not the written data) does not satisfy the resolver gate.
+			name:    "fs hosts write with sensitive domain only in options is not a write",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/hosts', '127.0.0.1 local', { note: 'github.com' });\n",
+			rule:    "",
+		},
+		{
+			// codex round 9: a shell redirect of a sensitive-domain line into
+			// /etc/hosts is a resolver tamper even without another partner.
+			name:    "shell echo sensitive domain >> /etc/hosts -> HIGH",
+			content: "require('child_process').execSync(\"echo '1.2.3.4 github.com' >> /etc/hosts\");\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+		{
+			// codex round 10 #2: -c must be the FIRST argv element to be the
+			// shell option; here sh runs script.sh and -c is a positional
+			// parameter, so the following string is not an executed script.
+			name:    "spawn sh script.sh then -c positional is not a shell write",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['script.sh', '-c', 'echo x >> /etc/sudoers.d/x']);\n",
+			rule:    "",
+		},
+		{
+			// codex round 11: a sensitive domain in an EARLIER command (curl)
+			// is not the content written to /etc/hosts; the gate binds to the
+			// pipeline segment feeding the redirect.
+			name:    "earlier curl github then plain hosts write (no domain in segment) is not a write",
+			content: "require('child_process').execSync(\"curl https://github.com/x; echo '127.0.0.1 local' >> /etc/hosts\");\n",
+			rule:    "",
+		},
+		{
+			// round 11 regression: a pipe still feeds tee, so the grant in the
+			// piped echo is part of the written content -> CRITICAL.
+			name:    "echo grant piped to sudo tee sudoers -> CRITICAL",
+			content: "require('child_process').execSync(\"echo 'u ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/x\");\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 12: a prefix concatenation (tmp + '/etc/...') targets
+			// a path under the prefix, not the host file.
+			name:    "fs write to tmp + '/etc/ld.so.preload' concat is not the host file",
+			content: "const fs = require('fs');\nconst tmp = require('os').tmpdir();\nfs.writeFileSync(tmp + '/etc/ld.so.preload', data);\n",
+			rule:    "",
+		},
+		{
+			// codex round 12: template-literal prefix is also under the prefix.
+			name:    "fs write to template `${tmp}/etc/hosts` is not the host file",
+			content: "const fs = require('fs');\nfs.writeFileSync(`${tmp}/etc/hosts`, '1.2.3.4 github.com');\n",
+			rule:    "",
+		},
+		{
+			// codex round 13: a JS concat suffix on an exact fs path targets a
+			// sibling file (/etc/sudoers.bak), not the host file.
+			name:    "fs write to '/etc/sudoers' + '.bak' concat suffix is not the host file",
+			content: "const fs = require('fs');\nfs.writeFileSync('/etc/sudoers' + '.bak', data);\n",
+			rule:    "",
+		},
+		{
+			// codex round 13: same JS concat suffix inside a shell command.
+			name:    "shell redirect to '/etc/sudoers' + '.bak' concat suffix is not the host file",
+			content: "require('child_process').execSync('echo x >> /etc/sudoers' + '.bak');\n",
+			rule:    "",
+		},
+		{
+			// codex round 14: a template interpolation suffix also evaluates to
+			// a sibling file.
+			name:    "fs write to template /etc/sudoers${'.bak'} suffix is not the host file",
+			content: "const fs = require('fs');\nfs.writeFileSync(`/etc/sudoers${'.bak'}`, data);\n",
+			rule:    "",
+		},
+		{
+			// codex round 14: same template suffix inside a shell command.
+			name:    "shell redirect to template /etc/hosts${'.allow'} suffix is not the host file",
+			content: "require('child_process').execSync(`echo x >> /etc/hosts${'.allow'}`);\n",
+			rule:    "",
+		},
+		{
+			// codex round 15: a separate shell option before -c (bash -e -c)
+			// still runs the command string.
+			name:    "spawnSync bash -e -c shell write to sudoers -> CRITICAL",
+			content: "const cp = require('child_process');\ncp.spawnSync('bash', ['-e', '-c', \"echo 'u ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/x\"]);\n",
+			rule:    RuleSudoersTamper, crit: true,
+		},
+		{
+			// codex round 15: same with the inline command-string form.
+			name:    "execaCommand bash -e -c shell write to ld.so.preload -> HIGH",
+			content: "const { execaCommand } = require('execa');\nawait execaCommand(\"bash -e -c 'echo /tmp/x.so > /etc/ld.so.preload'\");\n",
+			rule:    RuleHostTrustTamper, crit: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			findings := analyze(t, "index.js", c.content)
+			sudoers := hasRule(findings, RuleSudoersTamper)
+			host := hasRule(findings, RuleHostTrustTamper)
+			switch c.rule {
+			case "":
+				if sudoers || host {
+					t.Fatalf("expected no host-tamper finding, got sudoers=%v host=%v (%+v)", sudoers, host, findings)
+				}
+			default:
+				if !hasRule(findings, c.rule) {
+					t.Fatalf("expected %s, got findings %+v", c.rule, findings)
+				}
+				f := findRule(findings, c.rule)
+				if c.crit && f.Severity != types.SeverityCritical {
+					t.Errorf("expected CRITICAL, got %+v", f)
+				}
+				if !c.crit && f.Severity != types.SeverityHigh {
+					t.Errorf("expected HIGH, got %+v", f)
+				}
+			}
+		})
+	}
+}

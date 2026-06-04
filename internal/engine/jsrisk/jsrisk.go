@@ -52,6 +52,8 @@ const (
 	RuleDNSTXTExfil      = "JS_DNS_TXT_EXFIL_001"
 	RuleBunSecondStage   = "JS_BUN_SECOND_STAGE_001"
 	RuleGitHubC2         = "JS_GITHUB_C2_001"
+	RuleSudoersTamper    = "JS_SUDOERS_TAMPER_001"
+	RuleHostTrustTamper  = "JS_HOST_TRUST_TAMPER_001"
 )
 
 // Detection thresholds. Chosen to leave room for ordinary minified
@@ -611,6 +613,11 @@ func lineOf(content []byte, idx int) int {
 type cpCallSite struct {
 	Start     int
 	ArgsStart int
+	// Method is the lowercased child_process SOURCE method (exec, execsync,
+	// spawn, ...), resolved through any destructuring rename. It lets callers
+	// distinguish shell-interpreting forms (exec/execSync) from program APIs
+	// without re-reading the local call name.
+	Method string
 }
 
 // collectChildProcessCalls returns sites of real child_process
@@ -620,10 +627,17 @@ type cpCallSite struct {
 // name was never imported from the module are excluded.
 func collectChildProcessCalls(content []byte) []cpCallSite {
 	var sites []cpCallSite
+	// A binding or call written inside a STRING literal (a doc/snippet that
+	// quotes `require('child_process')`) is text, not a real import; skip
+	// those so an unrelated object's `.exec(...)` is not misclassified.
+	sr := jsStringInteriors(content)
 
 	// Inline require chain: require('child_process').spawn(...)
 	for _, loc := range inlineRequireReceiverRe.FindAllIndex(content, -1) {
-		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+		if insideStringInterior(sr, loc[0]) {
+			continue
+		}
+		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1], Method: lastCallMethod(content, loc[1])})
 	}
 
 	// Aliases bound via CJS require or ESM default/namespace import.
@@ -631,9 +645,15 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 	// receivers; an unrelated local variable called `cp` does not.
 	aliases := map[string]bool{}
 	for _, m := range childProcessAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+		if insideStringInterior(sr, m[2]) {
+			continue
+		}
 		aliases[string(content[m[2]:m[3]])] = true
 	}
 	for _, m := range childProcessAliasESMRe.FindAllSubmatchIndex(content, -1) {
+		if insideStringInterior(sr, m[2]) {
+			continue
+		}
 		aliases[string(content[m[2]:m[3]])] = true
 	}
 	if len(aliases) > 0 {
@@ -646,7 +666,7 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 				// The actual identifier starts at m[2]; that is the
 				// anchor we want for the finding's Line. ArgsStart is
 				// m[1] (one past the opening paren).
-				sites = append(sites, cpCallSite{Start: m[2], ArgsStart: m[1]})
+				sites = append(sites, cpCallSite{Start: m[2], ArgsStart: m[1], Method: lastCallMethod(content, m[1])})
 			}
 		}
 	}
@@ -655,7 +675,9 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 	// (left of `:` in CJS, left of ` as ` in ESM) must be a real
 	// child_process method; the local binding (right side, or the
 	// entry itself when not aliased) is what shows up in a bare call.
-	destructuredNames := map[string]bool{}
+	// local binding name -> lowercased source child_process method, so a
+	// renamed destructure (`{ execSync: run }`) still reports its real method.
+	destructuredNames := map[string]string{}
 	addDestructure := func(body string, aliasSep string) {
 		for _, raw := range strings.Split(body, ",") {
 			entry := strings.TrimSpace(raw)
@@ -668,20 +690,26 @@ func collectChildProcessCalls(content []byte) []cpCallSite {
 				local = strings.TrimSpace(entry[i+len(aliasSep):])
 			}
 			if cpMethodNames[source] && local != "" {
-				destructuredNames[local] = true
+				destructuredNames[local] = strings.ToLower(source)
 			}
 		}
 	}
 	for _, m := range childProcessDestructureRe.FindAllSubmatchIndex(content, -1) {
+		if insideStringInterior(sr, m[2]) {
+			continue
+		}
 		addDestructure(string(content[m[2]:m[3]]), ":")
 	}
 	for _, m := range childProcessESMDestructureRe.FindAllSubmatchIndex(content, -1) {
+		if insideStringInterior(sr, m[2]) {
+			continue
+		}
 		addDestructure(string(content[m[2]:m[3]]), " as ")
 	}
 	if len(destructuredNames) > 0 {
 		for _, loc := range anyBareInvokeRe.FindAllSubmatchIndex(content, -1) {
-			if destructuredNames[string(content[loc[2]:loc[3]])] {
-				sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
+			if src, ok := destructuredNames[string(content[loc[2]:loc[3]])]; ok {
+				sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1], Method: src})
 			}
 		}
 	}
@@ -970,6 +998,30 @@ func firstSignificantByteAfter(view jsLexicalView, parenIdx int) int {
 	return -1
 }
 
+// lastCallMethod returns the lowercased method/identifier immediately before
+// the `(` whose arguments begin at argsStart (e.g. "execsync" for
+// `cp.execSync(`, "exec" for `require('child_process').exec(`). Used to apply
+// shell-redirect parsing only to shell-interpreting calls.
+func lastCallMethod(code []byte, argsStart int) string {
+	j := argsStart - 2 // step over '(' then scan back
+	for j >= 0 && isJSSpace(code[j]) {
+		j--
+	}
+	end := j + 1
+	for j >= 0 {
+		c := code[j]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$' {
+			j--
+			continue
+		}
+		break
+	}
+	if j+1 >= end {
+		return ""
+	}
+	return strings.ToLower(string(code[j+1 : end]))
+}
+
 // calleeBefore returns the dotted callee token immediately before the `(` at
 // parenIdx (e.g. "axios.post", "http.request", "console.log"), lowercased.
 func calleeBefore(lowerCode []byte, parenIdx int) string {
@@ -1239,20 +1291,723 @@ func detectGitHubC2(path string, m *metrics) *types.Finding {
 	}
 }
 
+// fsWriteCall records the first-argument (path) byte range of a verified fs
+// write/append call. A path token inside [pathStart, pathEnd) is written to
+// disk; the full call args (for content inspection) start at pathStart.
+type fsWriteCall struct{ pathStart, pathEnd int }
+
+// fsDataArg returns the second (data) argument bytes of an fs write call,
+// given firstArgEndIdx (the comma or close paren ending the first/path arg).
+// The data argument is what is written to disk; options and callbacks that
+// follow are excluded. Returns nil when there is no data argument.
+func fsDataArg(code []byte, firstArgEndIdx int, stringRanges [][2]int) []byte {
+	if firstArgEndIdx < 0 || firstArgEndIdx >= len(code) || code[firstArgEndIdx] != ',' {
+		return nil
+	}
+	start := firstArgEndIdx + 1
+	depth := 1
+	for i := start; i < len(code); i++ {
+		if insideStringInterior(stringRanges, i) {
+			continue
+		}
+		switch code[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				return code[start:i]
+			}
+		case ',':
+			if depth == 1 {
+				return code[start:i]
+			}
+		}
+	}
+	return code[start:]
+}
+
+// collectFSWriteCalls returns every verified fs write/append call in stripped
+// (comment-masked) code. Each call's receiver/alias/destructure is bound to a
+// real fs / fs-extra / fs/promises import, so a local `writer.writeFileSync`
+// or a stringified example is not counted. Shared by the DNS-TXT envs.txt
+// staging check and the host-trust tamper detector.
+func collectFSWriteCalls(stripped []byte, stringRanges [][2]int) []fsWriteCall {
+	fsBindings := collectModuleBindings(stripped, stringRanges,
+		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+	var calls []fsWriteCall
+	add := func(matchEnd int) {
+		openParen := matchEnd - 1
+		argEnd := firstArgEnd(stripped, openParen, stringRanges)
+		if argEnd <= openParen {
+			return
+		}
+		calls = append(calls, fsWriteCall{openParen + 1, argEnd})
+	}
+	for _, mt := range fsWriteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		recv := string(stripped[mt[2]:mt[3]])
+		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+			continue
+		}
+		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
+			continue
+		}
+		add(mt[1])
+	}
+	for _, mt := range fsWriteBareCallRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		if !fsWriteMethodNames[fsBindings.sourceByLocal[string(stripped[mt[2]:mt[3]])]] {
+			continue
+		}
+		add(mt[1])
+	}
+	for _, mt := range fsPromisesWriteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		recv := string(stripped[mt[2]:mt[3]])
+		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+			continue
+		}
+		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
+			continue
+		}
+		add(mt[1])
+	}
+	for _, mt := range inlineRequireFsWriteRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		add(mt[1])
+	}
+	return calls
+}
+
+// Sensitive host-trust surfaces, grouped by how they are gated.
+//
+// A path is `exact` when it names a single file: it must be followed by a
+// path boundary so /etc/sudoers does NOT match /etc/sudoers.bak and /etc/hosts
+// does NOT match /etc/hosts.allow. A non-exact token ends in `/` and is a
+// directory prefix (its trailing slash is the boundary), so any file written
+// under it counts.
+type hostPath struct {
+	token string
+	exact bool
+}
+
+// sudoers: /etc/sudoers (the file) and /etc/sudoers.d/* (the drop-in dir).
+var sudoersPaths = []hostPath{
+	{"/etc/sudoers.d/", false},
+	{"/etc/sudoers", true},
+}
+
+// loaderTrustPaths: writes that change library preload, certificate trust,
+// the SSH daemon, or the global shell profile. HIGH on the write alone;
+// CRITICAL only with a strong partner.
+var loaderTrustPaths = []hostPath{
+	{"/etc/ld.so.preload", true},
+	{"/etc/profile.d/", false},
+	{"/etc/profile", true},
+	{"/usr/local/share/ca-certificates/", false},
+	{"/etc/ssl/certs/", false},
+	{"/etc/ssh/sshd_config", true},
+}
+
+// netResolutionPaths: name-resolution surfaces. A write fires ONLY when the
+// content names a sensitive domain (redirecting registry/forge traffic) or a
+// strong partner is present -- these files are edited by legitimate
+// container/dev tooling too.
+var netResolutionPaths = []hostPath{
+	{"/etc/hosts", true},
+	{"/etc/resolv.conf", true},
+}
+
+func allHostPaths() []hostPath {
+	var all []hostPath
+	all = append(all, sudoersPaths...)
+	all = append(all, loaderTrustPaths...)
+	all = append(all, netResolutionPaths...)
+	return all
+}
+
+// isPathByte reports whether c can be part of a filesystem path component, so
+// it would extend a path token in either direction.
+func isPathByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '.' || c == '_' || c == '-' || c == '/'
+}
+
+// hostPathBoundaryOK reports whether the byte after an exact path token at
+// [loc, loc+len(token)) is a path boundary (not a filename-continuation
+// character), so /etc/sudoers matches but /etc/sudoers.bak does not.
+func hostPathBoundaryOK(code []byte, end int) bool {
+	return end >= len(code) || !isPathByte(code[end])
+}
+
+// pathExtendedByConcat reports whether an exact path token is extended into a
+// different file by a JS expression: a string concatenation
+// (`'/etc/sudoers' + '.bak'`) or a template interpolation
+// (`/etc/sudoers${'.bak'}`), both evaluating to /etc/sudoers.bak. end is the
+// byte right after the token.
+func pathExtendedByConcat(buf []byte, end int) bool {
+	if end >= len(buf) {
+		return false
+	}
+	c := buf[end]
+	// `${...}` template interpolation immediately after the token.
+	if c == '$' && end+1 < len(buf) && buf[end+1] == '{' {
+		return true
+	}
+	// A closing quote followed by `+` string concatenation.
+	if c != '\'' && c != '"' && c != '`' {
+		return false
+	}
+	j := end + 1
+	for j < len(buf) && (buf[j] == ' ' || buf[j] == '\t' || buf[j] == '\n' || buf[j] == '\r') {
+		j++
+	}
+	return j < len(buf) && buf[j] == '+'
+}
+
+// sudoersGrantRe matches the distinctive sudoers privilege-grant directives
+// that escalate a sudoers write to CRITICAL on their own: NOPASSWD,
+// ALL=(ALL) / ALL=(ALL:ALL), %sudo, %wheel. Broad tokens (root, /bin/bash,
+// node, curl ...) are deliberately excluded -- they appear in legitimate
+// sudoers data and provisioning scripts, so they stay HIGH unless a strong
+// partner is present.
+var sudoersGrantRe = regexp.MustCompile(`(?i)nopasswd|all\s*=\s*\(\s*all(?:\s*:\s*all)?\s*\)|%sudo\b|%wheel\b`)
+
+// hostTamperSensitiveDomains gate a /etc/hosts or /etc/resolv.conf write:
+// pinning one of these to an attacker-controlled address redirects package,
+// registry, or forge traffic.
+var hostTamperSensitiveDomains = []string{
+	"github.com", "registry.npmjs.org", "npmjs.org", "pypi.org", "files.pythonhosted.org",
+}
+
+// shellWriteToPathRes maps each sensitive path token to a regex that matches a
+// shell WRITE toward it: a redirect (`> ` / `>> `), `tee [-a]`, or `sed -i`
+// in-place edit. Reads (`cat`, `visudo -c`, `chmod`) do not match. Exact-file
+// tokens carry a trailing path-boundary class so /etc/sudoers does not match
+// /etc/sudoers.bak.
+var shellWriteToPathRes = buildShellWriteToPathRes()
+
+func buildShellWriteToPathRes() map[string]*regexp.Regexp {
+	out := map[string]*regexp.Regexp{}
+	// q allows an optional opening quote on the path operand (`>> '/etc/x'`,
+	// `tee "/etc/x"`); the closing quote is already covered by the boundary
+	// class for exact tokens (a quote is not a path byte).
+	q := `['"` + "`" + `]?`
+	// sep is a leading path boundary for the sed form, whose lazy pre-path
+	// matcher would otherwise consume a leading path segment and match an
+	// embedded /etc/... suffix (e.g. /tmp/etc/...). The redirect and tee forms
+	// anchor the path immediately after the operator, so they need no sep.
+	sep := `[\s'"` + "`" + `]`
+	for _, hp := range allHostPaths() {
+		p := q + regexp.QuoteMeta(hp.token)
+		boundary := ""
+		if hp.exact {
+			boundary = `(?:[^a-zA-Z0-9._/-]|$)`
+		}
+		out[hp.token] = regexp.MustCompile(`(?i)(?:>>?\s*` + p + boundary +
+			`|\btee\b\s+(?:-a\s+|--append\s+)?` + p + boundary +
+			`|\bsed\b[^\n\r;|&]*?-i[^\n\r;|&]*?` + sep + p + boundary + `)`)
+	}
+	return out
+}
+
+// shellProgFirstArgRe matches when the FIRST argument (the spawned program) is
+// a shell, and shellDashCFlagRe confirms a `-c` flag follows. Together they
+// recognise the `spawn('sh', ['-c', '<script>'])` form, where the script
+// argument is interpreted by that shell even though the call is a program API.
+// Anchoring to the first argument rejects literal argv data like
+// `spawn('echo', ['sh', '-c', ...])`. Bounded form recognition, not a parser.
+var shellProgFirstArgRe = regexp.MustCompile(`(?i)^\s*['"` + "`" + `](?:/(?:usr/)?bin/)?(?:sh|bash|dash|zsh|ash)['"` + "`" + `]`)
+
+// shellDashCFlagRe matches a `-c` shell flag, including clustered short-option
+// forms (`-lc`, `-ec`), where the command string still follows the cluster.
+var shellDashCFlagRe = regexp.MustCompile(`['"` + "`" + `]-[a-z]*c[a-z]*['"` + "`" + `]`)
+
+// shellCommandStrRe matches a single command STRING that invokes a shell with
+// `-c` (`execaCommand('sh -c "..."')`, `'bash -e -c "..."'`), allowing leading
+// option tokens before -c; the rest of the string is interpreted by that
+// shell.
+var shellCommandStrRe = regexp.MustCompile(`(?i)^\s*['"` + "`" + `]\s*(?:/(?:usr/)?bin/)?(?:sh|bash|dash|zsh|ash)(?:\s+-[a-z]+)*\s+-[a-z]*c[a-z]*\b`)
+
+func spawnRunsShell(firstArg, args []byte) bool {
+	return shellProgFirstArgRe.Match(firstArg) && shellDashCFlagRe.Match(args)
+}
+
+// inlineDashCRe matches an UNQUOTED `-c` (or clustered `-lc`) flag inside a
+// single command string (`sh -c "<script>"`).
+var inlineDashCRe = regexp.MustCompile(`(?i)(?:^|\s)-[a-z]*c[a-z]*\s`)
+
+// dashCBareRe matches a bare shell `-c` flag (possibly clustered: -lc, -ec).
+var dashCBareRe = regexp.MustCompile(`(?i)^-[a-z]*c[a-z]*$`)
+
+// shellScriptFromArgv returns the executed script of an argv-array shell
+// invocation (`'sh', ['-c', '<cmd>', ...]`). Leading OPTION tokens (starting
+// with `-`, e.g. `-e`) are allowed before `-c`; the first NON-option element
+// ends option parsing, so in `['script.sh', '-c', ...]` the program runs
+// script.sh and -c is a positional parameter (rejected). The script is the
+// array element right after the -c flag; later elements are $0,$1,... and are
+// excluded. Models the -c calling convention, not a full shell parser.
+func shellScriptFromArgv(args []byte) ([]byte, bool) {
+	lb := bytes.IndexByte(args, '[')
+	if lb < 0 {
+		return nil, false
+	}
+	pos := lb + 1
+	for {
+		flag, end, ok := shellStringLiteralAt(args, pos)
+		if !ok {
+			return nil, false
+		}
+		if dashCBareRe.Match(flag) {
+			cmd, _, ok := shellStringLiteralAt(args, end)
+			if !ok {
+				return nil, false
+			}
+			return cmd, true
+		}
+		// A non-option token (a script file / program) before -c means -c is
+		// a positional parameter, not the shell option.
+		if len(flag) == 0 || flag[0] != '-' {
+			return nil, false
+		}
+		pos = end
+	}
+}
+
+// shellScriptFromCommandString returns the executed remainder of a single
+// command string that starts with a shell + `-c` (`sh -c "<cmd>"`).
+func shellScriptFromCommandString(s []byte) ([]byte, bool) {
+	if m := inlineDashCRe.FindIndex(s); m != nil {
+		return s[m[1]:], true
+	}
+	return nil, false
+}
+
+// shellStringLiteralAt returns the interior and the index past the closing
+// quote of the next string literal at or after from, skipping only argument
+// separators (whitespace, comma, `[`); a non-string token (a variable) yields
+// ok=false so an unrelated later string is not grabbed.
+func shellStringLiteralAt(b []byte, from int) (content []byte, end int, ok bool) {
+	i := from
+	for i < len(b) {
+		c := b[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' || c == '[' {
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(b) || (b[i] != '\'' && b[i] != '"' && b[i] != '`') {
+		return nil, 0, false
+	}
+	q := b[i]
+	for j := i + 1; j < len(b); j++ {
+		if b[j] == '\\' {
+			j++
+			continue
+		}
+		if b[j] == q {
+			return b[i+1 : j], j + 1, true
+		}
+	}
+	return nil, 0, false
+}
+
+// hostTamperStrongPartner reports the strong supply-chain partner signals that
+// escalate a host-trust write to CRITICAL (and that the net-resolution paths
+// require to fire absent a sensitive domain).
+func hostTamperStrongPartner(m *metrics) bool {
+	return m.HasCISecretRead || m.HasNetworkSink || m.HasDaemonChain ||
+		m.HasBunExecution || m.HasGitHubWriteChannel || m.HasSessionSink ||
+		m.hasObfuscatorShape()
+}
+
+// lastShellSegment returns the tail of pre after the last command separator
+// (`;`, newline, `&`/`&&`, `||`), which is the pipeline segment that feeds the
+// redirect/tee at the end of pre. A single `|` pipe is NOT a separator (it
+// feeds the next stage, e.g. `echo X | sudo tee FILE`), so the piped data is
+// kept. This binds the domain/grant gate to the data actually written and
+// excludes tokens from an earlier unrelated command. Not quote-aware: a
+// separator char inside a quoted argument is a documented limit.
+func lastShellSegment(pre []byte) []byte {
+	last := -1
+	for i := 0; i < len(pre); i++ {
+		switch pre[i] {
+		case ';', '\n', '\r', '&':
+			last = i
+		case '|':
+			if i+1 < len(pre) && pre[i+1] == '|' {
+				last = i + 1
+				i++
+			}
+		}
+	}
+	return pre[last+1:]
+}
+
+func containsSensitiveDomain(b []byte) bool {
+	lb := bytes.ToLower(b)
+	for _, d := range hostTamperSensitiveDomains {
+		db := []byte(d)
+		for from := 0; from < len(lb); {
+			i := bytes.Index(lb[from:], db)
+			if i < 0 {
+				break
+			}
+			at := from + i
+			// Require domain-label boundaries so api.github.com matches (the
+			// preceding '.' is a subdomain separator) but notgithub.com and
+			// github.com.evil do not. A label byte is [a-z0-9-]; the leading
+			// byte may also not be '.'-less continuation, and the trailing
+			// byte may not extend the domain ('.' would add another label).
+			leadOK := at == 0 || !isDomainLabelByte(lb[at-1])
+			end := at + len(db)
+			trailOK := end >= len(lb) || (!isDomainLabelByte(lb[end]) && lb[end] != '.')
+			if leadOK && trailOK {
+				return true
+			}
+			from = at + 1
+		}
+	}
+	return false
+}
+
+func isDomainLabelByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-'
+}
+
+// detectHostTamper emits JS_SUDOERS_TAMPER_001 / JS_HOST_TRUST_TAMPER_001 when
+// package code performs a REAL write to a sensitive host surface (a bound fs
+// write whose path argument is the surface, or a bound child_process / execa /
+// shelljs command that redirects / tees / sed -i's into it). It is
+// self-contained like detectDNSTXTExfil: it recomputes the lexical view and
+// call sites from content and reads only the partner booleans off m.
+func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
+	view := newJSLexicalView(content)
+	code := view.Code
+	stringRanges := view.StringRanges
+	fsCalls := collectFSWriteCalls(code, stringRanges)
+	cpCalls := collectChildProcessCalls(code)
+	shelljsCalls := collectShelljsExecCalls(code)
+	execaMatches := execaCallRe.FindAllIndex(code, -1)
+
+	// Only shell-INTERPRETING calls parse redirects: child_process exec /
+	// execSync run `/bin/sh -c`, and shelljs.exec runs a shell. Program APIs
+	// (spawn, spawnSync, execFile, execFileSync) and execa (no shell by
+	// default) pass their arguments literally, so a `>>`-looking string there
+	// is a plain argument, not a redirect.
+	// Only the FIRST argument is interpreted by the shell; a redirect-looking
+	// string in an options/env/callback argument is not a write. Bound to the
+	// first arg via firstArgEnd.
+	//
+	// KNOWN LIMITS (no shell parser, per the rule's scope):
+	//   - the redirect/tee scan is not shell-quote-aware, so a command that
+	//     merely PRINTS a quoted redirect string (`echo "x >> /etc/x"`) can
+	//     over-fire, and distinguishing it from a real quoted tee target needs
+	//     shell-quote parsing the analyzer does not do;
+	//   - content is bound to the FIRST redirect/tee per command, so a second
+	//     write to the same path in one command, and a payload that lives
+	//     inside a `sed` script rather than before the operator, are not
+	//     inspected for the domain/grant gate.
+	var shellArgs [][]byte
+	var shellStarts []int
+	addShell := func(start, argsStart int) {
+		if start < 0 || view.InString(start) {
+			return
+		}
+		argEnd := firstArgEnd(code, argsStart-1, stringRanges)
+		if argEnd <= argsStart {
+			return
+		}
+		shellArgs = append(shellArgs, code[argsStart:argEnd])
+		shellStarts = append(shellStarts, start)
+	}
+	for _, s := range cpCalls {
+		switch s.Method {
+		case "exec", "execsync":
+			// exec / execSync run `/bin/sh -c <first arg>`.
+			addShell(s.Start, s.ArgsStart)
+		case "spawn", "spawnsync", "execfile", "execfilesync":
+			// A program API still runs a shell when the program IS a shell
+			// with -c; only the argument right after -c is the script (later
+			// array elements are positional params $0,$1,...), so scan that.
+			if s.Start < 0 || view.InString(s.Start) {
+				continue
+			}
+			full := extractCallArgs(code, s.ArgsStart)
+			argEnd := firstArgEnd(code, s.ArgsStart-1, stringRanges)
+			if argEnd <= s.ArgsStart {
+				continue
+			}
+			if spawnRunsShell(code[s.ArgsStart:argEnd], full) {
+				if script, ok := shellScriptFromArgv(full); ok {
+					shellArgs = append(shellArgs, script)
+					shellStarts = append(shellStarts, s.Start)
+				}
+			}
+		}
+	}
+	for _, s := range shelljsCalls {
+		addShell(s.Start, s.ArgsStart)
+	}
+	// execa shells out only via execa('sh',['-c',...]) or
+	// execaCommand('sh -c "..."'); a plain execa parses args without a shell.
+	for _, loc := range execaMatches {
+		start, argsStart := loc[0], loc[1]
+		if view.InString(start) {
+			continue
+		}
+		argEnd := firstArgEnd(code, argsStart-1, stringRanges)
+		if argEnd <= argsStart {
+			continue
+		}
+		full := extractCallArgs(code, argsStart)
+		firstArg := code[argsStart:argEnd]
+		var script []byte
+		var ok bool
+		switch {
+		case spawnRunsShell(firstArg, full):
+			script, ok = shellScriptFromArgv(full)
+		case shellCommandStrRe.Match(firstArg):
+			script, ok = shellScriptFromCommandString(firstArg)
+		}
+		if ok {
+			shellArgs = append(shellArgs, script)
+			shellStarts = append(shellStarts, start)
+		}
+	}
+
+	indexAll := func(needle string) []int {
+		var idxs []int
+		nb := []byte(needle)
+		for from := 0; from < len(code); {
+			i := bytes.Index(code[from:], nb)
+			if i < 0 {
+				break
+			}
+			idxs = append(idxs, from+i)
+			from = from + i + 1
+		}
+		return idxs
+	}
+
+	// boundWrites returns, for every real write targeting the path, the byte
+	// span of the actual written CONTENT (so a grant/domain token elsewhere
+	// does not count) plus the earliest matched offset. For an fs write the
+	// content is the data (2nd) argument; for a shell write it is the command
+	// portion BEFORE the redirect/tee operator (the echoed/piped data), which
+	// excludes a domain sitting after the redirect in an unrelated `; curl ...`
+	// segment. An exact-file path must satisfy a trailing path boundary so
+	// /etc/sudoers does not match /etc/sudoers.bak.
+	boundWrites := func(hp hostPath) (contentSpans [][]byte, firstPos int) {
+		firstPos = -1
+		for _, loc := range indexAll(hp.token) {
+			if hp.exact && (!hostPathBoundaryOK(code, loc+len(hp.token)) ||
+				pathExtendedByConcat(code, loc+len(hp.token))) {
+				continue
+			}
+			for _, c := range fsCalls {
+				if loc < c.pathStart || loc >= c.pathEnd {
+					continue
+				}
+				// The path argument must be a STANDALONE string literal whose
+				// content starts with the token, so a prefix concatenation
+				// (tmp + '/etc/x'), a template prefix (`${tmp}/etc/x`), or an
+				// in-string prefix (/myapp/etc/x) is not treated as a write to
+				// the host path. The opening quote sits at the first non-space
+				// byte of the argument and the token starts right after it.
+				q := c.pathStart
+				for q < c.pathEnd && (code[q] == ' ' || code[q] == '\t' || code[q] == '\n' || code[q] == '\r') {
+					q++
+				}
+				if q >= c.pathEnd || (code[q] != '\'' && code[q] != '"' && code[q] != '`') || loc != q+1 {
+					break
+				}
+				contentSpans = append(contentSpans, fsDataArg(code, c.pathEnd, stringRanges))
+				if firstPos < 0 || loc < firstPos {
+					firstPos = loc
+				}
+				break
+			}
+		}
+		if re := shellWriteToPathRes[hp.token]; re != nil {
+			for i, args := range shellArgs {
+				m := re.FindIndex(args)
+				if m == nil {
+					continue
+				}
+				// For an exact token the match consumes a trailing boundary
+				// byte (m[1]-1); reject a JS concat that extends the path
+				// (`'... >> /etc/sudoers' + '.bak'`).
+				if hp.exact && pathExtendedByConcat(args, m[1]-1) {
+					continue
+				}
+				contentSpans = append(contentSpans, lastShellSegment(args[:m[0]]))
+				if firstPos < 0 || shellStarts[i] < firstPos {
+					firstPos = shellStarts[i]
+				}
+			}
+		}
+		return contentSpans, firstPos
+	}
+
+	lineFrom := func(pos int) int {
+		if pos < 0 {
+			return 1
+		}
+		return lineOf(code, pos)
+	}
+
+	strong := hostTamperStrongPartner(m)
+	var out []types.Finding
+
+	// JS_SUDOERS_TAMPER_001
+	var sudoersSpans [][]byte
+	sudoersPos := -1
+	for _, hp := range sudoersPaths {
+		spans, pos := boundWrites(hp)
+		if len(spans) == 0 {
+			continue
+		}
+		sudoersSpans = append(sudoersSpans, spans...)
+		if sudoersPos < 0 || (pos >= 0 && pos < sudoersPos) {
+			sudoersPos = pos
+		}
+	}
+	if len(sudoersSpans) > 0 {
+		grant := false
+		for _, s := range sudoersSpans {
+			if sudoersGrantRe.Match(s) {
+				grant = true
+				break
+			}
+		}
+		sev := types.SeverityHigh
+		if grant || strong {
+			sev = types.SeverityCritical
+		}
+		out = append(out, types.Finding{
+			RuleID:   RuleSudoersTamper,
+			RuleName: "Sudoers privilege tampering",
+			Severity: sev,
+			Category: "supply-chain",
+			Description: "Package JavaScript writes to /etc/sudoers or /etc/sudoers.d/* " +
+				"during install or runtime, changing who can run commands as root. A bound " +
+				"fs write or a shell redirect/tee/sed -i targets the sudoers surface. " +
+				"CRITICAL when the written content grants passwordless or unrestricted sudo " +
+				"(NOPASSWD, ALL=(ALL), %sudo, %wheel) or a strong supply-chain partner is " +
+				"present. Validation only (visudo -c) and chmod without a write do not match.",
+			FilePath:    path,
+			Line:        lineFrom(sudoersPos),
+			MatchedText: "write to sudoers surface",
+			Analyzer:    AnalyzerName,
+			Confidence:  0.85,
+			Remediation: "Package install/runtime code has no legitimate reason to edit " +
+				"sudoers. Inspect the file in a clean clone, remove the package, and audit " +
+				"the host's sudoers configuration for unauthorized grants.",
+		})
+	}
+
+	// JS_HOST_TRUST_TAMPER_001
+	hostHit := false
+	hostPos := -1
+	note := func(pos int) {
+		hostHit = true
+		if hostPos < 0 || (pos >= 0 && pos < hostPos) {
+			hostPos = pos
+		}
+	}
+	for _, hp := range loaderTrustPaths {
+		spans, pos := boundWrites(hp)
+		if len(spans) > 0 {
+			note(pos)
+		}
+	}
+	for _, hp := range netResolutionPaths {
+		spans, pos := boundWrites(hp)
+		if len(spans) == 0 {
+			continue
+		}
+		// The sensitive domain must be in the WRITTEN content (fs data arg or
+		// the pre-redirect shell segment), so a domain in an unrelated command
+		// segment does not satisfy the gate. Absent a domain, a strong partner
+		// is required.
+		domain := false
+		for _, s := range spans {
+			if containsSensitiveDomain(s) {
+				domain = true
+				break
+			}
+		}
+		if domain || strong {
+			note(pos)
+		}
+	}
+	if hostHit {
+		sev := types.SeverityHigh
+		if strong {
+			sev = types.SeverityCritical
+		}
+		out = append(out, types.Finding{
+			RuleID:   RuleHostTrustTamper,
+			RuleName: "Host trust surface tampering",
+			Severity: sev,
+			Category: "supply-chain",
+			Description: "Package JavaScript writes to a host trust surface: the dynamic " +
+				"linker preload (/etc/ld.so.preload), a CA certificate store, the SSH daemon " +
+				"config, the global shell profile, or name resolution (/etc/hosts, " +
+				"/etc/resolv.conf) pointed at a sensitive domain. These writes change code " +
+				"loading, certificate trust, or where registry/forge traffic goes. CRITICAL " +
+				"when paired with a strong supply-chain partner (secret read, exfil sink, " +
+				"daemonization, Bun stage, GitHub channel, session sink, or obfuscation).",
+			FilePath:    path,
+			Line:        lineFrom(hostPos),
+			MatchedText: "write to host trust surface",
+			Analyzer:    AnalyzerName,
+			Confidence:  0.8,
+			Remediation: "Package code should not modify loader, certificate, SSH, profile, " +
+				"or resolver configuration. Inspect the file in a clean clone, remove the " +
+				"package, and audit the affected host surface for tampering.",
+		})
+	}
+	return out
+}
+
 // collectShelljsExecCalls returns the call sites of real shelljs `.exec(...)`
 // invocations: an inline require('shelljs').exec(...) or an alias bound to
 // shelljs. Used both to detect a Bun command run via shelljs and to bind
 // host data indicators (a publish/exfil URL inside sh.exec('...')).
 func collectShelljsExecCalls(code []byte) []cpCallSite {
 	var sites []cpCallSite
+	// A shelljs binding or call quoted inside a string literal is text, not a
+	// real import; skip those (mirrors collectChildProcessCalls).
+	sr := jsStringInteriors(code)
 	for _, loc := range shelljsInlineExecRe.FindAllIndex(code, -1) {
+		if insideStringInterior(sr, loc[0]) {
+			continue
+		}
 		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 	}
 	aliases := map[string]bool{}
 	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
+		if insideStringInterior(sr, mm[2]) {
+			continue
+		}
 		aliases[string(code[mm[2]:mm[3]])] = true
 	}
 	for _, mm := range shelljsAliasESMRe.FindAllSubmatchIndex(code, -1) {
+		if insideStringInterior(sr, mm[2]) {
+			continue
+		}
 		aliases[string(code[mm[2]:mm[3]])] = true
 	}
 	if len(aliases) > 0 {
@@ -2491,6 +3246,7 @@ func detect(path string, m *metrics, content []byte) []types.Finding {
 	if f := detectGitHubC2(path, m); f != nil {
 		out = append(out, *f)
 	}
+	out = append(out, detectHostTamper(path, m, content)...)
 	return out
 }
 
@@ -3745,67 +4501,15 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// partner, while still allowing the natural form where the
 	// filename is quoted inside an executable call.
 	hasEnvsTxt := false
-	fsBindingsDNS := collectModuleBindings(stripped, stringRanges,
-		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
-	// Collect (openParen, argEnd) ranges for each verified fs write
-	// call. The envs.txt token must fall INSIDE the first-argument
-	// range (the path argument); presence in the data position of
-	// the call (or in an unrelated statement) does not register.
-	type argRange struct{ start, end int }
-	var firstArgRanges []argRange
-	addRange := func(matchEnd int) {
-		openParen := matchEnd - 1
-		argEnd := firstArgEnd(stripped, openParen, stringRanges)
-		if argEnd <= openParen {
-			return
-		}
-		firstArgRanges = append(firstArgRanges, argRange{openParen + 1, argEnd})
-	}
-	for _, mt := range fsWriteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
-		if insideStringInterior(stringRanges, mt[2]) {
-			continue
-		}
-		recv := string(stripped[mt[2]:mt[3]])
-		if !fsBindingsDNS.aliases[recv] && fsBindingsDNS.sourceByLocal[recv] != "promises" {
-			continue
-		}
-		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
-			continue
-		}
-		addRange(mt[1])
-	}
-	for _, mt := range fsWriteBareCallRe.FindAllSubmatchIndex(stripped, -1) {
-		if insideStringInterior(stringRanges, mt[2]) {
-			continue
-		}
-		if !fsWriteMethodNames[fsBindingsDNS.sourceByLocal[string(stripped[mt[2]:mt[3]])]] {
-			continue
-		}
-		addRange(mt[1])
-	}
-	for _, mt := range fsPromisesWriteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
-		if insideStringInterior(stringRanges, mt[2]) {
-			continue
-		}
-		recv := string(stripped[mt[2]:mt[3]])
-		if !fsBindingsDNS.aliases[recv] && fsBindingsDNS.sourceByLocal[recv] != "promises" {
-			continue
-		}
-		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
-			continue
-		}
-		addRange(mt[1])
-	}
-	for _, mt := range inlineRequireFsWriteRe.FindAllSubmatchIndex(stripped, -1) {
-		if insideStringInterior(stringRanges, mt[2]) {
-			continue
-		}
-		addRange(mt[1])
-	}
-	if len(firstArgRanges) > 0 {
+	// Each verified fs write call exposes its first-argument (path) range;
+	// the envs.txt token must fall INSIDE that range (the path argument).
+	// Presence in the data position of the call, or in an unrelated
+	// statement, does not register. Shared with the host-trust tamper rule.
+	fsCalls := collectFSWriteCalls(stripped, stringRanges)
+	if len(fsCalls) > 0 {
 		for _, loc := range envsTxtTokenRe.FindAllIndex(stripped, -1) {
-			for _, r := range firstArgRanges {
-				if loc[0] >= r.start && loc[0] < r.end {
+			for _, c := range fsCalls {
+				if loc[0] >= c.pathStart && loc[0] < c.pathEnd {
 					hasEnvsTxt = true
 					break
 				}

@@ -143,5 +143,41 @@ func RuleMetadata() []rulemeta.Rule {
 				"or runtime. Inspect the channel in a clean clone, rotate any non-GitHub " +
 				"credentials the process could reach, and pin the dependency to a reviewed version.",
 		},
+		{
+			ID:       RuleSudoersTamper,
+			Name:     "Sudoers privilege tampering",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerJSRisk,
+			Description: "Package JavaScript performs a real write to /etc/sudoers or " +
+				"/etc/sudoers.d/* -- a bound fs write whose path argument is the sudoers " +
+				"surface, or a bound child_process/execa/shelljs command that redirects, tees, " +
+				"or sed -i's into it. This changes who can run commands as root. Promoted to " +
+				"CRITICAL when the written content grants passwordless or unrestricted sudo " +
+				"(NOPASSWD, ALL=(ALL), %sudo, %wheel) or a strong supply-chain partner is " +
+				"present. Validation only (visudo -c) and chmod without a write do not match.",
+			Remediation: "Package install/runtime code has no legitimate reason to edit " +
+				"sudoers. Inspect the file in a clean clone, remove the package, and audit the " +
+				"host's sudoers configuration for unauthorized grants.",
+		},
+		{
+			ID:       RuleHostTrustTamper,
+			Name:     "Host trust surface tampering",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerJSRisk,
+			Description: "Package JavaScript writes to a host trust surface: the dynamic " +
+				"linker preload (/etc/ld.so.preload), a CA certificate store, the SSH daemon " +
+				"config (/etc/ssh/sshd_config), the global shell profile (/etc/profile, " +
+				"/etc/profile.d/*), or name resolution (/etc/hosts, /etc/resolv.conf) pointed " +
+				"at a sensitive domain. The write must be bound to a real fs or shell call. " +
+				"Loader/trust/profile writes fire HIGH on their own; resolution writes need a " +
+				"sensitive domain or a partner. CRITICAL when paired with a strong " +
+				"supply-chain partner (secret read, exfil sink, daemonization, Bun stage, " +
+				"GitHub channel, session sink, or obfuscation).",
+			Remediation: "Package code should not modify loader, certificate, SSH, profile, or " +
+				"resolver configuration. Inspect the file in a clean clone, remove the package, " +
+				"and audit the affected host surface for tampering.",
+		},
 	}
 }
