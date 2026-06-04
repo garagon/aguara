@@ -51,6 +51,7 @@ const (
 	RuleAgentPersistence = "AGENT_PERSISTENCE_001"
 	RuleDNSTXTExfil      = "JS_DNS_TXT_EXFIL_001"
 	RuleBunSecondStage   = "JS_BUN_SECOND_STAGE_001"
+	RuleGitHubC2         = "JS_GITHUB_C2_001"
 )
 
 // Detection thresholds. Chosen to leave room for ordinary minified
@@ -199,6 +200,23 @@ type metrics struct {
 	// documentation string.
 	HasBunExecution bool
 	LineBun         int
+
+	// GitHub-as-C2 write/control channel (JS_GITHUB_C2_001).
+	// HasGitHubWriteChannel is true when the file writes/controls GitHub
+	// content: a GraphQL write mutation, an Octokit write method call, or a
+	// REST contents/git-data endpoint paired with a PUT/PATCH/POST. The
+	// channel alone never fires; it requires a strong partner. Kind is one
+	// of "graphql-write" | "octokit-write" | "rest-write".
+	HasGitHubWriteChannel bool
+	LineGitHubChannel     int
+	GitHubChannelKind     string
+
+	// HasStrongSecretRead is a CI/cloud secret read that is NOT a bare
+	// GITHUB_TOKEN (NPM_TOKEN, AWS, OIDC request token, Vault, kube, cloud
+	// metadata). It is the discriminating partner for JS_GITHUB_C2_001: a
+	// legitimate release bot reads GITHUB_TOKEN, so only a non-GitHub
+	// secret separates credential exfil from ordinary GitHub writes.
+	HasStrongSecretRead bool
 }
 
 // computeMetrics walks the content once, tracking line numbers and
@@ -335,6 +353,16 @@ func computeMetrics(content []byte) *metrics {
 		m.LineBun = line
 	}
 
+	// GitHub-as-C2 write/control channel: a GraphQL write mutation, an
+	// Octokit write-method call, or a REST contents/git-data endpoint
+	// paired with a PUT/PATCH/POST. Channel alone never fires (see
+	// detectGitHubC2); it needs a strong partner.
+	if kind, line := findGitHubWriteChannel(view, lowerCode); kind != "" {
+		m.HasGitHubWriteChannel = true
+		m.GitHubChannelKind = kind
+		m.LineGitHubChannel = line
+	}
+
 	// CI / cloud secret reads come in three forms: direct member access
 	// (process.env.NAME), bracket access (process.env['NAME']), and
 	// destructuring ({NAME} = process.env). Pure string mentions do not
@@ -393,6 +421,94 @@ func computeMetrics(content []byte) *metrics {
 			if m.LineCISecret == 0 {
 				m.LineCISecret = lineOf(code, i)
 				m.CISecretMatched = n
+			}
+		}
+	}
+
+	// Strong (non-bare-GITHUB_TOKEN) secret read: the discriminating
+	// partner for the GitHub-C2 write channel. A legitimate release bot
+	// reads GITHUB_TOKEN, so only a non-GitHub secret (NPM_TOKEN, AWS,
+	// OIDC request token, Vault, kube, cloud metadata) separates credential
+	// exfil from an ordinary GitHub write. Env reads must be real code, and
+	// an assignment LHS (`process.env.NPM_TOKEN = x`) is a write, not a
+	// read, so it is excluded (same handling as the DNS detector).
+	envLHSStarts := map[int]bool{}
+	for _, loc := range processEnvDotLHSAssignRe.FindAllIndex(code, -1) {
+		envLHSStarts[loc[0]] = true
+	}
+	for _, loc := range processEnvBracketLHSAssignRe.FindAllIndex(code, -1) {
+		envLHSStarts[loc[0]] = true
+	}
+	for _, match := range envReadRe.FindAllSubmatchIndex(code, -1) {
+		if m.HasStrongSecretRead {
+			break
+		}
+		if !matchInCode(view, match) || envLHSStarts[match[0]] {
+			continue
+		}
+		name := string(code[match[2]:match[3]])
+		if name == "GITHUB_TOKEN" {
+			continue
+		}
+		for _, n := range ciSecretEnvVars {
+			if name == n {
+				m.HasStrongSecretRead = true
+				break
+			}
+		}
+	}
+	// Destructured form: const { AWS_SECRET_ACCESS_KEY = "" } = process.env.
+	if !m.HasStrongSecretRead {
+		for _, match := range envDestructureRe.FindAllSubmatchIndex(code, -1) {
+			if m.HasStrongSecretRead {
+				break
+			}
+			if !matchInCode(view, match) {
+				continue
+			}
+			for _, raw := range strings.Split(string(code[match[2]:match[3]]), ",") {
+				entry := strings.TrimSpace(raw)
+				// Strip a default initializer (`NAME = def`) then a rename
+				// (`NAME: alias`) before comparing the source member name.
+				if idx := strings.Index(entry, "="); idx >= 0 {
+					entry = strings.TrimSpace(entry[:idx])
+				}
+				if idx := strings.Index(entry, ":"); idx >= 0 {
+					entry = strings.TrimSpace(entry[:idx])
+				}
+				if entry == "GITHUB_TOKEN" {
+					continue
+				}
+				for _, n := range ciSecretEnvVars {
+					if entry == n {
+						m.HasStrongSecretRead = true
+						break
+					}
+				}
+				if m.HasStrongSecretRead {
+					break
+				}
+			}
+		}
+	}
+	if !m.HasStrongSecretRead {
+		for _, n := range ciSecretLiteralNeedles {
+			if bytes.Contains(code, []byte(n)) {
+				m.HasStrongSecretRead = true
+				break
+			}
+		}
+	}
+	// Whole-environment exfil (JSON.stringify(process.env),
+	// Object.values(process.env), ...) dumps every secret, including the
+	// non-GitHub ones, so it is a strong partner. Uses the DUMP-only regex:
+	// the single-key process.env[k] lookup is one variable (possibly
+	// GITHUB_TOKEN), which is the release-bot shape, not a credential dump.
+	if !m.HasStrongSecretRead {
+		for _, loc := range wholeProcessEnvDumpRe.FindAllIndex(code, -1) {
+			if matchInCode(view, loc) {
+				m.HasStrongSecretRead = true
+				break
 			}
 		}
 	}
@@ -628,6 +744,499 @@ func bunExecutionSite(view jsLexicalView, cpCalls []cpCallSite, execaMatches [][
 		return 0
 	}
 	return lineOf(code, best)
+}
+
+// findGitHubWriteChannel detects that the file WRITES or controls GitHub
+// content: a GraphQL write mutation, an Octokit write-method call, or a
+// REST contents/git-data endpoint paired with a PUT/PATCH/POST method.
+// Returns the channel kind and the anchor line, or ("", 0) for none. Reads
+// from GitHub (raw/gist/contents GET) are NOT a write channel -- those are
+// a separate follow-up rule.
+func findGitHubWriteChannel(view jsLexicalView, lowerCode []byte) (string, int) {
+	code := view.Code
+	// GraphQL write mutations: GitHub-specific names inside a query STRING,
+	// AND with the GraphQL `mutation` keyword nearby (the actual mutation
+	// body), AND a real send to GitHub's GraphQL API: the api.github.com
+	// /graphql endpoint as the URL of an HTTP client call, or a `.graphql(`
+	// client call. The send requirement keeps a fixture / example / unused
+	// mutation constant (even one that also names the endpoint) from counting
+	// as a channel.
+	//
+	// KNOWN LIMIT (lexical engine, no dataflow): the send and the mutation
+	// string are correlated at FILE level, not bound to the same request
+	// payload. A file that performs a real read-only GraphQL query AND also
+	// carries a SEPARATE unused write-mutation fixture string would be treated
+	// as a write channel. Binding the mutation literal to the request body
+	// (which is routinely an indirected variable, `body: q`) needs variable
+	// dataflow the analyzer does not do; the GitHub codex bot triages the
+	// residual by real-world risk.
+	graphqlSend := githubGraphQLEndpointSent(view, lowerCode) ||
+		firstCodeTokenIndex(view, githubGraphQLCallRe) >= 0
+	if graphqlSend {
+		for _, n := range githubGraphQLMutationNeedles {
+			if i := graphqlMutationIndex(view, lowerCode, n); i >= 0 {
+				return "graphql-write", lineOf(code, i)
+			}
+		}
+	}
+	// Octokit write-method calls (code tokens): a GitHub write method on an
+	// octokit / github / gh receiver chain.
+	if idx := firstCodeTokenIndex(view, octokitWriteRe); idx >= 0 {
+		return "octokit-write", lineOf(code, idx)
+	}
+	// Octokit request("POST /repos/.../git/blobs", ...) route form: method
+	// + endpoint together in a route string passed to request(...). The
+	// request( call must be real code, not a stringified example.
+	if idx := firstCodeTokenIndex(view, githubRequestRouteRe); idx >= 0 {
+		return "rest-write", lineOf(code, idx)
+	}
+	// REST contents / git-data endpoint reached by an HTTP client with a
+	// write verb. Iterate ALL endpoint candidates so a read of /contents (for
+	// a SHA) followed by a later write endpoint is still detected; a
+	// read-only endpoint, or an endpoint that is merely data, is skipped.
+	for _, re := range []*regexp.Regexp{githubContentsEndpointRe, githubGitDataEndpointRe} {
+		for _, loc := range re.FindAllIndex(lowerCode, -1) {
+			if restEndpointIsWrite(view, lowerCode, loc[0]) {
+				return "rest-write", lineOf(code, loc[0])
+			}
+		}
+	}
+	return "", 0
+}
+
+// urlOptionKeys are the option keys whose value is a request URL, so a GitHub
+// endpoint assigned to one of them is the request target (not body/data).
+var urlOptionKeys = map[string]bool{
+	"url": true, "uri": true, "baseurl": true, "endpoint": true, "href": true,
+}
+
+// httpClientRoots is the set of receiver roots recognised as HTTP clients on
+// the raw-REST write path. This is intentionally FP-safe rather than
+// exhaustive: an exotic or instance-named client (api.post, this.http.put) is
+// NOT recognised here, so it produces a miss rather than a false write. The
+// common malware shapes (octokit, GraphQL mutations) are caught by the
+// dedicated detectors above; this path only supplements raw fetch/axios/got
+// style calls to a GitHub contents / git-data endpoint.
+var httpClientRoots = map[string]bool{
+	"fetch": true, "axios": true, "got": true, "ky": true, "request": true,
+	"superagent": true, "needle": true, "undici": true, "http": true, "https": true,
+}
+
+// stringRangeContaining binary-searches the (sorted) string interiors for the
+// range containing idx, returning [start, end) and ok. Binary search keeps the
+// per-endpoint lookup logarithmic, so a bundle with tens of thousands of
+// string literals does not make the REST scan quadratic.
+func stringRangeContaining(view jsLexicalView, idx int) (int, int, bool) {
+	ranges := view.StringRanges
+	lo, hi := 0, len(ranges)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		r := ranges[mid]
+		if idx < r[0] {
+			hi = mid
+		} else if idx >= r[1] {
+			lo = mid + 1
+		} else {
+			return r[0], r[1], true
+		}
+	}
+	return 0, 0, false
+}
+
+// stringStartContaining returns the interior start of the string literal that
+// contains idx, or -1 if idx is not inside a string.
+func stringStartContaining(view jsLexicalView, idx int) int {
+	if s, _, ok := stringRangeContaining(view, idx); ok {
+		return s
+	}
+	return -1
+}
+
+// restEndpointIsWrite reports whether the GitHub REST endpoint string at idx
+// is the target of an HTTP write request: the first argument of a recognised
+// HTTP-client call (with a verb-specific helper like `.post`/`.put`, or a
+// top-level `method: PUT/PATCH/POST` option), or the `url:`-keyed value of an
+// options object that carries such a method. A GitHub path that is merely a
+// body/data value, or the argument of a non-HTTP callee (console.log), is not
+// a write.
+func restEndpointIsWrite(view jsLexicalView, lowerCode []byte, idx int) bool {
+	isVerbWrite, ok := urlBoundToHTTPClient(view, lowerCode, idx)
+	if !ok {
+		return false
+	}
+	// A verb-specific helper (.post/.put/.patch) is itself the write verb; a
+	// generic client needs a top-level `method: PUT/PATCH/POST` option in the
+	// same request.
+	return isVerbWrite || writeMethodNear(view, idx)
+}
+
+// urlBoundToHTTPClient reports whether the URL string at idx is the request
+// URL of a recognised HTTP client call -- the positional first argument
+// (`client(URL, ...)`) or a url-ish option value in the client's FIRST
+// (options) argument (`client({ url: URL })`) -- and, when so, whether the
+// callee is a verb-specific write helper (.post/.put/.patch). A GitHub path
+// that is merely a body/data value, or the argument of a non-HTTP callee
+// (console.log), is not bound.
+func urlBoundToHTTPClient(view jsLexicalView, lowerCode []byte, idx int) (isVerbWrite, ok bool) {
+	strStart := stringStartContaining(view, idx)
+	if strStart <= 0 {
+		return false, false
+	}
+	// Step over the opening delimiter, then any whitespace, to the preceding
+	// significant byte in the code.
+	j := strStart - 2
+	for j >= 0 && isJSSpace(lowerCode[j]) {
+		j--
+	}
+	if j < 0 {
+		return false, false
+	}
+	urlKeyed := false
+	switch lowerCode[j] {
+	case '(':
+		// positional URL argument: allowed.
+	case ':':
+		if !precedingKeyIsURL(lowerCode, j) {
+			return false, false
+		}
+		urlKeyed = true
+	default:
+		return false, false
+	}
+	code := view.Code
+	gStart, _, found := enclosingGroupSpan(view, idx)
+	if !found {
+		return false, false
+	}
+	var callParen int
+	if code[gStart] == '(' {
+		callParen = gStart
+	} else {
+		// URL sits inside an object / array literal; the call paren encloses
+		// it. A url-keyed value only counts when that object is the client's
+		// FIRST argument (the options/config object), not a body/data
+		// argument: axios.post('collector', { url: '<github>' }) writes to
+		// the collector, and the github path is just data.
+		pStart, _, ok2 := enclosingGroupSpan(view, gStart)
+		if !ok2 || code[pStart] != '(' {
+			return false, false
+		}
+		if urlKeyed && firstSignificantByteAfter(view, pStart) != gStart {
+			return false, false
+		}
+		callParen = pStart
+	}
+	isClient, verb := classifyHTTPCallee(calleeBefore(lowerCode, callParen))
+	if !isClient {
+		return false, false
+	}
+	return verb, true
+}
+
+// githubGraphQLEndpointSent reports whether the api.github.com/graphql
+// endpoint string is the request URL of a real HTTP client call (a genuine
+// send), as opposed to an unused constant / fixture / documentation string.
+func githubGraphQLEndpointSent(view jsLexicalView, lowerCode []byte) bool {
+	needle := []byte("api.github.com/graphql")
+	for from := 0; from < len(lowerCode); {
+		i := bytes.Index(lowerCode[from:], needle)
+		if i < 0 {
+			return false
+		}
+		abs := from + i
+		if _, ok := urlBoundToHTTPClient(view, lowerCode, abs); ok {
+			return true
+		}
+		from = abs + 1
+	}
+	return false
+}
+
+// firstSignificantByteAfter returns the offset of the first non-whitespace
+// byte after parenIdx, or the start of a string argument that begins there. A
+// return value equal to an object's `{` offset means that object is the call's
+// first argument.
+func firstSignificantByteAfter(view jsLexicalView, parenIdx int) int {
+	code := view.Code
+	for i := parenIdx + 1; i < len(code); i++ {
+		if view.InString(i) {
+			return i
+		}
+		if isJSSpace(code[i]) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// calleeBefore returns the dotted callee token immediately before the `(` at
+// parenIdx (e.g. "axios.post", "http.request", "console.log"), lowercased.
+func calleeBefore(lowerCode []byte, parenIdx int) string {
+	j := parenIdx - 1
+	for j >= 0 && isJSSpace(lowerCode[j]) {
+		j--
+	}
+	end := j + 1
+	for j >= 0 && (isJSIdentByte(lowerCode[j]) || lowerCode[j] == '.') {
+		j--
+	}
+	start := j + 1
+	if start >= end {
+		return ""
+	}
+	return strings.Trim(string(lowerCode[start:end]), ".")
+}
+
+// classifyHTTPCallee reports whether callee is a recognised HTTP client
+// (isClient) and, if so, whether the callee is a verb-specific write helper
+// such as `.post` / `.put` / `.patch` (isVerbWrite).
+func classifyHTTPCallee(callee string) (isClient, isVerbWrite bool) {
+	if callee == "" {
+		return false, false
+	}
+	parts := strings.Split(callee, ".")
+	if !httpClientRoots[parts[0]] {
+		return false, false
+	}
+	last := parts[len(parts)-1]
+	return true, last == "post" || last == "put" || last == "patch"
+}
+
+// precedingKeyIsURL reports whether the object key immediately before colonIdx
+// is a url-ish option key (url / uri / baseURL / endpoint / href).
+func precedingKeyIsURL(lowerCode []byte, colonIdx int) bool {
+	j := colonIdx - 1
+	for j >= 0 && isJSSpace(lowerCode[j]) {
+		j--
+	}
+	if j >= 0 && (lowerCode[j] == '"' || lowerCode[j] == '\'' || lowerCode[j] == '`') {
+		j--
+	}
+	end := j + 1
+	for j >= 0 && isJSIdentByte(lowerCode[j]) {
+		j--
+	}
+	start := j + 1
+	if start >= end {
+		return false
+	}
+	return urlOptionKeys[string(lowerCode[start:end])]
+}
+
+func isJSSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
+func isJSIdentByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '_' || b == '$'
+}
+
+// graphqlMutationKeywordRe matches the GraphQL `mutation` operation keyword
+// with word boundaries, so `mutationName` / `commentMutation` do not match.
+var graphqlMutationKeywordRe = regexp.MustCompile(`(?i)\bmutation\b`)
+
+// graphqlMutationInSameString reports whether the word-bounded GraphQL
+// `mutation` keyword lives in the SAME string literal as the GitHub
+// mutation-name occurrence at idx, binding the name to an actual GraphQL
+// mutation body. This rejects free-text neighbours such as
+// `const mutationName = 'createGist'`, where the name sits in one string and
+// the substring `mutation` is an unrelated identifier outside it.
+func graphqlMutationInSameString(view jsLexicalView, lowerCode []byte, idx int) bool {
+	s, e, ok := stringRangeContaining(view, idx)
+	if !ok {
+		return false
+	}
+	return graphqlMutationKeywordRe.Match(lowerCode[s:e])
+}
+
+// graphqlMutationIndex returns the offset of the first occurrence of the
+// lowercase GitHub mutation needle that lies inside a string interior AND
+// has the GraphQL `mutation` keyword nearby (a real mutation body), or -1.
+// It scans ALL occurrences, so an earlier harmless mention of the name
+// (e.g. in a doc string) does not suppress a later real mutation.
+func graphqlMutationIndex(view jsLexicalView, lowerCode []byte, needle string) int {
+	n := []byte(needle)
+	for from := 0; from < len(lowerCode); {
+		i := bytes.Index(lowerCode[from:], n)
+		if i < 0 {
+			return -1
+		}
+		abs := from + i
+		if view.InString(abs) && graphqlMutationInSameString(view, lowerCode, abs) {
+			return abs
+		}
+		from = abs + 1
+	}
+	return -1
+}
+
+// enclosingGroupSpan returns the byte span [start, end) of the innermost
+// bracket group ( (...) / {...} / [...] ) that encloses idx, skipping
+// brackets that fall inside string interiors. It binds a fetch/axios URL to
+// the SAME call argument list or options object as its `method:` option, so
+// a write method belonging to a different request is not associated with this
+// endpoint. Returns ok=false when idx is at top level (no enclosing group).
+//
+// The enclosing open is found by scanning BACKWARD from idx and stops at the
+// nearest unmatched open bracket, so a flat sequence of calls (a generated
+// bundle with thousands of endpoint literals) stays bounded per candidate
+// instead of rescanning from the start of the file. The forward scan that
+// finds the matching close is likewise bounded by the group span.
+func enclosingGroupSpan(view jsLexicalView, idx int) (int, int, bool) {
+	code := view.Code
+	if idx > len(code) {
+		idx = len(code)
+	}
+	open := -1
+	depth := 0
+	for i := idx - 1; i >= 0; i-- {
+		if view.InString(i) {
+			continue
+		}
+		switch code[i] {
+		case ')', '}', ']':
+			depth++
+		case '(', '{', '[':
+			if depth == 0 {
+				open = i
+			} else {
+				depth--
+			}
+		}
+		if open >= 0 {
+			break
+		}
+	}
+	if open < 0 {
+		return 0, 0, false
+	}
+	// Everything between open and idx is balanced (the backward scan found
+	// open at depth 0), so at idx we are exactly one level inside open.
+	depth = 1
+	for i := idx; i < len(code); i++ {
+		if view.InString(i) {
+			continue
+		}
+		switch code[i] {
+		case '(', '{', '[':
+			depth++
+		case ')', '}', ']':
+			depth--
+			if depth == 0 {
+				return open, i + 1, true
+			}
+		}
+	}
+	return open, len(code), true
+}
+
+// writeMethodNear reports whether a real PUT/PATCH/POST write-method option
+// lives in the request options object of the GitHub endpoint at endpointIdx.
+// The match must sit at the TOP LEVEL of that options object (brace depth 1
+// within the enclosing call / object group), so a `method` field buried in a
+// nested object -- e.g. `{ body: { method: 'POST' } }` on a read-only URL --
+// is not mistaken for the HTTP verb.
+func writeMethodNear(view jsLexicalView, endpointIdx int) bool {
+	code := view.Code
+	start, end, ok := enclosingGroupSpan(view, endpointIdx)
+	if !ok {
+		return false
+	}
+	for _, loc := range httpWriteMethodRe.FindAllIndex(code[start:end], -1) {
+		p := start + loc[0]
+		if !matchInCode(view, []int{p, start + loc[1]}) {
+			continue
+		}
+		if braceDepthAt(view, start, p) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// braceDepthAt returns the `{}` nesting depth at pos relative to start,
+// counting only braces in code (string interiors skipped). A request options
+// object opens exactly one brace, so its top-level fields sit at depth 1.
+func braceDepthAt(view jsLexicalView, start, pos int) int {
+	code := view.Code
+	depth := 0
+	for i := start; i < pos && i < len(code); i++ {
+		if view.InString(i) {
+			continue
+		}
+		switch code[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	return depth
+}
+
+// detectGitHubC2 emits JS_GITHUB_C2_001 when the file uses GitHub as a
+// write/control channel AND carries a strong partner that a legitimate
+// GitHub-write tool (release / changeset bot) does NOT have. A bare
+// GITHUB_TOKEN read, a payload body (content/sha/tree), or the GitHub
+// channel itself are NOT partners -- that is the ordinary release-bot
+// shape, and JS_CI_SECRET_HARVEST_001 already owns "secret to a sink".
+//
+// Execution is the SUSPICIOUS kind only -- install-time daemonization or a
+// Bun second stage -- not any child_process call: release bots routinely
+// shell out for git metadata (`execSync('git rev-parse HEAD')`), so bare
+// child_process is not a partner release bots lack.
+func detectGitHubC2(path string, m *metrics) *types.Finding {
+	if !m.HasGitHubWriteChannel {
+		return nil
+	}
+	exec := m.HasDaemonChain || m.HasBunExecution
+	persistence := m.HasClaudePersistence || m.HasVSCodePersistence
+	strongPartner := m.hasObfuscatorShape() || exec || persistence ||
+		m.HasStrongSecretRead || m.HasSessionSink
+	if !strongPartner {
+		return nil
+	}
+	// CRITICAL: a non-GitHub secret read written through the GitHub channel
+	// is the credential-exfil-via-GitHub shape (a release bot reads only
+	// GITHUB_TOKEN, which is not a strong secret). Other strong partners
+	// (obfuscation / execution / persistence / session exfil) stay HIGH.
+	//
+	// KNOWN LIMIT (lexical engine, no dataflow): the secret read and the
+	// GitHub channel are correlated at FILE level, not bound to the same
+	// payload. A release script that reads NPM_TOKEN to run `npm publish` AND
+	// also writes a changelog to GitHub would escalate to CRITICAL even
+	// though the token never reaches the GitHub write. Binding the secret to
+	// the write payload needs variable dataflow the analyzer does not do; the
+	// GitHub codex bot triages the residual by real-world risk.
+	sev := types.SeverityHigh
+	if m.HasStrongSecretRead {
+		sev = types.SeverityCritical
+	}
+	line := m.LineGitHubChannel
+	if line == 0 {
+		line = 1
+	}
+	return &types.Finding{
+		RuleID:   RuleGitHubC2,
+		RuleName: "GitHub used as payload or command channel",
+		Severity: sev,
+		Category: "supply-chain",
+		Description: "JavaScript writes or controls GitHub-hosted content (" + m.GitHubChannelKind +
+			") and pairs it with a supply-chain signal: obfuscation, local execution, " +
+			"persistence, a non-GitHub credential read, or an exfil sink. This is GitHub used " +
+			"as a payload/command channel, not an ordinary repository operation; the Red Hat/" +
+			"Miasma worm used the GitHub API to stage and control payloads. A normal release " +
+			"bot (createCommitOnBranch + GITHUB_TOKEN + a content body) does not match.",
+		FilePath:    path,
+		Line:        line,
+		MatchedText: "github write/control channel (" + m.GitHubChannelKind + ") + supply-chain partner",
+		Analyzer:    AnalyzerName,
+		Confidence:  0.85,
+		Remediation: "Confirm why package code writes to GitHub during install or runtime. " +
+			"Inspect the channel in a clean clone, rotate any non-GitHub credentials the " +
+			"process could reach, and pin the dependency to a reviewed version.",
+	}
 }
 
 // collectShelljsExecCalls returns the call sites of real shelljs `.exec(...)`
@@ -963,6 +1572,54 @@ var githubGraphQLNeedles = []string{
 	"api.github.com/graphql",
 	"createcommitonbranch",
 }
+
+// githubGraphQLCallRe matches a `.graphql(` client call (octokit.graphql,
+// graphqlClient.graphql), the second way a GitHub GraphQL mutation is sent
+// without the literal api.github.com/graphql endpoint string.
+var githubGraphQLCallRe = regexp.MustCompile(`(?i)\.\s*graphql\s*\(`)
+
+// GitHub-C2 write/control channel signals (JS_GITHUB_C2_001).
+//
+// githubGraphQLMutationNeedles are GitHub-specific GraphQL write mutations
+// that live inside query STRINGS, so they are matched by presence on
+// comment-masked code. createRef / updateRef are DELIBERATELY excluded:
+// the bare names collide with React.createRef / useRef and would
+// false-positive across ordinary front-end code; the GitHub ref-write path
+// is covered instead by the REST /git/refs endpoint + write-method check.
+var githubGraphQLMutationNeedles = []string{
+	"createcommitonbranch",
+	"creategist",
+}
+
+// githubContentsEndpointRe / githubGitDataEndpointRe match GitHub REST
+// write targets. Both require the api.github.com HOST plus the full
+// /repos/<owner>/<repo>/ prefix, so a non-GitHub service that happens to use
+// a GitHub-shaped path (internal.example/repos/o/r/contents/f) is not
+// mistaken for a GitHub endpoint. They are write targets when paired with a
+// PUT/PATCH/POST. (A GitHub Enterprise host uses /api/v3/repos/... and is not
+// matched here -- the FP-safe direction for a brand-new rule; octokit calls
+// against GHE are still covered by the Octokit write-method detectors.)
+var githubContentsEndpointRe = regexp.MustCompile(`(?i)api\.github\.com/repos/[^/'"` + "`" + `\s]+/[^/'"` + "`" + `\s]+/contents/`)
+var githubGitDataEndpointRe = regexp.MustCompile(`(?i)api\.github\.com/repos/[^/'"` + "`" + `\s]+/[^/'"` + "`" + `\s]+/git/(?:blobs|trees|commits|refs)`)
+
+// octokitWriteRe matches Octokit write methods ONLY on an octokit / github /
+// gh receiver chain, so an unrelated `db.createBlob(...)` or a method merely
+// named `createForAuthenticatedUser` on a non-GitHub object is not treated as
+// a GitHub write. createRef is excluded (React.createRef collision). This is
+// a light receiver-name shape, not alias/variable tracking: a renamed Octokit
+// instance is covered instead by the REST endpoint path.
+var octokitWriteRe = regexp.MustCompile(`(?i)\b(?:octokit|github|gh)\b[\w.$]*\.\s*(?:createorupdatefilecontents|createforauthenticateduser|createblob|createtree|createcommit|updateref)\s*\(`)
+
+// httpWriteMethodRe matches an HTTP write-method option (code token), e.g.
+// `method: 'PUT'`, used to confirm a REST endpoint is a write.
+var httpWriteMethodRe = regexp.MustCompile(`(?i)\bmethod\s*:\s*['"` + "`" + `](?:put|patch|post)['"` + "`" + `]`)
+
+// githubRequestRouteRe matches the Octokit `request("POST /repos/.../...")`
+// route form, where the write method and the contents/git-data endpoint
+// live together in the route string. The `request(` prefix is required so
+// a bare route string in a config/doc (never passed to a request call) is
+// not treated as a write channel.
+var githubRequestRouteRe = regexp.MustCompile(`(?i)\brequest\s*\(\s*['"` + "`" + `]\s*(?:put|patch|post)\s+/repos/[^/'"` + "`" + `\s]+/[^/'"` + "`" + `\s]+/(?:contents/|git/(?:blobs|trees|commits|refs))`)
 
 var sessionSinkNeedles = []string{
 	"filev2.getsession.org",
@@ -1767,6 +2424,17 @@ var wholeProcessEnvRe = regexp.MustCompile(
 		`|process\.env\s*\[\s*[A-Za-z_$][\w$]*\s*\]`,
 )
 
+// wholeProcessEnvDumpRe matches only TRUE whole-environment dumps -- every
+// variable serialised at once. It deliberately omits the single-key
+// `process.env[k]` dynamic lookup, which resolves to one variable (possibly
+// GITHUB_TOKEN) and is the ordinary release-bot shape, not a credential dump.
+// Used by the GitHub-C2 strong-secret partner check.
+var wholeProcessEnvDumpRe = regexp.MustCompile(
+	`JSON\.stringify\s*\([^)]*process\.env\b` +
+		`|Object\.(?:values|entries|fromEntries)\s*\([^)]*process\.env\b` +
+		`|Object\.assign\s*\([^)]*,\s*process\.env\b`,
+)
+
 // processEnvBracketLHSAssignRe identifies the LHS-assignment shape
 // `process.env[<id>] = ...` (single `=`, not `==` / `===`).
 var processEnvBracketLHSAssignRe = regexp.MustCompile(
@@ -1818,6 +2486,9 @@ func detect(path string, m *metrics, content []byte) []types.Finding {
 		out = append(out, *f)
 	}
 	if f := detectBunSecondStage(path, m); f != nil {
+		out = append(out, *f)
+	}
+	if f := detectGitHubC2(path, m); f != nil {
 		out = append(out, *f)
 	}
 	return out

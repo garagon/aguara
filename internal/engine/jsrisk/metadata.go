@@ -122,5 +122,26 @@ func RuleMetadata() []rulemeta.Rule {
 				"Bun stage executes, rotate any credentials reachable from its environment, and " +
 				"pin the dependency to a reviewed version (install with --ignore-scripts).",
 		},
+		{
+			ID:       RuleGitHubC2,
+			Name:     "GitHub used as payload or command channel",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerJSRisk,
+			Description: "JavaScript writes or controls GitHub-hosted content -- a GraphQL write " +
+				"mutation (createCommitOnBranch, createGist), an Octokit write method " +
+				"(createOrUpdateFileContents, createBlob/createTree/createCommit, " +
+				"createForAuthenticatedUser), or a REST contents/git-data endpoint with a " +
+				"PUT/PATCH/POST -- AND pairs it with a strong supply-chain signal: obfuscation, " +
+				"local execution (child_process/Bun), persistence, a non-GitHub credential read, " +
+				"or an exfil sink. This is GitHub used as a payload/command channel, distinct " +
+				"from credential exfil (JS_CI_SECRET_HARVEST_001). A legitimate release/changeset " +
+				"bot (createCommitOnBranch + GITHUB_TOKEN + a content body) does NOT match: a " +
+				"bare GITHUB_TOKEN read and a payload body are not partners. CRITICAL when a " +
+				"non-GitHub secret is read (the credential-exfil-via-GitHub shape).",
+			Remediation: "Confirm why package code writes to or controls GitHub during install " +
+				"or runtime. Inspect the channel in a clean clone, rotate any non-GitHub " +
+				"credentials the process could reach, and pin the dependency to a reviewed version.",
+		},
 	}
 }
