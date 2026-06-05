@@ -281,6 +281,21 @@ fs.appendFileSync('/etc/sudoers.d/x', 'user ALL=(ALL) NOPASSWD:ALL');`,
 fs.writeFileSync('/etc/ld.so.preload', '/tmp/libx.so');`,
 		},
 		{
+			name:     "jsrisk wiper tripwire through public API",
+			filename: "index.js",
+			ruleID:   "JS_WIPER_TRIPWIRE_001",
+			content: `const fs = require('fs');
+fs.rmSync('.ssh', { recursive: true, force: true });`,
+		},
+		{
+			// shell delete co-occurs with CMDEXEC_004 on the same line; the
+			// wiper finding must survive cross-rule dedup.
+			name:     "jsrisk wiper shell delete survives dedup through public API",
+			filename: "index.js",
+			ruleID:   "JS_WIPER_TRIPWIRE_001",
+			content:  `require('child_process').execSync('rm -rf ~/.gnupg');`,
+		},
+		{
 			name:     "rsbuild wallet read -> network through public API",
 			filename: "build.rs",
 			ruleID:   "RS_BUILD_WALLET_EXFIL_001",
