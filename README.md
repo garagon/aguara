@@ -525,10 +525,10 @@ Supported directives:
 
 ## Rules
 
-Aguara currently exposes **224 cataloged detections** through `aguara list-rules`:
+Aguara currently exposes **226 cataloged detections** through `aguara list-rules`:
 
 - **193 embedded YAML pattern rules** across 13 categories
-- **31 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
+- **33 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
 
 The table groups coverage by emit-time category for readability:
 

