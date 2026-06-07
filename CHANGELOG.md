@@ -5,6 +5,90 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-07
+
+Expands Aguara's offline coverage of supply-chain behavioral attack
+chains, informed by the Red Hat / Miasma npm worm. Six new behavioral
+detections span the chain from install-time execution through second
+stages, repository-as-control channels, host trust tampering, and
+destructive cleanup. Intel freshness is now visible in `check` /
+`audit` / `status`, and the JavaScript analyzer is faster. Everything
+stays deterministic and offline: no package execution, no network calls
+during a scan. Existing rule IDs, severities, and the `Severity`
+JSON encoding are unchanged.
+
+### Added
+
+- **npm lifecycle scripts that run local JavaScript** (`SUPPLY_026`,
+  pkgmeta analyzer). Flags a `package.json` whose install-time lifecycle
+  hooks (`preinstall` / `install` / `postinstall` / `prepare` and the
+  related pre/post keys) execute a local `.js` / `.cjs` / `.mjs` file,
+  `node -e`, or a `bun` stage. This is the entry point of the Miasma
+  chain, where a published package runs its own code the moment it is
+  installed.
+- **Node-to-Bun second-stage execution** (`JS_BUN_SECOND_STAGE_001`,
+  jsrisk). Flags package code that shells out to the Bun runtime as a
+  second stage and pairs it with a strong supply-chain signal
+  (obfuscator-shape payload, CI/cloud secret read, or a network exfil
+  sink). Running an ordinary Bun command never fires on its own.
+  CRITICAL when a secret read and an exfil sink are both present.
+- **Repository used as a payload or command channel**
+  (`JS_GITHUB_C2_001`, jsrisk). Flags code that writes or controls
+  GitHub-hosted content (a GraphQL write mutation, an Octokit write
+  method, or a REST contents / git-data write to `api.github.com`) and
+  pairs it with a strong partner that a normal release bot does not
+  carry. CRITICAL when a non-GitHub credential is also read.
+- **Sudoers privilege tampering** (`JS_SUDOERS_TAMPER_001`, jsrisk).
+  Flags a real write to `/etc/sudoers` or `/etc/sudoers.d/*`, whether a
+  bound filesystem write or a bound shell redirect / `tee` / `sed -i`.
+  CRITICAL when the written content grants passwordless or unrestricted
+  sudo. Validation-only (`visudo -c`) and `chmod` without a write do not
+  match.
+- **Host trust surface tampering** (`JS_HOST_TRUST_TAMPER_001`, jsrisk).
+  Flags a write to the dynamic linker preload (`/etc/ld.so.preload`), a
+  CA certificate store, the SSH daemon config, the global shell profile,
+  or name resolution (`/etc/hosts`, `/etc/resolv.conf`) pointed at a
+  sensitive domain.
+- **Destructive wipe of sensitive paths** (`JS_WIPER_TRIPWIRE_001`,
+  jsrisk). Flags a real deletion of a credential store
+  (`.ssh` / `.aws` / `.gnupg` / `.kube` / `.azure` / `.docker` / gcloud),
+  agent or editor trust (`.claude` / `CLAUDE.md` / `.cursorrules` /
+  `.vscode`), shell history, an evidence log, or a honeytoken, plus a
+  broad wipe of `$HOME` / `~` / `/root` / root. Detection is by the
+  actual delete capability of the call (a non-recursive `rm`, an
+  `unlink`, or a `fs/promises` call that has no such method cannot
+  destroy a directory), through a bound `fs` / `fs-extra` / `rimraf`
+  delete or a bound shell `rm` / `unlink` / `rmdir` / `find -delete`.
+  Build and cache cleanup (`node_modules`, `dist`, `/tmp`) does not
+  match. CRITICAL on a broad home or root wipe, on deleting two distinct
+  credential stores, or when paired with a strong partner.
+
+This closes the chain end to end: install hook, second stage, control
+channel, host tampering, destructive cleanup. Coverage is static and
+chain-gated, not a claim of complete worm detection.
+
+### Changed
+
+- **Advisory intel freshness is now visible.** `aguara check`,
+  `aguara audit`, and `aguara status` show the age and source of the
+  embedded or refreshed advisory intel, and JSON output gains an
+  `age_days` field and a real `stale` flag. This is informational only:
+  it never changes exit codes, `--fail-on`, or a verdict, and under
+  `--ci` the freshness note goes to stderr so stdout stays clean.
+- **Faster JavaScript risk analysis.** The jsrisk analyzer now masks
+  comments, regex-literal bodies, and string interiors in a single
+  shared pass, so code-token signals (network sinks, child-process
+  spawns, env reads, obfuscation shape) no longer match inside comments
+  or strings. The shared pass is about 8% faster than before with far
+  fewer allocations. No rule or severity change.
+
+### Notes
+
+- Rule catalog is now 193 YAML rules plus 34 analyzer-emitted rules
+  (227 cataloged) across 9 scan analyzers. The new detections are
+  emitted by the existing `pkgmeta` and `jsrisk` analyzers; no new
+  analyzer was added.
+
 ## [0.22.2] - 2026-06-03
 
 ### Fixed
