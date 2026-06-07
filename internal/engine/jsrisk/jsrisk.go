@@ -54,6 +54,7 @@ const (
 	RuleGitHubC2         = "JS_GITHUB_C2_001"
 	RuleSudoersTamper    = "JS_SUDOERS_TAMPER_001"
 	RuleHostTrustTamper  = "JS_HOST_TRUST_TAMPER_001"
+	RuleWiperTripwire    = "JS_WIPER_TRIPWIRE_001"
 )
 
 // Detection thresholds. Chosen to leave room for ordinary minified
@@ -1568,8 +1569,18 @@ func shellScriptFromArgv(args []byte) ([]byte, bool) {
 			return nil, false
 		}
 		if dashCBareRe.Match(flag) {
-			cmd, _, ok := shellStringLiteralAt(args, end)
+			cmd, cmdEnd, ok := shellStringLiteralAt(args, end)
 			if !ok {
+				return nil, false
+			}
+			// The script must be a plain literal: the next significant byte
+			// after it is an argument separator or the array close, never an
+			// expression tail (`'...' + x`, `'...'.replace(...)`).
+			r := cmdEnd
+			for r < len(args) && (args[r] == ' ' || args[r] == '\t' || args[r] == '\n' || args[r] == '\r') {
+				r++
+			}
+			if r < len(args) && args[r] != ',' && args[r] != ']' && args[r] != ')' {
 				return nil, false
 			}
 			return cmd, true
@@ -1590,6 +1601,31 @@ func shellScriptFromCommandString(s []byte) ([]byte, bool) {
 		return s[m[1]:], true
 	}
 	return nil, false
+}
+
+// wholeStringLiteralInterior returns the interior of arg when arg is a SINGLE
+// STATIC string literal spanning the whole argument (no concatenation tail or
+// surrounding expression). A concatenated/variable command ('cmd' + x, cmdVar)
+// yields ok=false, and a backtick template literal carrying a `${...}`
+// interpolation is dynamic JS (the interpolated value is unknown and is NOT a
+// shell $HOME), so it also yields ok=false.
+func wholeStringLiteralInterior(arg []byte) ([]byte, bool) {
+	i := 0
+	for i < len(arg) && (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '\n' || arg[i] == '\r') {
+		i++
+	}
+	if i >= len(arg) || (arg[i] != '\'' && arg[i] != '"' && arg[i] != '`') {
+		return nil, false
+	}
+	quote := arg[i]
+	interior, end, ok := shellStringLiteralAt(arg, i)
+	if !ok || len(bytes.TrimSpace(arg[end:])) > 0 {
+		return nil, false
+	}
+	if quote == '`' && bytes.Contains(interior, []byte("${")) {
+		return nil, false // JS template interpolation, not a static command
+	}
+	return interior, true
 }
 
 // shellStringLiteralAt returns the interior and the index past the closing
@@ -1685,42 +1721,19 @@ func isDomainLabelByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-'
 }
 
-// detectHostTamper emits JS_SUDOERS_TAMPER_001 / JS_HOST_TRUST_TAMPER_001 when
-// package code performs a REAL write to a sensitive host surface (a bound fs
-// write whose path argument is the surface, or a bound child_process / execa /
-// shelljs command that redirects / tees / sed -i's into it). It is
-// self-contained like detectDNSTXTExfil: it recomputes the lexical view and
-// call sites from content and reads only the partner booleans off m.
-func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
-	view := newJSLexicalView(content)
+// collectBoundShellCommands returns the shell command/script bytes and the
+// call-start offset for every BOUND shell execution: child_process exec /
+// execSync (first arg = command), shelljs.exec, and a shell launched via
+// spawn / execa with -c (the extracted -c script). A program API that does
+// not run a shell, a db.exec, a stringified example, and a plain execa pass
+// arguments literally and are excluded. Shared by the host-tamper and
+// wiper-tripwire detectors.
+func collectBoundShellCommands(view jsLexicalView, stringRanges [][2]int) (scripts [][]byte, starts []int) {
 	code := view.Code
-	stringRanges := view.StringRanges
-	fsCalls := collectFSWriteCalls(code, stringRanges)
 	cpCalls := collectChildProcessCalls(code)
 	shelljsCalls := collectShelljsExecCalls(code)
 	execaMatches := execaCallRe.FindAllIndex(code, -1)
-
-	// Only shell-INTERPRETING calls parse redirects: child_process exec /
-	// execSync run `/bin/sh -c`, and shelljs.exec runs a shell. Program APIs
-	// (spawn, spawnSync, execFile, execFileSync) and execa (no shell by
-	// default) pass their arguments literally, so a `>>`-looking string there
-	// is a plain argument, not a redirect.
-	// Only the FIRST argument is interpreted by the shell; a redirect-looking
-	// string in an options/env/callback argument is not a write. Bound to the
-	// first arg via firstArgEnd.
-	//
-	// KNOWN LIMITS (no shell parser, per the rule's scope):
-	//   - the redirect/tee scan is not shell-quote-aware, so a command that
-	//     merely PRINTS a quoted redirect string (`echo "x >> /etc/x"`) can
-	//     over-fire, and distinguishing it from a real quoted tee target needs
-	//     shell-quote parsing the analyzer does not do;
-	//   - content is bound to the FIRST redirect/tee per command, so a second
-	//     write to the same path in one command, and a payload that lives
-	//     inside a `sed` script rather than before the operator, are not
-	//     inspected for the domain/grant gate.
-	var shellArgs [][]byte
-	var shellStarts []int
-	addShell := func(start, argsStart int) {
+	add := func(start, argsStart int) {
 		if start < 0 || view.InString(start) {
 			return
 		}
@@ -1728,18 +1741,18 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 		if argEnd <= argsStart {
 			return
 		}
-		shellArgs = append(shellArgs, code[argsStart:argEnd])
-		shellStarts = append(shellStarts, start)
+		// The command must be a SINGLE string literal spanning the whole first
+		// argument; a concatenated / variable command is dynamic and skipped.
+		if interior, ok := wholeStringLiteralInterior(code[argsStart:argEnd]); ok {
+			scripts = append(scripts, interior)
+			starts = append(starts, start)
+		}
 	}
 	for _, s := range cpCalls {
 		switch s.Method {
 		case "exec", "execsync":
-			// exec / execSync run `/bin/sh -c <first arg>`.
-			addShell(s.Start, s.ArgsStart)
+			add(s.Start, s.ArgsStart)
 		case "spawn", "spawnsync", "execfile", "execfilesync":
-			// A program API still runs a shell when the program IS a shell
-			// with -c; only the argument right after -c is the script (later
-			// array elements are positional params $0,$1,...), so scan that.
 			if s.Start < 0 || view.InString(s.Start) {
 				continue
 			}
@@ -1750,20 +1763,24 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 			}
 			if spawnRunsShell(code[s.ArgsStart:argEnd], full) {
 				if script, ok := shellScriptFromArgv(full); ok {
-					shellArgs = append(shellArgs, script)
-					shellStarts = append(shellStarts, s.Start)
+					scripts = append(scripts, script)
+					starts = append(starts, s.Start)
 				}
 			}
 		}
 	}
 	for _, s := range shelljsCalls {
-		addShell(s.Start, s.ArgsStart)
+		add(s.Start, s.ArgsStart)
 	}
-	// execa shells out only via execa('sh',['-c',...]) or
-	// execaCommand('sh -c "..."'); a plain execa parses args without a shell.
 	for _, loc := range execaMatches {
 		start, argsStart := loc[0], loc[1]
 		if view.InString(start) {
+			continue
+		}
+		// Require a bare execa call (the imported function), not a method on a
+		// local object: `runner.execaCommand(...)` is an unbound helper, not the
+		// execa package.
+		if start > 0 && code[start-1] == '.' {
 			continue
 		}
 		argEnd := firstArgEnd(code, argsStart-1, stringRanges)
@@ -1778,13 +1795,39 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 		case spawnRunsShell(firstArg, full):
 			script, ok = shellScriptFromArgv(full)
 		case shellCommandStrRe.Match(firstArg):
-			script, ok = shellScriptFromCommandString(firstArg)
+			// Reject a concatenated execaCommand ('sh -c "..."' + '.bak').
+			if _, lit := wholeStringLiteralInterior(firstArg); lit {
+				script, ok = shellScriptFromCommandString(firstArg)
+			}
 		}
 		if ok {
-			shellArgs = append(shellArgs, script)
-			shellStarts = append(shellStarts, start)
+			scripts = append(scripts, script)
+			starts = append(starts, start)
 		}
 	}
+	return scripts, starts
+}
+
+// detectHostTamper emits JS_SUDOERS_TAMPER_001 / JS_HOST_TRUST_TAMPER_001 when
+// package code performs a REAL write to a sensitive host surface (a bound fs
+// write whose path argument is the surface, or a bound child_process / execa /
+// shelljs command that redirects / tees / sed -i's into it). It is
+// self-contained like detectDNSTXTExfil: it recomputes the lexical view and
+// call sites from content and reads only the partner booleans off m.
+func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
+	view := newJSLexicalView(content)
+	code := view.Code
+	stringRanges := view.StringRanges
+	fsCalls := collectFSWriteCalls(code, stringRanges)
+
+	// Shell content is the bound command string (exec/execSync first arg,
+	// shelljs.exec, or the -c script of a spawn/execa shell). KNOWN LIMITS
+	// (no shell parser, per the rule's scope): the redirect/tee scan is not
+	// shell-quote-aware, so a command that merely PRINTS a quoted redirect
+	// string (`echo "x >> /etc/x"`) can over-fire; and content is bound to the
+	// FIRST redirect/tee per command, so a second write to the same path in
+	// one command, and a payload inside a `sed` script, are not inspected.
+	shellArgs, shellStarts := collectBoundShellCommands(view, stringRanges)
 
 	indexAll := func(needle string) []int {
 		var idxs []int
@@ -1980,6 +2023,1027 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 		})
 	}
 	return out
+}
+
+// --- JS_WIPER_TRIPWIRE_001: destructive cleanup / wiper behaviour ---
+
+// A delete's reach depends on the method AND its recursive flag/option:
+//   - canDirFinal: can remove a (final) directory -- rmdir, rm -d, anything
+//     recursive. Needed to delete a credential-store directory like .ssh.
+//   - canRecursive: can recursively wipe a populated directory tree -- rm -r /
+//     fs.rm({recursive:true}) / fs-extra remove/emptyDir / rimraf / find
+//     -delete. Needed for a broad home/root wipe.
+//
+// unlink and a non-recursive rm/fs.rm remove FILES only, so they never satisfy
+// either: they cannot wipe a directory or root.
+type fsDeleteCall struct {
+	pathStart, pathEnd        int
+	canDirFinal, canRecursive bool
+}
+
+// delete method base modes (before the recursive flag/option is applied).
+const (
+	delModeFile      = iota // unlink: files only
+	delModeRmdir            // rmdir: empty/final dir; recursive only with the option
+	delModeRm               // rm: file; directory only with recursive
+	delModeRecursive        // remove/emptyDir/rimraf: always recursive
+)
+
+// deleteMethodCap describes a delete method. fsExtra methods (remove/emptyDir)
+// exist only on fs-extra, so a core `fs` binding cannot call them.
+type deleteMethodCap struct {
+	mode    int
+	fsExtra bool
+}
+
+// fsDeleteMethodCaps is keyed by the LOWERCASED method name.
+var fsDeleteMethodCaps = map[string]deleteMethodCap{
+	"rm":           {mode: delModeRm},
+	"rmsync":       {mode: delModeRm},
+	"rmdir":        {mode: delModeRmdir},
+	"rmdirsync":    {mode: delModeRmdir},
+	"unlink":       {mode: delModeFile},
+	"unlinksync":   {mode: delModeFile},
+	"remove":       {mode: delModeRecursive, fsExtra: true},
+	"removesync":   {mode: delModeRecursive, fsExtra: true},
+	"emptydir":     {mode: delModeRecursive, fsExtra: true},
+	"emptydirsync": {mode: delModeRecursive, fsExtra: true},
+}
+
+// recursiveOptTrueRe matches a `recursive: true` (or `!0`) option, with an
+// optionally quoted key. A literal `recursive: false`, a variable, or the bare
+// key absent leaves recursion off, so `fs.rmSync(p, { recursive: false })`
+// cannot wipe a directory.
+var recursiveOptTrueRe = regexp.MustCompile(`\brecursive["']?\s*:\s*(?:true|!0)\b`)
+
+// optsHaveTopLevelRecursiveTrue reports whether the options argument sets
+// `recursive: true` at the TOP level of the options object. A nested
+// `recursive: true` (`{ recursive: false, retry: { recursive: true } }`) does
+// not enable Node's recursive removal, so it must not grant the capability.
+func optsHaveTopLevelRecursiveTrue(opts []byte) bool {
+	for _, loc := range recursiveOptTrueRe.FindAllIndex(opts, -1) {
+		depth := 0
+		for i := 0; i < loc[0]; i++ {
+			switch opts[i] {
+			case '{', '[', '(':
+				depth++
+			case '}', ']', ')':
+				depth--
+			}
+		}
+		if depth == 1 { // directly inside the options object's braces
+			return true
+		}
+	}
+	return false
+}
+
+// fsBindingIsPromisesOnly reports whether recv is bound to fs/promises (or
+// fs.promises) and not also a regular fs alias, so its API is async-only and a
+// *Sync method on it does not exist.
+func fsBindingIsPromisesOnly(b moduleBindings, recv string) bool {
+	return !b.aliases[recv] && b.sourceByLocal[recv] == "promises"
+}
+
+// deleteModeCaps resolves a base mode plus a recursive flag/option into the two
+// capability bits.
+func deleteModeCaps(mode int, optRecursive bool) (canDirFinal, canRecursive bool) {
+	switch mode {
+	case delModeRmdir:
+		return true, optRecursive
+	case delModeRm:
+		return optRecursive, optRecursive
+	case delModeRecursive:
+		return true, true
+	default: // delModeFile
+		return false, false
+	}
+}
+
+// fsExtra* regexes detect bindings to the fs-extra module specifically, so the
+// fs-extra-only delete methods (remove/emptyDir) are not credited to a core
+// `fs` binding.
+var fsExtraAliasRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]fs-extra['"]\s*\)`)
+var fsExtraAliasESMRe = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]fs-extra['"]`)
+var fsExtraDestructureRe = regexp.MustCompile(`(?:const|let|var)\s+\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"]fs-extra['"]\s*\)`)
+var fsExtraDestructureESMRe = regexp.MustCompile(`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?\{\s*([^}]+)\s*\}\s+from\s*['"]fs-extra['"]`)
+var fsExtraAliasESMCombinedRe = regexp.MustCompile(`import\s+([A-Za-z_$][\w$]*)\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]+\})\s+from\s*['"]fs-extra['"]`)
+
+var fsDeleteReceiverRe = regexp.MustCompile(
+	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*(rm(?:dir)?(?:Sync)?|unlink(?:Sync)?|remove(?:Sync)?|emptyDir(?:Sync)?)\s*\(`)
+var fsPromisesDeleteReceiverRe = regexp.MustCompile(
+	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*promises\s*\.\s*(rm(?:dir)?(?:Sync)?|unlink(?:Sync)?|remove(?:Sync)?|emptyDir(?:Sync)?)\s*\(`)
+var inlineRequireFsDeleteRe = regexp.MustCompile(
+	jsIdentBoundary + `require\s*\(\s*['"](?:node:)?(fs|fs-extra|fs/promises)['"]\s*\)(?:\s*\.\s*promises)?\s*\.\s*(rm(?:dir)?(?:Sync)?|unlink(?:Sync)?|remove(?:Sync)?|emptyDir(?:Sync)?)\s*\(`)
+
+// rimraf binding: default (require('rimraf') / import rimraf from 'rimraf')
+// and named (const { rimraf } = require('rimraf') / import { rimraf } from
+// 'rimraf'), the modern rimraf v4+ API. Every export of rimraf deletes, so any
+// destructured local is a delete sink.
+var rimrafAliasRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]rimraf['"]\s*\)`)
+var rimrafAliasESMRe = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]rimraf['"]`)
+
+// rimrafAliasESMCombinedRe captures the DEFAULT alias of a combined import
+// (`import rimraf, { sync } from 'rimraf'`).
+var rimrafAliasESMCombinedRe = regexp.MustCompile(`import\s+([A-Za-z_$][\w$]*)\s*,\s*\{[^}]+\}\s+from\s*['"]rimraf['"]`)
+var rimrafDestructureRe = regexp.MustCompile(`(?:const|let|var)\s+\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"]rimraf['"]\s*\)`)
+
+// rimrafNamedESMRe captures the named bindings, allowing an optional default
+// alias before them (`import rimraf, { sync } from 'rimraf'`).
+var rimrafNamedESMRe = regexp.MustCompile(`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?\{\s*([^}]+)\s*\}\s+from\s*['"]rimraf['"]`)
+
+// rimrafReceiverCallRe matches a property call on a rimraf namespace/default
+// alias (rr.rimraf(...), rr.sync(...)); submatch 1 is the receiver, which the
+// caller verifies is a rimraf binding. Every rimraf export deletes.
+var rimrafReceiverCallRe = regexp.MustCompile(jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*\s*\(`)
+
+// inlineRimrafRe matches an inline require('rimraf') invocation, called
+// directly (`require('rimraf')('.ssh')`) or via a property
+// (`require('rimraf').sync('.ssh')`).
+var inlineRimrafRe = regexp.MustCompile(jsIdentBoundary + `require\s*\(\s*['"]rimraf['"]\s*\)(?:\s*\.\s*[A-Za-z_$][\w$]*)?\s*\(`)
+
+// Broad-home-wipe path-argument shapes. os.homedir() must be a real Node os
+// binding (a mock object named os does not count); process.env.HOME is global.
+var inlineRequireOsHomedirRe = regexp.MustCompile(`^\s*require\s*\(\s*['"](?:node:)?os['"]\s*\)\s*\.\s*homedir\s*\(\s*\)\s*$`)
+var homedirReceiverRe = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)\s*\.\s*homedir\s*\(\s*\)\s*$`)
+var homedirBareRe = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*$`)
+
+// isBroadHomePathArg reports whether the fs delete path argument resolves to
+// the whole home directory: process.env.HOME, an inline require('os').homedir(),
+// <osAlias>.homedir() for a real os import, or a destructured homedir() from os.
+func isBroadHomePathArg(parg []byte, osBindings moduleBindings) bool {
+	s := bytes.TrimSpace(parg)
+	switch string(s) {
+	case "process.env.HOME", "process.env['HOME']", `process.env["HOME"]`:
+		return true
+	}
+	if inlineRequireOsHomedirRe.Match(s) {
+		return true
+	}
+	if m := homedirReceiverRe.FindSubmatch(s); m != nil && osBindings.aliases[string(m[1])] {
+		return true
+	}
+	if m := homedirBareRe.FindSubmatch(s); m != nil && osBindings.sourceByLocal[string(m[1])] == "homedir" {
+		return true
+	}
+	return false
+}
+
+// collectFSDeleteCalls mirrors collectFSWriteCalls for delete sinks: fs /
+// fs-extra rm/rmdir/unlink/remove/emptyDir on a verified fs binding, plus
+// rimraf bound from the rimraf module. Returns the first-argument (path)
+// ranges; the path token / os.homedir() target is read from there.
+func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall {
+	fsBindings := collectModuleBindings(stripped, stringRanges,
+		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+	fsExtraBindings := collectModuleBindings(stripped, stringRanges,
+		fsExtraAliasRe, fsExtraAliasESMRe, fsExtraDestructureRe, fsExtraDestructureESMRe, fsExtraAliasESMCombinedRe)
+	// Aliases bound to fs/promises (or fs.promises): async-only, so a *Sync
+	// method on them does not exist.
+	fsPromisesAliases := map[string]bool{}
+	for _, re := range []*regexp.Regexp{fsPromisesAliasRequireRe, fsPromisesAliasDotRe, fsPromisesAliasESMRe, fsPromisesAliasESMCombinedRe} {
+		for _, mt := range re.FindAllSubmatchIndex(stripped, -1) {
+			if insideStringInterior(stringRanges, mt[0]) {
+				continue
+			}
+			fsPromisesAliases[string(stripped[mt[2]:mt[3]])] = true
+		}
+	}
+	isPromisesOnly := func(recv string) bool {
+		return fsPromisesAliases[recv] || fsBindingIsPromisesOnly(fsBindings, recv)
+	}
+	// Locals destructured directly from fs/promises: a *Sync local
+	// (`const { rmSync } = require('fs/promises')`) does not exist.
+	fsPromisesLocals := map[string]bool{}
+	addPromisesLocals := func(body string, sep string) {
+		for _, raw := range strings.Split(body, ",") {
+			local := strings.TrimSpace(raw)
+			if i := strings.Index(local, sep); i >= 0 {
+				local = strings.TrimSpace(local[i+len(sep):])
+			}
+			if local != "" {
+				fsPromisesLocals[local] = true
+			}
+		}
+	}
+	for _, mt := range fsPromisesDestructureRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[0]) {
+			continue
+		}
+		addPromisesLocals(string(stripped[mt[2]:mt[3]]), ":")
+	}
+	for _, mt := range fsPromisesDestructureESMRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[0]) {
+			continue
+		}
+		addPromisesLocals(string(stripped[mt[2]:mt[3]]), " as ")
+	}
+	var calls []fsDeleteCall
+	add := func(matchEnd, mode int) {
+		openParen := matchEnd - 1
+		argEnd := firstArgEnd(stripped, openParen, stringRanges)
+		if argEnd <= openParen {
+			return
+		}
+		// rm/rmdir reach a directory only with { recursive: true } in the
+		// options argument; remove/emptyDir/rimraf are always recursive. A
+		// literal { recursive: false } leaves recursion off.
+		opts := fsDataArg(stripped, argEnd, stringRanges)
+		optRecursive := optsHaveTopLevelRecursiveTrue(opts)
+		dirFinal, recursive := deleteModeCaps(mode, optRecursive)
+		calls = append(calls, fsDeleteCall{openParen + 1, argEnd, dirFinal, recursive})
+	}
+	for _, mt := range fsDeleteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		recv := string(stripped[mt[2]:mt[3]])
+		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+			continue
+		}
+		method := strings.ToLower(string(stripped[mt[4]:mt[5]]))
+		// fs/promises exposes async methods only; a *Sync method on a promises
+		// binding does not exist, so no deletion occurs.
+		if isPromisesOnly(recv) && strings.HasSuffix(method, "sync") {
+			continue
+		}
+		cap := fsDeleteMethodCaps[method]
+		// remove/emptyDir exist only on fs-extra; reject on a core fs binding.
+		if cap.fsExtra && !fsExtraBindings.aliases[recv] {
+			continue
+		}
+		add(mt[1], cap.mode)
+	}
+	for _, mt := range fsWriteBareCallRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		local := string(stripped[mt[2]:mt[3]])
+		method := fsBindings.sourceByLocal[local]
+		methodLower := strings.ToLower(method)
+		// A *Sync local destructured from fs/promises does not exist.
+		if fsPromisesLocals[local] && strings.HasSuffix(methodLower, "sync") {
+			continue
+		}
+		cap, ok := fsDeleteMethodCaps[methodLower]
+		if !ok {
+			continue
+		}
+		if cap.fsExtra && fsExtraBindings.sourceByLocal[local] != method {
+			continue
+		}
+		add(mt[1], cap.mode)
+	}
+	for _, mt := range fsPromisesDeleteReceiverRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[2]) {
+			continue
+		}
+		recv := string(stripped[mt[2]:mt[3]])
+		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+			continue
+		}
+		method := strings.ToLower(string(stripped[mt[4]:mt[5]]))
+		// The `.promises` namespace is async-only; a *Sync method there does
+		// not exist.
+		if strings.HasSuffix(method, "sync") {
+			continue
+		}
+		cap := fsDeleteMethodCaps[method]
+		if cap.fsExtra && !fsExtraBindings.aliases[recv] {
+			continue
+		}
+		add(mt[1], cap.mode)
+	}
+	for _, mt := range inlineRequireFsDeleteRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[0]) {
+			continue
+		}
+		module := string(stripped[mt[2]:mt[3]])
+		method := strings.ToLower(string(stripped[mt[4]:mt[5]]))
+		// fs/promises and the fs.promises namespace are async-only: a *Sync
+		// method does not exist there.
+		if (module == "fs/promises" || bytes.Contains(stripped[mt[0]:mt[1]], []byte(".promises"))) &&
+			strings.HasSuffix(method, "sync") {
+			continue
+		}
+		cap := fsDeleteMethodCaps[method]
+		if cap.fsExtra && module != "fs-extra" {
+			continue
+		}
+		add(mt[1], cap.mode)
+	}
+	// Inline require('rimraf')(...) / require('rimraf').sync(...): rimraf
+	// removes directories recursively, so it is always dir-capable.
+	for _, mt := range inlineRimrafRe.FindAllIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mt[0]) {
+			continue
+		}
+		add(mt[1], delModeRecursive)
+	}
+	// rimraf(path), bound from the rimraf import (default or named).
+	rimrafAliases := map[string]bool{}
+	for _, mm := range rimrafAliasRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mm[2]) {
+			continue
+		}
+		rimrafAliases[string(stripped[mm[2]:mm[3]])] = true
+	}
+	for _, mm := range rimrafAliasESMRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mm[2]) {
+			continue
+		}
+		rimrafAliases[string(stripped[mm[2]:mm[3]])] = true
+	}
+	for _, mm := range rimrafAliasESMCombinedRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mm[2]) {
+			continue
+		}
+		rimrafAliases[string(stripped[mm[2]:mm[3]])] = true
+	}
+	addRimrafDestructure := func(body string, sep string) {
+		for _, raw := range strings.Split(body, ",") {
+			local := strings.TrimSpace(raw)
+			if i := strings.Index(local, sep); i >= 0 {
+				local = strings.TrimSpace(local[i+len(sep):])
+			}
+			if i := strings.Index(local, "="); i >= 0 {
+				local = strings.TrimSpace(local[:i])
+			}
+			if local != "" {
+				rimrafAliases[local] = true
+			}
+		}
+	}
+	for _, mm := range rimrafDestructureRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mm[2]) {
+			continue
+		}
+		addRimrafDestructure(string(stripped[mm[2]:mm[3]]), ":")
+	}
+	for _, mm := range rimrafNamedESMRe.FindAllSubmatchIndex(stripped, -1) {
+		if insideStringInterior(stringRanges, mm[2]) {
+			continue
+		}
+		addRimrafDestructure(string(stripped[mm[2]:mm[3]]), " as ")
+	}
+	if len(rimrafAliases) > 0 {
+		for _, mm := range fsWriteBareCallRe.FindAllSubmatchIndex(stripped, -1) {
+			if insideStringInterior(stringRanges, mm[2]) {
+				continue
+			}
+			if rimrafAliases[string(stripped[mm[2]:mm[3]])] {
+				add(mm[1], delModeRecursive)
+			}
+		}
+		// Namespace property calls: rr.rimraf(...), rr.sync(...).
+		for _, mm := range rimrafReceiverCallRe.FindAllSubmatchIndex(stripped, -1) {
+			if insideStringInterior(stringRanges, mm[2]) {
+				continue
+			}
+			if rimrafAliases[string(stripped[mm[2]:mm[3]])] {
+				add(mm[1], delModeRecursive)
+			}
+		}
+	}
+	return calls
+}
+
+// sensitiveDeletePath is a path component/file whose deletion is dangerous.
+// home = true means home-only (standalone HIGH); home = false means
+// project-capable (HIGH only if home-anchored, else needs a strong partner).
+// dir = true means the token names a DIRECTORY, so deleting it (when it is the
+// final path component) needs a dir-capable method, not unlink.
+type sensitiveDeletePath struct {
+	token  string
+	family string
+	home   bool
+	dir    bool
+}
+
+// Ordered longest/most-specific first so .env.production wins over .env and
+// .canarytokens over .canary (the component boundary also disambiguates).
+var sensitiveDeletePaths = []sensitiveDeletePath{
+	{".config/gcloud", "gcloud", true, true},
+	{".bash_history", "history", true, false},
+	{".zsh_history", "history", true, false},
+	{".canarytokens", "honeytoken", true, false},
+	{".security-canary", "honeytoken", true, false},
+	{".honeytoken", "honeytoken", true, false},
+	{".gnupg", "gnupg", true, true},
+	{".canary", "honeytoken", true, false},
+	{".docker", "docker", true, true},
+	{".azure", "azure", true, true},
+	{".kube", "kube", true, true},
+	{".ssh", "ssh", true, true},
+	{".aws", "aws", true, true},
+	{".vscode/settings.json", "vscode", false, false},
+	{".vscode/extensions.json", "vscode", false, false},
+	{".git-credentials", "gitcred", false, false},
+	{".env.production", "env", false, false},
+	{"npm-debug.log", "npmlog", false, false},
+	{".cache/pip/log", "piplog", false, false},
+	{".cursorrules", "cursor", false, false},
+	{".env.local", "env", false, false},
+	{".npm/_logs", "npmlog", false, true},
+	{"CLAUDE.md", "claude", false, false},
+	{".pypirc", "pypirc", false, false},
+	{".claude", "claude", false, true},
+	{".npmrc", "npmrc", false, false},
+	{".netrc", "netrc", false, false},
+	{".env", "env", false, false},
+}
+
+// benignDeleteDirs are cleanup directories: a sensitive component UNDER one of
+// these (/tmp/.ssh, node_modules/.cache) is build/CI cleanup, not a wipe.
+var benignDeleteDirs = map[string]bool{
+	"node_modules": true, "dist": true, "build": true, "coverage": true,
+	".next": true, "out": true, "tmp": true,
+}
+
+// homeRootRe matches a home root with no deeper path -- a broad-wipe target:
+// a per-user home (/home/<u>, /Users/<u>) or /root (root's home, common when
+// package hooks run as root in containers/CI).
+var homeRootRe = regexp.MustCompile(`^(?:(?:/home|/Users)/[^/]+|/root)$`)
+
+// isDeleteComponentByte reports whether c continues a path component. `*` is a
+// literal filename byte for an fs path (so .ssh* != .ssh) but a glob the shell
+// expands (so rm -rf ~/.ssh* can delete ~/.ssh, treated as a component
+// boundary).
+func isDeleteComponentByte(c byte, shell bool) bool {
+	if c == '*' {
+		return !shell
+	}
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '.' || c == '_' || c == '-'
+}
+
+// matchSensitiveDeletePath finds a sensitive path component in target with
+// path-component boundaries (so .ssh matches ~/.ssh and .ssh/id_rsa but not
+// .ssh.bak, my-canary, or foo.ssh). Returns the entry and the offset where the
+// component starts (target[:at] is the prefix).
+func matchSensitiveDeletePath(target []byte, shell bool) (sensitiveDeletePath, int, bool) {
+	for _, s := range sensitiveDeletePaths {
+		tb := []byte(s.token)
+		for from := 0; from < len(target); {
+			i := bytes.Index(target[from:], tb)
+			if i < 0 {
+				break
+			}
+			at := from + i
+			end := at + len(tb)
+			leadOK := at == 0 || !isDeleteComponentByte(target[at-1], shell)
+			trailOK := end >= len(target) || !isDeleteComponentByte(target[end], shell)
+			if leadOK && trailOK {
+				return s, at, true
+			}
+			from = at + 1
+		}
+	}
+	return sensitiveDeletePath{}, 0, false
+}
+
+func deletePrefixIsBenign(prefix []byte) bool {
+	// A `..` may resolve out of the benign directory (/tmp/../home/u/.ssh), so
+	// the benign exemption cannot be trusted; do not suppress.
+	if bytes.Contains(prefix, []byte("..")) {
+		return false
+	}
+	segs := bytes.Split(prefix, []byte{'/'})
+	// In an absolute home path (/home/<u>/, /Users/<u>/) the <u> segment is a
+	// USERNAME, not a cleanup dir; exclude it so /home/tmp/.ssh (user "tmp")
+	// is not mistaken for a /tmp cleanup.
+	userSeg := -1
+	for i, seg := range segs {
+		if s := string(seg); (s == "home" || s == "Users") && i+1 < len(segs) {
+			userSeg = i + 1
+			break
+		}
+	}
+	for i, seg := range segs {
+		if i == userSeg {
+			continue
+		}
+		s := strings.Trim(strings.TrimSpace(string(seg)), "'\"`")
+		if benignDeleteDirs[s] {
+			return true
+		}
+	}
+	return false
+}
+
+// homeVarRe matches the $HOME / ${HOME} shell variable with a trailing
+// boundary, so $HOME_BACKUP / $HOMEDIR (different variables) do not match.
+var homeVarRe = regexp.MustCompile(`\$\{HOME\}|\$HOME(?:[^A-Za-z0-9_]|$)`)
+
+// deletePrefixIsHomeAnchored reports whether the prefix anchors the path to a
+// user home. ~ / $HOME / ${HOME} are only expanded in a SHELL command; in an
+// fs path literal they are literal directory names, so only the absolute
+// /home/<u>/ and /Users/<u>/ forms anchor an fs path.
+func deletePrefixIsHomeAnchored(prefix []byte, shell bool) bool {
+	// The anchor must be at the START of the path: a relative fixture path that
+	// merely contains a `home`/`Users` segment (vendor/home/u/.npmrc) or a `~`/
+	// `$HOME` past the first token char (build$HOME/.npmrc) is not home-anchored.
+	p := bytes.TrimLeft(prefix, " '\"`")
+	if bytes.HasPrefix(p, []byte("/home/")) || bytes.HasPrefix(p, []byte("/Users/")) ||
+		bytes.HasPrefix(p, []byte("/root/")) {
+		return true
+	}
+	if !shell {
+		return false // ~ / $HOME are literal directory names in an fs path
+	}
+	if len(p) > 0 && p[0] == '~' {
+		return true
+	}
+	loc := homeVarRe.FindIndex(p)
+	return loc != nil && loc[0] == 0
+}
+
+// deleteTargetIsConstructed reports whether the target path contains a segment
+// we cannot evaluate to a concrete sensitive path.
+//
+// For a SHELL target, a `$VAR` other than the recognized $HOME / ${HOME}
+// anchor (or a `${...}` template) is dynamic: `${tmp}/.ssh`,
+// `$HOME_BACKUP/.ssh`, `.ssh${suffix}`.
+//
+// For an fs path LITERAL, Node does not expand `~` or `$VAR` (including
+// `$HOME`), so any such marker means the literal is not the path the author
+// intended and is not a clean bare/absolute reference -- treat it as
+// constructed too (`fs.rmSync('~/.ssh')`, `fs.rmSync('$HOME/.aws')`).
+func deleteTargetIsConstructed(target []byte, shell bool) bool {
+	if !shell {
+		return bytes.IndexByte(target, '$') >= 0 || bytes.IndexByte(target, '~') >= 0
+	}
+	p := homeVarRe.ReplaceAll(target, []byte("/"))
+	return bytes.IndexByte(p, '$') >= 0
+}
+
+// isBroadWipeTarget reports whether the target is the whole home dir or root,
+// including a trailing glob (rm -rf /*, $HOME/*, ~/.*). ~ / $HOME / ${HOME}
+// count only for a SHELL target (they are not expanded in an fs path literal);
+// root and /home/<u> / /Users/<u> count for both.
+func isBroadWipeTarget(target []byte, shell bool) bool {
+	t := bytes.Trim(bytes.TrimSpace(target), "'\"`")
+	if len(t) == 0 {
+		return false // empty literal (fs.rmSync('')) is a no-op, not root
+	}
+	// Strip a trailing glob-only segment (/*, /.*, /**) so /* -> / and
+	// $HOME/* -> $HOME. ONLY a shell expands globs; in an fs path literal `*`
+	// is a literal byte, so /home/u/* is a file named '*', not a wipe.
+	if shell {
+		if i := bytes.LastIndexByte(t, '/'); i >= 0 {
+			if seg := t[i+1:]; len(seg) > 0 && len(bytes.Trim(seg, ".*")) == 0 {
+				t = t[:i+1]
+			}
+		}
+	}
+	t = bytes.TrimRight(t, "/")
+	if len(t) == 0 {
+		return true // originally "/" (or "/*")
+	}
+	if shell {
+		switch string(t) {
+		case "~", "$HOME", "${HOME}":
+			return true
+		}
+	}
+	return homeRootRe.Match(t)
+}
+
+// shell delete-command target extractors. rm/unlink/rmdir take MULTIPLE
+// operands; each non-flag operand (skipping `-x` flags and the `--` sentinel)
+// up to the next command separator is a delete target. (Not quote-aware for
+// paths containing spaces -- a documented limit.)
+var shellDeleteCmdRe = regexp.MustCompile(`(?i)\b(?:rm|unlink|rmdir)\b`)
+var shellFindCmdRe = regexp.MustCompile(`(?i)\bfind\b`)
+
+// shellCmdWrappers run the command that follows them, so a delete after one of
+// these is still a real delete command (sudo rm, xargs rm, then rm).
+var shellCmdWrappers = map[string]bool{
+	"sudo": true, "xargs": true, "env": true, "nice": true, "nohup": true,
+	"time": true, "command": true, "exec": true, "then": true, "do": true, "else": true,
+	"if": true, "while": true, "until": true, "elif": true,
+}
+
+func isShellWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+// isShellTokenByte covers a whole shell token including option flags (-rf),
+// assignments (FOO=1), and path-ish values, so they can be scanned as a unit.
+func isShellTokenByte(c byte) bool {
+	return isShellWordByte(c) || c == '=' || c == '.' || c == '/' || c == ':' || c == '+' || c == '@'
+}
+
+// isShellOptOrAssign reports whether a token is a command-line option (-n,
+// --force) or a VAR=value assignment, both of which may sit between a wrapper
+// (sudo/env) and the actual command.
+func isShellOptOrAssign(tok []byte) bool {
+	if len(tok) == 0 {
+		return false
+	}
+	if tok[0] == '-' {
+		return true
+	}
+	if eq := bytes.IndexByte(tok, '='); eq > 0 {
+		c := tok[0]
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'
+	}
+	return false
+}
+
+// atShellCommandStart reports whether the delete word at p begins a command:
+// at the script start / string quote, after a command separator (; | & ( {
+// newline), or after a command wrapper (sudo/xargs/...). This rejects a delete
+// word that is an ARGUMENT being printed/passed (`echo rm -rf ~/.ssh`).
+func atShellCommandStart(scr []byte, p int) bool {
+	// Glued directly to `=` (no space) means the word is an assignment VALUE
+	// (`FOO=rm echo ...`), not a command -- a real command after an
+	// assignment is space-separated (`FOO=1 rm ...`).
+	if p > 0 && scr[p-1] == '=' {
+		return false
+	}
+	j := p - 1
+	for j >= 0 && (scr[j] == ' ' || scr[j] == '\t') {
+		j--
+	}
+	if j < 0 {
+		return true
+	}
+	switch scr[j] {
+	case ';', '|', '&', '\n', '\r', '(', '{', '`':
+		// A backtick opens a command substitution (the script is the extracted
+		// shell interior, so a remaining backtick is shell, not a JS string
+		// delimiter), so the word after it is a real command.
+		return true
+	case '\'', '"':
+		// Only the script's OPENING delimiter (position 0) is a command
+		// boundary; an inner shell quote means the delete word is quoted data
+		// (`echo "rm -rf ~/.ssh"`, `grep "rm ..." file`).
+		return j == 0
+	}
+	end := j + 1
+	for j >= 0 && isShellTokenByte(scr[j]) {
+		j--
+	}
+	tok := scr[j+1 : end]
+	// An option / assignment (sudo -n rm, env FOO=1 rm) belongs to a wrapper:
+	// skip it and keep scanning back. A wrapper word also continues, but must
+	// itself be at a command start (so `echo sudo rm ...` does not count).
+	if isShellOptOrAssign(tok) || shellCmdWrappers[strings.ToLower(string(tok))] {
+		return atShellCommandStart(scr, j+1)
+	}
+	// A plain word that is itself preceded by an option is that option's VALUE
+	// (sudo -u root rm): skip it and keep scanning back. (echo foo rm -> foo
+	// is preceded by echo, not an option, so it is not skipped.)
+	k := j
+	for k >= 0 && (scr[k] == ' ' || scr[k] == '\t') {
+		k--
+	}
+	pend := k + 1
+	for k >= 0 && isShellTokenByte(scr[k]) {
+		k--
+	}
+	if prev := scr[k+1 : pend]; len(prev) > 0 && prev[0] == '-' {
+		return atShellCommandStart(scr, j+1)
+	}
+	return false
+}
+
+// stripShellQuotes removes all quote characters from a shell token, so a
+// partially quoted operand ("$HOME"/*) normalizes to $HOME/*. (Not
+// quote-semantics-aware: a quoted home var stays treated as expandable, the
+// documented limit.)
+func stripShellQuotes(b []byte) []byte {
+	return bytes.Map(func(r rune) rune {
+		if r == '\'' || r == '"' || r == '`' {
+			return -1
+		}
+		return r
+	}, b)
+}
+
+// shellDelTarget is a delete operand plus the capability of its command:
+//   - canDirFinal: removes a (final) directory -- rmdir, rm -d, rm -r, find
+//     -delete. unlink and a flag-less rm cannot.
+//   - canRecursive: recursively wipes a populated tree -- rm -r/-R/--recursive,
+//     find -delete. Needed for a broad home/root wipe.
+//   - allowBroadWipe: the operand may itself be the broad target ($HOME, /).
+//     True for rm; for find it is true only when the delete is UNFILTERED
+//     (`find $HOME -delete`), false when a predicate narrows it
+//     (`find $HOME -name '*.log' -delete` deletes filtered files, not the root).
+type shellDelTarget struct {
+	path                                      []byte
+	canDirFinal, canRecursive, allowBroadWipe bool
+}
+
+// shellRmFlagCaps reads an rm flag cluster and reports whether it grants
+// recursion (-r/-R/--recursive) or an empty-directory delete (-d).
+func shellRmFlagCaps(flag []byte) (recursive, dirOnly bool) {
+	lf := strings.ToLower(string(flag))
+	if lf == "--recursive" {
+		return true, false
+	}
+	if len(flag) < 2 || flag[1] == '-' {
+		return false, false // a long option other than --recursive
+	}
+	cluster := flag[1:] // short cluster, e.g. -rf / -fd
+	return bytes.ContainsAny(cluster, "rR"), bytes.IndexByte(cluster, 'd') >= 0
+}
+
+// shellRmTargets returns the operands of rm/unlink/rmdir commands (each
+// non-flag operand up to the next separator), tagged with the command's
+// directory/recursive capability so a flag-less rm or unlink of a directory or
+// broad target does not classify as a wipe.
+func shellRmTargets(scr []byte) []shellDelTarget {
+	var out []shellDelTarget
+	for _, m := range shellDeleteCmdRe.FindAllIndex(scr, -1) {
+		if !atShellCommandStart(scr, m[0]) {
+			continue
+		}
+		cmd := strings.ToLower(string(scr[m[0]:m[1]]))
+		seg := scr[m[1]:]
+		if cut := bytes.IndexAny(seg, ";|&\n\r"); cut >= 0 {
+			seg = seg[:cut]
+		}
+		fields := bytes.Fields(seg)
+		// First pass: resolve capability from the command and its flags.
+		var canDirFinal, canRecursive bool
+		switch cmd {
+		case "rmdir":
+			canDirFinal = true // removes empty/final directories
+		case "unlink":
+			// files only
+		default: // rm
+			for _, tok := range fields {
+				if len(tok) == 0 || tok[0] != '-' {
+					continue
+				}
+				if rec, dirOnly := shellRmFlagCaps(tok); rec {
+					canRecursive, canDirFinal = true, true
+				} else if dirOnly {
+					canDirFinal = true
+				}
+			}
+		}
+		// Second pass: collect operands.
+		for _, tok := range fields {
+			if len(tok) > 0 && tok[0] == '-' {
+				continue
+			}
+			t := stripShellQuotes(tok)
+			if len(t) == 0 {
+				continue
+			}
+			out = append(out, shellDelTarget{t, canDirFinal, canRecursive, true}) // rm: operand can be the broad target
+		}
+	}
+	return out
+}
+
+// shellFindTargets returns ALL search roots of a `find <root>... -delete`
+// command (the non-flag operands before the first predicate). An UNFILTERED
+// find (the first predicate is -delete) wipes the whole root, so the root is a
+// broad-wipe target; a FILTERED find (a -name/-type/... predicate precedes
+// -delete) deletes matched entries only, so the root is classified for
+// sensitive paths but not as a broad wipe.
+func shellFindTargets(scr []byte) []shellDelTarget {
+	var out []shellDelTarget
+	for _, m := range shellFindCmdRe.FindAllIndex(scr, -1) {
+		if !atShellCommandStart(scr, m[0]) {
+			continue
+		}
+		seg := scr[m[1]:]
+		if cut := bytes.IndexAny(seg, ";|&\n\r"); cut >= 0 {
+			seg = seg[:cut]
+		}
+		fields := bytes.Fields(seg)
+		hasDelete := false
+		for _, f := range fields {
+			if strings.EqualFold(string(stripShellQuotes(f)), "-delete") {
+				hasDelete = true
+				break
+			}
+		}
+		if !hasDelete {
+			continue // a find without a standalone -delete predicate is a read
+		}
+		i := 0
+		// Skip find GLOBAL options that precede the path operands (-H/-L/-P,
+		// -D <debug>, -O<level>); the predicates (-name/-type/-delete) come
+		// AFTER the roots.
+	skipOpts:
+		for i < len(fields) {
+			s := strings.ToLower(string(stripShellQuotes(fields[i])))
+			switch {
+			case s == "-h" || s == "-l" || s == "-p":
+				i++
+			case s == "-d":
+				i += 2 // -D takes a debug value
+			case strings.HasPrefix(s, "-o"):
+				i++
+			default:
+				break skipOpts
+			}
+		}
+		var roots [][]byte
+		firstPred := ""
+		for ; i < len(fields); i++ {
+			t := stripShellQuotes(fields[i])
+			if len(t) == 0 {
+				continue
+			}
+			if t[0] == '-' {
+				firstPred = strings.ToLower(string(t)) // first predicate ends the root list
+				break
+			}
+			roots = append(roots, t)
+		}
+		// Unfiltered (`find <root> -delete`) wipes the whole root; a filtering
+		// predicate before -delete narrows it.
+		unfiltered := firstPred == "-delete"
+		for _, r := range roots {
+			// find -delete recurses depth-first, removing populated subtrees.
+			out = append(out, shellDelTarget{r, true, true, unfiltered})
+		}
+	}
+	return out
+}
+
+// wiperStrongPartner reports the strong supply-chain partner signals that
+// escalate a sensitive delete to CRITICAL and let a bare-relative
+// project-capable delete fire at all.
+func wiperStrongPartner(m *metrics) bool {
+	return m.HasCISecretRead || m.HasNetworkSink || m.HasSessionSink ||
+		m.HasBunExecution || m.HasGitHubWriteChannel || m.HasDaemonChain ||
+		m.hasObfuscatorShape()
+}
+
+// detectWiperTripwire emits JS_WIPER_TRIPWIRE_001 when package code performs a
+// REAL destructive delete of a sensitive path (credential stores, agent/editor
+// trust, evidence, honeytokens) or a broad home/root wipe. Self-contained like
+// detectHostTamper. Stop-rule: no full shell parser, no variable-to-path
+// dataflow, no dynamic path evaluation beyond os.homedir() / HOME broad wipe.
+//
+// KNOWN LIMITS:
+//   - not shell-quote-aware: shell operands are classified after the
+//     surrounding quotes are stripped, so a QUOTED home var the shell would
+//     NOT expand (`rm -rf '$HOME/.npmrc'`) is treated as home-anchored, which
+//     can over-fire on a project-capable file whose home var was quoted;
+//   - out of scope (spec, PR 1): a direct program-API deleter
+//     (`spawn('rm', ['-rf', path])`, `execFileSync('find', [...])`), `del()`,
+//     and runtime honeytoken creation are not modelled -- without argv
+//     parsing/dataflow they are FP-prone, and shell-launched deletes are the
+//     in-scope surface;
+//   - find predicates are not parsed: a sensitive path that appears only as a
+//     `find <root> -name '.ssh' -delete` predicate (not as a root) is not
+//     matched. Parsing find expressions is the arbitrary-argv-parsing the
+//     rule's stop-rule excludes;
+//   - a backtick template carrying a `${...}` interpolation is treated as
+//     dynamic and skipped, so an ESCAPED template (`\${HOME}`, a static string
+//     in JS) is also skipped (a missed detection, not an over-fire);
+//   - a nested shell launched from inside an exec command
+//     (`exec('sh -c "rm -rf ~/.ssh"')`) is not peeled; the inner script is
+//     quoted data to the outer command scan. Peeling arbitrary nested shells
+//     is the shell-parsing depth the stop-rule excludes;
+//   - execa is bound by call shape (a bare `execa(...)`/`execaCommand(...)`),
+//     not by a verified import: a bare LOCAL helper that shadows the execa name
+//     (`function execaCommand(){}`) is still treated as execa. Receiver calls
+//     (`obj.execaCommand(...)`) are excluded, but import-binding/scope analysis
+//     to reject same-named local functions is the shadowing the stop-rule
+//     excludes. (A nested `sh -c` payload, the common shape here, is already
+//     unmatched per the prior limit.)
+func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding {
+	view := newJSLexicalView(content)
+	code := view.Code
+	stringRanges := view.StringRanges
+
+	strong := wiperStrongPartner(m)
+	var anyFired, critical bool
+	families := map[string]bool{}
+	firstPos := -1
+	record := func(pos int) {
+		anyFired = true
+		if firstPos < 0 || (pos >= 0 && pos < firstPos) {
+			firstPos = pos
+		}
+	}
+	// Capability gates the classification:
+	//   - a broad home/root wipe needs canRecursive (a populated tree): a
+	//     flag-less rm, rmdir, or unlink cannot perform it.
+	//   - a sensitive DIRECTORY token that is the final path component needs
+	//     canDirFinal (rmdir / rm -d / anything recursive); unlink and a
+	//     flag-less rm only remove files.
+	//   - a file token (or a file inside a sensitive dir) needs neither.
+	classify := func(target []byte, pos int, shell, allowBroadWipe, canDirFinal, canRecursive bool) {
+		if allowBroadWipe && canRecursive && isBroadWipeTarget(target, shell) {
+			critical = true
+			record(pos)
+			return
+		}
+		if deleteTargetIsConstructed(target, shell) {
+			return
+		}
+		sp, at, ok := matchSensitiveDeletePath(target, shell)
+		if !ok {
+			return
+		}
+		// A directory token that is the final path component can only be removed
+		// by a dir-capable method. "Final" means nothing meaningful follows the
+		// token: either the string ends, or only trailing slashes remain
+		// (`.ssh/`). A real subpath after it (`.ssh/id_rsa`) is a file delete,
+		// which any method can do.
+		end := at + len(sp.token)
+		if sp.dir && !canDirFinal && len(bytes.Trim(target[end:], "/")) == 0 {
+			return
+		}
+		prefix := target[:at]
+		if deletePrefixIsBenign(prefix) {
+			return
+		}
+		switch {
+		case sp.home:
+			families[sp.family] = true
+			record(pos)
+		case deletePrefixIsHomeAnchored(prefix, shell):
+			record(pos)
+		case strong:
+			// project-capable, bare-relative: fires only with a partner.
+			record(pos)
+		}
+	}
+
+	// 1. fs / fs-extra / rimraf delete calls.
+	osBindings := collectModuleBindings(code, stringRanges,
+		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
+	for _, c := range collectFSDeleteCalls(code, stringRanges) {
+		// A broad home wipe targets a populated directory tree; only a
+		// recursive method (rm/fs.rm with recursive, fs-extra remove, rimraf)
+		// can perform it -- not unlink and not a non-recursive rm.
+		if c.canRecursive && isBroadHomePathArg(code[c.pathStart:c.pathEnd], osBindings) {
+			critical = true
+			record(c.pathStart)
+			continue
+		}
+		// The path must be a SINGLE string literal spanning the whole first
+		// argument: a concatenation, template, or method-call tail
+		// ('.ssh' + x, `${tmp}/.ssh`, '.ssh'.replace(...)) is dynamic.
+		target, ok := wholeStringLiteralInterior(code[c.pathStart:c.pathEnd])
+		if !ok {
+			continue
+		}
+		classify(target, c.pathStart, false, true, c.canDirFinal, c.canRecursive)
+	}
+
+	// 2. bound shell delete commands. find roots do NOT allow a broad-home
+	// classification: `find $HOME -name '*.log' -delete` deletes filtered
+	// files, not the home root.
+	scripts, starts := collectBoundShellCommands(view, stringRanges)
+	for i, scr := range scripts {
+		for _, t := range shellRmTargets(scr) {
+			classify(t.path, starts[i], true, t.allowBroadWipe, t.canDirFinal, t.canRecursive)
+		}
+		for _, t := range shellFindTargets(scr) {
+			classify(t.path, starts[i], true, t.allowBroadWipe, t.canDirFinal, t.canRecursive)
+		}
+	}
+
+	if !anyFired {
+		return nil
+	}
+	sev := types.SeverityHigh
+	if critical || strong || len(families) >= 2 {
+		sev = types.SeverityCritical
+	}
+	line := 1
+	if firstPos >= 0 {
+		line = lineOf(code, firstPos)
+	}
+	return &types.Finding{
+		RuleID:   RuleWiperTripwire,
+		RuleName: "Destructive wipe of sensitive paths",
+		Severity: sev,
+		Category: "supply-chain",
+		Description: "Package JavaScript performs a REAL destructive delete of a sensitive " +
+			"path -- a credential store (.ssh/.aws/.gnupg/.kube/...), agent/editor trust " +
+			"(.claude/.vscode/...), shell history, an evidence log, or a honeytoken -- or a " +
+			"broad wipe of $HOME/~/root, through a bound fs/fs-extra/rimraf delete or a bound " +
+			"shell rm/unlink/rmdir/find -delete. Build/cache cleanup (node_modules, dist, " +
+			"/tmp, ...) and sibling/builder paths do not match. CRITICAL on a broad home/root " +
+			"wipe, on deleting two distinct credential stores, or when paired with a strong " +
+			"supply-chain partner.",
+		FilePath:    path,
+		Line:        line,
+		MatchedText: "destructive delete of a sensitive path",
+		Analyzer:    AnalyzerName,
+		// Above the generic command-execution rule's confidence so this
+		// specific supply-chain finding survives same-line cross-rule dedup
+		// (a shell rm of a sensitive path also matches CMDEXEC_004).
+		Confidence: 0.92,
+		Remediation: "Package install/runtime code has no legitimate reason to delete " +
+			"credential stores, agent trust files, history, or the home directory. Inspect " +
+			"the file in a clean clone, remove the package, and audit the host for missing or " +
+			"altered credentials and trust files.",
+	}
 }
 
 // collectShelljsExecCalls returns the call sites of real shelljs `.exec(...)`
@@ -3058,6 +4122,34 @@ var fsModuleAliasESMRe = regexp.MustCompile(
 var fsModuleAliasESMCombinedRe = regexp.MustCompile(
 	`import\s+([A-Za-z_$][\w$]*)\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]+\})\s+from\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]`,
 )
+
+// fs/promises (and fs.promises) aliasing forms. A binding to this module is
+// async-only: a *Sync method on it does not exist, so it cannot delete.
+// The destructure-with-rename form (`const { promises: fsp } = require('fs')`)
+// is already covered by sourceByLocal[fsp] == "promises".
+var fsPromisesAliasRequireRe = regexp.MustCompile(
+	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?fs/promises['"]\s*\)`,
+)
+var fsPromisesAliasDotRe = regexp.MustCompile(
+	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?fs['"]\s*\)\s*\.\s*promises\b`,
+)
+var fsPromisesAliasESMRe = regexp.MustCompile(
+	`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?fs/promises['"]`,
+)
+
+// fsPromisesAliasESMCombinedRe captures the DEFAULT alias in a combined
+// fs/promises import (`import fsp, { rm } from 'fs/promises'`); the generic fs
+// combined regex would otherwise record fsp as a plain fs alias.
+var fsPromisesAliasESMCombinedRe = regexp.MustCompile(
+	`import\s+([A-Za-z_$][\w$]*)\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]+\})\s+from\s*['"](?:node:)?fs/promises['"]`,
+)
+var fsPromisesDestructureRe = regexp.MustCompile(
+	`(?:(?:const|let|var)\s+|,\s*)\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"](?:node:)?fs/promises['"]\s*\)`,
+)
+var fsPromisesDestructureESMRe = regexp.MustCompile(
+	`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?\{\s*([^}]+)\s*\}\s*from\s*['"](?:node:)?fs/promises['"]`,
+)
+
 var fsDestructureRe = regexp.MustCompile(
 	`(?:(?:const|let|var)\s+|,\s*)\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]\s*\)`,
 )
@@ -3247,6 +4339,9 @@ func detect(path string, m *metrics, content []byte) []types.Finding {
 		out = append(out, *f)
 	}
 	out = append(out, detectHostTamper(path, m, content)...)
+	if f := detectWiperTripwire(path, m, content); f != nil {
+		out = append(out, *f)
+	}
 	return out
 }
 

@@ -179,5 +179,28 @@ func RuleMetadata() []rulemeta.Rule {
 				"resolver configuration. Inspect the file in a clean clone, remove the package, " +
 				"and audit the affected host surface for tampering.",
 		},
+		{
+			ID:       RuleWiperTripwire,
+			Name:     "Destructive wipe of sensitive paths",
+			Severity: "HIGH",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerJSRisk,
+			Description: "Package JavaScript performs a REAL destructive delete of a sensitive " +
+				"path -- a credential store (.ssh/.aws/.gnupg/.kube/.azure/.docker/gcloud), " +
+				"agent/editor trust (.claude/CLAUDE.md/.cursorrules/.vscode), shell history, an " +
+				"evidence log, or a honeytoken -- or a broad wipe of $HOME/~/root, through a " +
+				"bound fs/fs-extra/rimraf delete (rm/rmdir/unlink/remove/emptyDir) or a bound " +
+				"shell rm/unlink/rmdir/find -delete. Credential dirs, history, and honeytokens " +
+				"fire standalone; project-capable config files (.npmrc/.env/.vscode/...) fire " +
+				"only when home-anchored or with a strong partner. Build/cache cleanup " +
+				"(node_modules, dist, build, /tmp, ...), sibling/builder paths (.env.example, " +
+				"tmp + '/.ssh'), comments, strings, db.exec, and unbound local helpers do not " +
+				"match. CRITICAL on a broad home/root wipe, on deleting two distinct credential " +
+				"stores, or when paired with a strong supply-chain partner.",
+			Remediation: "Package install/runtime code has no legitimate reason to delete " +
+				"credential stores, agent trust files, history, or the home directory. Inspect " +
+				"the file in a clean clone, remove the package, and audit the host for missing " +
+				"or altered credentials and trust files.",
+		},
 	}
 }

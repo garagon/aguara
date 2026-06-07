@@ -154,6 +154,7 @@ Beyond "is this package version known-bad," Aguara has analyzers that flag insta
 | Node downloads and runs a Bun second stage to evade Node-focused monitoring | `jsrisk` (`JS_BUN_SECOND_STAGE_001`) |
 | GitHub API used as a payload/command channel (write mutations, Octokit writes, REST git-data) | `jsrisk` (`JS_GITHUB_C2_001`) |
 | Host trust tampering: writes to sudoers, loader preload, CA stores, SSH, hosts/resolver | `jsrisk` (`JS_SUDOERS_TAMPER_001`, `JS_HOST_TRUST_TAMPER_001`) |
+| Destructive cleanup: deletes credential stores, agent files, evidence, or wipes the home directory | `jsrisk` (`JS_WIPER_TRIPWIRE_001`) |
 | Python install hook fetches remote JavaScript and runs it through `node -e` | `pyrisk` (`PY_IMPORTTIME_REMOTE_JS_001`) |
 | Rust `build.rs` reads wallet/keystore material and sends it to a network sink | `rsbuild` (`RS_BUILD_WALLET_EXFIL_001`) |
 
@@ -274,10 +275,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **226 cataloged detections** through `aguara list-rules`:
+Aguara exposes **227 cataloged detections** through `aguara list-rules`:
 
 - **193 embedded YAML pattern rules** across 13 categories
-- **33 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
+- **34 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
