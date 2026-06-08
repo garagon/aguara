@@ -142,6 +142,32 @@ dangerouslyAllowAllBuilds: false
 	}
 }
 
+// TestMixedSpellingMergePrecedence: an explicit value wins over a merged
+// one even when the two use different (kebab vs camel) spellings of the
+// same setting. pnpm treats the spellings as one setting, so an explicit
+// safe override must not be shadowed by a merged unsafe value, and an
+// explicit unsafe value must still be flagged.
+func TestMixedSpellingMergePrecedence(t *testing.T) {
+	// Merged unsafe (kebab) + explicit safe (camel) -> no finding.
+	safeWins := `defaults: &d
+  dangerously-allow-all-builds: true
+<<: *d
+dangerouslyAllowAllBuilds: false
+`
+	if fires(t, target, safeWins, RuleDangerousBuilds) {
+		t.Fatal("explicit camelCase false must win over merged kebab-case true")
+	}
+	// Merged safe (camel) + explicit unsafe (kebab) -> finding.
+	unsafeWins := `defaults: &d
+  dangerouslyAllowAllBuilds: false
+<<: *d
+dangerously-allow-all-builds: true
+`
+	if !fires(t, target, unsafeWins, RuleDangerousBuilds) {
+		t.Fatal("explicit kebab-case true must win over merged camelCase false")
+	}
+}
+
 // TestQuotedFalseNotFlagged: the spec's FP discipline requires that an
 // explicit intent-to-disable ("false") is never read as an opt-in.
 func TestQuotedFalseNotFlagged(t *testing.T) {

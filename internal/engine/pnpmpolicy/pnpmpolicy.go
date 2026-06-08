@@ -105,10 +105,19 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 
 	// Flatten the root mapping with merge keys resolved, then index it
 	// by normalized key so kebab-case and camelCase resolve together.
+	// First-wins on the normalized key: flatten emits explicit keys
+	// before merged ones, so an explicit value wins over a merged one
+	// even when the two use different spellings of the same setting
+	// (e.g. explicit dangerouslyAllowAllBuilds vs merged
+	// dangerously-allow-all-builds).
 	entries := flatten(root, 0)
 	idx := make(map[string]entry, len(entries))
+	indexed := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		idx[normalizeKey(e.key)] = e
+		if nk := normalizeKey(e.key); !indexed[nk] {
+			indexed[nk] = true
+			idx[nk] = e
+		}
 	}
 	get := func(name string) (entry, bool) {
 		e, ok := idx[normalizeKey(name)]
