@@ -198,9 +198,12 @@ dangerously-allow-all-builds: true
 // pnpm ignores and must not produce a finding.
 func TestUnrecognizedSpellingNotFlagged(t *testing.T) {
 	for _, src := range []string{
-		"dangerouslyallowallbuilds: true\n", // no camel boundaries
-		"BlockExoticSubdeps: false\n",       // wrong leading case
-		"DANGEROUSLY_ALLOW_ALL_BUILDS: true\n",
+		"dangerouslyallowallbuilds: true\n",     // no camel boundaries
+		"BlockExoticSubdeps: false\n",           // wrong leading case
+		"DANGEROUSLY_ALLOW_ALL_BUILDS: true\n",  // underscores, not kebab
+		"dangerously--allow-all-builds: true\n", // doubled hyphen
+		"dangerously-allow-all-builds-: true\n", // trailing hyphen
+		"-block-exotic-subdeps: false\n",        // leading hyphen
 	} {
 		if got := ids(t, target, src); len(got) != 0 {
 			t.Fatalf("unrecognized key spelling must not fire, got %v on:\n%s", got, src)

@@ -350,15 +350,25 @@ func mergeTargets(n *yaml.Node) []*yaml.Node {
 	return nil
 }
 
-// normalizeKey folds a pnpm setting key from kebab-case to camelCase so
-// the two spellings pnpm actually accepts compare equal (it treats
-// "block-exotic-subdeps" and "blockExoticSubdeps" as one setting). The
-// fold is case-sensitive and only joins on hyphens, so an unrecognized
-// smushed spelling like "blockexoticsubdeps" or a mis-cased
-// "BlockExoticSubdeps" (which pnpm does NOT honor as that setting) does
-// not collapse onto the real key and produce a false finding.
+// normalizeKey folds a well-formed kebab-case pnpm setting key to
+// camelCase so the two spellings pnpm actually accepts compare equal (it
+// treats "block-exotic-subdeps" and "blockExoticSubdeps" as one
+// setting). The fold is case-sensitive and only joins single hyphens
+// between non-empty segments. A spelling pnpm does NOT honor as that
+// setting -- a smushed "blockexoticsubdeps", a mis-cased
+// "BlockExoticSubdeps", or a malformed hyphenation
+// ("block--exotic-subdeps", a leading/trailing hyphen) -- is returned
+// unchanged so it cannot collapse onto a real key and produce a false
+// finding.
 func normalizeKey(s string) string {
 	s = strings.TrimSpace(s)
+	if strings.Contains(s, "-") {
+		for _, seg := range strings.Split(s, "-") {
+			if seg == "" {
+				return s // leading/trailing/doubled hyphen: not a valid kebab key
+			}
+		}
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	upNext := false
