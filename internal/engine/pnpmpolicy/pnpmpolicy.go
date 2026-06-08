@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
@@ -104,19 +105,26 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	}
 
 	// Flatten the root mapping with merge keys resolved, then index it
-	// by normalized key so kebab-case and camelCase resolve together.
-	// First-wins on the normalized key: flatten emits explicit keys
-	// before merged ones, so an explicit value wins over a merged one
-	// even when the two use different spellings of the same setting
-	// (e.g. explicit dangerouslyAllowAllBuilds vs merged
-	// dangerously-allow-all-builds).
+	// by normalized key so kebab-case and camelCase resolve to the same
+	// setting. Precedence mirrors pnpm's config loading:
+	//   - an explicit key always wins over a merged one;
+	//   - among explicit keys, the last value wins (later overrides);
+	//   - among merged keys, the first wins (YAML merge semantics).
 	entries := flatten(root, 0)
 	idx := make(map[string]entry, len(entries))
-	indexed := make(map[string]bool, len(entries))
+	explicitSet := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		if nk := normalizeKey(e.key); !indexed[nk] {
-			indexed[nk] = true
-			idx[nk] = e
+		nk := normalizeKey(e.key)
+		if !e.merged {
+			idx[nk] = e // last explicit wins, and overrides any merged value
+			explicitSet[nk] = true
+			continue
+		}
+		if explicitSet[nk] {
+			continue // an explicit value already won
+		}
+		if _, ok := idx[nk]; !ok {
+			idx[nk] = e // first merged wins
 		}
 	}
 	get := func(name string) (entry, bool) {
@@ -238,7 +246,12 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// MEDIUM, one per pending entry. The allowBuilds mapping is flattened
 	// too so entries supplied through a merge key are seen.
 	if e, ok := get("allowBuilds"); ok && e.value.Kind == yaml.MappingNode {
+		seenPkg := make(map[string]bool)
 		for _, ab := range flatten(e.value, 0) {
+			if seenPkg[ab.key] {
+				continue // a decision for this package already won
+			}
+			seenPkg[ab.key] = true
 			if isNull(ab.value) {
 				emit(RuleBuildApprovalPending, "pnpm allowBuilds entry pending decision", "MEDIUM",
 					fmt.Sprintf("allowBuilds entry %q has no explicit true/false decision; the package has a build script still pending review.", ab.key),
@@ -252,19 +265,22 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 }
 
 // entry is a resolved key/value pair: the value node, the line of the
-// key (where a finding points), and the original (un-normalized) key
-// text for display.
+// key (where a finding points), the original (un-normalized) key text
+// for display, and whether it came from a merge key rather than being
+// written directly at this mapping level (merged values lose to explicit
+// ones during indexing).
 type entry struct {
-	key   string
-	value *yaml.Node
-	line  int
+	key    string
+	value  *yaml.Node
+	line   int
+	merged bool
 }
 
-// flatten returns the key/value pairs of a mapping node in source order
-// with YAML merge keys (`<<:`) expanded. Explicitly-written keys take
-// precedence over merged ones, and the first occurrence of a key wins
-// (explicit keys are visited before merges, mirroring YAML merge
-// semantics).
+// flatten returns the key/value pairs of a mapping node in source order,
+// explicit keys first and then keys pulled in through YAML merge keys
+// (`<<:`), each tagged with merged. Duplicates are kept; precedence is
+// resolved by the caller's index so pnpm's last-wins (explicit) /
+// first-wins (merged) rules can be applied across spellings.
 func flatten(node *yaml.Node, depth int) []entry {
 	return flattenVisited(node, depth, make(map[*yaml.Node]bool))
 }
@@ -284,15 +300,7 @@ func flattenVisited(node *yaml.Node, depth int, visited map[*yaml.Node]bool) []e
 	}
 	visited[node] = true
 
-	var out []entry
-	seen := make(map[string]bool)
-	add := func(e entry) {
-		if !seen[e.key] {
-			seen[e.key] = true
-			out = append(out, e)
-		}
-	}
-
+	var out, merged []entry
 	var merges []*yaml.Node
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		k, v := node.Content[i], node.Content[i+1]
@@ -300,16 +308,17 @@ func flattenVisited(node *yaml.Node, depth int, visited map[*yaml.Node]bool) []e
 			merges = append(merges, v)
 			continue
 		}
-		add(entry{key: k.Value, value: v, line: k.Line})
+		out = append(out, entry{key: k.Value, value: v, line: k.Line})
 	}
 	for _, mn := range merges {
 		for _, tgt := range mergeTargets(mn) {
 			for _, e := range flattenVisited(tgt, depth+1, visited) {
-				add(e)
+				e.merged = true // anything reached through a merge is merged from here
+				merged = append(merged, e)
 			}
 		}
 	}
-	return out
+	return append(out, merged...)
 }
 
 // mergeTargets resolves the value of a `<<` merge key to the mapping
@@ -341,12 +350,31 @@ func mergeTargets(n *yaml.Node) []*yaml.Node {
 	return nil
 }
 
-// normalizeKey folds a pnpm setting key to a canonical form so that
-// kebab-case and camelCase spellings of the same setting compare equal
-// (pnpm treats them as one). e.g. "block-exotic-subdeps" and
-// "blockExoticSubdeps" both fold to "blockexoticsubdeps".
+// normalizeKey folds a pnpm setting key from kebab-case to camelCase so
+// the two spellings pnpm actually accepts compare equal (it treats
+// "block-exotic-subdeps" and "blockExoticSubdeps" as one setting). The
+// fold is case-sensitive and only joins on hyphens, so an unrecognized
+// smushed spelling like "blockexoticsubdeps" or a mis-cased
+// "BlockExoticSubdeps" (which pnpm does NOT honor as that setting) does
+// not collapse onto the real key and produce a false finding.
 func normalizeKey(s string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
+	s = strings.TrimSpace(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	upNext := false
+	for _, r := range s {
+		if r == '-' {
+			upNext = true
+			continue
+		}
+		if upNext {
+			b.WriteRune(unicode.ToUpper(r))
+			upNext = false
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // mappingRoot returns the top-level mapping node of a parsed document,

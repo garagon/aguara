@@ -193,6 +193,35 @@ dangerously-allow-all-builds: true
 	}
 }
 
+// TestUnrecognizedSpellingNotFlagged: pnpm only accepts kebab-case and
+// camelCase keys, so a smushed-lowercase or mis-cased spelling is a typo
+// pnpm ignores and must not produce a finding.
+func TestUnrecognizedSpellingNotFlagged(t *testing.T) {
+	for _, src := range []string{
+		"dangerouslyallowallbuilds: true\n", // no camel boundaries
+		"BlockExoticSubdeps: false\n",       // wrong leading case
+		"DANGEROUSLY_ALLOW_ALL_BUILDS: true\n",
+	} {
+		if got := ids(t, target, src); len(got) != 0 {
+			t.Fatalf("unrecognized key spelling must not fire, got %v on:\n%s", got, src)
+		}
+	}
+}
+
+// TestDuplicateExplicitSpellingLastWins: two explicit spellings of one
+// setting resolve to pnpm's last-wins, regardless of which spelling
+// comes second.
+func TestDuplicateExplicitSpellingLastWins(t *testing.T) {
+	// safe then unsafe -> unsafe wins -> fire.
+	if !fires(t, target, "dangerouslyAllowAllBuilds: false\ndangerously-allow-all-builds: true\n", RuleDangerousBuilds) {
+		t.Fatal("later explicit true must win over earlier explicit false")
+	}
+	// unsafe then safe -> safe wins -> no fire.
+	if fires(t, target, "dangerously-allow-all-builds: true\ndangerouslyAllowAllBuilds: false\n", RuleDangerousBuilds) {
+		t.Fatal("later explicit false must win over earlier explicit true")
+	}
+}
+
 // TestQuotedFalseNotFlagged: the spec's FP discipline requires that an
 // explicit intent-to-disable ("false") is never read as an opt-in.
 func TestQuotedFalseNotFlagged(t *testing.T) {
