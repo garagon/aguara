@@ -264,11 +264,26 @@ type entry struct {
 // with YAML merge keys (`<<:`) expanded. Explicitly-written keys take
 // precedence over merged ones, and the first occurrence of a key wins
 // (explicit keys are visited before merges, mirroring YAML merge
-// semantics). Depth is bounded to defuse anchor cycles.
+// semantics).
 func flatten(node *yaml.Node, depth int) []entry {
+	return flattenVisited(node, depth, make(map[*yaml.Node]bool))
+}
+
+// flattenVisited is flatten with a visited-node set so a self-referential
+// or fan-out merge (e.g. `<<: [*d, *d, *d]` where *d merges itself)
+// expands each mapping node at most once. Merge keys are idempotent, so
+// skipping an already-seen node is semantically correct and bounds the
+// work to O(nodes) instead of exponential. Depth stays as a second
+// guard.
+func flattenVisited(node *yaml.Node, depth int, visited map[*yaml.Node]bool) []entry {
 	if node == nil || node.Kind != yaml.MappingNode || depth > maxMergeDepth {
 		return nil
 	}
+	if visited[node] {
+		return nil
+	}
+	visited[node] = true
+
 	var out []entry
 	seen := make(map[string]bool)
 	add := func(e entry) {
@@ -289,7 +304,7 @@ func flatten(node *yaml.Node, depth int) []entry {
 	}
 	for _, mn := range merges {
 		for _, tgt := range mergeTargets(mn) {
-			for _, e := range flatten(tgt, depth+1) {
+			for _, e := range flattenVisited(tgt, depth+1, visited) {
 				add(e)
 			}
 		}

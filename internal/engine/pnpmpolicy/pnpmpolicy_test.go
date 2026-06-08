@@ -3,6 +3,7 @@ package pnpmpolicy
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/garagon/aguara/internal/scanner"
 )
@@ -126,6 +127,30 @@ config:
 	// A nested merge under a non-pnpm key must NOT leak as a root setting.
 	if fires(t, target, src, RuleDangerousBuilds) {
 		t.Fatal("a merge under an unrelated key must not be read as a root setting")
+	}
+}
+
+// TestMergeBombTerminates: a fan-out / self-referential merge must not
+// cause exponential or unbounded work. A crafted untrusted
+// pnpm-workspace.yaml should be analyzed in well under a second.
+func TestMergeBombTerminates(t *testing.T) {
+	// Self-referential anchor plus a fan-out merge sequence that would
+	// blow up if the same node were re-expanded per branch per depth.
+	src := `base: &b
+  dangerouslyAllowAllBuilds: true
+  <<: [*b, *b, *b, *b]
+<<: [*b, *b, *b, *b]
+`
+	done := make(chan map[string]bool, 1)
+	go func() { done <- ids(t, target, src) }()
+	select {
+	case got := <-done:
+		// And it must still resolve the merged setting correctly.
+		if !got[RuleDangerousBuilds] {
+			t.Fatal("merge bomb terminated but lost the merged dangerous setting")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("merge expansion did not terminate; possible exponential blowup")
 	}
 }
 
