@@ -87,6 +87,75 @@ func TestFalsePositives(t *testing.T) {
 	}
 }
 
+// TestKebabCaseKeys: pnpm normalizes kebab-case and camelCase setting
+// keys to the same value, so the analyzer must match both spellings.
+func TestKebabCaseKeys(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"dangerously-allow-all-builds: true\n", RuleDangerousBuilds},
+		{"block-exotic-subdeps: false\n", RuleExoticSubdepsDisabled},
+		{"trust-lockfile: true\n", RuleTrustLockfile},
+		{"minimum-release-age: 0\n", RuleMinReleaseAgeDisabled},
+		{"only-built-dependencies:\n  - esbuild\n", RuleLegacyBuildPolicy},
+		{"allow-builds:\n  sharp:\n", RuleBuildApprovalPending},
+	}
+	for _, c := range cases {
+		if !fires(t, target, c.src, c.want) {
+			t.Fatalf("kebab-case must fire %s on:\n%s", c.want, c.src)
+		}
+	}
+}
+
+// TestMergeKeysResolved: a setting supplied through a YAML merge key
+// (`<<: *anchor`) is applied by pnpm, so the analyzer must see it.
+func TestMergeKeysResolved(t *testing.T) {
+	src := `presets:
+  unsafe: &unsafe
+    dangerouslyAllowAllBuilds: true
+config:
+  <<: *unsafe
+`
+	// The merge happens inside `config:`, not at the root, so the root
+	// has no dangerous setting. Verify a root-level merge instead.
+	rootMerge := `defaults: &d
+  dangerouslyAllowAllBuilds: true
+<<: *d
+`
+	if !fires(t, target, rootMerge, RuleDangerousBuilds) {
+		t.Fatalf("root-level merge key must surface the merged dangerous setting")
+	}
+	// A nested merge under a non-pnpm key must NOT leak as a root setting.
+	if fires(t, target, src, RuleDangerousBuilds) {
+		t.Fatal("a merge under an unrelated key must not be read as a root setting")
+	}
+}
+
+// TestExplicitKeyWinsOverMerge: an explicit safe value overrides a
+// merged unsafe one (YAML merge precedence), so no finding fires.
+func TestExplicitKeyWinsOverMerge(t *testing.T) {
+	src := `defaults: &d
+  dangerouslyAllowAllBuilds: true
+<<: *d
+dangerouslyAllowAllBuilds: false
+`
+	if fires(t, target, src, RuleDangerousBuilds) {
+		t.Fatal("explicit dangerouslyAllowAllBuilds: false must win over the merged true")
+	}
+}
+
+// TestQuotedFalseNotFlagged: the spec's FP discipline requires that an
+// explicit intent-to-disable ("false") is never read as an opt-in.
+func TestQuotedFalseNotFlagged(t *testing.T) {
+	for _, src := range []string{
+		"dangerouslyAllowAllBuilds: \"false\"\n",
+		"dangerouslyAllowAllBuilds: no\n",
+		"dangerouslyAllowAllBuilds: off\n",
+	} {
+		if fires(t, target, src, RuleDangerousBuilds) {
+			t.Fatalf("a disable value must not fire HIGH:\n%s", src)
+		}
+	}
+}
+
 // TestNonStrictRequiresExplicitPositiveAge locks the spec's FP-discipline
 // rule: minimumReleaseAgeStrict: false on its own may just be declaring
 // the v11 compatibility default, so it must NOT fire without an explicit

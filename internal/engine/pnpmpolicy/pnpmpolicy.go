@@ -18,6 +18,17 @@
 //     field cannot blind the whole analyzer, dynamic values like
 //     ${AGE} are skipped rather than crashing, and every finding
 //     carries the exact line of the offending field.
+//
+// Key resolution mirrors what pnpm actually loads: setting keys are
+// matched case-insensitively with kebab-case and camelCase treated as
+// the same setting (pnpm normalizes `block-exotic-subdeps` and
+// `blockExoticSubdeps` to one value), and YAML merge keys (`<<:`) are
+// expanded before evaluation so a value supplied through an anchor is
+// not missed. Boolean values use YAML 1.1 spellings (true/false/yes/
+// no/on/off, matching the js-yaml loader pnpm uses); a value that is
+// not one of those tokens is treated as ambiguous and not evaluated,
+// rather than coerced, so an explicit "false" is never mis-flagged as
+// a dangerous opt-in.
 package pnpmpolicy
 
 import (
@@ -50,6 +61,10 @@ const (
 const AnalyzerName = rulemeta.AnalyzerPnpmPolicy
 
 const category = "supply-chain"
+
+// maxMergeDepth bounds YAML merge-key resolution (anchor cycles / deeply
+// nested merges) so a hostile file cannot cause unbounded recursion.
+const maxMergeDepth = 16
 
 // legacyKeys are pnpm v10 build-policy settings removed or replaced in
 // v11. Presence is a migration nudge (INFO), not a vulnerability.
@@ -87,7 +102,18 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	if root == nil {
 		return nil, nil
 	}
-	fields := topLevelFields(root)
+
+	// Flatten the root mapping with merge keys resolved, then index it
+	// by normalized key so kebab-case and camelCase resolve together.
+	entries := flatten(root, 0)
+	idx := make(map[string]entry, len(entries))
+	for _, e := range entries {
+		idx[normalizeKey(e.key)] = e
+	}
+	get := func(name string) (entry, bool) {
+		e, ok := idx[normalizeKey(name)]
+		return e, ok
+	}
 
 	src := strings.Split(string(target.Content), "\n")
 	rel := target.RelPath
@@ -112,54 +138,54 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	}
 
 	// 1. dangerouslyAllowAllBuilds: true -> HIGH
-	if f, ok := fields["dangerouslyAllowAllBuilds"]; ok {
-		if b, parsed := yamlBool(f.value.Value); parsed && b {
+	if e, ok := get("dangerouslyAllowAllBuilds"); ok {
+		if b, parsed := yamlBool(e.value.Value); parsed && b {
 			emit(RuleDangerousBuilds, "pnpm dangerouslyAllowAllBuilds enabled", "HIGH",
 				"dangerouslyAllowAllBuilds: true lets every direct and transitive dependency run install-time lifecycle scripts without approval.",
-				f.line,
+				e.line,
 				"Remove dangerouslyAllowAllBuilds: true and approve only the packages that need build scripts via allowBuilds (or `pnpm approve-builds`).")
 		}
 	}
 
 	// 2. strictDepBuilds: false -> MEDIUM (v11 default is true).
-	if f, ok := fields["strictDepBuilds"]; ok {
-		if b, parsed := yamlBool(f.value.Value); parsed && !b {
+	if e, ok := get("strictDepBuilds"); ok {
+		if b, parsed := yamlBool(e.value.Value); parsed && !b {
 			emit(RuleStrictDepBuildsDisabled, "pnpm strictDepBuilds disabled", "MEDIUM",
 				"strictDepBuilds: false downgrades an unapproved build script from an install failure to a warning, so unreviewed install-time code can pass CI.",
-				f.line,
+				e.line,
 				"Remove strictDepBuilds: false (or set it to true) so an unapproved build script fails the install and forces an explicit allowBuilds decision.")
 		}
 	}
 
 	// 3. blockExoticSubdeps: false -> MEDIUM (v11 default is true).
-	if f, ok := fields["blockExoticSubdeps"]; ok {
-		if b, parsed := yamlBool(f.value.Value); parsed && !b {
+	if e, ok := get("blockExoticSubdeps"); ok {
+		if b, parsed := yamlBool(e.value.Value); parsed && !b {
 			emit(RuleExoticSubdepsDisabled, "pnpm blockExoticSubdeps disabled", "MEDIUM",
 				"blockExoticSubdeps: false allows transitive dependencies to resolve from git/tarball URLs instead of the registry, widening the code that can enter the tree without registry provenance.",
-				f.line,
+				e.line,
 				"Remove blockExoticSubdeps: false (or set it to true). If a specific exotic subdep is required, vet and pin it explicitly rather than disabling the block globally.")
 		}
 	}
 
 	// 4. trustLockfile: true -> MEDIUM (v11 default is false).
-	if f, ok := fields["trustLockfile"]; ok {
-		if b, parsed := yamlBool(f.value.Value); parsed && b {
+	if e, ok := get("trustLockfile"); ok {
+		if b, parsed := yamlBool(e.value.Value); parsed && b {
 			emit(RuleTrustLockfile, "pnpm trustLockfile enabled", "MEDIUM",
 				"trustLockfile: true stops pnpm re-applying minimumReleaseAge and trustPolicy to lockfile entries, raising lockfile-poisoning risk on repos that take outside contributions.",
-				f.line,
+				e.line,
 				"Remove trustLockfile: true so pnpm keeps verifying lockfile entries. Only consider it in fully closed repos where the lockfile is trusted end to end.")
 		}
 	}
 
 	// 5 + 6. minimumReleaseAge / minimumReleaseAgeStrict.
 	minAgeSet, minAgeVal := false, 0
-	if f, ok := fields["minimumReleaseAge"]; ok {
-		if n, parsed := yamlInt(f.value.Value); parsed {
+	if e, ok := get("minimumReleaseAge"); ok {
+		if n, parsed := yamlInt(e.value.Value); parsed {
 			minAgeSet, minAgeVal = true, n
 			if n == 0 {
 				emit(RuleMinReleaseAgeDisabled, "pnpm minimumReleaseAge disabled", "LOW",
 					"minimumReleaseAge: 0 is an explicit opt-out of the v11 default (1440 minutes), removing the wait window that protects against freshly published malicious versions.",
-					f.line,
+					e.line,
 					"Remove minimumReleaseAge: 0 to use the default window, or set a positive value (e.g. 1440 for one day).")
 			}
 		}
@@ -168,46 +194,46 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// value AND strict is explicitly false. Without an explicit positive
 	// age, `minimumReleaseAgeStrict: false` may just be declaring the v11
 	// compatibility default, so we stay silent.
-	if f, ok := fields["minimumReleaseAgeStrict"]; ok && minAgeSet && minAgeVal > 0 {
-		if b, parsed := yamlBool(f.value.Value); parsed && !b {
+	if e, ok := get("minimumReleaseAgeStrict"); ok && minAgeSet && minAgeVal > 0 {
+		if b, parsed := yamlBool(e.value.Value); parsed && !b {
 			emit(RuleMinReleaseAgeNonStrict, "pnpm minimumReleaseAge not strictly enforced", "LOW",
 				"minimumReleaseAge is set to a positive value but minimumReleaseAgeStrict: false lets pnpm fall back to a version below the age threshold when no compatible alternative exists.",
-				f.line,
+				e.line,
 				"Set minimumReleaseAgeStrict: true (or remove the false override) so the release-age threshold is always enforced.")
 		}
 	}
 
 	// 7. trustPolicy: off (explicit) -> LOW. Compared on the literal
-	// value because YAML resolves bare `off` as a boolean; we want the
-	// string token, and absence never fires.
-	if f, ok := fields["trustPolicy"]; ok {
-		if strings.EqualFold(strings.TrimSpace(f.value.Value), "off") {
+	// value because YAML resolves bare `off` as a string here; we want
+	// the token, and absence never fires.
+	if e, ok := get("trustPolicy"); ok {
+		if strings.EqualFold(strings.TrimSpace(e.value.Value), "off") {
 			emit(RuleTrustPolicyOff, "pnpm trustPolicy explicitly off", "LOW",
 				"trustPolicy: off is set explicitly, opting the project out of trust-evidence checks (such as no-downgrade) that harden the lockfile.",
-				f.line,
+				e.line,
 				"Consider a stricter trust policy such as no-downgrade. If off is intentional, document why; the finding only surfaces because the opt-out is explicit.")
 		}
 	}
 
 	// 8. Legacy v10 build-policy settings -> INFO, one per present key.
 	for _, k := range legacyKeys {
-		if f, ok := fields[k]; ok {
+		if e, ok := get(k); ok {
 			emit(RuleLegacyBuildPolicy, "pnpm legacy v10 build-policy setting", "INFO",
-				fmt.Sprintf("%q is a pnpm v10 build-policy setting removed or replaced in v11; on v11 it no longer takes effect, so the intended build restriction may silently not apply.", k),
-				f.line,
+				fmt.Sprintf("%q is a pnpm v10 build-policy setting removed or replaced in v11; on v11 it no longer takes effect, so the intended build restriction may silently not apply.", e.key),
+				e.line,
 				"Migrate this setting to allowBuilds, the v11 mechanism for deciding which dependencies may run build scripts, and verify the resulting policy matches the original intent.")
 		}
 	}
 
 	// 9. allowBuilds entries left undecided (null/empty placeholder) ->
-	// MEDIUM, one per pending entry.
-	if f, ok := fields["allowBuilds"]; ok && f.value.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(f.value.Content); i += 2 {
-			keyNode, valNode := f.value.Content[i], f.value.Content[i+1]
-			if isNull(valNode) {
+	// MEDIUM, one per pending entry. The allowBuilds mapping is flattened
+	// too so entries supplied through a merge key are seen.
+	if e, ok := get("allowBuilds"); ok && e.value.Kind == yaml.MappingNode {
+		for _, ab := range flatten(e.value, 0) {
+			if isNull(ab.value) {
 				emit(RuleBuildApprovalPending, "pnpm allowBuilds entry pending decision", "MEDIUM",
-					fmt.Sprintf("allowBuilds entry %q has no explicit true/false decision; the package has a build script still pending review.", keyNode.Value),
-					keyNode.Line,
+					fmt.Sprintf("allowBuilds entry %q has no explicit true/false decision; the package has a build script still pending review.", ab.key),
+					ab.line,
 					"Set this allowBuilds entry to true (allow) or false (block) after reviewing the package's install-time script, or run `pnpm approve-builds`.")
 			}
 		}
@@ -216,22 +242,87 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	return findings, nil
 }
 
-// field pairs a top-level setting's value node with the line of its key
-// (where the finding points).
-type field struct {
+// entry is a resolved key/value pair: the value node, the line of the
+// key (where a finding points), and the original (un-normalized) key
+// text for display.
+type entry struct {
+	key   string
 	value *yaml.Node
 	line  int
 }
 
-// topLevelFields indexes the root mapping by key. Later duplicate keys
-// win, mirroring how a YAML loader resolves them.
-func topLevelFields(root *yaml.Node) map[string]field {
-	out := make(map[string]field, len(root.Content)/2)
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		k, v := root.Content[i], root.Content[i+1]
-		out[k.Value] = field{value: v, line: k.Line}
+// flatten returns the key/value pairs of a mapping node in source order
+// with YAML merge keys (`<<:`) expanded. Explicitly-written keys take
+// precedence over merged ones, and the first occurrence of a key wins
+// (explicit keys are visited before merges, mirroring YAML merge
+// semantics). Depth is bounded to defuse anchor cycles.
+func flatten(node *yaml.Node, depth int) []entry {
+	if node == nil || node.Kind != yaml.MappingNode || depth > maxMergeDepth {
+		return nil
+	}
+	var out []entry
+	seen := make(map[string]bool)
+	add := func(e entry) {
+		if !seen[e.key] {
+			seen[e.key] = true
+			out = append(out, e)
+		}
+	}
+
+	var merges []*yaml.Node
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k, v := node.Content[i], node.Content[i+1]
+		if k.Tag == "!!merge" || k.Value == "<<" {
+			merges = append(merges, v)
+			continue
+		}
+		add(entry{key: k.Value, value: v, line: k.Line})
+	}
+	for _, mn := range merges {
+		for _, tgt := range mergeTargets(mn) {
+			for _, e := range flatten(tgt, depth+1) {
+				add(e)
+			}
+		}
 	}
 	return out
+}
+
+// mergeTargets resolves the value of a `<<` merge key to the mapping
+// node(s) it pulls in: an alias to a mapping, an inline mapping, or a
+// sequence of either.
+func mergeTargets(n *yaml.Node) []*yaml.Node {
+	if n == nil {
+		return nil
+	}
+	switch n.Kind {
+	case yaml.AliasNode:
+		return []*yaml.Node{n.Alias}
+	case yaml.MappingNode:
+		return []*yaml.Node{n}
+	case yaml.SequenceNode:
+		var out []*yaml.Node
+		for _, it := range n.Content {
+			switch it.Kind {
+			case yaml.AliasNode:
+				if it.Alias != nil {
+					out = append(out, it.Alias)
+				}
+			case yaml.MappingNode:
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// normalizeKey folds a pnpm setting key to a canonical form so that
+// kebab-case and camelCase spellings of the same setting compare equal
+// (pnpm treats them as one). e.g. "block-exotic-subdeps" and
+// "blockExoticSubdeps" both fold to "blockexoticsubdeps".
+func normalizeKey(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
 }
 
 // mappingRoot returns the top-level mapping node of a parsed document,
@@ -252,7 +343,9 @@ func mappingRoot(doc *yaml.Node) *yaml.Node {
 
 // yamlBool interprets the YAML 1.1 boolean spellings pnpm config uses.
 // Returns (value, true) for a recognized boolean token, (false, false)
-// otherwise (dynamic values like ${X}, numbers, arbitrary strings).
+// otherwise (dynamic values like ${X}, numbers, arbitrary strings). A
+// non-boolean string is deliberately NOT coerced, so an explicit
+// "false" is never read as a dangerous opt-in.
 func yamlBool(s string) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "true", "yes", "on":
