@@ -239,6 +239,39 @@ func TestQuotedFalseNotFlagged(t *testing.T) {
 	}
 }
 
+// TestBooleanMatchesPnpmLoader locks the boolean model to pnpm's actual
+// config loader (js-yaml, YAML 1.1), where yes/no/on/off ARE booleans.
+// This deliberately differs from gopkg.in/yaml.v3 (which resolves
+// yes/off as strings): trusting the v3 tag here would diverge from pnpm
+// and miss real opt-ins like `dangerouslyAllowAllBuilds: yes`. A value
+// that is not a recognized boolean token is left un-evaluated.
+func TestBooleanMatchesPnpmLoader(t *testing.T) {
+	// yes/on resolve to true -> a truthy danger flag fires.
+	for _, v := range []string{"yes", "on", "true"} {
+		if !fires(t, target, "dangerouslyAllowAllBuilds: "+v+"\n", RuleDangerousBuilds) {
+			t.Fatalf("dangerouslyAllowAllBuilds: %s must fire (resolves true)", v)
+		}
+	}
+	// no/off resolve to false -> a flag whose UNSAFE value is false fires.
+	for _, v := range []string{"no", "off", "false"} {
+		if !fires(t, target, "strictDepBuilds: "+v+"\n", RuleStrictDepBuildsDisabled) {
+			t.Fatalf("strictDepBuilds: %s must fire (resolves false, the unsafe value)", v)
+		}
+	}
+	// A non-boolean token is ambiguous and not evaluated.
+	if got := ids(t, target, "dangerouslyAllowAllBuilds: maybe\n"); len(got) != 0 {
+		t.Fatalf("a non-boolean token must not be evaluated, got %v", got)
+	}
+}
+
+// TestQuotedZeroIsExplicitOptOut: a quoted "0" for minimumReleaseAge is
+// still an explicit 0 by intent, so it fires the disabled rule.
+func TestQuotedZeroIsExplicitOptOut(t *testing.T) {
+	if !fires(t, target, "minimumReleaseAge: \"0\"\n", RuleMinReleaseAgeDisabled) {
+		t.Fatal("minimumReleaseAge: \"0\" is an explicit opt-out and must fire")
+	}
+}
+
 // TestNonStrictRequiresExplicitPositiveAge locks the spec's FP-discipline
 // rule: minimumReleaseAgeStrict: false on its own may just be declaring
 // the v11 compatibility default, so it must NOT fire without an explicit
