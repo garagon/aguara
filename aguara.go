@@ -19,6 +19,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
+	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
 	"github.com/garagon/aguara/internal/engine/pyrisk"
 	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
@@ -443,6 +444,7 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	// co-presence YAML rules, so they must run in the library path too.
 	s.RegisterAnalyzer(pyrisk.New())
 	s.RegisterAnalyzer(rsbuild.New())
+	s.RegisterAnalyzer(pnpmpolicy.New())
 	// NLP and ToxicFlow are stateless, cheap to instantiate
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
@@ -590,6 +592,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	s.RegisterAnalyzer(jsrisk.New())
 	s.RegisterAnalyzer(pyrisk.New())
 	s.RegisterAnalyzer(rsbuild.New())
+	s.RegisterAnalyzer(pnpmpolicy.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())

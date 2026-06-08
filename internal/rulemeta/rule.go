@@ -57,13 +57,14 @@ type Rule struct {
 // (they show up in JSON output and in --filter args), so they're
 // short, lower-case, kebab-stable.
 const (
-	AnalyzerCITrust   = "ci-trust"
-	AnalyzerPkgMeta   = "pkgmeta"
-	AnalyzerJSRisk    = "jsrisk"
-	AnalyzerNLP       = "nlp"
-	AnalyzerToxicFlow = "toxicflow"
-	AnalyzerRugPull   = "rugpull"
-	AnalyzerPyRisk    = "pyrisk"
-	AnalyzerRSBuild   = "rsbuild"
-	AnalyzerPattern   = "" // YAML-driven rules; empty so JSON omits the field
+	AnalyzerCITrust    = "ci-trust"
+	AnalyzerPkgMeta    = "pkgmeta"
+	AnalyzerJSRisk     = "jsrisk"
+	AnalyzerNLP        = "nlp"
+	AnalyzerToxicFlow  = "toxicflow"
+	AnalyzerRugPull    = "rugpull"
+	AnalyzerPyRisk     = "pyrisk"
+	AnalyzerRSBuild    = "rsbuild"
+	AnalyzerPnpmPolicy = "pnpm-policy"
+	AnalyzerPattern    = "" // YAML-driven rules; empty so JSON omits the field
 )

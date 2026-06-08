@@ -27,13 +27,14 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 
 	// One representative ID per analyzer.
 	want := map[string]string{
-		"JS_DNS_TXT_EXFIL_001":  rulemeta.AnalyzerJSRisk,
-		"GHA_PWN_REQUEST_001":   rulemeta.AnalyzerCITrust,
-		"NPM_LIFECYCLE_GIT_001": rulemeta.AnalyzerPkgMeta,
-		"TOXIC_001":             rulemeta.AnalyzerToxicFlow,
-		"TOXIC_CROSS_001":       rulemeta.AnalyzerToxicFlow,
-		"NLP_HIDDEN_INSTRUCTION": rulemeta.AnalyzerNLP,
-		"AGENT_PERSISTENCE_001": rulemeta.AnalyzerJSRisk,
+		"JS_DNS_TXT_EXFIL_001":      rulemeta.AnalyzerJSRisk,
+		"GHA_PWN_REQUEST_001":       rulemeta.AnalyzerCITrust,
+		"NPM_LIFECYCLE_GIT_001":     rulemeta.AnalyzerPkgMeta,
+		"TOXIC_001":                 rulemeta.AnalyzerToxicFlow,
+		"TOXIC_CROSS_001":           rulemeta.AnalyzerToxicFlow,
+		"NLP_HIDDEN_INSTRUCTION":    rulemeta.AnalyzerNLP,
+		"AGENT_PERSISTENCE_001":     rulemeta.AnalyzerJSRisk,
+		"PNPM_DANGEROUS_BUILDS_001": rulemeta.AnalyzerPnpmPolicy,
 		// And one pattern rule from the YAML catalog (analyzer
 		// stays empty for these).
 		"PROMPT_INJECTION_001": rulemeta.AnalyzerPattern,
@@ -160,14 +161,25 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 		Category string
 	}
 	cases := map[string]want{
-		"TOXIC_001":             {Severity: "HIGH", Category: "toxic-flow"},
-		"TOXIC_002":             {Severity: "HIGH", Category: "toxic-flow"},
-		"TOXIC_003":             {Severity: "HIGH", Category: "toxic-flow"},
-		"TOXIC_CROSS_001":       {Severity: "HIGH", Category: "toxic-flow"},
-		"TOXIC_CROSS_002":       {Severity: "HIGH", Category: "toxic-flow"},
-		"TOXIC_CROSS_003":       {Severity: "HIGH", Category: "toxic-flow"},
-		"NLP_CRED_EXFIL_COMBO":  {Severity: "CRITICAL", Category: "exfiltration"},
-		"RUGPULL_001":           {Severity: "CRITICAL", Category: "rug-pull"},
+		"TOXIC_001":            {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_002":            {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_003":            {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_001":      {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_002":      {Severity: "HIGH", Category: "toxic-flow"},
+		"TOXIC_CROSS_003":      {Severity: "HIGH", Category: "toxic-flow"},
+		"NLP_CRED_EXFIL_COMBO": {Severity: "CRITICAL", Category: "exfiltration"},
+		"RUGPULL_001":          {Severity: "CRITICAL", Category: "rug-pull"},
+		// pnpm-policy emit sites (pnpmpolicy.go) -- fixed
+		// severities, all category "supply-chain".
+		"PNPM_DANGEROUS_BUILDS_001":           {Severity: "HIGH", Category: "supply-chain"},
+		"PNPM_STRICT_DEP_BUILDS_DISABLED_001": {Severity: "MEDIUM", Category: "supply-chain"},
+		"PNPM_EXOTIC_SUBDEPS_DISABLED_001":    {Severity: "MEDIUM", Category: "supply-chain"},
+		"PNPM_TRUST_LOCKFILE_001":             {Severity: "MEDIUM", Category: "supply-chain"},
+		"PNPM_MIN_RELEASE_AGE_DISABLED_001":   {Severity: "LOW", Category: "supply-chain"},
+		"PNPM_MIN_RELEASE_AGE_NON_STRICT_001": {Severity: "LOW", Category: "supply-chain"},
+		"PNPM_TRUST_POLICY_OFF_001":           {Severity: "LOW", Category: "supply-chain"},
+		"PNPM_LEGACY_BUILD_POLICY_001":        {Severity: "INFO", Category: "supply-chain"},
+		"PNPM_BUILD_APPROVAL_PENDING_001":     {Severity: "MEDIUM", Category: "supply-chain"},
 	}
 	for id, w := range cases {
 		rec, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
@@ -263,6 +275,12 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"TOXIC_CROSS_001", "TOXIC_CROSS_002", "TOXIC_CROSS_003",
 		// rug-pull analyzer (only fires with --monitor / WithStateDir).
 		"RUGPULL_001",
+		// pnpm-policy public consts.
+		"PNPM_DANGEROUS_BUILDS_001", "PNPM_STRICT_DEP_BUILDS_DISABLED_001",
+		"PNPM_EXOTIC_SUBDEPS_DISABLED_001", "PNPM_TRUST_LOCKFILE_001",
+		"PNPM_MIN_RELEASE_AGE_DISABLED_001", "PNPM_MIN_RELEASE_AGE_NON_STRICT_001",
+		"PNPM_TRUST_POLICY_OFF_001", "PNPM_LEGACY_BUILD_POLICY_001",
+		"PNPM_BUILD_APPROVAL_PENDING_001",
 	}
 	for _, id := range emitted {
 		_, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
