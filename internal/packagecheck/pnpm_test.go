@@ -103,6 +103,8 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		// normally and must not be dropped or misrouted to the alias path.
 		{"normal pkg, peer is an npm alias", "foo@1.0.0(bar@npm:baz@2.0.0)", "foo", "1.0.0", true},
 		{"normal pkg, peer is a file dep", "foo@1.0.0(bar@file:../baz)", "foo", "1.0.0", true},
+		{"normal pkg, underscore peer is an npm alias", "foo@1.0.0_bar@npm:baz@2.0.0", "foo", "1.0.0", true},
+		{"normal pkg, underscore peer is a file dep", "foo@1.0.0_bar@file:../baz", "foo", "1.0.0", true},
 		{"real npm alias with scoped peer suffix", "safe-react@npm:react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
 	}
 	for _, tc := range cases {

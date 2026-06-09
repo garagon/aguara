@@ -172,36 +172,15 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		}
 	}
 
-	// An alias pointing at a NON-registry source
-	// ("alias@workspace:...", "alias@file:...", "alias@github:...") is
-	// not addressable in the npm registry. The FIRST protocol in the key
-	// determines the source, so this rejection also runs BEFORE the
-	// npm-alias routing: a key like "local-safe@file:safe@npm:node-ipc@9.2.3"
-	// is a file dependency whose path merely contains "@npm:", not an npm
-	// alias, and must not resolve to a node-ipc advisory hit. The alias
-	// NAME precedes the protocol here (so the leading-prefix rejection
-	// above does not catch it), but a package name cannot contain ":", so
-	// "@<protocol>:" only appears in alias-shaped keys. A real npm alias
-	// never contains these tokens (its real spec is a plain registry
-	// name@version), so genuine aliases pass through.
-	for _, p := range []string{
-		"@workspace:", "@file:", "@link:", "@github:", "@git:", "@http:", "@https:", "@jsr:",
-	} {
-		if strings.Contains(key, p) {
-			return "", "", false
-		}
-	}
-
-	// npm: alias entries resolve to a DIFFERENT real registry package
-	// than the local dependency name. The user may have installed
-	// `safe-ipc@npm:node-ipc@9.2.3`, but the package that must be matched
-	// against npm advisories is node-ipc@9.2.3, not safe-ipc.
-	if strings.Contains(key, "@npm:") {
-		return parsePnpmAliasPackageKey(key)
-	}
-
-	// (The parens-style peer-dep suffix was already stripped at the top
-	// of the function, before source/alias classification.)
+	// Source/alias classification happens AFTER the (name, version)
+	// split below, on the VERSION FIELD specifically (the text right
+	// after the package name's "@"). That is where pnpm records the
+	// install source: "npm:real@ver" for an alias, "workspace:" / "file:"
+	// / ... for a non-registry alias, or a plain version otherwise.
+	// Classifying the version field rather than substring-matching the
+	// whole key means a protocol that appears only in a peer suffix
+	// ("foo@1.0.0(bar@npm:baz@2.0.0)", "foo@1.0.0_bar@npm:baz@2.0.0") or
+	// a local path is never mistaken for THIS package's source.
 
 	// Two pnpm key formats coexist in the wild:
 	//
@@ -295,12 +274,32 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		return "", "", false
 	}
 
+	// The version field carries the install source.
+	//
+	//   "npm:real@ver" -> alias to a DIFFERENT real registry package;
+	//                     resolve and match the REAL package, discarding
+	//                     the local alias name.
+	//   "file:" / "link:" / "workspace:" / "github:" / "git:" / "http(s):"
+	//   / "jsr:" -> alias to a non-registry source; not matchable.
+	//   anything else -> a plain (possibly peer-decorated) version.
+	if real, isAlias := strings.CutPrefix(version, "npm:"); isAlias {
+		return parseNpmAliasTarget(real)
+	}
+	for _, proto := range []string{
+		"file:", "link:", "workspace:", "github:", "git:", "http:", "https:", "jsr:",
+	} {
+		if strings.HasPrefix(version, proto) {
+			return "", "", false
+		}
+	}
+
 	// Strip peer-dep / build-hook suffix. Two encodings exist in
 	// the wild:
 	//   pre-v9: "react@18.2.0_react-dom@18.2.0"   (underscore separator)
 	//   v9+:    "react@18.2.0(peer-dep@1.0.0)"    (paren wrapper)
-	// SemVer build metadata uses "+", which is preserved.
-	if i := strings.IndexAny(version, "_("); i >= 0 {
+	// SemVer build metadata uses "+", which is preserved. (The paren
+	// form was already stripped from the key at the top of the function.)
+	if i := strings.IndexByte(version, '_'); i >= 0 {
 		version = version[:i]
 	}
 	if version == "" {
@@ -309,50 +308,36 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 	return name, version, true
 }
 
-// parsePnpmAliasPackageKey resolves an npm: alias package key to the
-// REAL registry package it points at. pnpm lets a dependency be
-// installed under a different local name:
+// parseNpmAliasTarget resolves the REAL registry package an npm: alias
+// points at, from the spec on the RIGHT of "npm:". pnpm lets a
+// dependency be installed under a different local name:
 //
 //	pnpm add safe-ipc@npm:node-ipc@9.2.3
 //
-// which lands in the lockfile packages map as a key shaped like
+// which lands in the lockfile packages map as "safe-ipc@npm:node-ipc@9.2.3";
+// after the (name, version) split the version field is "npm:node-ipc@9.2.3"
+// and this function receives "node-ipc@9.2.3". The alias name is
+// intentionally discarded: matching against npm advisories must use the
+// real package (node-ipc@9.2.3), or a compromised registry package hides
+// behind an innocent local name.
 //
-//	safe-ipc@npm:node-ipc@9.2.3                          (unscoped real)
-//	@local/safe-ipc@npm:node-ipc@9.2.3                   (scoped alias)
-//	safe-rbac@npm:@redhat-cloud-services/rbac-client@2.1.5 (scoped real)
-//	/safe-ipc@npm:node-ipc@9.2.3                         (older slash form)
-//	safe-react@npm:react@18.2.0(@types/react@18.0.0)     (real + peer suffix)
+// Forms handled (the paren peer suffix was already stripped from the key
+// upstream):
 //
-// The alias (left of "@npm:") is intentionally discarded: matching
-// against npm advisories must use the real package (node-ipc@9.2.3), or
-// a compromised registry package hides behind an innocent local name.
+//	node-ipc@9.2.3                              (unscoped real)
+//	@redhat-cloud-services/rbac-client@2.1.5    (scoped real)
+//	react@18.2.0_react-dom@18.2.0               (underscore peer suffix)
 //
 // Only an UNAMBIGUOUS alias with an exact pinned version is resolved.
-// Returns ok=false when the right-hand side lacks a version, carries a
-// range/dist-tag instead of an exact version, is an empty or malformed
-// spec, or is not the npm registry. Same discipline as the rest of the
-// parser: under-report before false-positive.
-func parsePnpmAliasPackageKey(key string) (string, string, bool) {
-	key = strings.TrimPrefix(key, "/")
-
-	idx := strings.Index(key, "@npm:")
-	if idx < 0 {
+// Returns ok=false when the spec lacks a version, carries a range or
+// dist-tag instead of an exact version, or is empty/malformed. Same
+// discipline as the rest of the parser: under-report before
+// false-positive.
+func parseNpmAliasTarget(spec string) (string, string, bool) {
+	if spec == "" {
 		return "", "", false
 	}
-	real := key[idx+len("@npm:"):]
-
-	// Strip a peer-dep suffix "(peer@version)" before extracting the
-	// real (name, version): the peer wrapper sits after the version and
-	// can itself be scoped, so removing it first keeps the boundary scan
-	// simple.
-	if i := strings.IndexByte(real, '('); i >= 0 {
-		real = real[:i]
-	}
-	if real == "" {
-		return "", "", false
-	}
-
-	name, version, ok := parseModernRegistrySpec(real)
+	name, version, ok := parseModernRegistrySpec(spec)
 	if !ok {
 		return "", "", false
 	}
