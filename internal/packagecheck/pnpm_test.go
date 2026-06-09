@@ -35,6 +35,11 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"github: ref", "github:user/repo", "", "", false},
 		{"git: ref", "git:user/repo", "", "", false},
 		{"https: ref", "https://example.com/pkg", "", "", false},
+		// jsr: is a non-registry source like the others; a bare top-level
+		// jsr: key must skip, not emit a bogus npm ref.
+		{"jsr: ref", "jsr:node-ipc@9.2.3", "", "", false},
+		{"jsr: scoped ref", "jsr:@scope/pkg@1.0.0", "", "", false},
+		{"jsr: slash-prefixed", "/jsr:node-ipc@9.2.3", "", "", false},
 
 		// Legacy v5 slash-separator format
 		{"v5 unscoped", "/lodash/4.17.21", "lodash", "4.17.21", true},

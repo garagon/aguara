@@ -43,8 +43,8 @@ var exactNpmVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-
 // in the package keys are handled deterministically.
 //
 // Non-registry sources (workspace:, file:, link:, github:, git:,
-// http://, https://) are skipped — they are not addressable in the
-// npm registry and matching them against npm advisories would
+// http://, https://, jsr:) are skipped — they are not addressable in
+// the npm registry and matching them against npm advisories would
 // false-positive on name collisions.
 func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	data, err := os.ReadFile(target.Path)
@@ -126,7 +126,7 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 //
 //   - bare names without a version ("node-ipc", "node-ipc@")
 //   - non-registry sources (file:, link:, workspace:, github:, git:,
-//     http:, https:): these are not addressable in the npm registry
+//     http:, https:, jsr:): these are not addressable in the npm registry
 //     and matching them against npm OSV records would false-positive
 //     on name collisions (e.g. a local "lodash" link would inherit
 //     every lodash advisory).
@@ -165,7 +165,7 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 	// rejected as the file dependency it is, not resolved to the npm
 	// package buried in its path.
 	for _, prefix := range []string{
-		"file:", "link:", "workspace:", "github:", "git:", "http:", "https:",
+		"file:", "link:", "workspace:", "github:", "git:", "http:", "https:", "jsr:",
 	} {
 		if strings.HasPrefix(key, prefix) {
 			return "", "", false
