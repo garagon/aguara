@@ -5,6 +5,54 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+Aguara now checks pnpm's supply-chain posture, not only its lockfile.
+pnpm v11 ships some of the strongest supply-chain controls in the Node
+ecosystem; Aguara verifies a project is actually using them, and
+resolves `npm:` aliases in `pnpm-lock.yaml` so a compromised registry
+package cannot hide behind a local dependency name.
+
+### Added
+
+- **pnpm-policy analyzer** (`internal/engine/pnpmpolicy/`), the tenth
+  scan analyzer. Reads `pnpm-workspace.yaml` and flags supply-chain
+  settings weakened below the pnpm v11 defaults, with nine new rules
+  (all category `supply-chain`):
+  - `PNPM_DANGEROUS_BUILDS_001` (HIGH): `dangerouslyAllowAllBuilds: true`
+    lets every dependency run install-time lifecycle scripts without
+    approval.
+  - `PNPM_STRICT_DEP_BUILDS_DISABLED_001` (MEDIUM): `strictDepBuilds:
+    false` downgrades unapproved build scripts from a failure to a
+    warning.
+  - `PNPM_EXOTIC_SUBDEPS_DISABLED_001` (MEDIUM): `blockExoticSubdeps:
+    false` lets transitive deps resolve from git/tarball URLs.
+  - `PNPM_TRUST_LOCKFILE_001` (MEDIUM): `trustLockfile: true` skips
+    supply-chain verification for lockfile entries.
+  - `PNPM_BUILD_APPROVAL_PENDING_001` (MEDIUM): an `allowBuilds` entry
+    left undecided means a build script is still pending review.
+  - `PNPM_MIN_RELEASE_AGE_DISABLED_001` / `_NON_STRICT_001` (LOW): the
+    release-age window is disabled or not strictly enforced.
+  - `PNPM_TRUST_POLICY_OFF_001` (LOW): `trustPolicy: off` set
+    explicitly.
+  - `PNPM_LEGACY_BUILD_POLICY_001` (INFO): pnpm v10 build settings that
+    v11 no longer honors (migrate to `allowBuilds`).
+
+  A missing setting is treated as the secure v11 default and never
+  fires. Kebab-case and camelCase keys resolve to the same setting,
+  YAML merge keys (`<<:`) are expanded, and each finding points at the
+  exact line. Rule catalog grows to 236 cataloged detections (193 YAML
+  + 43 analyzer-emitted).
+
+- **`npm:` alias resolution in `pnpm-lock.yaml`** (`aguara check` /
+  `aguara audit`). A dependency installed as
+  `pnpm add safe-ipc@npm:node-ipc@9.2.3` now matches advisories for the
+  real registry package (`node-ipc@9.2.3`) instead of the local alias
+  name. Unscoped and scoped aliases, scoped real targets, leading-slash
+  and peer-decorated keys are handled. Only unambiguous aliases with an
+  exact pinned version resolve; ranges, dist-tags, malformed specs, and
+  non-registry sources (`workspace:` / `file:` / `link:` / `github:` /
+  `git:` / `http(s):` / `jsr:`) are skipped, and alias + direct entries
+  for the same package dedup to one finding.
+
 ## [0.23.0] - 2026-06-07
 
 Expands Aguara's offline coverage of supply-chain behavioral attack

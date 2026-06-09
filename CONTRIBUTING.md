@@ -35,8 +35,14 @@ make test
 cmd/aguara/            CLI entry point (Cobra)
 internal/
   engine/
-    pattern/           Layer 1: regex/contains matcher + base64/hex decoder
-    nlp/               Layer 2: goldmark AST walker, keyword classifier
+    pattern/           Regex/contains matcher + encoded-payload decoders
+    ci/                CI Trust: GitHub Actions workflow trust chains
+    pkgmeta/           PkgMeta: package.json lifecycle / git-source chains
+    jsrisk/            JSRisk: JavaScript install-time / runtime behavior
+    pyrisk/            PyRisk: Python install-hook remote-JS execution
+    rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
+    pnpmpolicy/        Pnpm Policy: pnpm-workspace.yaml supply-chain posture
+    nlp/               NLP: goldmark AST walker, keyword classifier
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation
   rules/               Rule engine: YAML loader, compiler, self-tester

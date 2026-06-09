@@ -51,6 +51,7 @@ So Aguara looks at the trust layer around your project and your agents, locally 
 | Surface | Examples | Command |
 |---|---|---|
 | Packages and lockfiles | npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET | `aguara check .` |
+| Package manager policy | pnpm supply-chain settings in `pnpm-workspace.yaml` | `aguara scan .`, `aguara audit .` |
 | Install scripts | npm lifecycle hooks, install-time JS / Python / Rust behavior | `aguara scan .`, `aguara check .` |
 | MCP configs | Claude Desktop, Cursor, VS Code, Cline, and 13 more | `aguara discover`, `aguara scan --auto` |
 | Agent skills and tools | skills, prompts, tool descriptions | `aguara scan <path>` |
@@ -133,7 +134,7 @@ aguara check . --fresh     # refresh only the ecosystems this run touches, then 
 
 | Ecosystem | Evidence read | Coverage |
 |---|---|---|
-| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml` | Strong malicious-package coverage; `pnpm-lock.yaml` works before install. |
+| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml` | Strong malicious-package coverage; `pnpm-lock.yaml` works before install. `npm:` aliases resolve to the real registry package, so a compromised package cannot hide behind a local dependency name. |
 | PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage. |
 | RubyGems | `Gemfile.lock` | Strong malicious-package coverage. |
 | NuGet | `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj` | Strong exact-version coverage. |
@@ -159,6 +160,23 @@ Beyond "is this package version known-bad," Aguara has analyzers that flag insta
 | Rust `build.rs` reads wallet/keystore material and sends it to a network sink | `rsbuild` (`RS_BUILD_WALLET_EXFIL_001`) |
 
 These are structural detections bound to real calls (a bound `child_process`/`fs` call, a real `process.env` read, a flow from a fetch to an execution sink), not text matches, so a documented command or an example string does not trigger them.
+
+## pnpm Supply-Chain Posture
+
+pnpm v11 ships some of the strongest supply-chain controls in the Node ecosystem: build-script approval, a release-age window for new versions, exotic-source blocking, and trust policies. Aguara verifies a project is actually using them. The `pnpm-policy` analyzer reads `pnpm-workspace.yaml` and flags settings that weaken those protections:
+
+| Finding | Severity | Setting |
+|---|---|---|
+| All dependencies may run install scripts | HIGH | `dangerouslyAllowAllBuilds: true` |
+| Unapproved build scripts warn instead of failing | MEDIUM | `strictDepBuilds: false` |
+| Transitive deps may resolve from git/tarball URLs | MEDIUM | `blockExoticSubdeps: false` |
+| Lockfile entries skip supply-chain verification | MEDIUM | `trustLockfile: true` |
+| Build approval still pending for a package | MEDIUM | undecided `allowBuilds` entry |
+| Release-age window disabled or not enforced | LOW | `minimumReleaseAge: 0`, non-strict mode |
+| Trust policy explicitly opted out | LOW | `trustPolicy: off` |
+| pnpm v10 build settings that v11 no longer honors | INFO | `onlyBuiltDependencies` and friends |
+
+A missing setting is treated as the secure pnpm v11 default and never reported; only an explicit value less safe than the default fires. Each finding points at the exact line and ships remediation, and every rule is explainable via `aguara explain <RULE_ID>`.
 
 ## Adopting Aguara in CI
 
@@ -275,10 +293,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **227 cataloged detections** through `aguara list-rules`:
+Aguara exposes **236 cataloged detections** through `aguara list-rules`:
 
 - **193 embedded YAML pattern rules** across 13 categories
-- **34 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, NLP, toxic-flow, and rug-pull
+- **43 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpm-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -290,7 +308,7 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-Nine scan analyzers run per file (eight by default; rug-pull joins with `--monitor`), each catching a different class of attack:
+Ten scan analyzers run per file (nine by default; rug-pull joins with `--monitor`), each catching a different class of attack:
 
 | Analyzer | Engine | What it catches |
 |---|---|---|
@@ -300,6 +318,7 @@ Nine scan analyzers run per file (eight by default; rug-pull joins with `--monit
 | JSRisk | JavaScript single-pass | Obfuscation, install-time daemonization, CI secret harvest, OIDC runner pivot, DNS-TXT exfil, Bun second stage, GitHub C2, host-trust tampering |
 | PyRisk | Python install-hook scanner | `setup.py`/`__init__.py` that fetch remote JS and run it via `node -e` (flow-sensitive) |
 | RSBuild | Cargo build-script scanner | `build.rs` reading wallet/keystore material and sending it to a network sink (flow-sensitive) |
+| Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |
 | NLP | Goldmark AST + JSON/YAML | Prompt injection, tool poisoning, proximity-weighted keyword classification |
 | Toxic Flow | Capability correlation | Dangerous source/sink combinations within a file and across files in a directory |
 | Rug-Pull | SHA256 change tracking | Tool descriptions that change between scans (`--monitor`) |
