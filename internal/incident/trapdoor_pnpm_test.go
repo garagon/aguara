@@ -93,3 +93,51 @@ func TestTrapDoor_PnpmWholePackageRangeFlagged(t *testing.T) {
 		t.Errorf("hit advisory = %q, want SOCKET-2026-05-24-trapdoor", res.Hits[0].Record.ID)
 	}
 }
+
+// TestTrapDoor_PnpmNpmAliasResolvedViaEmbeddedIntel proves the npm:
+// alias path end to end against the REAL embedded snapshots: the
+// compromised TrapDoor package is installed under an innocent local
+// alias ("safe-bootstrap"), but the lockfile key encodes the real
+// registry target, so the parser resolves it to dev-env-bootstrapper
+// and the advisory still fires. Without alias resolution this scans
+// clean -- the exact false negative PR2 closes.
+func TestTrapDoor_PnpmNpmAliasResolvedViaEmbeddedIntel(t *testing.T) {
+	dir := t.TempDir()
+	lock := "lockfileVersion: '9.0'\n\n" +
+		"importers:\n" +
+		"  .:\n" +
+		"    dependencies:\n" +
+		"      safe-bootstrap:\n" +
+		"        specifier: npm:dev-env-bootstrapper@1.0.12\n" +
+		"        version: dev-env-bootstrapper@1.0.12\n\n" +
+		"packages:\n" +
+		"  safe-bootstrap@npm:dev-env-bootstrapper@1.0.12:\n" +
+		"    resolution: {integrity: sha512-FAKE_FIXTURE_DO_NOT_VERIFY==}\n\n" +
+		"snapshots:\n" +
+		"  safe-bootstrap@npm:dev-env-bootstrapper@1.0.12: {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte(lock), 0o644); err != nil {
+		t.Fatalf("write pnpm-lock.yaml: %v", err)
+	}
+
+	matcher := intel.NewMatcher(incident.EmbeddedSnapshots()...)
+	targets, err := packagecheck.Discover(dir, []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := (&packagecheck.Runner{Matcher: matcher}).Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected 1 pnpm hit via alias, got %d: %+v", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Ref.Name != "dev-env-bootstrapper" {
+		t.Errorf("hit name = %q, want dev-env-bootstrapper (alias must not leak as safe-bootstrap)", res.Hits[0].Ref.Name)
+	}
+	if res.Hits[0].Record.ID != "SOCKET-2026-05-24-trapdoor" {
+		t.Errorf("hit advisory = %q, want SOCKET-2026-05-24-trapdoor", res.Hits[0].Record.ID)
+	}
+	if len(res.Ecosystems) != 1 || res.Ecosystems[0].Source != "pnpm-lock.yaml" {
+		t.Errorf("ecosystem summary = %+v, want one pnpm-lock.yaml entry", res.Ecosystems)
+	}
+}

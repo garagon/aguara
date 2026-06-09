@@ -35,6 +35,11 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"github: ref", "github:user/repo", "", "", false},
 		{"git: ref", "git:user/repo", "", "", false},
 		{"https: ref", "https://example.com/pkg", "", "", false},
+		// jsr: is a non-registry source like the others; a bare top-level
+		// jsr: key must skip, not emit a bogus npm ref.
+		{"jsr: ref", "jsr:node-ipc@9.2.3", "", "", false},
+		{"jsr: scoped ref", "jsr:@scope/pkg@1.0.0", "", "", false},
+		{"jsr: slash-prefixed", "/jsr:node-ipc@9.2.3", "", "", false},
 
 		// Legacy v5 slash-separator format
 		{"v5 unscoped", "/lodash/4.17.21", "lodash", "4.17.21", true},
@@ -61,6 +66,53 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"empty string", "", "", "", false},
 		{"bare scope without version", "@scope/pkg", "", "", false},
 		{"slash with empty version", "/lodash/", "", "", false},
+
+		// npm: alias entries -> resolve to the REAL registry package,
+		// discarding the local alias name.
+		{"alias unscoped real", "safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
+		{"alias scoped real", "safe-rbac@npm:@redhat-cloud-services/rbac-client@2.1.5", "@redhat-cloud-services/rbac-client", "2.1.5", true},
+		{"scoped alias unscoped real", "@local/safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
+		{"scoped alias scoped real", "@local/safe@npm:@scope/evil@1.2.3", "@scope/evil", "1.2.3", true},
+		{"scoped alias scoped real + peer", "@local/safe@npm:@scope/evil@1.2.3(@types/node@22.0.0)", "@scope/evil", "1.2.3", true},
+		{"alias slash-prefixed", "/safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
+		{"alias real + scoped peer paren", "safe-react@npm:react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
+		{"alias real + underscore peer", "safe-react@npm:react@18.2.0_react-dom@18.2.0", "react", "18.2.0", true},
+		{"alias real prerelease", "safe@npm:preact@10.0.0-alpha.1", "preact", "10.0.0-alpha.1", true},
+
+		// npm: alias entries that are NOT unambiguously resolvable.
+		{"alias real no version", "safe@npm:node-ipc", "", "", false},
+		{"alias real caret range", "safe@npm:node-ipc@^9.2.0", "", "", false},
+		{"alias real tilde range", "safe@npm:node-ipc@~9.2.0", "", "", false},
+		{"alias real x-range", "safe@npm:node-ipc@9.2.x", "", "", false},
+		{"alias real dist-tag", "safe@npm:node-ipc@latest", "", "", false},
+		{"alias real partial version", "safe@npm:node-ipc@9.2", "", "", false},
+		{"alias empty real", "safe@npm:", "", "", false},
+		{"alias scoped real no version", "safe@npm:@scope/pkg", "", "", false},
+		{"alias scoped real empty version", "safe@npm:@scope/pkg@", "", "", false},
+		// A non-npm alias target (alias@workspace:/file:/github:) does not
+		// contain "@npm:", so it never routes through the alias path and
+		// the normal non-registry rejection applies.
+		{"alias workspace target", "safe@workspace:node-ipc@9.2.3", "", "", false},
+		{"alias file target", "safe@file:../node-ipc", "", "", false},
+		{"alias github target", "safe@github:user/repo", "", "", false},
+		// A file dependency whose PATH contains "@npm:" must be treated
+		// as the file dep it is (first protocol wins), not resolved to
+		// the npm package in the path. Otherwise a local directory turns
+		// into a false advisory hit.
+		{"file dep with npm in path", "local-safe@file:safe@npm:node-ipc@9.2.3", "", "", false},
+		{"link dep with npm in path", "local@link:vendor@npm:node-ipc@9.2.3", "", "", false},
+		// Slash-prefixed bare non-registry key whose path contains
+		// "@npm:": after the leading "/" is stripped it starts with
+		// "file:", so it is rejected before alias routing.
+		{"slash file: prefix with npm in path", "/file:safe@npm:node-ipc@9.2.3", "", "", false},
+		// A protocol token that appears only in the PEER suffix belongs
+		// to the peer, not this package: the real package is still parsed
+		// normally and must not be dropped or misrouted to the alias path.
+		{"normal pkg, peer is an npm alias", "foo@1.0.0(bar@npm:baz@2.0.0)", "foo", "1.0.0", true},
+		{"normal pkg, peer is a file dep", "foo@1.0.0(bar@file:../baz)", "foo", "1.0.0", true},
+		{"normal pkg, underscore peer is an npm alias", "foo@1.0.0_bar@npm:baz@2.0.0", "foo", "1.0.0", true},
+		{"normal pkg, underscore peer is a file dep", "foo@1.0.0_bar@file:../baz", "foo", "1.0.0", true},
+		{"real npm alias with scoped peer suffix", "safe-react@npm:react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,6 +178,59 @@ packages:
 	require.Equal(t, "20.5.0", refs[0].Version)
 	require.Equal(t, "@vitejs/plugin-react", refs[1].Name)
 	require.Equal(t, "4.0.0", refs[1].Version)
+}
+
+func TestParsePNPMLock_ResolvesNpmAlias(t *testing.T) {
+	// A dependency installed under a local alias name must be matched
+	// against the REAL registry package, not the alias.
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "pnpm-lock.yaml")
+	require.NoError(t, os.WriteFile(lock, []byte(`lockfileVersion: '9.0'
+
+packages:
+  safe-ipc@npm:node-ipc@9.2.3:
+    resolution:
+      integrity: sha512-stub==
+`), 0o644))
+
+	refs, err := ParsePNPMLock(Target{
+		Ecosystem: intel.EcosystemNPM,
+		Path:      lock,
+		Source:    "pnpm-lock.yaml",
+	})
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	require.Equal(t, "node-ipc", refs[0].Name, "alias must resolve to the real registry package")
+	require.Equal(t, "9.2.3", refs[0].Version)
+	require.Equal(t, "pnpm-lock.yaml", refs[0].Source)
+}
+
+func TestParsePNPMLock_DedupsAliasAndRealEntry(t *testing.T) {
+	// When the same real package appears both directly and behind an
+	// alias, the existing (name, version) dedup must collapse them to a
+	// single ref so packages_read / findings are not inflated.
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "pnpm-lock.yaml")
+	require.NoError(t, os.WriteFile(lock, []byte(`lockfileVersion: '9.0'
+
+packages:
+  node-ipc@9.2.3:
+    resolution:
+      integrity: sha512-stub==
+  safe-ipc@npm:node-ipc@9.2.3:
+    resolution:
+      integrity: sha512-stub==
+`), 0o644))
+
+	refs, err := ParsePNPMLock(Target{
+		Ecosystem: intel.EcosystemNPM,
+		Path:      lock,
+		Source:    "pnpm-lock.yaml",
+	})
+	require.NoError(t, err)
+	require.Len(t, refs, 1, "alias + real entry for the same package must dedup to one ref")
+	require.Equal(t, "node-ipc", refs[0].Name)
+	require.Equal(t, "9.2.3", refs[0].Version)
 }
 
 func TestParsePNPMLock_IgnoresWorkspaceAndFileRefs(t *testing.T) {
