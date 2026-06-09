@@ -10,7 +10,7 @@ func RuleMetadata() []rulemeta.Rule {
 	return []rulemeta.Rule{
 		{
 			ID:       RulePwnRequest,
-			Name:     "Pull-request-target with PR-controlled checkout",
+			Name:     "pull_request_target executes untrusted PR code",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerCITrust,
@@ -28,7 +28,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleCache,
-			Name:     "Pull-request-target cache poisoning chain",
+			Name:     "Untrusted PR workflow can write cache consumed by privileged workflows",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerCITrust,
@@ -43,7 +43,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleOIDC,
-			Name:     "OIDC token grant on install/build/test chain",
+			Name:     "OIDC token available in a job that executes install/build/test code",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerCITrust,
@@ -59,7 +59,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleCheckout,
-			Name:     "Pull-request-target head-ref checkout without persist-credentials: false",
+			Name:     "Privileged workflow checks out PR code with persisted credentials",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerCITrust,
@@ -73,3 +73,8 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 	}
 }
+
+// ruleInfo indexes this analyzer's catalog metadata by rule ID so emit
+// sites derive RuleName / Severity / Category from the single source of
+// truth instead of duplicating the strings.
+var ruleInfo = rulemeta.Index(RuleMetadata())

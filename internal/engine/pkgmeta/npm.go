@@ -626,9 +626,9 @@ func detectLocalJSLifecycle(pkg *manifest) []types.Finding {
 		}
 		findings = append(findings, types.Finding{
 			RuleID:   RuleLocalJSLifecycle,
-			RuleName: "npm lifecycle script executes local JavaScript",
-			Severity: types.SeverityHigh,
-			Category: "supply-chain",
+			RuleName: ruleInfo[RuleLocalJSLifecycle].Name,
+			Severity: ruleInfo[RuleLocalJSLifecycle].SeverityLevel(),
+			Category: ruleInfo[RuleLocalJSLifecycle].Category,
 			Description: "package.json runs " + runtime + " on local JavaScript from the `" + key +
 				"` lifecycle script, which npm executes automatically during install. " +
 				"Install-time execution of a package's own JS is the first hop of supply-chain " +
@@ -684,9 +684,9 @@ func detectLifecycleGit(pkg *manifest) []types.Finding {
 		safeVersion := sanitizeGitURL(d.Version)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleLifecycleGit,
-			RuleName: "Git dependency can execute lifecycle code during install",
+			RuleName: ruleInfo[RuleLifecycleGit].Name,
 			Severity: sev,
-			Category: "supply-chain",
+			Category: ruleInfo[RuleLifecycleGit].Category,
 			Description: "package.json pulls " + d.Name + " from a git source (" + safeVersion +
 				") and defines an npm install-time lifecycle script. On `npm install`, " +
 				"the git ref can change between resolutions and the lifecycle script will " +
@@ -740,9 +740,9 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 		safeVersion := sanitizeGitURL(v)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleOptionalGit,
-			RuleName: "Optional dependency resolves executable code from git",
+			RuleName: ruleInfo[RuleOptionalGit].Name,
 			Severity: sev,
-			Category: "supply-chain",
+			Category: ruleInfo[RuleOptionalGit].Category,
 			Description: "optionalDependencies." + n + " resolves to a git source (" + safeVersion +
 				"). Optional dependencies install silently when resolution succeeds, so a " +
 				"mutable git ref here is a quieter supply-chain entry point than the same " +
@@ -787,9 +787,9 @@ func detectPublishSurface(pkg *manifest) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RulePublishSurface,
-		RuleName: "Package publish surface exposed to install-time code",
-		Severity: types.SeverityHigh,
-		Category: "supply-chain",
+		RuleName: ruleInfo[RulePublishSurface].Name,
+		Severity: ruleInfo[RulePublishSurface].SeverityLevel(),
+		Category: ruleInfo[RulePublishSurface].Category,
 		Description: "package.json defines a publish surface (publishConfig or a publish " +
 			"script) alongside install/build/test scripts and references provenance / " +
 			"trusted-publishing / OIDC. Install-time scripts running in the same context " +

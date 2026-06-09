@@ -9,7 +9,7 @@ func RuleMetadata() []rulemeta.Rule {
 	return []rulemeta.Rule{
 		{
 			ID:       RuleLifecycleGit,
-			Name:     "npm install-time lifecycle script with git-sourced dependency",
+			Name:     "Git dependency can execute lifecycle code during install",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerPkgMeta,
@@ -26,7 +26,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleOptionalGit,
-			Name:     "git-sourced optionalDependency",
+			Name:     "Optional dependency resolves executable code from git",
 			Severity: "MEDIUM",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerPkgMeta,
@@ -60,7 +60,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RulePublishSurface,
-			Name:     "publishConfig + install/build/test + trusted publishing reference",
+			Name:     "Package publish surface exposed to install-time code",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerPkgMeta,
@@ -75,3 +75,8 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 	}
 }
+
+// ruleInfo indexes this analyzer's catalog metadata by rule ID so emit
+// sites derive RuleName / Severity / Category from the single source of
+// truth instead of duplicating the strings.
+var ruleInfo = rulemeta.Index(RuleMetadata())

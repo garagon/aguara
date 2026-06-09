@@ -11,7 +11,7 @@ func RuleMetadata() []rulemeta.Rule {
 	return []rulemeta.Rule{
 		{
 			ID:       RuleObfuscation,
-			Name:     "Obfuscator-shape JavaScript payload",
+			Name:     "Large obfuscated JavaScript payload",
 			Severity: "MEDIUM",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
@@ -26,7 +26,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleDaemon,
-			Name:     "Install-time daemonization via child_process",
+			Name:     "Detached background execution from JavaScript",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
@@ -40,7 +40,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:   RuleCISecretHarvest,
-			Name: "CI secret harvest: process.env read + network sink",
+			Name: "CI credential harvesting with network or registry sink",
 			// Emit site (jsrisk.go) ships SeverityCritical for
 			// this rule; the catalog mirrors that so list-rules /
 			// explain triage stays aligned with scan findings.
@@ -57,7 +57,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleProcMemOIDC,
-			Name:     "Runner-process memory pivot to extract OIDC tokens",
+			Name:     "Runner process memory access combined with OIDC token reference",
 			Severity: "CRITICAL",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
@@ -71,7 +71,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleAgentPersistence,
-			Name:     "Claude Code / VS Code workspace persistence",
+			Name:     "Persistence through Claude Code or VS Code workspace automation",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
@@ -85,7 +85,7 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 		{
 			ID:       RuleDNSTXTExfil,
-			Name:     "DNS TXT credential exfiltration chain",
+			Name:     "DNS TXT exfiltration chain in JavaScript",
 			Severity: "HIGH",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerJSRisk,
@@ -204,3 +204,8 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 	}
 }
+
+// ruleInfo indexes this analyzer's catalog metadata by rule ID so emit
+// sites derive RuleName / Severity / Category from the single source of
+// truth instead of duplicating the strings.
+var ruleInfo = rulemeta.Index(RuleMetadata())

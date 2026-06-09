@@ -111,9 +111,9 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 		if networkSinkRe.MatchString(ln.text) && sinkSendsTainted(ln.text, taint) {
 			return []types.Finding{{
 				RuleID:      RuleBuildWalletExfil,
-				RuleName:    "Rust build.rs wallet/keystore exfiltration",
-				Severity:    types.SeverityCritical,
-				Category:    "supply-chain",
+				RuleName:    ruleInfo[RuleBuildWalletExfil].Name,
+				Severity:    ruleInfo[RuleBuildWalletExfil].SeverityLevel(),
+				Category:    ruleInfo[RuleBuildWalletExfil].Category,
 				Description: "A Cargo build script reads wallet/keystore material and sends it over the network: the value reaching the network sink traces back to the keystore read.",
 				FilePath:    target.RelPath,
 				Line:        ln.num,

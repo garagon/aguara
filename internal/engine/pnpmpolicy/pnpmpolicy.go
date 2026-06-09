@@ -64,8 +64,6 @@ const (
 // AnalyzerName is the analyzer identifier surfaced on findings.
 const AnalyzerName = rulemeta.AnalyzerPnpmPolicy
 
-const category = "supply-chain"
-
 // maxMergeDepth bounds YAML merge-key resolution (anchor cycles / deeply
 // nested merges) so a hostile file cannot cause unbounded recursion.
 const maxMergeDepth = 16
@@ -144,12 +142,12 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	}
 
 	var findings []types.Finding
-	emit := func(id, name, sev, desc string, line int, rem string) {
+	emit := func(id, desc string, line int, rem string) {
 		findings = append(findings, types.Finding{
 			RuleID:      id,
-			RuleName:    name,
-			Severity:    severity(sev),
-			Category:    category,
+			RuleName:    ruleInfo[id].Name,
+			Severity:    ruleInfo[id].SeverityLevel(),
+			Category:    ruleInfo[id].Category,
 			Description: desc,
 			FilePath:    rel,
 			Line:        line,
@@ -162,7 +160,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// 1. dangerouslyAllowAllBuilds: true -> HIGH
 	if e, ok := get("dangerouslyAllowAllBuilds"); ok {
 		if b, parsed := yamlBool(e.value.Value); parsed && b {
-			emit(RuleDangerousBuilds, "pnpm dangerouslyAllowAllBuilds enabled", "HIGH",
+			emit(RuleDangerousBuilds,
 				"dangerouslyAllowAllBuilds: true lets every direct and transitive dependency run install-time lifecycle scripts without approval.",
 				e.line,
 				"Remove dangerouslyAllowAllBuilds: true and approve only the packages that need build scripts via allowBuilds (or `pnpm approve-builds`).")
@@ -172,7 +170,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// 2. strictDepBuilds: false -> MEDIUM (v11 default is true).
 	if e, ok := get("strictDepBuilds"); ok {
 		if b, parsed := yamlBool(e.value.Value); parsed && !b {
-			emit(RuleStrictDepBuildsDisabled, "pnpm strictDepBuilds disabled", "MEDIUM",
+			emit(RuleStrictDepBuildsDisabled,
 				"strictDepBuilds: false downgrades an unapproved build script from an install failure to a warning, so unreviewed install-time code can pass CI.",
 				e.line,
 				"Remove strictDepBuilds: false (or set it to true) so an unapproved build script fails the install and forces an explicit allowBuilds decision.")
@@ -182,7 +180,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// 3. blockExoticSubdeps: false -> MEDIUM (v11 default is true).
 	if e, ok := get("blockExoticSubdeps"); ok {
 		if b, parsed := yamlBool(e.value.Value); parsed && !b {
-			emit(RuleExoticSubdepsDisabled, "pnpm blockExoticSubdeps disabled", "MEDIUM",
+			emit(RuleExoticSubdepsDisabled,
 				"blockExoticSubdeps: false allows transitive dependencies to resolve from git/tarball URLs instead of the registry, widening the code that can enter the tree without registry provenance.",
 				e.line,
 				"Remove blockExoticSubdeps: false (or set it to true). If a specific exotic subdep is required, vet and pin it explicitly rather than disabling the block globally.")
@@ -192,7 +190,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// 4. trustLockfile: true -> MEDIUM (v11 default is false).
 	if e, ok := get("trustLockfile"); ok {
 		if b, parsed := yamlBool(e.value.Value); parsed && b {
-			emit(RuleTrustLockfile, "pnpm trustLockfile enabled", "MEDIUM",
+			emit(RuleTrustLockfile,
 				"trustLockfile: true stops pnpm re-applying minimumReleaseAge and trustPolicy to lockfile entries, raising lockfile-poisoning risk on repos that take outside contributions.",
 				e.line,
 				"Remove trustLockfile: true so pnpm keeps verifying lockfile entries. Only consider it in fully closed repos where the lockfile is trusted end to end.")
@@ -205,7 +203,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 		if n, parsed := yamlInt(e.value.Value); parsed {
 			minAgeSet, minAgeVal = true, n
 			if n == 0 {
-				emit(RuleMinReleaseAgeDisabled, "pnpm minimumReleaseAge disabled", "LOW",
+				emit(RuleMinReleaseAgeDisabled,
 					"minimumReleaseAge: 0 is an explicit opt-out of the v11 default (1440 minutes), removing the wait window that protects against freshly published malicious versions.",
 					e.line,
 					"Remove minimumReleaseAge: 0 to use the default window, or set a positive value (e.g. 1440 for one day).")
@@ -218,7 +216,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// compatibility default, so we stay silent.
 	if e, ok := get("minimumReleaseAgeStrict"); ok && minAgeSet && minAgeVal > 0 {
 		if b, parsed := yamlBool(e.value.Value); parsed && !b {
-			emit(RuleMinReleaseAgeNonStrict, "pnpm minimumReleaseAge not strictly enforced", "LOW",
+			emit(RuleMinReleaseAgeNonStrict,
 				"minimumReleaseAge is set to a positive value but minimumReleaseAgeStrict: false lets pnpm fall back to a version below the age threshold when no compatible alternative exists.",
 				e.line,
 				"Set minimumReleaseAgeStrict: true (or remove the false override) so the release-age threshold is always enforced.")
@@ -230,7 +228,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// the token, and absence never fires.
 	if e, ok := get("trustPolicy"); ok {
 		if strings.EqualFold(strings.TrimSpace(e.value.Value), "off") {
-			emit(RuleTrustPolicyOff, "pnpm trustPolicy explicitly off", "LOW",
+			emit(RuleTrustPolicyOff,
 				"trustPolicy: off is set explicitly, opting the project out of trust-evidence checks (such as no-downgrade) that harden the lockfile.",
 				e.line,
 				"Consider a stricter trust policy such as no-downgrade. If off is intentional, document why; the finding only surfaces because the opt-out is explicit.")
@@ -240,7 +238,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	// 8. Legacy v10 build-policy settings -> INFO, one per present key.
 	for _, k := range legacyKeys {
 		if e, ok := get(k); ok {
-			emit(RuleLegacyBuildPolicy, "pnpm legacy v10 build-policy setting", "INFO",
+			emit(RuleLegacyBuildPolicy,
 				fmt.Sprintf("%q is a pnpm v10 build-policy setting removed or replaced in v11; on v11 it no longer takes effect, so the intended build restriction may silently not apply.", e.key),
 				e.line,
 				"Migrate this setting to allowBuilds, the v11 mechanism for deciding which dependencies may run build scripts, and verify the resulting policy matches the original intent.")
@@ -258,7 +256,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			}
 			seenPkg[ab.key] = true
 			if isNull(ab.value) {
-				emit(RuleBuildApprovalPending, "pnpm allowBuilds entry pending decision", "MEDIUM",
+				emit(RuleBuildApprovalPending,
 					fmt.Sprintf("allowBuilds entry %q has no explicit true/false decision; the package has a build script still pending review.", ab.key),
 					ab.line,
 					"Set this allowBuilds entry to true (allow) or false (block) after reviewing the package's install-time script, or run `pnpm approve-builds`.")
@@ -421,17 +419,6 @@ func srcLine(lines []string, n int) string {
 		return ""
 	}
 	return strings.TrimSpace(lines[n-1])
-}
-
-// severity maps the canonical string to a types.Severity. Unknown
-// strings degrade to INFO rather than panicking; the metadata strings
-// are all known so this is defensive only.
-func severity(s string) types.Severity {
-	sev, err := types.ParseSeverity(s)
-	if err != nil {
-		return types.SeverityInfo
-	}
-	return sev
 }
 
 // isTarget matches only pnpm-workspace.yaml (by base name, on either

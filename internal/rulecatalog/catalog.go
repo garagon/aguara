@@ -18,15 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/garagon/aguara/internal/engine/ci"
-	"github.com/garagon/aguara/internal/engine/jsrisk"
-	"github.com/garagon/aguara/internal/engine/nlp"
-	"github.com/garagon/aguara/internal/engine/pkgmeta"
-	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
-	"github.com/garagon/aguara/internal/engine/pyrisk"
-	"github.com/garagon/aguara/internal/engine/rsbuild"
-	"github.com/garagon/aguara/internal/engine/rugpull"
-	"github.com/garagon/aguara/internal/engine/toxicflow"
+	"github.com/garagon/aguara/internal/engine"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
@@ -112,20 +104,14 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = append(out, fromCompiledRule(r))
 	}
 
-	// 4. Analyzer-emitted rules. Order doesn't matter; the sort
-	// at the end establishes the canonical ordering. rugpull is
-	// in the catalog unconditionally even though the analyzer
-	// only runs with --monitor / WithStateDir, so `aguara explain
-	// RUGPULL_001` works without first enabling the detector.
-	out = append(out, ci.RuleMetadata()...)
-	out = append(out, pkgmeta.RuleMetadata()...)
-	out = append(out, jsrisk.RuleMetadata()...)
-	out = append(out, pyrisk.RuleMetadata()...)
-	out = append(out, rsbuild.RuleMetadata()...)
-	out = append(out, pnpmpolicy.RuleMetadata()...)
-	out = append(out, nlp.RuleMetadata()...)
-	out = append(out, toxicflow.RuleMetadata()...)
-	out = append(out, rugpull.RuleMetadata()...)
+	// 4. Analyzer-emitted rules, aggregated by the engine registry
+	// (the same single source of truth the scanner pipelines register
+	// from). Order doesn't matter; the sort at the end establishes the
+	// canonical ordering. rugpull is in the catalog unconditionally
+	// even though the analyzer only runs with --monitor / WithStateDir,
+	// so `aguara explain RUGPULL_001` works without first enabling the
+	// detector.
+	out = append(out, engine.RuleMetadata()...)
 
 	// 5. --disable-rule filter. Applied AFTER merge so users can
 	// disable analyzer rules too (same UX as YAML rules).

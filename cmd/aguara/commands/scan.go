@@ -13,16 +13,9 @@ import (
 	"github.com/garagon/aguara/discover"
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/config"
-	"github.com/garagon/aguara/internal/engine/ci"
-	"github.com/garagon/aguara/internal/engine/jsrisk"
-	"github.com/garagon/aguara/internal/engine/nlp"
+	"github.com/garagon/aguara/internal/engine"
 	"github.com/garagon/aguara/internal/engine/pattern"
-	"github.com/garagon/aguara/internal/engine/pkgmeta"
-	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
-	"github.com/garagon/aguara/internal/engine/pyrisk"
-	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
-	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
@@ -457,15 +450,7 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
-	s.RegisterAnalyzer(ci.New())
-	s.RegisterAnalyzer(pkgmeta.New())
-	s.RegisterAnalyzer(jsrisk.New())
-	s.RegisterAnalyzer(pyrisk.New())
-	s.RegisterAnalyzer(rsbuild.New())
-	s.RegisterAnalyzer(pnpmpolicy.New())
-	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
-	s.RegisterAnalyzer(toxicflow.New())
-	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+	engine.RegisterDefaults(s)
 
 	var store *state.Store
 	if flagMonitor {

@@ -132,9 +132,9 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			if _, ok := taint[payload]; ok {
 				return []types.Finding{{
 					RuleID:      RulePyImportTimeRemoteJS,
-					RuleName:    "PyPI import-time remote JavaScript execution",
-					Severity:    types.SeverityCritical,
-					Category:    "supply-chain",
+					RuleName:    ruleInfo[RulePyImportTimeRemoteJS].Name,
+					Severity:    ruleInfo[RulePyImportTimeRemoteJS].SeverityLevel(),
+					Category:    ruleInfo[RulePyImportTimeRemoteJS].Category,
 					Description: "A remote JavaScript payload fetched at install/import time is passed to node -e: the value executed traces back to the download.",
 					FilePath:    target.RelPath,
 					Line:        ln.num,

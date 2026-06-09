@@ -1272,9 +1272,9 @@ func detectGitHubC2(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleGitHubC2,
-		RuleName: "GitHub used as payload or command channel",
+		RuleName: ruleInfo[RuleGitHubC2].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleGitHubC2].Category,
 		Description: "JavaScript writes or controls GitHub-hosted content (" + m.GitHubChannelKind +
 			") and pairs it with a supply-chain signal: obfuscation, local execution, " +
 			"persistence, a non-GitHub credential read, or an exfil sink. This is GitHub used " +
@@ -1940,9 +1940,9 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 		}
 		out = append(out, types.Finding{
 			RuleID:   RuleSudoersTamper,
-			RuleName: "Sudoers privilege tampering",
+			RuleName: ruleInfo[RuleSudoersTamper].Name,
 			Severity: sev,
-			Category: "supply-chain",
+			Category: ruleInfo[RuleSudoersTamper].Category,
 			Description: "Package JavaScript writes to /etc/sudoers or /etc/sudoers.d/* " +
 				"during install or runtime, changing who can run commands as root. A bound " +
 				"fs write or a shell redirect/tee/sed -i targets the sudoers surface. " +
@@ -2002,9 +2002,9 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 		}
 		out = append(out, types.Finding{
 			RuleID:   RuleHostTrustTamper,
-			RuleName: "Host trust surface tampering",
+			RuleName: ruleInfo[RuleHostTrustTamper].Name,
 			Severity: sev,
-			Category: "supply-chain",
+			Category: ruleInfo[RuleHostTrustTamper].Category,
 			Description: "Package JavaScript writes to a host trust surface: the dynamic " +
 				"linker preload (/etc/ld.so.preload), a CA certificate store, the SSH daemon " +
 				"config, the global shell profile, or name resolution (/etc/hosts, " +
@@ -3020,9 +3020,9 @@ func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding
 	}
 	return &types.Finding{
 		RuleID:   RuleWiperTripwire,
-		RuleName: "Destructive wipe of sensitive paths",
+		RuleName: ruleInfo[RuleWiperTripwire].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleWiperTripwire].Category,
 		Description: "Package JavaScript performs a REAL destructive delete of a sensitive " +
 			"path -- a credential store (.ssh/.aws/.gnupg/.kube/...), agent/editor trust " +
 			"(.claude/.vscode/...), shell history, an evidence log, or a honeytoken -- or a " +
@@ -4398,9 +4398,9 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleBunSecondStage,
-		RuleName: "Bun second-stage execution",
+		RuleName: ruleInfo[RuleBunSecondStage].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleBunSecondStage].Category,
 		Description: "JavaScript runs the Bun runtime as a second stage alongside a " +
 			"supply-chain signal: an obfuscator-shape payload, a CI/cloud secret read, or a " +
 			"network exfil sink. The Red Hat/Miasma worm used a Node preinstall hook to " +
@@ -5752,9 +5752,9 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleDNSTXTExfil,
-		RuleName: "DNS TXT exfiltration chain in JavaScript",
+		RuleName: ruleInfo[RuleDNSTXTExfil].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleDNSTXTExfil].Category,
 		Description: "JavaScript invokes resolveTxt against the Node dns module and " +
 			"pairs it with at least one further exfiltration signal: a CI / cloud " +
 			"secret read, an envs.txt credential stage, a tar.gz archive staged " +
@@ -5817,9 +5817,9 @@ func detectObfuscation(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleObfuscation,
-		RuleName: "Large obfuscated JavaScript payload",
+		RuleName: ruleInfo[RuleObfuscation].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleObfuscation].Category,
 		Description: "JavaScript file matches the static shape of an obfuscator-emitted " +
 			"payload (hex identifier density, dispatcher calls, or a while(!![]) loop) " +
 			"in combination with at least one further signal. Payloads with this shape are " +
@@ -5856,9 +5856,9 @@ func detectDaemon(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleDaemon,
-		RuleName: "Detached background execution from JavaScript",
+		RuleName: ruleInfo[RuleDaemon].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleDaemon].Category,
 		Description: "JavaScript spawns a child process with detached: true and either " +
 			"stdio ignored or .unref() called. That keeps the spawned process alive past " +
 			"the parent's exit, which is the standard shape for install-time payloads that " +
@@ -5890,9 +5890,9 @@ func detectCISecretHarvest(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleCISecretHarvest,
-		RuleName: "CI credential harvesting with network or registry sink",
-		Severity: types.SeverityCritical,
-		Category: "supply-chain",
+		RuleName: ruleInfo[RuleCISecretHarvest].Name,
+		Severity: ruleInfo[RuleCISecretHarvest].SeverityLevel(),
+		Category: ruleInfo[RuleCISecretHarvest].Category,
 		Description: "JavaScript reads a CI / cloud token (e.g. " + m.CISecretMatched +
 			") and then routes it to a network, npm registry, GitHub API, or session-exfil " +
 			"sink. Whatever the wrapper looks like, this is the credential-exfil shape used " +
@@ -5928,9 +5928,9 @@ func detectProcMemOIDC(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleProcMemOIDC,
-		RuleName: "Runner process memory access combined with OIDC token reference",
-		Severity: types.SeverityCritical,
-		Category: "supply-chain",
+		RuleName: ruleInfo[RuleProcMemOIDC].Name,
+		Severity: ruleInfo[RuleProcMemOIDC].SeverityLevel(),
+		Category: ruleInfo[RuleProcMemOIDC].Category,
 		Description: "JavaScript accesses /proc/<pid>/mem|maps|cmdline-style paths and " +
 			"references ACTIONS_ID_TOKEN_REQUEST_* or Runner.Worker. Reading another " +
 			"process's memory to steal an OIDC token is a runner-pivot shape with no " +
@@ -5961,9 +5961,9 @@ func detectAgentPersistence(path string, m *metrics) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleAgentPersistence,
-		RuleName: "Persistence through Claude Code or VS Code workspace automation",
+		RuleName: ruleInfo[RuleAgentPersistence].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleAgentPersistence].Category,
 		Description: "File references " + m.AgentPathMatched + ", an automation surface that " +
 			"executes on workspace open. Writing to or invoking these paths from package " +
 			"code installs persistence that survives reinstall and is invisible outside the " +

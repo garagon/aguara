@@ -85,9 +85,9 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 
 		findings = append(findings, types.Finding{
 			RuleID:      "RUGPULL_001",
-			RuleName:    "Tool description changed with dangerous content",
-			Severity:    types.SeverityCritical,
-			Category:    "rug-pull",
+			RuleName:    ruleInfo["RUGPULL_001"].Name,
+			Severity:    ruleInfo["RUGPULL_001"].SeverityLevel(),
+			Category:    ruleInfo["RUGPULL_001"].Category,
 			Description: "File content changed since last scan and now contains suspicious patterns. This may indicate a rug-pull attack where a previously safe tool becomes malicious.",
 			FilePath:    target.RelPath,
 			Line:        lineNum,
