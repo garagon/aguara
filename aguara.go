@@ -14,16 +14,9 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/garagon/aguara/discover"
-	"github.com/garagon/aguara/internal/engine/ci"
-	"github.com/garagon/aguara/internal/engine/jsrisk"
-	"github.com/garagon/aguara/internal/engine/nlp"
+	"github.com/garagon/aguara/internal/engine"
 	"github.com/garagon/aguara/internal/engine/pattern"
-	"github.com/garagon/aguara/internal/engine/pkgmeta"
-	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
-	"github.com/garagon/aguara/internal/engine/pyrisk"
-	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
-	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
@@ -429,26 +422,11 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 
 	// Reuse pre-compiled pattern matcher (the expensive part: regex + AC automaton)
 	s.RegisterAnalyzer(sc.matcher)
-	// CI trust analyzer parses workflow YAML — runs before toxicflow so its
-	// chain findings can be deduped/correlated alongside leaf signals.
-	s.RegisterAnalyzer(ci.New())
-	// pkgmeta inspects package.json for npm lifecycle / git-source chains.
-	s.RegisterAnalyzer(pkgmeta.New())
-	// jsrisk scans JavaScript for obfuscation, daemonization, CI secret
-	// exfil sinks, runner-process memory access, and Claude / VS Code
-	// persistence references.
-	s.RegisterAnalyzer(jsrisk.New())
-	// pyrisk binds a remote-JS fetch to a node -e/--eval execution sink in
-	// Python install hooks; rsbuild binds a wallet/keystore read to a
-	// network sink in Cargo build scripts. Both replace the retired
-	// co-presence YAML rules, so they must run in the library path too.
-	s.RegisterAnalyzer(pyrisk.New())
-	s.RegisterAnalyzer(rsbuild.New())
-	s.RegisterAnalyzer(pnpmpolicy.New())
-	// NLP and ToxicFlow are stateless, cheap to instantiate
-	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
-	s.RegisterAnalyzer(toxicflow.New())
-	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+	// The default analyzer set (ci-trust, pkgmeta, jsrisk, pyrisk,
+	// rsbuild, pnpm-policy, NLP, toxicflow + the cross-file accumulator)
+	// is owned by internal/engine so the CLI and both library paths
+	// always register the same pipeline.
+	engine.RegisterDefaults(s)
 
 	// Rug-pull: fresh state store per scan for thread safety
 	if sc.cfg.stateDir != "" {
@@ -495,8 +473,8 @@ func redactSensitiveFindings(findings []Finding) {
 }
 
 type compileResult struct {
-	compiled         []*rules.CompiledRule
-	toolScopedRules  map[string]scanner.ToolScopedRule
+	compiled        []*rules.CompiledRule
+	toolScopedRules map[string]scanner.ToolScopedRule
 }
 
 // loadAndCompile loads built-in (and optionally custom) rules, compiles them,
@@ -587,15 +565,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
-	s.RegisterAnalyzer(ci.New())
-	s.RegisterAnalyzer(pkgmeta.New())
-	s.RegisterAnalyzer(jsrisk.New())
-	s.RegisterAnalyzer(pyrisk.New())
-	s.RegisterAnalyzer(rsbuild.New())
-	s.RegisterAnalyzer(pnpmpolicy.New())
-	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
-	s.RegisterAnalyzer(toxicflow.New())
-	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+	engine.RegisterDefaults(s)
 
 	// Enable rug-pull detection when stateDir is provided
 	if cfg.stateDir != "" {
