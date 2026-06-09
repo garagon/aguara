@@ -3,12 +3,23 @@ package packagecheck
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
 	"gopkg.in/yaml.v3"
 )
+
+// exactNpmVersionRe matches an exact, fully-resolved npm version: three
+// numeric components with an optional prerelease/build suffix
+// (1.2.3, 10.0.0-alpha.1, 2.1.5+build.7). It deliberately rejects range
+// operators (^, ~, >, <, =, *, x), dist-tags (latest, next), and
+// partial versions (9.2) so an alias whose right-hand side is not a
+// pinned registry version is skipped rather than matched. pnpm always
+// records resolved exact versions in the packages map, so this is the
+// only form a real alias entry takes.
+var exactNpmVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
 
 // ParsePNPMLock reads a pnpm-lock.yaml file and returns the declared
 // npm packages. pnpm installs from the npm registry, so refs land in
@@ -124,6 +135,32 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 // Conservative by design: better to under-emit than to surface false
 // positives on shapes pnpm uses for non-registry packages.
 func parsePnpmPackageKey(key string) (string, string, bool) {
+	// npm: alias entries resolve to a DIFFERENT real registry package
+	// than the local dependency name. The user may have installed
+	// `safe-ipc@npm:node-ipc@9.2.3`, but the package that must be
+	// matched against npm advisories is node-ipc@9.2.3, not safe-ipc.
+	// Route these to a dedicated resolver before the normal path; the
+	// "@npm:" token never appears in a non-alias key (peer suffixes
+	// are "(pkg@ver)", non-registry sources start with file:/link:/...).
+	if strings.Contains(key, "@npm:") {
+		return parsePnpmAliasPackageKey(key)
+	}
+
+	// An alias pointing at a NON-registry source
+	// ("alias@workspace:...", "alias@file:...", "alias@github:...") is
+	// not addressable in the npm registry. Unlike a bare "file:..." key,
+	// the alias NAME precedes the protocol, so the leading-prefix
+	// rejection below would miss it and the modern parser would emit a
+	// junk (alias, "workspace:...") ref. A package name cannot contain
+	// ":", so "@<protocol>:" only appears in alias keys; reject here.
+	for _, p := range []string{
+		"@workspace:", "@file:", "@link:", "@github:", "@git:", "@http:", "@https:", "@jsr:",
+	} {
+		if strings.Contains(key, p) {
+			return "", "", false
+		}
+	}
+
 	// Older lockfiles prefix entries with "/". Strip before the
 	// source-prefix checks so "/file:..." and "file:..." are
 	// treated identically.
@@ -253,6 +290,100 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 	if i := strings.IndexAny(version, "_("); i >= 0 {
 		version = version[:i]
 	}
+	if version == "" {
+		return "", "", false
+	}
+	return name, version, true
+}
+
+// parsePnpmAliasPackageKey resolves an npm: alias package key to the
+// REAL registry package it points at. pnpm lets a dependency be
+// installed under a different local name:
+//
+//	pnpm add safe-ipc@npm:node-ipc@9.2.3
+//
+// which lands in the lockfile packages map as a key shaped like
+//
+//	safe-ipc@npm:node-ipc@9.2.3                          (unscoped real)
+//	@local/safe-ipc@npm:node-ipc@9.2.3                   (scoped alias)
+//	safe-rbac@npm:@redhat-cloud-services/rbac-client@2.1.5 (scoped real)
+//	/safe-ipc@npm:node-ipc@9.2.3                         (older slash form)
+//	safe-react@npm:react@18.2.0(@types/react@18.0.0)     (real + peer suffix)
+//
+// The alias (left of "@npm:") is intentionally discarded: matching
+// against npm advisories must use the real package (node-ipc@9.2.3), or
+// a compromised registry package hides behind an innocent local name.
+//
+// Only an UNAMBIGUOUS alias with an exact pinned version is resolved.
+// Returns ok=false when the right-hand side lacks a version, carries a
+// range/dist-tag instead of an exact version, is an empty or malformed
+// spec, or is not the npm registry. Same discipline as the rest of the
+// parser: under-report before false-positive.
+func parsePnpmAliasPackageKey(key string) (string, string, bool) {
+	key = strings.TrimPrefix(key, "/")
+
+	idx := strings.Index(key, "@npm:")
+	if idx < 0 {
+		return "", "", false
+	}
+	real := key[idx+len("@npm:"):]
+
+	// Strip a peer-dep suffix "(peer@version)" before extracting the
+	// real (name, version): the peer wrapper sits after the version and
+	// can itself be scoped, so removing it first keeps the boundary scan
+	// simple.
+	if i := strings.IndexByte(real, '('); i >= 0 {
+		real = real[:i]
+	}
+	if real == "" {
+		return "", "", false
+	}
+
+	name, version, ok := parseModernRegistrySpec(real)
+	if !ok {
+		return "", "", false
+	}
+	// Strip a pre-v9 underscore peer suffix from the version itself.
+	if i := strings.IndexByte(version, '_'); i >= 0 {
+		version = version[:i]
+	}
+	// Only an exact, resolved version is matchable; ranges and dist-tags
+	// would false-positive against advisories for unrelated versions.
+	if !exactNpmVersionRe.MatchString(version) {
+		return "", "", false
+	}
+	return name, version, true
+}
+
+// parseModernRegistrySpec splits a modern npm registry spec
+// ("node-ipc@9.2.3", "@scope/pkg@1.2.3") into (name, version). It is the
+// resolved RIGHT-hand side of an npm: alias, which pnpm always writes in
+// modern (name@version) form, never the legacy slash form. Returns
+// ok=false for a missing version or a malformed scoped spec.
+func parseModernRegistrySpec(spec string) (string, string, bool) {
+	if strings.HasPrefix(spec, "@") {
+		// Scoped: the package/version boundary is the "@" AFTER the
+		// single "/" in "@scope/pkg".
+		slash := strings.IndexByte(spec, '/')
+		if slash < 0 {
+			return "", "", false
+		}
+		rel := strings.IndexByte(spec[slash:], '@')
+		if rel < 0 {
+			return "", "", false // "@scope/pkg" with no version
+		}
+		at := slash + rel
+		name, version := spec[:at], spec[at+1:]
+		if name == "" || version == "" {
+			return "", "", false
+		}
+		return name, version, true
+	}
+	at := strings.IndexByte(spec, '@')
+	if at <= 0 {
+		return "", "", false // bare name, no version
+	}
+	name, version := spec[:at], spec[at+1:]
 	if version == "" {
 		return "", "", false
 	}

@@ -64,6 +64,50 @@ func TestRunner_RunReportsHitsAndEcosystemSummary(t *testing.T) {
 	}
 }
 
+func TestRunner_ResolvesNpmAliasToRealCompromisedPackage(t *testing.T) {
+	// The fixture installs node-ipc@9.2.3 under the local alias
+	// "safe-ipc". The matcher knows only the REAL package node-ipc@9.2.3.
+	// The runner must still report a hit, proving the alias was resolved
+	// to the real registry package rather than the innocent local name.
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Records: []intel.Record{{
+			ID:        "MAL-TEST-NPM-node-ipc",
+			Ecosystem: intel.EcosystemNPM,
+			Name:      "node-ipc",
+			Kind:      intel.KindMalicious,
+			Versions:  []string{"9.2.3"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+
+	targets, err := Discover(filepath.Join("testdata", "pnpm-alias-compromised"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1 (hits=%+v)", len(res.Hits), res.Hits)
+	}
+	if got := res.Hits[0].Ref.Name; got != "node-ipc" {
+		t.Errorf("hit ref name = %q, want node-ipc (the alias must NOT leak as safe-ipc)", got)
+	}
+	if got := res.Hits[0].Ref.Version; got != "9.2.3" {
+		t.Errorf("hit ref version = %q, want 9.2.3", got)
+	}
+	if got := res.Hits[0].Ref.Source; got != "pnpm-lock.yaml" {
+		t.Errorf("hit ref source = %q, want pnpm-lock.yaml", got)
+	}
+	if er := res.Ecosystems[0]; er.PackagesRead != 2 {
+		t.Errorf("packages_read = %d, want 2 (node-ipc via alias + lodash)", er.PackagesRead)
+	}
+}
+
 func TestRunner_CleanProjectReturnsZeroFindings(t *testing.T) {
 	// The matcher knows about a malicious package the fixture does
 	// NOT carry. Expect zero hits, one EcosystemResult with
