@@ -19,16 +19,20 @@
 //     ${AGE} are skipped rather than crashing, and every finding
 //     carries the exact line of the offending field.
 //
-// Key resolution mirrors what pnpm actually loads: setting keys are
-// matched case-insensitively with kebab-case and camelCase treated as
-// the same setting (pnpm normalizes `block-exotic-subdeps` and
-// `blockExoticSubdeps` to one value), and YAML merge keys (`<<:`) are
-// expanded before evaluation so a value supplied through an anchor is
-// not missed. Boolean values use YAML 1.1 spellings (true/false/yes/
-// no/on/off, matching the js-yaml loader pnpm uses); a value that is
-// not one of those tokens is treated as ambiguous and not evaluated,
-// rather than coerced, so an explicit "false" is never mis-flagged as
-// a dangerous opt-in.
+// Key resolution mirrors what pnpm actually loads: setting keys match
+// the exact camelCase spelling pnpm honors in pnpm-workspace.yaml.
+// Ground-truthed against pnpm 11.5.2 (2026-06-09): a kebab-case key
+// (`block-exotic-subdeps: false`) in pnpm-workspace.yaml is silently
+// IGNORED by pnpm -- `pnpm config list` does not load it and install
+// emits no warning -- so flagging it as a weakened setting would be a
+// false positive (the secure default still applies). Kebab-case is the
+// .npmrc spelling, not the workspace-file spelling. YAML merge keys
+// (`<<:`) are expanded before evaluation so a value supplied through an
+// anchor is not missed. Boolean values use YAML 1.1 spellings
+// (true/false/yes/no/on/off, matching the js-yaml loader pnpm uses); a
+// value that is not one of those tokens is treated as ambiguous and not
+// evaluated, rather than coerced, so an explicit "false" is never
+// mis-flagged as a dangerous opt-in.
 package pnpmpolicy
 
 import (
@@ -37,7 +41,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
@@ -105,8 +108,10 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	}
 
 	// Flatten the root mapping with merge keys resolved, then index it
-	// by normalized key so kebab-case and camelCase resolve to the same
-	// setting. Precedence mirrors pnpm's config loading:
+	// by exact key. Only the camelCase spelling pnpm honors in
+	// pnpm-workspace.yaml matches; a kebab-case key is ignored by pnpm
+	// there (ground truth: pnpm 11.5.2), so it must not produce a
+	// finding. Precedence mirrors pnpm's config loading:
 	//   - an explicit key always wins over a merged one;
 	//   - among explicit keys, the last value wins (later overrides);
 	//   - among merged keys, the first wins (YAML merge semantics).
@@ -114,21 +119,21 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	idx := make(map[string]entry, len(entries))
 	explicitSet := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		nk := normalizeKey(e.key)
+		k := strings.TrimSpace(e.key)
 		if !e.merged {
-			idx[nk] = e // last explicit wins, and overrides any merged value
-			explicitSet[nk] = true
+			idx[k] = e // last explicit wins, and overrides any merged value
+			explicitSet[k] = true
 			continue
 		}
-		if explicitSet[nk] {
+		if explicitSet[k] {
 			continue // an explicit value already won
 		}
-		if _, ok := idx[nk]; !ok {
-			idx[nk] = e // first merged wins
+		if _, ok := idx[k]; !ok {
+			idx[k] = e // first merged wins
 		}
 	}
 	get := func(name string) (entry, bool) {
-		e, ok := idx[normalizeKey(name)]
+		e, ok := idx[name]
 		return e, ok
 	}
 
@@ -348,43 +353,6 @@ func mergeTargets(n *yaml.Node) []*yaml.Node {
 		return out
 	}
 	return nil
-}
-
-// normalizeKey folds a well-formed kebab-case pnpm setting key to
-// camelCase so the two spellings pnpm actually accepts compare equal (it
-// treats "block-exotic-subdeps" and "blockExoticSubdeps" as one
-// setting). The fold is case-sensitive and only joins single hyphens
-// between non-empty segments. A spelling pnpm does NOT honor as that
-// setting -- a smushed "blockexoticsubdeps", a mis-cased
-// "BlockExoticSubdeps", or a malformed hyphenation
-// ("block--exotic-subdeps", a leading/trailing hyphen) -- is returned
-// unchanged so it cannot collapse onto a real key and produce a false
-// finding.
-func normalizeKey(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.Contains(s, "-") {
-		for _, seg := range strings.Split(s, "-") {
-			if seg == "" {
-				return s // leading/trailing/doubled hyphen: not a valid kebab key
-			}
-		}
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	upNext := false
-	for _, r := range s {
-		if r == '-' {
-			upNext = true
-			continue
-		}
-		if upNext {
-			b.WriteRune(unicode.ToUpper(r))
-			upNext = false
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 // mappingRoot returns the top-level mapping node of a parsed document,
