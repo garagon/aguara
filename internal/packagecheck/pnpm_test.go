@@ -67,6 +67,8 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"alias unscoped real", "safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
 		{"alias scoped real", "safe-rbac@npm:@redhat-cloud-services/rbac-client@2.1.5", "@redhat-cloud-services/rbac-client", "2.1.5", true},
 		{"scoped alias unscoped real", "@local/safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
+		{"scoped alias scoped real", "@local/safe@npm:@scope/evil@1.2.3", "@scope/evil", "1.2.3", true},
+		{"scoped alias scoped real + peer", "@local/safe@npm:@scope/evil@1.2.3(@types/node@22.0.0)", "@scope/evil", "1.2.3", true},
 		{"alias slash-prefixed", "/safe-ipc@npm:node-ipc@9.2.3", "node-ipc", "9.2.3", true},
 		{"alias real + scoped peer paren", "safe-react@npm:react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
 		{"alias real + underscore peer", "safe-react@npm:react@18.2.0_react-dom@18.2.0", "react", "18.2.0", true},

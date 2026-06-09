@@ -215,32 +215,34 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		version string
 	)
 	if strings.HasPrefix(key, "@") {
-		// Slash count discriminates modern vs v5 for scoped keys:
-		//   1 slash  -> "@scope/pkg@version" or "@scope/pkg" (modern)
-		//   2+ slashes -> "@scope/pkg/version[_peer@...]" (v5)
-		// Without this check, a v5 key with a peer-dep suffix
-		// containing "@" (e.g. "@types/node/20.5.0_typescript@5.0.0")
-		// would route through the modern branch and pick the peer
-		// "@" as the version separator, producing
-		// (name="@types/node/20.5.0_typescript", version="5.0.0").
-		switch strings.Count(key, "/") {
-		case 1:
-			// Modern scoped form. The "@" AFTER the first slash
-			// is the package/version boundary; any later "@"
-			// belongs to a peer-dep suffix.
-			slash := strings.IndexByte(key, '/')
-			if rel := strings.IndexByte(key[slash:], '@'); rel >= 0 {
-				at := slash + rel
+		// Scoped key. After the scope's "/" the package/version
+		// boundary is the next "@" -- but ONLY if it precedes the next
+		// "/". This single rule distinguishes all three scoped shapes
+		// without a slash count:
+		//   modern  "@scope/pkg@1.2.3"          -> "@" before any 2nd "/"
+		//   alias   "@local/safe@npm:@s/e@1.2.3"-> "@npm:" before the
+		//                                          real package's "/"
+		//                                          (so scoped-alias ->
+		//                                          scoped-real resolves)
+		//   v5      "@scope/pkg/1.2.3[_peer@v]"  -> a "/" comes first,
+		//                                          so any "@" is a peer
+		//                                          suffix, not the
+		//                                          boundary
+		// The version field is classified (npm: alias / non-registry /
+		// plain) after this split, so picking the boundary "@" here is
+		// all that is needed.
+		slash := strings.IndexByte(key, '/')
+		if slash >= 0 {
+			rest := key[slash+1:]
+			atRel := strings.IndexByte(rest, '@')
+			slashRel := strings.IndexByte(rest, '/')
+			if atRel >= 0 && (slashRel < 0 || atRel < slashRel) {
+				at := slash + 1 + atRel
 				name = key[:at]
 				version = key[at+1:]
 			}
-			// No "@" after the slash -> "@scope/pkg" without
-			// a version. Leave name="" so the v5 fallback below
-			// rejects via the >= 2 slashes guard.
-		default:
-			// 0 slashes -> malformed scoped (just "@something").
-			// >= 2 slashes -> v5 form; leave name="" for v5
-			//                slash-fallback below.
+			// else: v5 slash form, or "@scope/pkg" without a version
+			// -> leave name="" for the v5 fallback / rejection below.
 		}
 	} else {
 		firstAt := strings.IndexByte(key, '@')
