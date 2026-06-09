@@ -88,20 +88,24 @@ func TestFalsePositives(t *testing.T) {
 	}
 }
 
-// TestKebabCaseKeys: pnpm normalizes kebab-case and camelCase setting
-// keys to the same value, so the analyzer must match both spellings.
-func TestKebabCaseKeys(t *testing.T) {
-	cases := []struct{ src, want string }{
-		{"dangerously-allow-all-builds: true\n", RuleDangerousBuilds},
-		{"block-exotic-subdeps: false\n", RuleExoticSubdepsDisabled},
-		{"trust-lockfile: true\n", RuleTrustLockfile},
-		{"minimum-release-age: 0\n", RuleMinReleaseAgeDisabled},
-		{"only-built-dependencies:\n  - esbuild\n", RuleLegacyBuildPolicy},
-		{"allow-builds:\n  sharp:\n", RuleBuildApprovalPending},
-	}
-	for _, c := range cases {
-		if !fires(t, target, c.src, c.want) {
-			t.Fatalf("kebab-case must fire %s on:\n%s", c.want, c.src)
+// TestKebabCaseKeysIgnored: pnpm silently IGNORES kebab-case keys in
+// pnpm-workspace.yaml (ground truth: pnpm 11.5.2, 2026-06-09 -- `pnpm
+// config list` does not load them and install emits no warning; kebab
+// is the .npmrc spelling, not the workspace-file spelling). A kebab key
+// therefore leaves the secure default in effect and must NOT fire.
+func TestKebabCaseKeysIgnored(t *testing.T) {
+	for _, src := range []string{
+		"dangerously-allow-all-builds: true\n",
+		"block-exotic-subdeps: false\n",
+		"trust-lockfile: true\n",
+		"minimum-release-age: 0\n",
+		"strict-dep-builds: false\n",
+		"trust-policy: off\n",
+		"only-built-dependencies:\n  - esbuild\n",
+		"allow-builds:\n  sharp:\n",
+	} {
+		if got := ids(t, target, src); len(got) != 0 {
+			t.Fatalf("kebab-case key is ignored by pnpm and must not fire, got %v on:\n%s", got, src)
 		}
 	}
 }
@@ -167,61 +171,54 @@ dangerouslyAllowAllBuilds: false
 	}
 }
 
-// TestMixedSpellingMergePrecedence: an explicit value wins over a merged
-// one even when the two use different (kebab vs camel) spellings of the
-// same setting. pnpm treats the spellings as one setting, so an explicit
-// safe override must not be shadowed by a merged unsafe value, and an
-// explicit unsafe value must still be flagged.
-func TestMixedSpellingMergePrecedence(t *testing.T) {
-	// Merged unsafe (kebab) + explicit safe (camel) -> no finding.
-	safeWins := `defaults: &d
-  dangerously-allow-all-builds: true
+// TestKebabDoesNotShadowCamel: a kebab key is a separate, ignored key,
+// so it never overrides the camelCase value pnpm actually loads -- in
+// either direction.
+func TestKebabDoesNotShadowCamel(t *testing.T) {
+	// Merged camel true (loaded by pnpm) + explicit kebab false
+	// (ignored by pnpm) -> the dangerous setting IS in effect -> fire.
+	stillDangerous := `defaults: &d
+  dangerouslyAllowAllBuilds: true
 <<: *d
-dangerouslyAllowAllBuilds: false
+dangerously-allow-all-builds: false
 `
-	if fires(t, target, safeWins, RuleDangerousBuilds) {
-		t.Fatal("explicit camelCase false must win over merged kebab-case true")
+	if !fires(t, target, stillDangerous, RuleDangerousBuilds) {
+		t.Fatal("ignored kebab false must not mask the merged camelCase true pnpm loads")
 	}
-	// Merged safe (camel) + explicit unsafe (kebab) -> finding.
-	unsafeWins := `defaults: &d
-  dangerouslyAllowAllBuilds: false
-<<: *d
-dangerously-allow-all-builds: true
-`
-	if !fires(t, target, unsafeWins, RuleDangerousBuilds) {
-		t.Fatal("explicit kebab-case true must win over merged camelCase false")
+	// Explicit camel false + kebab true -> pnpm loads only the safe
+	// false -> no finding.
+	safe := "dangerouslyAllowAllBuilds: false\ndangerously-allow-all-builds: true\n"
+	if fires(t, target, safe, RuleDangerousBuilds) {
+		t.Fatal("ignored kebab true must not override the explicit camelCase false")
 	}
 }
 
-// TestUnrecognizedSpellingNotFlagged: pnpm only accepts kebab-case and
-// camelCase keys, so a smushed-lowercase or mis-cased spelling is a typo
-// pnpm ignores and must not produce a finding.
+// TestDuplicateCamelKeyLastWins: duplicate camelCase keys resolve to the
+// later value, mirroring how a YAML loader applies duplicates.
+func TestDuplicateCamelKeyLastWins(t *testing.T) {
+	if !fires(t, target, "dangerouslyAllowAllBuilds: false\ndangerouslyAllowAllBuilds: true\n", RuleDangerousBuilds) {
+		t.Fatal("later duplicate true must win over earlier false")
+	}
+	if fires(t, target, "dangerouslyAllowAllBuilds: true\ndangerouslyAllowAllBuilds: false\n", RuleDangerousBuilds) {
+		t.Fatal("later duplicate false must win over earlier true")
+	}
+}
+
+// TestUnrecognizedSpellingNotFlagged: only the exact camelCase spelling
+// pnpm honors in pnpm-workspace.yaml matches; any other spelling is a
+// key pnpm ignores there and must not produce a finding.
 func TestUnrecognizedSpellingNotFlagged(t *testing.T) {
 	for _, src := range []string{
 		"dangerouslyallowallbuilds: true\n",     // no camel boundaries
 		"BlockExoticSubdeps: false\n",           // wrong leading case
-		"DANGEROUSLY_ALLOW_ALL_BUILDS: true\n",  // underscores, not kebab
-		"dangerously--allow-all-builds: true\n", // doubled hyphen
+		"DANGEROUSLY_ALLOW_ALL_BUILDS: true\n",  // underscores
+		"dangerously--allow-all-builds: true\n", // malformed hyphenation
 		"dangerously-allow-all-builds-: true\n", // trailing hyphen
 		"-block-exotic-subdeps: false\n",        // leading hyphen
 	} {
 		if got := ids(t, target, src); len(got) != 0 {
 			t.Fatalf("unrecognized key spelling must not fire, got %v on:\n%s", got, src)
 		}
-	}
-}
-
-// TestDuplicateExplicitSpellingLastWins: two explicit spellings of one
-// setting resolve to pnpm's last-wins, regardless of which spelling
-// comes second.
-func TestDuplicateExplicitSpellingLastWins(t *testing.T) {
-	// safe then unsafe -> unsafe wins -> fire.
-	if !fires(t, target, "dangerouslyAllowAllBuilds: false\ndangerously-allow-all-builds: true\n", RuleDangerousBuilds) {
-		t.Fatal("later explicit true must win over earlier explicit false")
-	}
-	// unsafe then safe -> safe wins -> no fire.
-	if fires(t, target, "dangerously-allow-all-builds: true\ndangerouslyAllowAllBuilds: false\n", RuleDangerousBuilds) {
-		t.Fatal("later explicit false must win over earlier explicit true")
 	}
 }
 
