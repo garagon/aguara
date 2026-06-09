@@ -88,6 +88,12 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		{"alias workspace target", "safe@workspace:node-ipc@9.2.3", "", "", false},
 		{"alias file target", "safe@file:../node-ipc", "", "", false},
 		{"alias github target", "safe@github:user/repo", "", "", false},
+		// A file dependency whose PATH contains "@npm:" must be treated
+		// as the file dep it is (first protocol wins), not resolved to
+		// the npm package in the path. Otherwise a local directory turns
+		// into a false advisory hit.
+		{"file dep with npm in path", "local-safe@file:safe@npm:node-ipc@9.2.3", "", "", false},
+		{"link dep with npm in path", "local@link:vendor@npm:node-ipc@9.2.3", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

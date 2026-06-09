@@ -142,23 +142,29 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 	// Route these to a dedicated resolver before the normal path; the
 	// "@npm:" token never appears in a non-alias key (peer suffixes
 	// are "(pkg@ver)", non-registry sources start with file:/link:/...).
-	if strings.Contains(key, "@npm:") {
-		return parsePnpmAliasPackageKey(key)
-	}
-
 	// An alias pointing at a NON-registry source
 	// ("alias@workspace:...", "alias@file:...", "alias@github:...") is
-	// not addressable in the npm registry. Unlike a bare "file:..." key,
-	// the alias NAME precedes the protocol, so the leading-prefix
-	// rejection below would miss it and the modern parser would emit a
-	// junk (alias, "workspace:...") ref. A package name cannot contain
-	// ":", so "@<protocol>:" only appears in alias keys; reject here.
+	// not addressable in the npm registry. The FIRST protocol in the key
+	// determines the source, so this rejection runs BEFORE the npm-alias
+	// routing: a key like "local-safe@file:safe@npm:node-ipc@9.2.3" is a
+	// file dependency whose path merely contains "@npm:", not an npm
+	// alias, and must not resolve to a node-ipc advisory hit. The alias
+	// NAME precedes the protocol, so the leading-prefix rejection further
+	// down would miss it and the modern parser would emit a junk
+	// (alias, "file:...") ref. A package name cannot contain ":", so
+	// "@<protocol>:" only appears in alias-shaped keys; reject here. A
+	// real npm alias never contains these tokens (its real spec is a
+	// plain registry name@version), so genuine aliases pass through.
 	for _, p := range []string{
 		"@workspace:", "@file:", "@link:", "@github:", "@git:", "@http:", "@https:", "@jsr:",
 	} {
 		if strings.Contains(key, p) {
 			return "", "", false
 		}
+	}
+
+	if strings.Contains(key, "@npm:") {
+		return parsePnpmAliasPackageKey(key)
 	}
 
 	// Older lockfiles prefix entries with "/". Strip before the
