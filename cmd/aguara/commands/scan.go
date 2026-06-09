@@ -18,6 +18,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
+	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
 	"github.com/garagon/aguara/internal/engine/pyrisk"
 	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
@@ -461,6 +462,7 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 	s.RegisterAnalyzer(jsrisk.New())
 	s.RegisterAnalyzer(pyrisk.New())
 	s.RegisterAnalyzer(rsbuild.New())
+	s.RegisterAnalyzer(pnpmpolicy.New())
 	s.RegisterAnalyzer(nlp.NewInjectionAnalyzer())
 	s.RegisterAnalyzer(toxicflow.New())
 	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
