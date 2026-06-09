@@ -98,6 +98,12 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		// "@npm:": after the leading "/" is stripped it starts with
 		// "file:", so it is rejected before alias routing.
 		{"slash file: prefix with npm in path", "/file:safe@npm:node-ipc@9.2.3", "", "", false},
+		// A protocol token that appears only in the PEER suffix belongs
+		// to the peer, not this package: the real package is still parsed
+		// normally and must not be dropped or misrouted to the alias path.
+		{"normal pkg, peer is an npm alias", "foo@1.0.0(bar@npm:baz@2.0.0)", "foo", "1.0.0", true},
+		{"normal pkg, peer is a file dep", "foo@1.0.0(bar@file:../baz)", "foo", "1.0.0", true},
+		{"real npm alias with scoped peer suffix", "safe-react@npm:react@18.2.0(@types/react@18.0.0)", "react", "18.2.0", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

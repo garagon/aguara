@@ -141,6 +141,23 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 	// (leading-prefix rejection, npm-alias routing) sees the same key.
 	key = strings.TrimPrefix(key, "/")
 
+	// Strip the parens-style peer-dep suffix up front, BEFORE any
+	// source/alias classification. v9+ encodes resolved peer deps as
+	// "name@version(peer@version)", and the peer can itself carry a
+	// protocol ("foo@1.0.0(bar@npm:baz@2.0.0)") or be scoped
+	// ("@commitlint/cli@19.6.1(@types/node@22.10.2)"). The suffix
+	// belongs to the PEER, not this package: leaving it in would make
+	// the "@npm:" / "@<protocol>:" tests below misread a peer's
+	// protocol as this package's and either misroute the key to the
+	// alias parser (dropping the real package) or reject it. The suffix
+	// is always after the version, so removing it here is safe; a scoped
+	// peer also adds an extra "/" that would otherwise fool the v5
+	// slash-count heuristic. The underscore-style suffix is removed
+	// downstream from the version string itself.
+	if i := strings.IndexByte(key, '('); i >= 0 {
+		key = key[:i]
+	}
+
 	// Hard reject non-registry sources whose key STARTS with the
 	// protocol. Each prefix is a literal pnpm spec; no wildcards. This
 	// runs before npm-alias routing so a slash-prefixed local key like
@@ -183,19 +200,8 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		return parsePnpmAliasPackageKey(key)
 	}
 
-	// Strip the parens-style peer-dep suffix from the key BEFORE
-	// classifying scoped vs unscoped. v9+ encodes resolved peer
-	// deps as "name@version(peer@version)" and the peer can itself
-	// be scoped ("@commitlint/cli@19.6.1(@types/node@22.10.2)").
-	// A scoped peer adds an extra "/" to the key, which would fool
-	// the scoped slash-count heuristic into treating the key as v5
-	// slash-form and splitting on the wrong "/". The peer suffix
-	// is always after the version, so removing it pre-classification
-	// is safe; the underscore-style suffix is removed downstream
-	// from the version string itself.
-	if i := strings.IndexByte(key, '('); i >= 0 {
-		key = key[:i]
-	}
+	// (The parens-style peer-dep suffix was already stripped at the top
+	// of the function, before source/alias classification.)
 
 	// Two pnpm key formats coexist in the wild:
 	//
