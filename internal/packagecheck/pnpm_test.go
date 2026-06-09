@@ -94,6 +94,10 @@ func TestParsePnpmPackageKey(t *testing.T) {
 		// into a false advisory hit.
 		{"file dep with npm in path", "local-safe@file:safe@npm:node-ipc@9.2.3", "", "", false},
 		{"link dep with npm in path", "local@link:vendor@npm:node-ipc@9.2.3", "", "", false},
+		// Slash-prefixed bare non-registry key whose path contains
+		// "@npm:": after the leading "/" is stripped it starts with
+		// "file:", so it is rejected before alias routing.
+		{"slash file: prefix with npm in path", "/file:safe@npm:node-ipc@9.2.3", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

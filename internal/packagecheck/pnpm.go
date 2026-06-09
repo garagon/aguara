@@ -135,26 +135,38 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 // Conservative by design: better to under-emit than to surface false
 // positives on shapes pnpm uses for non-registry packages.
 func parsePnpmPackageKey(key string) (string, string, bool) {
-	// npm: alias entries resolve to a DIFFERENT real registry package
-	// than the local dependency name. The user may have installed
-	// `safe-ipc@npm:node-ipc@9.2.3`, but the package that must be
-	// matched against npm advisories is node-ipc@9.2.3, not safe-ipc.
-	// Route these to a dedicated resolver before the normal path; the
-	// "@npm:" token never appears in a non-alias key (peer suffixes
-	// are "(pkg@ver)", non-registry sources start with file:/link:/...).
+	// Older lockfiles prefix entries with "/". Strip before the
+	// source-prefix checks so "/file:..." and "file:..." are
+	// treated identically. Done FIRST so every classification below
+	// (leading-prefix rejection, npm-alias routing) sees the same key.
+	key = strings.TrimPrefix(key, "/")
+
+	// Hard reject non-registry sources whose key STARTS with the
+	// protocol. Each prefix is a literal pnpm spec; no wildcards. This
+	// runs before npm-alias routing so a slash-prefixed local key like
+	// "/file:safe@npm:node-ipc@9.2.3" (now "file:safe@npm:...") is
+	// rejected as the file dependency it is, not resolved to the npm
+	// package buried in its path.
+	for _, prefix := range []string{
+		"file:", "link:", "workspace:", "github:", "git:", "http:", "https:",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			return "", "", false
+		}
+	}
+
 	// An alias pointing at a NON-registry source
 	// ("alias@workspace:...", "alias@file:...", "alias@github:...") is
 	// not addressable in the npm registry. The FIRST protocol in the key
-	// determines the source, so this rejection runs BEFORE the npm-alias
-	// routing: a key like "local-safe@file:safe@npm:node-ipc@9.2.3" is a
-	// file dependency whose path merely contains "@npm:", not an npm
+	// determines the source, so this rejection also runs BEFORE the
+	// npm-alias routing: a key like "local-safe@file:safe@npm:node-ipc@9.2.3"
+	// is a file dependency whose path merely contains "@npm:", not an npm
 	// alias, and must not resolve to a node-ipc advisory hit. The alias
-	// NAME precedes the protocol, so the leading-prefix rejection further
-	// down would miss it and the modern parser would emit a junk
-	// (alias, "file:...") ref. A package name cannot contain ":", so
-	// "@<protocol>:" only appears in alias-shaped keys; reject here. A
-	// real npm alias never contains these tokens (its real spec is a
-	// plain registry name@version), so genuine aliases pass through.
+	// NAME precedes the protocol here (so the leading-prefix rejection
+	// above does not catch it), but a package name cannot contain ":", so
+	// "@<protocol>:" only appears in alias-shaped keys. A real npm alias
+	// never contains these tokens (its real spec is a plain registry
+	// name@version), so genuine aliases pass through.
 	for _, p := range []string{
 		"@workspace:", "@file:", "@link:", "@github:", "@git:", "@http:", "@https:", "@jsr:",
 	} {
@@ -163,23 +175,12 @@ func parsePnpmPackageKey(key string) (string, string, bool) {
 		}
 	}
 
+	// npm: alias entries resolve to a DIFFERENT real registry package
+	// than the local dependency name. The user may have installed
+	// `safe-ipc@npm:node-ipc@9.2.3`, but the package that must be matched
+	// against npm advisories is node-ipc@9.2.3, not safe-ipc.
 	if strings.Contains(key, "@npm:") {
 		return parsePnpmAliasPackageKey(key)
-	}
-
-	// Older lockfiles prefix entries with "/". Strip before the
-	// source-prefix checks so "/file:..." and "file:..." are
-	// treated identically.
-	key = strings.TrimPrefix(key, "/")
-
-	// Hard reject non-registry sources. Each prefix is a literal
-	// pnpm spec; no wildcards.
-	for _, prefix := range []string{
-		"file:", "link:", "workspace:", "github:", "git:", "http:", "https:",
-	} {
-		if strings.HasPrefix(key, prefix) {
-			return "", "", false
-		}
 	}
 
 	// Strip the parens-style peer-dep suffix from the key BEFORE
