@@ -8,8 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 Aguara now checks pnpm's supply-chain posture, not only its lockfile.
 pnpm v11 ships some of the strongest supply-chain controls in the Node
 ecosystem; Aguara verifies a project is actually using them, and
-resolves `npm:` aliases in `pnpm-lock.yaml` so a compromised registry
-package cannot hide behind a local dependency name.
+hardens `pnpm-lock.yaml` parsing so an alias-shaped lockfile entry
+cannot hide a compromised registry package behind a local dependency
+name.
 
 ### Added
 
@@ -37,21 +38,26 @@ package cannot hide behind a local dependency name.
     v11 no longer honors (migrate to `allowBuilds`).
 
   A missing setting is treated as the secure v11 default and never
-  fires. Kebab-case and camelCase keys resolve to the same setting,
-  YAML merge keys (`<<:`) are expanded, and each finding points at the
-  exact line. Rule catalog grows to 236 cataloged detections (193 YAML
-  + 43 analyzer-emitted).
+  fires. Only the exact camelCase keys pnpm honors in
+  `pnpm-workspace.yaml` match (verified against pnpm 11.5.2: a
+  kebab-case key there is silently ignored by pnpm, so flagging it
+  would be a false positive). YAML merge keys (`<<:`) are expanded, and
+  each finding points at the exact line. Rule catalog grows to 236
+  cataloged detections (193 YAML + 43 analyzer-emitted).
 
 - **`npm:` alias resolution in `pnpm-lock.yaml`** (`aguara check` /
-  `aguara audit`). A dependency installed as
-  `pnpm add safe-ipc@npm:node-ipc@9.2.3` now matches advisories for the
-  real registry package (`node-ipc@9.2.3`) instead of the local alias
-  name. Unscoped and scoped aliases, scoped real targets, leading-slash
-  and peer-decorated keys are handled. Only unambiguous aliases with an
-  exact pinned version resolve; ranges, dist-tags, malformed specs, and
-  non-registry sources (`workspace:` / `file:` / `link:` / `github:` /
-  `git:` / `http(s):` / `jsr:`) are skipped, and alias + direct entries
-  for the same package dedup to one finding.
+  `aguara audit`). An alias-shaped lockfile entry such as
+  `safe-ipc@npm:node-ipc@9.2.3` now matches advisories for the real
+  registry package (`node-ipc@9.2.3`), never the local alias name.
+  pnpm itself normalizes aliased installs to real-name lockfile keys
+  (verified on pnpm 8/10/11), so this is hardening for hand-edited or
+  poisoned lockfiles and historical shapes rather than a gap in normal
+  installs. Unscoped and scoped aliases, scoped real targets,
+  leading-slash and peer-decorated keys are handled. Only unambiguous
+  aliases with an exact pinned version resolve; ranges, dist-tags,
+  malformed specs, and non-registry sources (`workspace:` / `file:` /
+  `link:` / `github:` / `git:` / `http(s):` / `jsr:`) are skipped, and
+  alias + direct entries for the same package dedup to one finding.
 
 ## [0.23.0] - 2026-06-07
 
