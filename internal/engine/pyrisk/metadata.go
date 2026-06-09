@@ -30,3 +30,8 @@ func RuleMetadata() []rulemeta.Rule {
 		},
 	}
 }
+
+// ruleInfo indexes this analyzer's catalog metadata by rule ID so emit
+// sites derive RuleName / Severity / Category from the single source of
+// truth instead of duplicating the strings.
+var ruleInfo = rulemeta.Index(RuleMetadata())

@@ -21,6 +21,8 @@
 // strings.
 package rulemeta
 
+import "github.com/garagon/aguara/internal/types"
+
 // Rule is the neutral metadata shape for a detection rule.
 //
 // Field semantics:
@@ -68,3 +70,27 @@ const (
 	AnalyzerPnpmPolicy = "pnpm-policy"
 	AnalyzerPattern    = "" // YAML-driven rules; empty so JSON omits the field
 )
+
+// Index returns the rules keyed by ID. Analyzers use it to derive their
+// emit-site RuleName / Severity / Category from their own RuleMetadata()
+// instead of duplicating the strings, so scan output and the catalog
+// (explain / list-rules) cannot drift apart.
+func Index(rules []Rule) map[string]Rule {
+	out := make(map[string]Rule, len(rules))
+	for _, r := range rules {
+		out[r.ID] = r
+	}
+	return out
+}
+
+// SeverityLevel returns the types.Severity for the rule's canonical
+// severity string. Unknown strings degrade to INFO rather than
+// panicking; metadata severities are static and locked by the catalog
+// tests, so this is defensive only.
+func (r Rule) SeverityLevel() types.Severity {
+	sev, err := types.ParseSeverity(r.Severity)
+	if err != nil {
+		return types.SeverityInfo
+	}
+	return sev
+}

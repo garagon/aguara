@@ -615,9 +615,9 @@ func detectPwnRequest(wf *workflow, j *job) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RulePwnRequest,
-		RuleName: "pull_request_target executes untrusted PR code",
+		RuleName: ruleInfo[RulePwnRequest].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RulePwnRequest].Category,
 		Description: "Workflow runs on pull_request_target (privileged) and checks out " +
 			"the PR head ref while the same job installs, builds, tests, or runs " +
 			"PR-controlled code. This is the classic pwn-request chain that turns " +
@@ -651,9 +651,9 @@ func detectCache(wf *workflow, j *job) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleCache,
-		RuleName: "Untrusted PR workflow can write cache consumed by privileged workflows",
+		RuleName: ruleInfo[RuleCache].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleCache].Category,
 		Description: "pull_request_target jobs that check out PR code AND populate the " +
 			"GitHub Actions cache can poison cache entries consumed later by privileged " +
 			"workflows. Cache writes are not constrained by the workflow's GITHUB_TOKEN " +
@@ -694,9 +694,9 @@ func detectOIDC(wf *workflow, j *job, eff perms) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleOIDC,
-		RuleName: "OIDC token available in a job that executes install/build/test code",
+		RuleName: ruleInfo[RuleOIDC].Name,
 		Severity: sev,
-		Category: "supply-chain",
+		Category: ruleInfo[RuleOIDC].Category,
 		Description: "id-token: write (or write-all) is granted on a job that also installs, " +
 			"builds, tests, or runs scripts. The OIDC token is exposed for the lifetime of " +
 			"the job, so any compromised dependency lifecycle script can mint a trusted " +
@@ -725,9 +725,9 @@ func detectCheckout(wf *workflow, j *job) *types.Finding {
 	}
 	return &types.Finding{
 		RuleID:   RuleCheckout,
-		RuleName: "Privileged workflow checks out PR code with persisted credentials",
-		Severity: types.SeverityHigh,
-		Category: "supply-chain",
+		RuleName: ruleInfo[RuleCheckout].Name,
+		Severity: ruleInfo[RuleCheckout].SeverityLevel(),
+		Category: ruleInfo[RuleCheckout].Category,
 		Description: "actions/checkout in a pull_request_target job is fetching the PR head " +
 			"ref while leaving persist-credentials at its default (true). That leaves the " +
 			"job's GITHUB_TOKEN in .git/config, where any subsequent step executing PR code " +
