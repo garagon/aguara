@@ -27,6 +27,16 @@
 //     rest of the analyzer.
 //   - Fixed severities, so the catalog (explain / list-rules) and scan
 //     output never disagree; emit metadata is derived from RuleMetadata.
+//
+// Scope boundary: hook command and credential-helper detection works on
+// common shell shapes with bounded regexes; it is deliberately NOT a
+// shell parser. It catches the unambiguous, high-frequency forms (a
+// fetch piped or command-substituted into an interpreter at a command
+// position; an interpreter running a repo-relative or fetched script)
+// and stays silent on cross-statement dataflow, deeply obfuscated
+// indirection, and other constructed strings -- under-report before
+// false-positive. Such lines are still covered by the pattern engine's
+// download-and-execute rules; agent-policy adds the agent-config framing.
 package agentpolicy
 
 import (
@@ -52,11 +62,14 @@ var (
 	// pipe and the interpreter is allowed (sudo / command / exec /
 	// env VAR=…, or an absolute/relative path such as /bin/bash), so
 	// `curl … | sudo sh` is covered.
-	// The span between the fetch and the pipe excludes shell separators
-	// (; & |) and newlines, so the fetch and the pipe-to-interpreter must
-	// be the SAME command segment -- `curl health; echo x | sh` does not
-	// match (the fetched bytes are not what is piped to sh).
-	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n;&|]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
+	// The fetch must be at a COMMAND position (start of command or after
+	// a shell separator), so a `curl` that is an argument to another
+	// command (`printf 'curl ...' | bash`, `echo curl | bash`) is not
+	// read as the pipeline producer. The span up to the pipe excludes
+	// shell separators (; & |) and newlines, so the fetch and the
+	// pipe-to-interpreter are the SAME segment -- `curl health; echo x |
+	// sh` does not match.
+	hookFetchExecRe = regexp.MustCompile(`(?i)(?:^|[;&|(])\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n;&|]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
@@ -449,17 +462,6 @@ func isRepoRelativeCommand(cmd string) bool {
 	if c == "" {
 		return false
 	}
-	// `interp -c "<command string>"` runs a command STRING, not a script
-	// path: the argument is `op read ...` or `$(curl ...)`, not a file.
-	// Classify the string by content (fetch or an explicit repo-relative
-	// path) rather than treating its first word -- often a PATH tool like
-	// `op` or `vault` -- as a repo script.
-	if cFlagRe.MatchString(c) {
-		return fetchWordRe.MatchString(c) ||
-			strings.Contains(c, "./") || strings.Contains(c, "../") ||
-			strings.Contains(c, ".claude/")
-	}
-
 	fields := strings.Fields(c)
 	i := 0
 	viaInterp := false
@@ -481,6 +483,18 @@ func isRepoRelativeCommand(cmd string) bool {
 			continue
 		}
 		break
+	}
+	// `interp -c "<command string>"` runs a command STRING, not a script
+	// path: the argument is `op read ...` or `$(curl ...)`, not a file.
+	// Only when the command is actually an interpreter -- so a non-shell
+	// binary using -c for its own option (`/usr/local/bin/mint -c
+	// ./mint.yml`) is NOT misread. Classify the string by content (a
+	// fetch or an explicit repo-relative path), not by its first word,
+	// which is often a PATH tool like `op` or `vault`.
+	if viaInterp && cFlagRe.MatchString(c) {
+		return fetchWordRe.MatchString(c) ||
+			strings.Contains(c, "./") || strings.Contains(c, "../") ||
+			strings.Contains(c, ".claude/")
 	}
 	if i >= len(fields) {
 		return false

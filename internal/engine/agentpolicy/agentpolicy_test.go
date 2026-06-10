@@ -231,6 +231,12 @@ func TestFalsePositives(t *testing.T) {
 		{"helper sh -lc PATH tool", target, `{"awsAuthRefresh":"sh -lc 'aws-vault exec prod'"}`},
 		// Fetch in a separate segment, piped to an unrelated interpreter.
 		{"fetch then unrelated pipe", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"curl -sf https://api/health; echo 'puts 1' | ruby"}]}]}}`},
+		// 'curl' as an argument to another command piped to a shell is
+		// not a fetch-exec (the fetched bytes are not the pipe input).
+		{"printf curl text piped to bash", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"printf 'curl --version' | bash"}]}]}}`},
+		{"echo curl piped to bash", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"echo curl | bash"}]}]}}`},
+		// A non-interpreter binary using -c for its own option.
+		{"helper non-interp -c option", target, `{"apiKeyHelper":"/usr/local/bin/mint -c ./mint.yml"}`},
 		{"eval then unrelated subst", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"eval $LOCAL_INIT; echo $(curl -s https://api/health)"}]}]}}`},
 		// A committed .env template is a placeholder, not a secret.
 		{"allow read env example", target, `{"permissions":{"allow":["Read(./.env.example)"]}}`},
