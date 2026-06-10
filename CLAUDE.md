@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.23.0 (2026-06-07; main carries unreleased #203 pnpm-policy + #204 pnpm aliases). 193 YAML rules + 43 analyzer-emitted (236 cataloged), 13 categories, 10 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpmpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml with `npm:` alias resolution / package-lock.json / yarn.lock classic, and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.23.0 (2026-06-07; main carries unreleased #203 pnpm-policy + #204 pnpm aliases + #207 engine registry + agentpolicy). 193 YAML rules + 51 analyzer-emitted (244 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 11 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml with `npm:` alias resolution / package-lock.json / yarn.lock classic, and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -56,7 +56,9 @@ Aguara is a deterministic static security scanner for AI agent skills and MCP se
 
 Root package re-exports types from `internal/types` and exposes: `Scan()`, `ScanContent()`, `ListRules()`, `ExplainRule()`, `Discover()`. Used by external consumers like `aguara-mcp`. Functional options pattern (`WithMinSeverity()`, `WithWorkers()`, etc.).
 
-### Analysis Pipeline (9 default analyzers + rug-pull when --monitor is set, run sequentially per file)
+Analyzer wiring is centralized: add an analyzer in `internal/engine/engine.go` (`DefaultAnalyzers` + `RuleMetadata`) - one place, not the old four call sites. Emit-site RuleName/Severity/Category derive from each analyzer's `RuleMetadata()` via `rulemeta.Index` (no string drift).
+
+### Analysis Pipeline (10 default analyzers + rug-pull when --monitor is set, run sequentially per file)
 
 1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
 2. **CI Trust** (`internal/engine/ci/`) - YAML parser for `.github/workflows/*.yml`. Detects `pull_request_target` pwn-request chains, cache poisoning, OIDC token surface, and persisted-credentials checkouts. Emits `GHA_PWN_REQUEST_001` / `GHA_CACHE_001` / `GHA_OIDC_001` / `GHA_CHECKOUT_001`.
@@ -65,11 +67,12 @@ Root package re-exports types from `internal/types` and exposes: `Scan()`, `Scan
 5. **PyRisk** (`internal/engine/pyrisk/`) - Flow-sensitive single-pass scanner for `setup.py`/`__init__.py`. Binds a remote-JS fetch to a `node -e`/`--eval` execution sink (≤2 hops, taint cleared on safe reassignment). Emits `PY_IMPORTTIME_REMOTE_JS_001` (moved from a co-presence YAML rule in v0.22.0).
 6. **RSBuild** (`internal/engine/rsbuild/`) - Flow-sensitive single-pass scanner for `build.rs`. Binds a wallet/keystore read to a network send sink (the tainted value must reach a send/body argument; ≤2 hops). Emits `RS_BUILD_WALLET_EXFIL_001` (moved from a co-presence YAML rule in v0.22.0).
 7. **PnpmPolicy** (`internal/engine/pnpmpolicy/`) - yaml.Node parser for `pnpm-workspace.yaml` (exact target, base name only). Flags pnpm supply-chain settings weakened below the v11 defaults; absence of a setting never fires. Only exact camelCase keys match (ground truth pnpm 11.5.2: kebab-case in pnpm-workspace.yaml is silently IGNORED by pnpm - kebab is the .npmrc spelling - so kebab must NOT fire), YAML merge keys expand (visited-set bounded), explicit beats merged, booleans follow pnpm's js-yaml 1.1 loader (yes/no/on/off ARE booleans - do not "fix" to yaml.v3 tags). Emits 9 `PNPM_*` rules (1 HIGH `PNPM_DANGEROUS_BUILDS_001`, 4 MEDIUM, 3 LOW, 1 INFO), all category supply-chain.
-8. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
-9. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file source/sink co-occurrence + cross-file capability correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
-10. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
+8. **AgentPolicy** (`internal/engine/agentpolicy/`) - JSON parser for Claude Code `.claude/settings.json` / `settings.local.json` (exact target via `.claude/` path suffix). Flags host config dangerous to inherit from a cloned repo: hooks that fetch-and-execute, code-injection env vars (NODE_OPTIONS --require, LD_PRELOAD, BASH_ENV…), `bypassPermissions`, `enableAllProjectMcpServers`, broad/secret-read allow rules, repo-relative credential helpers. Per-key independent decode (one bad block doesn't blind the rest); absence never fires; fires on dangerous value SHAPE only. Emits 8 `AGENTCFG_*` rules (1 CRITICAL, 2 HIGH, 4 MEDIUM, 1 LOW), category `agent-trust`.
+9. **NLP Analyzer** (`internal/engine/nlp/`) - Goldmark AST walker for markdown; JSON/YAML string extractor for structured files. Keyword classification with proximity weighting. Detects prompt injection, authority claims, credential+exfil combos.
+10. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file source/sink co-occurrence + cross-file capability correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
+11. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
-All ten implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first nine run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
+All eleven implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first ten run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
 
 ### Key Package Relationships
 
@@ -149,7 +152,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 193 YAML / 236 cataloged)
+- Rule count (currently 193 YAML / 244 cataloged)
 - Test count (currently ~750)
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)

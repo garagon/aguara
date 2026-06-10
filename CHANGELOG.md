@@ -5,14 +5,46 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-Aguara now checks pnpm's supply-chain posture, not only its lockfile.
-pnpm v11 ships some of the strongest supply-chain controls in the Node
-ecosystem; Aguara verifies a project is actually using them, and
-hardens `pnpm-lock.yaml` parsing so an alias-shaped lockfile entry
+Aguara now checks the trust layer around AI agents and pnpm projects.
+A new agent-policy analyzer reads a repo's Claude Code configuration and
+flags settings that are dangerous to inherit from a clone; pnpm posture
+checks verify a project uses pnpm v11's supply-chain controls; and
+`pnpm-lock.yaml` parsing is hardened so an alias-shaped lockfile entry
 cannot hide a compromised registry package behind a local dependency
 name.
 
 ### Added
+
+- **agent-policy analyzer** (`internal/engine/agentpolicy/`), the
+  eleventh scan analyzer. Reads `.claude/settings.json` /
+  `settings.local.json` and flags Claude Code host configuration that is
+  dangerous to inherit from a cloned repo (after the one-time
+  workspace-trust prompt, its hooks and helpers run automatically), with
+  eight new rules in a new `agent-trust` category:
+  - `AGENTCFG_HOOK_FETCH_EXEC_001` (CRITICAL): a hook command downloads
+    and runs remote code (`curl | sh`, `eval $(curl ...)`), executed
+    automatically when a session opens in the repo.
+  - `AGENTCFG_ENV_EXEC_001` (HIGH): the `env` block sets a
+    code-execution variable (`NODE_OPTIONS --require`, `LD_PRELOAD`,
+    `BASH_ENV`, and similar).
+  - `AGENTCFG_BYPASS_PERMS_001` (HIGH): `permissions.defaultMode` is
+    `bypassPermissions`, pre-disabling the tool-approval prompt.
+  - `AGENTCFG_MCP_AUTOAPPROVE_001` (MEDIUM):
+    `enableAllProjectMcpServers: true` auto-loads every `.mcp.json`
+    server.
+  - `AGENTCFG_BROAD_ALLOW_001` (MEDIUM): a blanket or dangerous
+    `permissions.allow` rule (`Bash(*)`, `Bash(curl *)`).
+  - `AGENTCFG_SECRET_READ_ALLOW_001` (MEDIUM): an allow rule over a
+    secret path (`.env`, `~/.ssh`, `~/.aws`, private keys).
+  - `AGENTCFG_HELPER_REPO_SCRIPT_001` (MEDIUM): a credential helper
+    (`apiKeyHelper`, `awsAuthRefresh`) runs a repo-shipped script.
+  - `AGENTCFG_PERMS_WEAK_MODE_001` (LOW): `defaultMode` is `acceptEdits`
+    or `auto` shipped as a project default.
+
+  A missing setting is treated as the secure default and never fires;
+  the analyzer judges the dangerous shape of a value, not the presence
+  of hooks or permissions. Malformed JSON is silent. Rule catalog grows
+  to 244 cataloged detections (193 YAML + 51 analyzer-emitted).
 
 - **pnpm-policy analyzer** (`internal/engine/pnpmpolicy/`), the tenth
   scan analyzer. Reads `pnpm-workspace.yaml` and flags supply-chain
