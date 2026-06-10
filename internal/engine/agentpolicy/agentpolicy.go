@@ -61,13 +61,20 @@ var (
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
 	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source|(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\s+-c)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
-	// fetchOutputRe captures the file a curl/wget download is written to:
+	// outputFlagRe captures the file a download is explicitly written to:
 	// a short flag cluster ending in o/O (-o, -O, -qO, -sLo), --output,
-	// or a shell redirect. fetchThenRunsFile then confirms an interpreter
-	// runs THAT SAME file, so a newline-separated "curl -o /tmp/a\nbash
-	// /tmp/a" is caught while an unrelated two-line hook is not.
-	fetchOutputRe = regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^\n]*?(?:\s-[a-z]*[oO]\s+|--output(?:-document)?[=\s]+|>\s*)('?"?)([^\s'";|&]+)`)
-	interpRe      = `(?i)\b(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`
+	// or a shell redirect.
+	outputFlagRe = regexp.MustCompile(`(?i)(?:\s-[a-z]*[oO]\s+|--output(?:-document)?[=\s]+|>\s*)['"]?([^\s'";|&]+)`)
+	// fetchURLRe captures URLs in the command; when no explicit output
+	// file is given (curl -O, wget default), the download lands at the
+	// URL's basename.
+	fetchURLRe = regexp.MustCompile(`(?i)(https?|ftp)://[^\s'";|&]+`)
+	// interpCmdPrefix matches an interpreter at a COMMAND position
+	// (start of command or after a shell separator), optionally
+	// path-qualified / sudo-wrapped, followed by whitespace before its
+	// script argument. Anchoring to a command position prevents the
+	// "sh" inside a filename like "setup.sh" from matching.
+	interpCmdPrefix = "(?i)(?:^|[\\s;&|(`])(?:sudo\\s+|command\\s+|exec\\s+|[~./][^\\s]*/)?(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\\s+"
 )
 
 // envExecVars are environment variables whose presence in a committed
@@ -89,8 +96,9 @@ var envExecVars = map[string]bool{
 }
 
 // nodeOptionsExecRe matches the NODE_OPTIONS flags that load and run
-// code (as opposed to tuning the runtime).
-var nodeOptionsExecRe = regexp.MustCompile(`(?i)--(require|import|loader|experimental-loader)\b`)
+// code (as opposed to tuning the runtime), including Node's short
+// aliases (-r for --require, -i is interactive so excluded).
+var nodeOptionsExecRe = regexp.MustCompile(`(?i)(--(require|import|loader|experimental-loader)\b|(?:^|\s)-r(?:\s|=))`)
 
 // credentialHelpers are the settings keys that execute a script to mint
 // or refresh credentials. A repo-relative target runs repo code with
@@ -209,18 +217,19 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 	}
 }
 
-// fetchThenRunsFile reports whether a command downloads a resource to a
-// file and then runs that same file through an interpreter, even when
-// the two statements are separated by a newline (which the inline
-// pipe/chain regex does not cross). The file identity must match, so an
-// unrelated fetch and a later unrelated interpreter call do not trip it.
+// fetchThenRunsFile reports whether a command downloads a resource and
+// then runs that same file through an interpreter, even when the two
+// statements are separated by a newline (which the inline pipe regex
+// does not cross). The downloaded file's name must match the file the
+// interpreter runs, so an unrelated fetch and a later unrelated
+// interpreter call do not trip it.
 func fetchThenRunsFile(cmd string) bool {
-	for _, m := range fetchOutputRe.FindAllStringSubmatch(cmd, -1) {
-		file := strings.TrimSpace(m[2])
-		if file == "" {
-			continue
-		}
-		runRe, err := regexp.Compile(interpRe + `[^\n]*` + regexp.QuoteMeta(file))
+	for _, name := range downloadedNames(cmd) {
+		// Require an interpreter at a command position and a token
+		// boundary after the name, so a downloaded "/tmp/h" does not
+		// prefix-match a later "/tmp/healthcheck.sh" and "sh" inside a
+		// filename is not read as a shell.
+		runRe, err := regexp.Compile(interpCmdPrefix + `[^\n]*?` + regexp.QuoteMeta(name) + `(?:["'\s;|&)]|$)`)
 		if err != nil {
 			continue
 		}
@@ -229,6 +238,51 @@ func fetchThenRunsFile(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// downloadedNames returns the file name(s) a curl/wget download lands at.
+// An explicit output target (-o / --output / redirect) wins; otherwise
+// the download uses the URL's basename (curl -O, wget default).
+func downloadedNames(cmd string) []string {
+	if !fetchURLRe.MatchString(cmd) && !strings.Contains(strings.ToLower(cmd), "curl") &&
+		!strings.Contains(strings.ToLower(cmd), "wget") {
+		return nil
+	}
+	var explicit []string
+	for _, m := range outputFlagRe.FindAllStringSubmatch(cmd, -1) {
+		f := strings.Trim(m[1], `'"`)
+		if f != "" && !isURL(f) {
+			explicit = append(explicit, f)
+		}
+	}
+	if len(explicit) > 0 {
+		return explicit
+	}
+	var names []string
+	for _, u := range fetchURLRe.FindAllString(cmd, -1) {
+		if b := urlBasename(u); b != "" {
+			names = append(names, b)
+		}
+	}
+	return names
+}
+
+func isURL(s string) bool {
+	return fetchURLRe.MatchString(s)
+}
+
+// urlBasename returns the last path segment of a URL, stripping any
+// query/fragment, or "" when there is none.
+func urlBasename(u string) string {
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	u = strings.TrimRight(u, "/")
+	seg := u[strings.LastIndexByte(u, '/')+1:]
+	if seg == "" || strings.Contains(seg, ":") { // bare host, no path
+		return ""
+	}
+	return seg
 }
 
 // checkEnv flags an env block that sets a code-execution variable.
@@ -445,7 +499,9 @@ func isRepoRelativeCommand(cmd string) bool {
 	if i >= len(fields) {
 		return false
 	}
-	target := fields[i]
+	// Strip shell quotes so a quoted absolute path (`bash
+	// "/usr/local/bin/mint.sh"`) is classified by its real prefix.
+	target := strings.Trim(fields[i], `'"`)
 	// A network fetch is the dangerous command itself, not a substring
 	// of an absolute binary name.
 	if fetchCommands[strings.ToLower(filepath.Base(target))] {
