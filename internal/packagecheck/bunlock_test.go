@@ -91,12 +91,22 @@ func TestParseBunLock_Dedup(t *testing.T) {
 	require.Len(t, refs, 1, "same (name, version) from an alias + direct must dedup")
 }
 
-func TestParseBunLock_MalformedNoPanic(t *testing.T) {
-	// No packages object, or junk: no refs, no error, no panic.
-	for _, body := range []string{``, `not json`, `{"workspaces":{}}`, `{"packages":{`} {
+func TestParseBunLock_ValidNoPackagesIsEmpty(t *testing.T) {
+	// Valid JSON with no packages object (or an empty one) is a project
+	// with no locked deps: zero refs, no error, no panic.
+	for _, body := range []string{`{}`, `{"workspaces":{}}`, `{"lockfileVersion":1,"packages":{}}`} {
 		refs, err := ParseBunLock(writeBunLock(t, body))
 		require.NoError(t, err)
 		require.Empty(t, refs)
+	}
+}
+
+func TestParseBunLock_InvalidFailsLoudly(t *testing.T) {
+	// A supported lockfile that does not decode must error, not pass
+	// silently with zero packages (which would look audited but is not).
+	for _, body := range []string{``, `not json`, `{"packages":{`} {
+		_, err := ParseBunLock(writeBunLock(t, body))
+		require.Error(t, err, "invalid bun.lock must fail loudly: %q", body)
 	}
 }
 

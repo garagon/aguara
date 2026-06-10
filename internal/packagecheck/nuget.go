@@ -14,14 +14,14 @@ import (
 // dependencies. Dispatches on target.Source:
 //
 //   - "packages.lock.json" -> parseNuGetLockfile (Direct +
-//     Transitive entries; the
-//     resolved-version source of truth
-//     when central package management is
-//     enabled)
+//                              Transitive entries; the
+//                              resolved-version source of truth
+//                              when central package management is
+//                              enabled)
 //   - "csproj" / "fsproj" / "vbproj" -> parseNuGetProjectFile
-//     (PackageReference items; the
-//     version source when no lockfile
-//     is in use)
+//                              (PackageReference items; the
+//                              version source when no lockfile
+//                              is in use)
 //
 // No external commands (`dotnet restore`, `nuget`). No network.
 // obj/project.assets.json is out of scope; the build cache lives

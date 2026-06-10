@@ -66,9 +66,11 @@ func ParseBunLock(target Target) ([]PackageRef, error) {
 		Packages map[string][]json.RawMessage `json:"packages"`
 	}
 	if err := json.Unmarshal(strict, &lock); err != nil {
-		// Malformed (or comment-bearing) bun.lock: stay silent rather
-		// than guess, mirroring the other parsers' tolerance.
-		return nil, nil
+		// A supported lockfile that does not decode must fail loudly,
+		// like ParsePackageLock / ParsePNPMLock, so a corrupt bun.lock is
+		// never mistaken for an audited project. A valid file with no
+		// packages object simply yields zero refs below.
+		return nil, fmt.Errorf("parse bun.lock: %w", err)
 	}
 
 	seen := map[string]bool{}

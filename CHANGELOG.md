@@ -17,16 +17,19 @@ name.
 
 - **bun.lock and yarn Berry lockfile parsing** (`aguara check` /
   `aguara audit`). A freshly cloned Bun or Yarn v2+ project can now be
-  audited before install: `bun.lock` (the text lockfile; the legacy
-  binary `bun.lockb` stays out of scope) and `yarn.lock` Berry (v2+) join
-  the existing `pnpm-lock.yaml` / `package-lock.json` / classic
-  `yarn.lock` parsers. Both resolve `npm:` aliases to the real registry
-  package -- Bun records it as the resolved first element, Berry as the
-  `resolution:` field -- so a compromised package cannot hide behind a
-  local alias. Conservative, like the other npm parsers: only exact
-  registry tuples are emitted; git/file/workspace/patch sources and
+  audited before install: `bun.lock` (the text lockfile) and `yarn.lock`
+  Berry (v2+) join the existing `pnpm-lock.yaml` / `package-lock.json` /
+  classic `yarn.lock` parsers. Both resolve `npm:` aliases to the real
+  registry package -- Bun records it as the resolved first element, Berry
+  as the `resolution:` field -- so a compromised package cannot hide
+  behind a local alias. Conservative, like the other npm parsers: only
+  exact registry tuples are emitted; git/file/workspace/patch sources and
   ranges are skipped, and results dedupe on (name, version). A Berry
   lockfile previously errored out as unsupported; it is now parsed.
+  The legacy binary `bun.lockb` is not parsed (it cannot be read without
+  running Bun); a repo whose only lockfile is `bun.lockb` fails with a
+  clear message to commit the text `bun.lock` instead, rather than
+  passing as audited with zero packages read.
 
 - **agent-policy analyzer** (`internal/engine/agentpolicy/`), the
   eleventh scan analyzer. Reads `.claude/settings.json` /
