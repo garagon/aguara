@@ -47,11 +47,15 @@ const AnalyzerName = rulemeta.AnalyzerAgentPolicy
 
 var (
 	// hookFetchExecRe matches a command that downloads a resource and
-	// runs it through an interpreter: a pipe into a shell/runtime, a
-	// "&&"/";" chain into one, or eval/exec of a "$(curl ...)"
-	// substitution. Deliberately narrow: indirection beyond these
-	// shapes is out of scope (under-report before false-positive).
-	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?(\|\s*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b|(&&|;)\s*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b)`)
+	// runs it through an interpreter: a pipe or "&&"/";" chain into a
+	// shell/runtime. An optional wrapper between the chain and the
+	// interpreter is allowed (sudo / command / exec / env VAR=…, or an
+	// absolute/relative path to the interpreter such as /bin/bash), so
+	// `curl … | sudo sh` and `wget … && /bin/bash x` are covered.
+	// Deliberately narrow beyond that: deeper indirection is out of
+	// scope (under-report before false-positive). evalSubstRe covers
+	// the eval/exec "$(curl …)" wrapping form.
+	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?(?:\||&&|;)\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"` / `exec $(wget ...)`,
 	// where the interpreter wraps the fetch rather than following it.
 	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
@@ -353,33 +357,59 @@ func isSecretReadRule(rule string) bool {
 	return false
 }
 
+// fetchRe matches a bare network fetch anywhere in a command.
+var fetchRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b`)
+
+// helperWrappers are leading tokens to skip when locating the script a
+// helper command actually runs: interpreters (so `bash ./x.sh` is seen
+// as running ./x.sh) and privilege/exec wrappers.
+var helperWrappers = map[string]bool{
+	"sudo": true, "command": true, "exec": true, "env": true,
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ash": true,
+	"node": true, "deno": true, "bun": true, "python": true,
+	"python3": true, "ruby": true, "perl": true, "php": true,
+}
+
 // isRepoRelativeCommand reports whether a helper command runs code from
 // the repository (relative path or bare filename) or a network fetch,
 // rather than an absolute / home-anchored system path the developer
-// controls.
+// controls. Leading interpreter / wrapper tokens are skipped so the
+// repo-relative test applies to the script argument, not the wrapper
+// (e.g. `bash ./.claude/mint.sh`, `sudo python scripts/token.py`).
 func isRepoRelativeCommand(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	if c == "" {
 		return false
 	}
-	if hookFetchExecRe.MatchString(c) || evalSubstRe.MatchString(c) ||
-		regexp.MustCompile(`(?i)\b(curl|wget|iwr|fetch)\b`).MatchString(c) {
+	if fetchRe.MatchString(c) {
 		return true
 	}
-	first := strings.Fields(c)[0]
-	// Absolute or home-anchored paths are the developer's own tooling.
-	if strings.HasPrefix(first, "/") || strings.HasPrefix(first, "~") ||
-		strings.HasPrefix(first, "$HOME") || strings.HasPrefix(first, "${HOME}") {
+	fields := strings.Fields(c)
+	i := 0
+	for i < len(fields) {
+		tok := fields[i]
+		base := strings.ToLower(filepath.Base(tok))
+		// Skip a wrapper/interpreter token, a flag, or an env
+		// assignment (VAR=value) to reach the script argument.
+		if helperWrappers[base] || strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") {
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(fields) {
 		return false
 	}
-	// Explicit repo-relative path, or the .claude/ directory anywhere.
-	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, "../") ||
-		strings.Contains(first, ".claude/") {
-		return true
+	target := fields[i]
+	// Absolute or home-anchored paths are the developer's own tooling.
+	if strings.HasPrefix(target, "/") || strings.HasPrefix(target, "~") ||
+		strings.HasPrefix(target, "$HOME") || strings.HasPrefix(target, "${HOME}") {
+		return false
 	}
-	// A bare relative script reference (contains a path separator but is
-	// not absolute) -- e.g. "scripts/mint.sh".
-	if strings.Contains(first, "/") {
+	// Explicit repo-relative path, the .claude/ directory anywhere, or a
+	// bare relative path with a separator (e.g. "scripts/mint.sh").
+	if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") ||
+		strings.Contains(target, ".claude/") || strings.Contains(target, "/") {
 		return true
 	}
 	return false
