@@ -67,6 +67,9 @@ func AdjustConfidence(findings []types.Finding) []types.Finding {
 			mult := fileTypeMultiplier(findings[i].FilePath)
 			if mult != 1.0 {
 				findings[i].Confidence *= mult
+				if findings[i].Confidence > 1.0 { // instruction-file boost can exceed 1.0
+					findings[i].Confidence = 1.0
+				}
 			}
 		}
 	}
@@ -131,6 +134,14 @@ func inDocSection(ctx []types.ContextLine) bool {
 // Documentation formats get a slight penalty (0.9) while executable/config
 // files get no adjustment (1.0).
 func fileTypeMultiplier(filePath string) float64 {
+	// Agent instruction files (.cursorrules, AGENTS.md, copilot-
+	// instructions.md, ...) are directives the agent obeys, not prose
+	// examples. A prompt injection there is more likely real and more
+	// dangerous than the same pattern in a README, so it is weighted UP
+	// rather than getting the documentation penalty below.
+	if types.IsAgentInstructionFile(filePath) {
+		return 1.25
+	}
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".md", ".markdown", ".txt", ".rst":

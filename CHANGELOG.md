@@ -31,6 +31,20 @@ name.
   clear message to commit the text `bun.lock` instead, rather than
   passing as audited with zero packages read.
 
+- **Agent instruction files treated as a high-trust prompt-injection
+  surface.** Files an AI editor auto-loads and follows as directives --
+  `.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, and
+  `copilot-instructions.md` -- are now run through the prompt-injection
+  (NLP) analyzer even when they have no `.md` extension, and a finding in
+  one is weighted up rather than getting the documentation penalty a
+  README receives. An injected directive in these files is what the agent
+  actually obeys, so the same payload scores higher here than in prose.
+  No new rules or analyzer. The directory-scoped Cursor and Windsurf rule
+  formats (`.cursor/rules/*.mdc`, `.windsurf/rules/*`) and pattern-rule
+  coverage of the extensionless files are a follow-up. `CLAUDE.md` is
+  intentionally left out for now, since it is so widely used for
+  legitimate project instructions that flagging it would be noisy.
+
 - **agent-policy analyzer** (`internal/engine/agentpolicy/`), the
   eleventh scan analyzer. Reads `.claude/settings.json` /
   `settings.local.json` and flags Claude Code host configuration that is
