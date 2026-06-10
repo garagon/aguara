@@ -3,7 +3,7 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.24.0] - 2026-06-10
 
 Aguara now checks the trust layer around AI agents and pnpm projects.
 A new agent-policy analyzer reads a repo's Claude Code configuration and
