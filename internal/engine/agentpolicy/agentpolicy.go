@@ -253,6 +253,12 @@ func (a *Analyzer) checkEnv(raw json.RawMessage, emit emitFunc) {
 		return
 	}
 	for k, v := range env {
+		// An empty value clears the variable -- a hardening action, not an
+		// injection. Flagging it would false-positive (and fail --ci) on a
+		// config that explicitly clears an inherited dangerous variable.
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
 		dangerous := envExecVars[k]
 		if k == "NODE_OPTIONS" && nodeOptionsExecRe.MatchString(v) {
 			dangerous = true

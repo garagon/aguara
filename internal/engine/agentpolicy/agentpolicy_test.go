@@ -241,6 +241,9 @@ func TestFalsePositives(t *testing.T) {
 		{"helper bare system binary", target, `{"apiKeyHelper":"vault-helper"}`},
 		// Generic ENV application flag is not code injection.
 		{"env generic ENV flag", target, `{"env":{"ENV":"production"}}`},
+		// Clearing a dangerous variable is hardening, not injection.
+		{"env clears LD_PRELOAD", target, `{"env":{"LD_PRELOAD":""}}`},
+		{"env clears BASH_ENV", target, `{"env":{"BASH_ENV":""}}`},
 		// interp -c running a PATH credential tool is not a repo script.
 		{"helper bash -c PATH tool", target, `{"apiKeyHelper":"bash -c 'op read op://vault/key'"}`},
 		{"helper sh -lc PATH tool", target, `{"awsAuthRefresh":"sh -lc 'aws-vault exec prod'"}`},
