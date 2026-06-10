@@ -150,6 +150,10 @@ func parseTarget(t Target) ([]PackageRef, error) {
 			return ParsePackageLock(t)
 		case "yarn.lock":
 			return ParseYarnLock(t)
+		case "bun.lock":
+			return ParseBunLock(t)
+		case "bun.lockb":
+			return nil, fmt.Errorf("bun.lockb is a binary lockfile and is not supported; commit the text bun.lock instead (bun install writes it by default since Bun 1.2)")
 		default:
 			return nil, fmt.Errorf("packagecheck: no npm parser for source %q", t.Source)
 		}

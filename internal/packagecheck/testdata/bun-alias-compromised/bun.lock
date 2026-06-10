@@ -1,0 +1,17 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "app",
+      "dependencies": {
+        "safe-ipc": "npm:node-ipc@9.2.3",
+        "lodash": "4.17.21",
+      },
+    },
+  },
+  "packages": {
+    "lodash": ["lodash@4.17.21", "", {}, "sha512-FAKE=="],
+
+    "safe-ipc": ["node-ipc@9.2.3", "", {}, "sha512-FAKE=="],
+  }
+}

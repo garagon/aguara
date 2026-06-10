@@ -58,12 +58,9 @@ var yarnNonRegistryProtocols = []string{
 // indented body carrying `version "x.y.z"`.
 //
 // Yarn Berry (v2+) yarn.lock is a different, YAML-shaped grammar with a
-// `__metadata:` block. The v1 line parser would misread it, so a Berry
-// file is detected and rejected with a clear error rather than parsed.
-// Returning an empty result would let a Berry repo pass `aguara check
-// --ci` with zero packages read, which is too quiet: the user would not
-// learn their lockfile went unaudited. Failing loudly is the honest
-// signal until a Berry parser lands.
+// top-level `__metadata:` block. It is detected and handled by
+// parseYarnBerryLock (which reads the authoritative `resolution:`
+// field); the v1 line walker below handles classic v1 only.
 //
 // Conservative by design, mirroring ParsePackageLock: an entry is
 // emitted only when it maps with confidence to a registry tuple. Any
@@ -76,13 +73,19 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open yarn.lock: %w", err)
 	}
-	content := string(data)
+	// Normalize CRLF so a Windows checkout's `:\r` block headers are not
+	// missed (which would skip every block and read zero packages).
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
-	// Berry detection. A v2+ yarn.lock opens with a `__metadata:`
-	// block; v1 never has one. Fail loudly rather than parse: a silent
-	// empty result would let a Berry repo look audited when it was not.
-	if strings.Contains(content, "__metadata:") {
-		return nil, fmt.Errorf("yarn Berry lockfile detected; yarn.lock v2+ is not parsed yet (only yarn classic v1 is supported)")
+	// Berry detection. A v2+ yarn.lock has a top-level `__metadata:`
+	// block header; v1 never does. Match a real header line (the whole
+	// line is `__metadata:`, unindented and uncommented), not any
+	// occurrence -- otherwise a v1 lockfile with `# __metadata:` in a
+	// comment would route to the Berry parser and read zero packages,
+	// hiding every v1 dependency. Berry uses a different (YAML-shaped)
+	// grammar, so route it to the Berry parser rather than the v1 walker.
+	if hasYarnBerryMetadata(content) {
+		return parseYarnBerryLock(target, content)
 	}
 
 	seen := map[string]bool{}
@@ -236,4 +239,165 @@ func isExactYarnVersion(v string) bool {
 		return false
 	}
 	return !strings.ContainsAny(v, " \t^~*<>=|:/")
+}
+
+// hasYarnBerryMetadata reports whether content has a top-level
+// `__metadata:` block header -- the whole line (minus trailing
+// whitespace) is `__metadata:`, so an indented occurrence or a comment
+// like `# __metadata:` does not count.
+func hasYarnBerryMetadata(content string) bool {
+	for _, ln := range strings.Split(content, "\n") {
+		if strings.TrimRight(ln, " \t") == "__metadata:" {
+			return true
+		}
+	}
+	return false
+}
+
+// yarnBerryResolutionRe captures the quoted resolution string in a yarn
+// Berry entry body (`  resolution: "lodash@npm:4.17.21"`). The indent is
+// anchored to EXACTLY two spaces -- the block-body level Berry always
+// emits -- so a nested dependency literally named `resolution` (four-
+// space indent under `dependencies:`) is never mistaken for the block's
+// own resolution, even in a hand-edited block with reordered or missing
+// top-level fields.
+var yarnBerryResolutionRe = regexp.MustCompile(`^  resolution:\s+"([^"]+)"`)
+
+// parseYarnBerryLock parses a yarn Berry (v2+) yarn.lock. Berry's body
+// carries an authoritative `resolution:` field that is ALREADY
+// normalized to the real package -- an npm alias descriptor
+// (`my-lodash@npm:lodash@4.17.20`) resolves to `lodash@npm:4.17.20` --
+// so reading resolution matches the real registry package and an alias
+// cannot hide a compromised dependency behind a local name.
+//
+// Both the name AND version are taken from the resolution, the single
+// resolved locator, so a hand-edited block whose `version:` field
+// disagrees with its resolution cannot fabricate a tuple (e.g.
+// resolution node-ipc@npm:9.2.3 with version: 1.0.0 must not emit
+// node-ipc@1.0.0). Anything without the `npm:` protocol (workspace:,
+// patch:, file:, git, exec:, virtual ...) is not a public-registry
+// package and is skipped. Conservative, like the other npm parsers: an
+// entry is emitted only when the name is a usable npm identifier and the
+// version is an exact resolved version; results dedupe on (name,
+// version) in deterministic order.
+func parseYarnBerryLock(target Target, content string) ([]PackageRef, error) {
+	seen := map[string]bool{}
+	var refs []PackageRef
+	add := func(name, version string) {
+		if name == "" || version == "" {
+			return
+		}
+		composite := name + "@" + version
+		if seen[composite] {
+			return
+		}
+		seen[composite] = true
+		refs = append(refs, PackageRef{
+			Ecosystem: intel.EcosystemNPM,
+			Name:      name,
+			Version:   version,
+			Path:      target.Path,
+			Source:    "yarn.lock",
+		})
+	}
+
+	lines := strings.Split(content, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		// A block header is non-indented and ends with ':'. Skip blanks,
+		// comments, indented body lines, and the __metadata: block.
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(line, "#") ||
+			!strings.HasSuffix(strings.TrimRight(line, " "), ":") || strings.HasPrefix(line, "__metadata:") {
+			i++
+			continue
+		}
+
+		resolution := ""
+		j := i + 1
+		for j < len(lines) {
+			b := lines[j]
+			// Only the next non-indented header ends the block. A blank
+			// line does NOT (Berry separates blocks with a blank, but a
+			// hand-edited block can carry an internal blank before its
+			// resolution: line, and that must not hide the package).
+			if b != "" && b[0] != ' ' && b[0] != '\t' {
+				break
+			}
+			if resolution == "" {
+				if m := yarnBerryResolutionRe.FindStringSubmatch(b); m != nil {
+					resolution = m[1]
+				}
+			}
+			j++
+		}
+
+		if name, version, ok := yarnBerryNameVersion(resolution); ok {
+			add(name, version)
+		}
+		i = j
+	}
+
+	sort.Slice(refs, func(i, j int) bool {
+		return refs[i].Name+"@"+refs[i].Version < refs[j].Name+"@"+refs[j].Version
+	})
+	return refs, nil
+}
+
+// yarnBerryNameVersion returns the real package name AND version from a
+// Berry npm resolution -- both from this single resolved locator, so a
+// disagreeing `version:` field cannot fabricate a tuple. Real Yarn
+// normalizes an aliased resolution to the real package --
+// `my-lodash@npm:lodash@4.17.20` resolves to `lodash@npm:4.17.20`
+// (verified against Yarn 4; the alias survives only in the descriptor
+// key, which this parser does not read). The text after `@npm:` is the
+// resolved reference; it is either:
+//
+//	bare version       `lodash@npm:4.17.20`        -> name before @npm:, version = the bare value
+//	embedded name@ver  `alias@npm:node-ipc@9.2.3`  -> name = node-ipc, version = 9.2.3
+//
+// Handling both shapes makes the result correct whether Yarn normalizes
+// the resolution or ever retains the alias ident, so an alias never
+// hides the real package. ok=false when there is no `@npm:` protocol
+// (workspace:/patch:/git/... are not registry packages), the name is not
+// a usable npm identifier, or the version is not an exact resolved
+// version.
+func yarnBerryNameVersion(resolution string) (name, version string, ok bool) {
+	cur := resolution
+	for {
+		idx := strings.Index(cur, "@npm:")
+		if idx <= 0 {
+			return "", "", false
+		}
+		nameBefore := cur[:idx]
+		after := cur[idx+len("@npm:"):]
+		// Peel a nested alias layer (`alias@npm:real@npm:version`): the
+		// real locator is what follows this `@npm:`.
+		if strings.Contains(after, "@npm:") {
+			cur = after
+			continue
+		}
+		// Strip Yarn resolution metadata: `::key=val...` and `#builtin<...>`.
+		if i := strings.Index(after, "::"); i >= 0 {
+			after = after[:i]
+		}
+		if i := strings.IndexByte(after, '#'); i >= 0 {
+			after = after[:i]
+		}
+		// A '@' in `after` (past any leading scope '@') means it carries
+		// an embedded name@version -- the real package -- so name/version
+		// split at that final '@'. Otherwise `after` is a bare version
+		// and the name is the segment before this `@npm:`.
+		if at := strings.LastIndexByte(after, '@'); at > 0 {
+			name, version = after[:at], after[at+1:]
+		} else {
+			name, version = nameBefore, after
+		}
+		break
+	}
+	canonical, valid := validNPMName(name)
+	if !valid || !exactNpmVersionRe.MatchString(version) {
+		return "", "", false
+	}
+	return canonical, version, true
 }
