@@ -148,3 +148,17 @@ func TestBunLockPreferredOverLockb(t *testing.T) {
 	require.Len(t, targets, 1)
 	require.Equal(t, "bun.lock", targets[0].Source, "text bun.lock wins over binary bun.lockb")
 }
+
+func TestParseBunLock_Compact(t *testing.T) {
+	// A compacted (single-line) JSONC bun.lock must parse identically to
+	// the pretty-printed form; the JSON-based parser does not depend on
+	// formatting.
+	refs, err := ParseBunLock(writeBunLock(t,
+		`{"lockfileVersion":1,"packages":{"lodash":["lodash@4.17.21","",{},"sha512-FAKE=="],"safe-ipc":["node-ipc@9.2.3","",{},"sha512-FAKE=="],}}`))
+	require.NoError(t, err)
+	require.Len(t, refs, 2)
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	require.Equal(t, "lodash", refs[0].Name)
+	require.Equal(t, "node-ipc", refs[1].Name)
+	require.Equal(t, "9.2.3", refs[1].Version)
+}

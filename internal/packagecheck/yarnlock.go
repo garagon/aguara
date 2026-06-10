@@ -317,8 +317,12 @@ func parseYarnBerryLock(target Target, content string) ([]PackageRef, error) {
 		j := i + 1
 		for j < len(lines) {
 			b := lines[j]
-			if b == "" || (b[0] != ' ' && b[0] != '\t') {
-				break // blank line or next header ends the block
+			// Only the next non-indented header ends the block. A blank
+			// line does NOT (Berry separates blocks with a blank, but a
+			// hand-edited block can carry an internal blank before its
+			// resolution: line, and that must not hide the package).
+			if b != "" && b[0] != ' ' && b[0] != '\t' {
+				break
 			}
 			if resolution == "" {
 				if m := yarnBerryResolutionRe.FindStringSubmatch(b); m != nil {

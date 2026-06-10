@@ -201,6 +201,28 @@ lodash@^4.17.21:
 	require.Equal(t, []string{"lodash@4.17.21"}, refSet(refs), "v1 lockfile must parse as v1 despite a __metadata: comment")
 }
 
+func TestParseYarnLock_BerryInternalBlankLine(t *testing.T) {
+	// A hand-edited block with a blank line before resolution: must still
+	// be read (a blank line does not end the block; only the next header
+	// does).
+	refs, err := ParseYarnLock(writeYarn(t, `__metadata:
+  version: 8
+
+"lodash@npm:4.17.21":
+  version: 4.17.21
+
+  resolution: "lodash@npm:4.17.21"
+  languageName: node
+
+"left-pad@npm:1.3.0":
+  version: 1.3.0
+  resolution: "left-pad@npm:1.3.0"
+`))
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"lodash@4.17.21", "left-pad@1.3.0"}, refSet(refs),
+		"an internal blank line must not hide a package")
+}
+
 func TestParseYarnLock_BerryCRLF(t *testing.T) {
 	// A Windows/CRLF checkout must parse identically to LF.
 	lf := "__metadata:\n  version: 8\n\n\"lodash@npm:4.17.21\":\n  version: 4.17.21\n  resolution: \"lodash@npm:4.17.21\"\n"

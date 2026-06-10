@@ -1,6 +1,7 @@
 package packagecheck
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,14 +11,12 @@ import (
 	"github.com/garagon/aguara/internal/intel"
 )
 
-// bunPackagesKeyRe marks the start of the resolved "packages" object in a
-// bun.lock file.
-var bunPackagesKeyRe = regexp.MustCompile(`^\s*"packages"\s*:\s*\{`)
-
-// bunEntryRe matches a resolved package entry inside that object: a
-// quoted key whose value is an array whose first element is the resolved
-// "<name>@<version>" string. Group 1 captures that first element.
-var bunEntryRe = regexp.MustCompile(`^\s*"(?:[^"\\]|\\.)*"\s*:\s*\[\s*"([^"]+)"`)
+// bunTrailingCommaRe matches a JSONC trailing comma -- a comma followed
+// (after optional whitespace) by a closing `}` or `]`. bun.lock string
+// values (package names, versions, integrity hashes) never contain `,}`
+// or `,]`, so stripping these is safe and turns the JSONC document into
+// strict JSON.
+var bunTrailingCommaRe = regexp.MustCompile(`,(\s*[}\]])`)
 
 // (exactNpmVersionRe is defined in pnpm.go: a strict three-component
 // semver matcher shared across the npm lockfile parsers. It rejects
@@ -35,11 +34,15 @@ var bunEntryRe = regexp.MustCompile(`^\s*"(?:[^"\\]|\\.)*"\s*:\s*\[\s*"([^"]+)"`
 // audits the locked set before `bun install` runs. Bun installs from the
 // npm registry, so refs land in intel.EcosystemNPM with Source="bun.lock".
 //
-// Only the TEXT bun.lock is parsed. The legacy binary bun.lockb is out of
-// scope (it cannot be read without executing Bun, which would break the
-// offline contract). bun.lock is JSONC -- it carries trailing commas, so
-// encoding/json rejects it -- so the parser is line-based, like the yarn
-// v1 parser, rather than depending on a JSONC decoder.
+// Only the TEXT bun.lock is parsed here; the legacy binary bun.lockb is
+// handled (with a clear error) at the discovery/runner layer, never
+// silently. bun.lock is JSONC -- it carries trailing commas, which
+// encoding/json rejects -- so the trailing commas are stripped (a safe
+// transform, see bunTrailingCommaRe) and the document is decoded as
+// strict JSON. Decoding the structured `packages` object (rather than
+// scanning lines) makes the parser correct regardless of formatting:
+// pretty-printed or compact, LF or CRLF, and a nested `packages` key
+// under `workspaces` is never confused with the top-level resolved map.
 //
 // Each entry in the packages object has the resolved "<name>@<version>"
 // as its array's first element, and Bun normalizes aliases there: an
@@ -49,12 +52,23 @@ var bunEntryRe = regexp.MustCompile(`^\s*"(?:[^"\\]|\\.)*"\s*:\s*\[\s*"([^"]+)"`
 // dependency behind a local name. Conservative, mirroring the other npm
 // parsers: an entry is emitted only when the first element maps to a
 // usable npm name and an exact resolved version; anything with a protocol
-// (git/file/workspace/...) or a range is skipped, and results dedupe on
-// (name, version) in deterministic order.
+// (git/file/workspace/...) or a range is skipped, malformed JSON yields
+// no findings (never a panic), and results dedupe on (name, version) in
+// deterministic order.
 func ParseBunLock(target Target) ([]PackageRef, error) {
 	data, err := os.ReadFile(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open bun.lock: %w", err)
+	}
+
+	strict := bunTrailingCommaRe.ReplaceAll(data, []byte("$1"))
+	var lock struct {
+		Packages map[string][]json.RawMessage `json:"packages"`
+	}
+	if err := json.Unmarshal(strict, &lock); err != nil {
+		// Malformed (or comment-bearing) bun.lock: stay silent rather
+		// than guess, mirroring the other parsers' tolerance.
+		return nil, nil
 	}
 
 	seen := map[string]bool{}
@@ -77,37 +91,17 @@ func ParseBunLock(target Target) ([]PackageRef, error) {
 		})
 	}
 
-	inPackages := false
-	// Track object depth so only the TOP-LEVEL "packages" map is parsed.
-	// depth is the object nesting before the current line: the root
-	// object's direct keys (lockfileVersion, workspaces, packages) sit at
-	// depth 1. A nested "packages" key (e.g. a workspace member at path
-	// "packages" under "workspaces") sits deeper and is ignored, so the
-	// real resolved map is not missed.
-	depth := 0
-	// Normalize CRLF so Windows checkouts parse identically.
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	for _, line := range strings.Split(content, "\n") {
-		net := strings.Count(line, "{") - strings.Count(line, "}")
-		if inPackages {
-			if m := bunEntryRe.FindStringSubmatch(line); m != nil {
-				if name, version, ok := splitNameVersion(m[1]); ok {
-					add(name, version)
-				}
-			}
-			// Entry lines balance their own braces (the inline dependencies
-			// object); the packages map's closing "}" drops depth back to
-			// the top level, ending the scan.
-			depth += net
-			if depth <= 1 {
-				break
-			}
+	for _, arr := range lock.Packages {
+		if len(arr) == 0 {
 			continue
 		}
-		if depth == 1 && bunPackagesKeyRe.MatchString(line) {
-			inPackages = true
+		var first string
+		if err := json.Unmarshal(arr[0], &first); err != nil {
+			continue // first element is not a string locator
 		}
-		depth += net
+		if name, version, ok := splitNameVersion(first); ok {
+			add(name, version)
+		}
 	}
 
 	sort.Slice(refs, func(i, j int) bool {
