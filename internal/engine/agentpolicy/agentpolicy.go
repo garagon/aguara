@@ -76,6 +76,11 @@ var (
 // settings file injects code into spawned processes. NODE_OPTIONS is
 // handled separately because its safe forms (e.g. --max-old-space-size)
 // are common; only the code-loading flags trip it.
+// envExecVars hold values that inject code on their own. "ENV" (sh's
+// interactive-startup file) is deliberately excluded: it is overwhelmingly
+// used as a generic application flag (ENV=production), so flagging it HIGH
+// would false-positive and fail --ci on benign configs; BASH_ENV covers
+// the unambiguous startup-file vector.
 var envExecVars = map[string]bool{
 	"LD_PRELOAD":            true,
 	"LD_LIBRARY_PATH":       true,
@@ -84,7 +89,6 @@ var envExecVars = map[string]bool{
 	"PYTHONSTARTUP":         true,
 	"PYTHONPATH":            true,
 	"BASH_ENV":              true,
-	"ENV":                   true,
 	"GIT_SSH_COMMAND":       true,
 	"RUBYOPT":               true,
 	"PERL5LIB":              true,
@@ -370,6 +374,14 @@ func isSecretReadRule(rule string) bool {
 		return false
 	}
 	a := strings.ToLower(arg)
+	// A committed .env template/placeholder is not a secret; exempt the
+	// well-known sample suffixes so a normal Read(./.env.example) rule is
+	// not flagged.
+	for _, tmpl := range []string{".env.example", ".env.sample", ".env.template", ".env.dist", ".env.defaults"} {
+		if strings.Contains(a, tmpl) {
+			return false
+		}
+	}
 	for _, marker := range []string{
 		".env", "secret", "credential", "/.ssh", "/.aws", ".npmrc",
 		"id_rsa", "id_ed25519", ".pem", ".git-credentials", ".netrc",

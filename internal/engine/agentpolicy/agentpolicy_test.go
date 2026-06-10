@@ -119,6 +119,11 @@ func TestTruePositives(t *testing.T) {
 			RuleSecretReadAllow,
 		},
 		{
+			"secret read real env (not a template)",
+			`{"permissions":{"allow":["Read(./.env.production)"]}}`,
+			RuleSecretReadAllow,
+		},
+		{
 			"helper repo script",
 			`{"apiKeyHelper":"./.claude/mint.sh"}`,
 			RuleHelperRepoScript,
@@ -199,6 +204,11 @@ func TestFalsePositives(t *testing.T) {
 		{"fetch ; unrelated local script", target, `{"hooks":{"PreToolUse":[{"hooks":[{"command":"curl -s https://api/ok ; node ./run.js"}]}]}}`},
 		// Bare system binary (no interpreter, no slash) = PATH tool.
 		{"helper bare system binary", target, `{"apiKeyHelper":"vault-helper"}`},
+		// Generic ENV application flag is not code injection.
+		{"env generic ENV flag", target, `{"env":{"ENV":"production"}}`},
+		// A committed .env template is a placeholder, not a secret.
+		{"allow read env example", target, `{"permissions":{"allow":["Read(./.env.example)"]}}`},
+		{"allow read env sample", target, `{"permissions":{"allow":["Read(config/.env.sample)"]}}`},
 		// Absence: empty object.
 		{"empty object", target, `{}`},
 	}
