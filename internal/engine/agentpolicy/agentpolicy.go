@@ -59,6 +59,13 @@ var (
 	// evalSubstRe catches `eval "$(curl ...)"` / `exec $(wget ...)`,
 	// where the interpreter wraps the fetch rather than following it.
 	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
+	// fetchOutputRe captures the file a curl/wget download is written to
+	// (-o / -O / --output / shell redirect). interpRunFileRe is then
+	// built per-file to confirm an interpreter runs THAT SAME file, so a
+	// newline-separated "curl -o /tmp/a\nbash /tmp/a" is caught while an
+	// unrelated two-line hook (curl health-check; bash build.sh) is not.
+	fetchOutputRe = regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^\n]*?(?:-o|-O|--output|>)\s*('?"?)([^\s'";|&]+)`)
+	interpRe      = `(?i)\b(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`
 )
 
 // envExecVars are environment variables whose presence in a committed
@@ -189,7 +196,7 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 				if cmd == "" {
 					continue
 				}
-				if hookFetchExecRe.MatchString(cmd) || evalSubstRe.MatchString(cmd) {
+				if hookFetchExecRe.MatchString(cmd) || evalSubstRe.MatchString(cmd) || fetchThenRunsFile(cmd) {
 					emit(RuleHookFetchExec,
 						fmt.Sprintf("A %s hook command downloads a remote resource and runs it through an interpreter, which Claude Code executes automatically when a session opens in this repo.", event),
 						cmd,
@@ -198,6 +205,28 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 			}
 		}
 	}
+}
+
+// fetchThenRunsFile reports whether a command downloads a resource to a
+// file and then runs that same file through an interpreter, even when
+// the two statements are separated by a newline (which the inline
+// pipe/chain regex does not cross). The file identity must match, so an
+// unrelated fetch and a later unrelated interpreter call do not trip it.
+func fetchThenRunsFile(cmd string) bool {
+	for _, m := range fetchOutputRe.FindAllStringSubmatch(cmd, -1) {
+		file := strings.TrimSpace(m[2])
+		if file == "" {
+			continue
+		}
+		runRe, err := regexp.Compile(interpRe + `[^\n]*` + regexp.QuoteMeta(file))
+		if err != nil {
+			continue
+		}
+		if runRe.MatchString(cmd) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkEnv flags an env block that sets a code-execution variable.
@@ -357,9 +386,6 @@ func isSecretReadRule(rule string) bool {
 	return false
 }
 
-// fetchRe matches a bare network fetch anywhere in a command.
-var fetchRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b`)
-
 // helperWrappers are leading tokens to skip when locating the script a
 // helper command actually runs: interpreters (so `bash ./x.sh` is seen
 // as running ./x.sh) and privilege/exec wrappers.
@@ -370,27 +396,32 @@ var helperWrappers = map[string]bool{
 	"python3": true, "ruby": true, "perl": true, "php": true,
 }
 
+// fetchCommands are the binaries whose invocation IS a network fetch.
+// Matched on the resolved command's base name so a benign absolute
+// helper whose name merely contains "fetch" (e.g.
+// /usr/local/bin/fetch-token) is not misread as a fetch.
+var fetchCommands = map[string]bool{
+	"curl": true, "wget": true, "iwr": true,
+	"invoke-webrequest": true, "fetch": true,
+}
+
 // isRepoRelativeCommand reports whether a helper command runs code from
-// the repository (relative path or bare filename) or a network fetch,
-// rather than an absolute / home-anchored system path the developer
-// controls. Leading interpreter / wrapper tokens are skipped so the
-// repo-relative test applies to the script argument, not the wrapper
-// (e.g. `bash ./.claude/mint.sh`, `sudo python scripts/token.py`).
+// the repository (relative path or bare filename) or performs a network
+// fetch, rather than running an absolute / home-anchored system path the
+// developer controls. Leading interpreter / wrapper / flag / env-
+// assignment tokens are skipped so the test applies to the script the
+// command actually runs (e.g. `bash ./.claude/mint.sh`,
+// `sudo python scripts/token.py`).
 func isRepoRelativeCommand(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	if c == "" {
 		return false
-	}
-	if fetchRe.MatchString(c) {
-		return true
 	}
 	fields := strings.Fields(c)
 	i := 0
 	for i < len(fields) {
 		tok := fields[i]
 		base := strings.ToLower(filepath.Base(tok))
-		// Skip a wrapper/interpreter token, a flag, or an env
-		// assignment (VAR=value) to reach the script argument.
 		if helperWrappers[base] || strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") {
 			i++
 			continue
@@ -401,6 +432,11 @@ func isRepoRelativeCommand(cmd string) bool {
 		return false
 	}
 	target := fields[i]
+	// A network fetch is the dangerous command itself, not a substring
+	// of an absolute binary name.
+	if fetchCommands[strings.ToLower(filepath.Base(target))] {
+		return true
+	}
 	// Absolute or home-anchored paths are the developer's own tooling.
 	if strings.HasPrefix(target, "/") || strings.HasPrefix(target, "~") ||
 		strings.HasPrefix(target, "$HOME") || strings.HasPrefix(target, "${HOME}") {
@@ -447,9 +483,14 @@ func isTarget(t *scanner.Target) bool {
 			continue
 		}
 		s := filepath.ToSlash(p)
-		if strings.HasSuffix(s, ".claude/settings.json") ||
-			strings.HasSuffix(s, ".claude/settings.local.json") {
-			return true
+		for _, name := range []string{"settings.json", "settings.local.json"} {
+			// Require a real ".claude" path segment (repo root
+			// ".claude/<name>" or "/.claude/<name>" anywhere), not a
+			// directory that merely ends in ".claude" such as
+			// "fixtures/not.claude/<name>".
+			if s == ".claude/"+name || strings.HasSuffix(s, "/.claude/"+name) {
+				return true
+			}
 		}
 	}
 	return false

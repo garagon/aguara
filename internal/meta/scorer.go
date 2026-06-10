@@ -24,6 +24,7 @@ var categoryMultiplier = map[string]float64{
 	"mcp-config":          1.3,
 	"rug-pull":            1.5,
 	"toxic-flow":          1.4,
+	"agent-trust":         1.5,
 }
 
 // severityBase maps severity to base score points.
@@ -68,7 +69,7 @@ func ComputeRiskScore(findings []types.Finding) float64 {
 
 	total := 0.0
 	for i, f := range sorted {
-		weight := 1.0 / float64(int(1) << i)
+		weight := 1.0 / float64(int(1)<<i)
 		total += f.Score * weight
 	}
 	if total > 100 {
