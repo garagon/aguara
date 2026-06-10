@@ -73,28 +73,36 @@ func ParseBunLock(target Target) ([]PackageRef, error) {
 	}
 
 	inPackages := false
+	// Track object depth so only the TOP-LEVEL "packages" map is parsed.
+	// depth is the object nesting before the current line: the root
+	// object's direct keys (lockfileVersion, workspaces, packages) sit at
+	// depth 1. A nested "packages" key (e.g. a workspace member at path
+	// "packages" under "workspaces") sits deeper and is ignored, so the
+	// real resolved map is not missed.
 	depth := 0
 	// Normalize CRLF so Windows checkouts parse identically.
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	for _, line := range strings.Split(content, "\n") {
-		if !inPackages {
-			if bunPackagesKeyRe.MatchString(line) {
-				inPackages = true
-				depth = 1
+		net := strings.Count(line, "{") - strings.Count(line, "}")
+		if inPackages {
+			if m := bunEntryRe.FindStringSubmatch(line); m != nil {
+				if name, version, ok := splitNameVersion(m[1]); ok {
+					add(name, version)
+				}
+			}
+			// Entry lines balance their own braces (the inline dependencies
+			// object); the packages map's closing "}" drops depth back to
+			// the top level, ending the scan.
+			depth += net
+			if depth <= 1 {
+				break
 			}
 			continue
 		}
-		if m := bunEntryRe.FindStringSubmatch(line); m != nil {
-			if name, version, ok := splitNameVersion(m[1]); ok {
-				add(name, version)
-			}
+		if depth == 1 && bunPackagesKeyRe.MatchString(line) {
+			inPackages = true
 		}
-		// Entry lines balance their own braces (the inline dependencies
-		// object); the packages object's own closing "}" drops depth to 0.
-		depth += strings.Count(line, "{") - strings.Count(line, "}")
-		if depth <= 0 {
-			break
-		}
+		depth += net
 	}
 
 	sort.Slice(refs, func(i, j int) bool {

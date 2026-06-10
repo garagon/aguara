@@ -60,6 +60,26 @@ func TestParseBunLock_SkipsNonRegistryAndRanges(t *testing.T) {
 	require.Equal(t, "1.0.0", refs[0].Version)
 }
 
+func TestParseBunLock_NestedPackagesKeyIgnored(t *testing.T) {
+	// A workspace member at path "packages" produces a nested
+	// "packages": {...} under "workspaces". Only the TOP-LEVEL packages
+	// map must be parsed, so the real resolved set is not missed.
+	refs, err := ParseBunLock(writeBunLock(t, `{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root" },
+    "packages": { "name": "packages", "dependencies": { "x": "1.0.0" } },
+  },
+  "packages": {
+    "real-dep": ["real-dep@2.3.4", "", {}, "sha512-FAKE=="],
+  }
+}`))
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	require.Equal(t, "real-dep", refs[0].Name)
+	require.Equal(t, "2.3.4", refs[0].Version)
+}
+
 func TestParseBunLock_Dedup(t *testing.T) {
 	refs, err := ParseBunLock(writeBunLock(t, `{
   "packages": {
