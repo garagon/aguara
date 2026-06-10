@@ -42,6 +42,7 @@ internal/
     pyrisk/            PyRisk: Python install-hook remote-JS execution
     rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
     pnpmpolicy/        Pnpm Policy: pnpm-workspace.yaml supply-chain posture
+    agentpolicy/       Agent Policy: .claude/settings.json host-config posture
     nlp/               NLP: goldmark AST walker, keyword classifier
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation

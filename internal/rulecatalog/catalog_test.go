@@ -27,14 +27,15 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 
 	// One representative ID per analyzer.
 	want := map[string]string{
-		"JS_DNS_TXT_EXFIL_001":      rulemeta.AnalyzerJSRisk,
-		"GHA_PWN_REQUEST_001":       rulemeta.AnalyzerCITrust,
-		"NPM_LIFECYCLE_GIT_001":     rulemeta.AnalyzerPkgMeta,
-		"TOXIC_001":                 rulemeta.AnalyzerToxicFlow,
-		"TOXIC_CROSS_001":           rulemeta.AnalyzerToxicFlow,
-		"NLP_HIDDEN_INSTRUCTION":    rulemeta.AnalyzerNLP,
-		"AGENT_PERSISTENCE_001":     rulemeta.AnalyzerJSRisk,
-		"PNPM_DANGEROUS_BUILDS_001": rulemeta.AnalyzerPnpmPolicy,
+		"JS_DNS_TXT_EXFIL_001":         rulemeta.AnalyzerJSRisk,
+		"GHA_PWN_REQUEST_001":          rulemeta.AnalyzerCITrust,
+		"NPM_LIFECYCLE_GIT_001":        rulemeta.AnalyzerPkgMeta,
+		"TOXIC_001":                    rulemeta.AnalyzerToxicFlow,
+		"TOXIC_CROSS_001":              rulemeta.AnalyzerToxicFlow,
+		"NLP_HIDDEN_INSTRUCTION":       rulemeta.AnalyzerNLP,
+		"AGENT_PERSISTENCE_001":        rulemeta.AnalyzerJSRisk,
+		"PNPM_DANGEROUS_BUILDS_001":    rulemeta.AnalyzerPnpmPolicy,
+		"AGENTCFG_HOOK_FETCH_EXEC_001": rulemeta.AnalyzerAgentPolicy,
 		// And one pattern rule from the YAML catalog (analyzer
 		// stays empty for these).
 		"PROMPT_INJECTION_001": rulemeta.AnalyzerPattern,
@@ -172,6 +173,9 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 		// pnpm-policy emit sites (pnpmpolicy.go) -- fixed
 		// severities, all category "supply-chain".
 		"PNPM_DANGEROUS_BUILDS_001":           {Severity: "HIGH", Category: "supply-chain"},
+		"AGENTCFG_HOOK_FETCH_EXEC_001":        {Severity: "CRITICAL", Category: "agent-trust"},
+		"AGENTCFG_BYPASS_PERMS_001":           {Severity: "HIGH", Category: "agent-trust"},
+		"AGENTCFG_PERMS_WEAK_MODE_001":        {Severity: "LOW", Category: "agent-trust"},
 		"PNPM_STRICT_DEP_BUILDS_DISABLED_001": {Severity: "MEDIUM", Category: "supply-chain"},
 		"PNPM_EXOTIC_SUBDEPS_DISABLED_001":    {Severity: "MEDIUM", Category: "supply-chain"},
 		"PNPM_TRUST_LOCKFILE_001":             {Severity: "MEDIUM", Category: "supply-chain"},
@@ -281,6 +285,11 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"PNPM_MIN_RELEASE_AGE_DISABLED_001", "PNPM_MIN_RELEASE_AGE_NON_STRICT_001",
 		"PNPM_TRUST_POLICY_OFF_001", "PNPM_LEGACY_BUILD_POLICY_001",
 		"PNPM_BUILD_APPROVAL_PENDING_001",
+		// agent-policy public consts.
+		"AGENTCFG_HOOK_FETCH_EXEC_001", "AGENTCFG_ENV_EXEC_001",
+		"AGENTCFG_BYPASS_PERMS_001", "AGENTCFG_MCP_AUTOAPPROVE_001",
+		"AGENTCFG_BROAD_ALLOW_001", "AGENTCFG_SECRET_READ_ALLOW_001",
+		"AGENTCFG_HELPER_REPO_SCRIPT_001", "AGENTCFG_PERMS_WEAK_MODE_001",
 	}
 	for _, id := range emitted {
 		_, err := rulecatalog.FindByID(rulecatalog.Options{}, id)

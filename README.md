@@ -178,6 +178,23 @@ pnpm v11 ships some of the strongest supply-chain controls in the Node ecosystem
 
 A missing setting is treated as the secure pnpm v11 default and never reported; only an explicit value less safe than the default fires. Each finding points at the exact line and ships remediation, and every rule is explainable via `aguara explain <RULE_ID>`.
 
+## Agent Host Config Posture
+
+A cloned repo can ship a `.claude/settings.json` that Claude Code loads when you open it. After the one-time workspace-trust prompt, its hooks and credential helpers run automatically (a `SessionStart` hook fires on session open), it can inject environment variables into every subprocess, and it can pre-disable the tool-approval prompt - all from a checked-in file. The `agent-policy` analyzer reads that file and flags what is dangerous to inherit from someone else's repo:
+
+| Finding | Severity | What it catches |
+|---|---|---|
+| Hook downloads and executes remote code | CRITICAL | a hook command piping a network fetch into a shell (`curl \| sh`), run automatically on session open |
+| Code-execution environment variable | HIGH | `env` setting `NODE_OPTIONS --require`, `LD_PRELOAD`, `BASH_ENV`, and similar |
+| Permissions default to bypass | HIGH | `defaultMode: "bypassPermissions"` shipped in the repo |
+| MCP servers auto-approved | MEDIUM | `enableAllProjectMcpServers: true` |
+| Dangerous command pre-approved | MEDIUM | `allow` rules like `Bash(*)` or `Bash(curl *)` |
+| Secret read pre-approved | MEDIUM | `allow` rules over `.env`, `~/.ssh`, `~/.aws`, private keys |
+| Repo-shipped credential helper | MEDIUM | `apiKeyHelper` / `awsAuthRefresh` pointing at a repo-relative script |
+| Auto-approving default mode | LOW | `defaultMode: "acceptEdits"` / `"auto"` shipped in the repo |
+
+The analyzer judges the dangerous shape of a value, never the mere presence of hooks or permissions (both normal). A benign config with narrow allow rules and local hooks stays quiet.
+
 ## Adopting Aguara in CI
 
 Adopt Aguara without turning the first CI run into a wall of pre-existing findings. `aguara audit` (and `aguara scan`) support a baseline so a new gate fails only on **new** scan findings:
@@ -293,10 +310,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **236 cataloged detections** through `aguara list-rules`:
+Aguara exposes **244 cataloged detections** through `aguara list-rules`:
 
 - **193 embedded YAML pattern rules** across 13 categories
-- **43 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpm-policy, NLP, toxic-flow, and rug-pull
+- **51 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -308,7 +325,7 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-Ten scan analyzers run per file (nine by default; rug-pull joins with `--monitor`), each catching a different class of attack:
+Eleven scan analyzers run per file (ten by default; rug-pull joins with `--monitor`), each catching a different class of attack:
 
 | Analyzer | Engine | What it catches |
 |---|---|---|
@@ -319,6 +336,7 @@ Ten scan analyzers run per file (nine by default; rug-pull joins with `--monitor
 | PyRisk | Python install-hook scanner | `setup.py`/`__init__.py` that fetch remote JS and run it via `node -e` (flow-sensitive) |
 | RSBuild | Cargo build-script scanner | `build.rs` reading wallet/keystore material and sending it to a network sink (flow-sensitive) |
 | Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |
+| Agent Policy | `.claude/settings.json` JSON | Claude Code host config that is dangerous to inherit from a cloned repo: hooks that fetch-and-execute, code-injection env vars, `bypassPermissions`, MCP auto-approval, dangerous allow rules, repo-shipped credential helpers |
 | NLP | Goldmark AST + JSON/YAML | Prompt injection, tool poisoning, proximity-weighted keyword classification |
 | Toxic Flow | Capability correlation | Dangerous source/sink combinations within a file and across files in a directory |
 | Rug-Pull | SHA256 change tracking | Tool descriptions that change between scans (`--monitor`) |
