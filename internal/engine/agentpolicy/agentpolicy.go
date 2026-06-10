@@ -52,7 +52,11 @@ var (
 	// pipe and the interpreter is allowed (sudo / command / exec /
 	// env VAR=…, or an absolute/relative path such as /bin/bash), so
 	// `curl … | sudo sh` is covered.
-	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
+	// The span between the fetch and the pipe excludes shell separators
+	// (; & |) and newlines, so the fetch and the pipe-to-interpreter must
+	// be the SAME command segment -- `curl health; echo x | sh` does not
+	// match (the fetched bytes are not what is piped to sh).
+	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n;&|]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
@@ -69,7 +73,10 @@ var (
 	// false positives. Such a line is still flagged by the pattern
 	// engine's download-and-execute rules; agent-policy adds the
 	// agent-config framing for the unambiguous forms.
-	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source|(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\s+-c)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
+	// The span between the eval keyword and the $(fetch) excludes shell
+	// separators so `eval $X; echo $(curl health)` does not match (the
+	// fetched bytes are echoed, not evaluated).
+	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source|(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\s+-c)\b[^\n;&]*\$\(\s*(curl|wget|iwr|fetch)\b`)
 )
 
 // envExecVars are environment variables whose presence in a committed
@@ -362,8 +369,13 @@ func isBroadCommandRule(rule string) bool {
 
 var dangerousBinaries = map[string]bool{
 	"curl": true, "wget": true, "rm": true, "eval": true, "exec": true,
-	"sh": true, "bash": true, "nc": true, "ncat": true, "netcat": true,
-	"chmod": true, "sudo": true, "dd": true, "mkfifo": true, "node": true,
+	"nc": true, "ncat": true, "netcat": true,
+	"chmod": true, "sudo": true, "dd": true, "mkfifo": true,
+	// Interpreters: a wildcard allow (Bash(python *)) lets the agent run
+	// arbitrary code in that language without approval.
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ash": true,
+	"node": true, "deno": true, "bun": true, "python": true, "python3": true,
+	"ruby": true, "perl": true, "php": true, "pwsh": true, "powershell": true,
 }
 
 // isSecretReadRule reports whether an allow rule grants Read/Edit access
@@ -409,6 +421,13 @@ var helperPrefixes = map[string]bool{
 // envAssignRe matches a leading KEY=value environment assignment.
 var envAssignRe = regexp.MustCompile(`^[A-Za-z_]\w*=`)
 
+// cFlagRe matches an interpreter command-string flag (bash -c, sh -lc,
+// pwsh -Command), whose argument is a command, not a script path.
+var cFlagRe = regexp.MustCompile(`(?i)(^|\s)-(l?i?c|ic)\b|(?i)(^|\s)(-command|--command)\b`)
+
+// fetchWordRe matches a network-fetch command as a word.
+var fetchWordRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b`)
+
 // fetchCommands are the binaries whose invocation IS a network fetch.
 // Matched on the resolved command's base name so a benign absolute
 // helper whose name merely contains "fetch" (e.g.
@@ -430,6 +449,17 @@ func isRepoRelativeCommand(cmd string) bool {
 	if c == "" {
 		return false
 	}
+	// `interp -c "<command string>"` runs a command STRING, not a script
+	// path: the argument is `op read ...` or `$(curl ...)`, not a file.
+	// Classify the string by content (fetch or an explicit repo-relative
+	// path) rather than treating its first word -- often a PATH tool like
+	// `op` or `vault` -- as a repo script.
+	if cFlagRe.MatchString(c) {
+		return fetchWordRe.MatchString(c) ||
+			strings.Contains(c, "./") || strings.Contains(c, "../") ||
+			strings.Contains(c, ".claude/")
+	}
+
 	fields := strings.Fields(c)
 	i := 0
 	viaInterp := false
