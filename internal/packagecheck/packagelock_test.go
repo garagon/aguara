@@ -268,11 +268,11 @@ func TestValidNPMName(t *testing.T) {
 		{"foo", "foo", true},
 		{"@scope/pkg", "@scope/pkg", true},
 		{"", "", false},
-		{"foo/bar", "", false},        // unscoped with a slash
+		{"foo/bar", "", false},          // unscoped with a slash
 		{"@scope/pkg/extra", "", false}, // scoped with extra segment
-		{"@scope", "", false},          // scope without package
-		{"@/pkg", "", false},           // empty scope
-		{"@scope/", "", false},         // empty package
+		{"@scope", "", false},           // scope without package
+		{"@/pkg", "", false},            // empty scope
+		{"@scope/", "", false},          // empty package
 	}
 	for _, c := range cases {
 		got, ok := validNPMName(c.in)
@@ -289,14 +289,14 @@ func TestPackageLockName(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"", "", false},                                         // root
-		{"node_modules/foo", "foo", true},                       // unscoped
-		{"node_modules/@scope/pkg", "@scope/pkg", true},         // scoped
-		{"packages/a/node_modules/foo", "foo", true},            // nested unscoped
+		{"", "", false},                                            // root
+		{"node_modules/foo", "foo", true},                          // unscoped
+		{"node_modules/@scope/pkg", "@scope/pkg", true},            // scoped
+		{"packages/a/node_modules/foo", "foo", true},               // nested unscoped
 		{"packages/a/node_modules/@scope/pkg", "@scope/pkg", true}, // nested scoped
-		{"node_modules/a/node_modules/foo", "foo", true},        // dep-of-dep
-		{"packages/a", "", false},                               // workspace src dir
-		{"some/other/path", "", false},                          // no node_modules segment
+		{"node_modules/a/node_modules/foo", "foo", true},           // dep-of-dep
+		{"packages/a", "", false},                                  // workspace src dir
+		{"some/other/path", "", false},                             // no node_modules segment
 	}
 	for _, c := range cases {
 		got, ok := packageLockName(c.key)

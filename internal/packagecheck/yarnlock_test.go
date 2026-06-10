@@ -234,9 +234,9 @@ func TestParseYarnLock_BerryAliasRetainingResolution(t *testing.T) {
 
 func TestParseYarnLock_BerryNestedFieldsNotMiscaptured(t *testing.T) {
 	// A nested dependency named "version"/"resolution" (4-space indent)
-	// must not be mistaken for the block's own fields. The first entry
-	// has correct top-level fields plus such nested deps; the second has
-	// NO top-level version (only a nested one) and must be skipped.
+	// must NOT be mistaken for the block's own resolution. `good` must
+	// resolve to 1.0.0 (from its own 2-space resolution), never 9.9.9 or
+	// 8.8.8 from the nested deps.
 	refs, err := ParseYarnLock(writeYarn(t, `__metadata:
   version: 8
 
@@ -246,15 +246,10 @@ func TestParseYarnLock_BerryNestedFieldsNotMiscaptured(t *testing.T) {
   dependencies:
     version: "npm:9.9.9"
     resolution: "npm:8.8.8"
-
-"sneaky@npm:2.0.0":
-  resolution: "sneaky@npm:2.0.0"
-  dependencies:
-    version: "npm:9.9.9"
 `))
 	require.NoError(t, err)
 	require.Equal(t, []string{"good@1.0.0"}, refSet(refs),
-		"nested version/resolution must not be captured; the no-top-level-version block is skipped")
+		"nested version/resolution deps must not be captured as the block's own fields")
 }
 
 func TestParseYarnLock_BerrySkipsNonRegistry(t *testing.T) {

@@ -373,11 +373,12 @@ func pickYarnLockTarget(dir string) []Target {
 }
 
 // pickBunLockTarget returns a Target for a Bun project rooted at dir, or
-// nil when no text bun.lock is present. Only the text bun.lock is
-// supported; the legacy binary bun.lockb is skipped (it cannot be read
-// without executing Bun). Bun installs from the npm registry
-// (Ecosystem = intel.EcosystemNPM); Source="bun.lock" routes the runner
-// to ParseBunLock. The same node_modules-ancestor guard applies.
+// nil when no Bun lockfile is present. The text bun.lock is parsed
+// (Source="bun.lock"); a repo with ONLY the legacy binary bun.lockb
+// gets Source="bun.lockb", which the runner turns into a clear error
+// rather than silently reading zero packages (the same honest-failure
+// posture used for unsupported shapes). Bun installs from the npm
+// registry. The same node_modules-ancestor guard applies.
 func pickBunLockTarget(dir string) []Target {
 	if hasNodeModulesAncestor(dir) {
 		return nil
@@ -387,6 +388,13 @@ func pickBunLockTarget(dir string) []Target {
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "bun.lock"),
 			Source:    "bun.lock",
+		}}
+	}
+	if statRegular(filepath.Join(dir, "bun.lockb")) {
+		return []Target{{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      filepath.Join(dir, "bun.lockb"),
+			Source:    "bun.lockb",
 		}}
 	}
 	return nil

@@ -16,9 +16,9 @@ import (
 //
 //   - "pom.xml"          -> parsePomXML  (Maven proper)
 //   - "gradle.lockfile"  -> parseGradleLockfile (both
-//                            single-lockfile mode at project root
-//                            and per-configuration mode under
-//                            gradle/dependency-locks/)
+//     single-lockfile mode at project root
+//     and per-configuration mode under
+//     gradle/dependency-locks/)
 //
 // No external commands (`mvn`, `gradle`). No network. Parent POMs,
 // BOMs, dependencyManagement-only declarations, profiles, and the

@@ -119,3 +119,32 @@ func TestParseBunLock_DeterministicOrder(t *testing.T) {
 		require.Equal(t, first, refs, "ParseBunLock must be deterministic")
 	}
 }
+
+func TestBunLockbFailsLoudly(t *testing.T) {
+	// A repo with ONLY the binary bun.lockb must fail with a clear error,
+	// not pass silently with zero packages read.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bun.lockb"), []byte{0, 1, 2, 3}, 0o644))
+
+	targets, err := Discover(dir, []string{intel.EcosystemNPM})
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, "bun.lockb", targets[0].Source)
+
+	runner := &Runner{Matcher: intel.NewMatcher(intel.Snapshot{})}
+	_, err = runner.Run(targets)
+	require.Error(t, err, "bun.lockb-only repo must fail loudly")
+	require.Contains(t, err.Error(), "bun.lockb")
+}
+
+func TestBunLockPreferredOverLockb(t *testing.T) {
+	// When both exist, the text bun.lock is parsed (no error).
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bun.lockb"), []byte{0, 1}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bun.lock"),
+		[]byte(`{"packages":{"lodash":["lodash@4.17.21","",{},"sha512-FAKE=="],}}`), 0o644))
+	targets, err := Discover(dir, []string{intel.EcosystemNPM})
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, "bun.lock", targets[0].Source, "text bun.lock wins over binary bun.lockb")
+}

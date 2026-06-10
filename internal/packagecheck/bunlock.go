@@ -19,6 +19,11 @@ var bunPackagesKeyRe = regexp.MustCompile(`^\s*"packages"\s*:\s*\{`)
 // "<name>@<version>" string. Group 1 captures that first element.
 var bunEntryRe = regexp.MustCompile(`^\s*"(?:[^"\\]|\\.)*"\s*:\s*\[\s*"([^"]+)"`)
 
+// (exactNpmVersionRe is defined in pnpm.go: a strict three-component
+// semver matcher shared across the npm lockfile parsers. It rejects
+// dist-tags like `latest` and partial versions, so only a concrete
+// resolved tuple is emitted.)
+
 // ParseBunLock reads a Bun text lockfile (bun.lock, lockfileVersion 1+)
 // and returns the declared npm packages. It is the Bun counterpart to
 // ParsePNPMLock / ParseYarnLock: a freshly cloned Bun project carries
@@ -123,7 +128,7 @@ func splitNameVersion(spec string) (name, version string, ok bool) {
 	}
 	rawName, version := spec[:at], spec[at+1:]
 	canonical, valid := validNPMName(rawName)
-	if !valid || !isExactYarnVersion(version) {
+	if !valid || !exactNpmVersionRe.MatchString(version) {
 		return "", "", false
 	}
 	return canonical, version, true
