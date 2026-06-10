@@ -134,7 +134,7 @@ aguara check . --fresh     # refresh only the ecosystems this run touches, then 
 
 | Ecosystem | Evidence read | Coverage |
 |---|---|---|
-| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml` | Strong malicious-package coverage; `pnpm-lock.yaml` works before install. Alias-shaped (`npm:`) lockfile entries resolve to the real registry package, so a hand-edited lockfile cannot hide a compromised package behind a local dependency name. |
+| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock` (classic v1 + Berry v2+), `bun.lock` | Strong malicious-package coverage; the lockfiles work before install. `npm:` alias entries resolve to the real registry package across all of them, so a lockfile cannot hide a compromised package behind a local dependency name. |
 | PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage. |
 | RubyGems | `Gemfile.lock` | Strong malicious-package coverage. |
 | NuGet | `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj` | Strong exact-version coverage. |

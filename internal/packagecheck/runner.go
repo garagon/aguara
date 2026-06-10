@@ -150,6 +150,8 @@ func parseTarget(t Target) ([]PackageRef, error) {
 			return ParsePackageLock(t)
 		case "yarn.lock":
 			return ParseYarnLock(t)
+		case "bun.lock":
+			return ParseBunLock(t)
 		default:
 			return nil, fmt.Errorf("packagecheck: no npm parser for source %q", t.Source)
 		}

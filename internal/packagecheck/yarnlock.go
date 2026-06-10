@@ -79,10 +79,11 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 	content := string(data)
 
 	// Berry detection. A v2+ yarn.lock opens with a `__metadata:`
-	// block; v1 never has one. Fail loudly rather than parse: a silent
-	// empty result would let a Berry repo look audited when it was not.
+	// block; v1 never has one. Berry uses a different (YAML-shaped)
+	// grammar, so route it to the Berry parser rather than the v1 line
+	// walker.
 	if strings.Contains(content, "__metadata:") {
-		return nil, fmt.Errorf("yarn Berry lockfile detected; yarn.lock v2+ is not parsed yet (only yarn classic v1 is supported)")
+		return parseYarnBerryLock(target, content)
 	}
 
 	seen := map[string]bool{}
@@ -236,4 +237,103 @@ func isExactYarnVersion(v string) bool {
 		return false
 	}
 	return !strings.ContainsAny(v, " \t^~*<>=|:/")
+}
+
+// yarnBerryResolutionRe captures the quoted resolution string in a yarn
+// Berry entry body (`  resolution: "lodash@npm:4.17.21"`).
+var yarnBerryResolutionRe = regexp.MustCompile(`^\s+resolution:\s+"([^"]+)"`)
+
+// yarnBerryVersionRe captures the unquoted version in a Berry entry body
+// (`  version: 4.17.21`).
+var yarnBerryVersionRe = regexp.MustCompile(`^\s+version:\s+(\S+)`)
+
+// parseYarnBerryLock parses a yarn Berry (v2+) yarn.lock. Berry's body
+// carries an authoritative `resolution:` field that is ALREADY
+// normalized to the real package -- an npm alias descriptor
+// (`my-lodash@npm:lodash@4.17.20`) resolves to `lodash@npm:4.17.20` --
+// so reading resolution matches the real registry package and an alias
+// cannot hide a compromised dependency behind a local name.
+//
+// A registry resolution has the form `<name>@npm:<version>`. Anything
+// without the `npm:` protocol (workspace:, patch:, file:, git, exec:,
+// virtual ...) is not a public-registry package and is skipped. The
+// authoritative exact version comes from the `version:` field.
+// Conservative, like the v1 parser: an entry is emitted only when the
+// name is a usable npm identifier and the version is exact; results
+// dedupe on (name, version) in deterministic order.
+func parseYarnBerryLock(target Target, content string) ([]PackageRef, error) {
+	seen := map[string]bool{}
+	var refs []PackageRef
+	add := func(name, version string) {
+		if name == "" || version == "" {
+			return
+		}
+		composite := name + "@" + version
+		if seen[composite] {
+			return
+		}
+		seen[composite] = true
+		refs = append(refs, PackageRef{
+			Ecosystem: intel.EcosystemNPM,
+			Name:      name,
+			Version:   version,
+			Path:      target.Path,
+			Source:    "yarn.lock",
+		})
+	}
+
+	lines := strings.Split(content, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		// A block header is non-indented and ends with ':'. Skip blanks,
+		// comments, indented body lines, and the __metadata: block.
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(line, "#") ||
+			!strings.HasSuffix(strings.TrimRight(line, " "), ":") || strings.HasPrefix(line, "__metadata:") {
+			i++
+			continue
+		}
+
+		resolution, version := "", ""
+		j := i + 1
+		for j < len(lines) {
+			b := lines[j]
+			if b == "" || (b[0] != ' ' && b[0] != '\t') {
+				break // blank line or next header ends the block
+			}
+			if resolution == "" {
+				if m := yarnBerryResolutionRe.FindStringSubmatch(b); m != nil {
+					resolution = m[1]
+				}
+			}
+			if version == "" {
+				if m := yarnBerryVersionRe.FindStringSubmatch(b); m != nil {
+					version = m[1]
+				}
+			}
+			j++
+		}
+
+		if name, ok := yarnBerryRegistryName(resolution); ok && isExactYarnVersion(version) {
+			add(name, version)
+		}
+		i = j
+	}
+
+	sort.Slice(refs, func(i, j int) bool {
+		return refs[i].Name+"@"+refs[i].Version < refs[j].Name+"@"+refs[j].Version
+	})
+	return refs, nil
+}
+
+// yarnBerryRegistryName returns the real package name from a Berry
+// resolution of the form `<name>@npm:<version>`, and ok=false when the
+// resolution is not an npm-registry resolution (no `@npm:` protocol) or
+// the name is not a usable npm identifier.
+func yarnBerryRegistryName(resolution string) (string, bool) {
+	idx := strings.Index(resolution, "@npm:")
+	if idx <= 0 {
+		return "", false
+	}
+	return validNPMName(resolution[:idx])
 }

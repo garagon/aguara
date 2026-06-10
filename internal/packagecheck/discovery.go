@@ -61,6 +61,7 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemNPM, pickPnpmTarget},
 	{intel.EcosystemNPM, pickPackageLockTarget},
 	{intel.EcosystemNPM, pickYarnLockTarget},
+	{intel.EcosystemNPM, pickBunLockTarget},
 }
 
 // Discover walks root and returns one Target per lockfile / discovery
@@ -366,6 +367,26 @@ func pickYarnLockTarget(dir string) []Target {
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "yarn.lock"),
 			Source:    "yarn.lock",
+		}}
+	}
+	return nil
+}
+
+// pickBunLockTarget returns a Target for a Bun project rooted at dir, or
+// nil when no text bun.lock is present. Only the text bun.lock is
+// supported; the legacy binary bun.lockb is skipped (it cannot be read
+// without executing Bun). Bun installs from the npm registry
+// (Ecosystem = intel.EcosystemNPM); Source="bun.lock" routes the runner
+// to ParseBunLock. The same node_modules-ancestor guard applies.
+func pickBunLockTarget(dir string) []Target {
+	if hasNodeModulesAncestor(dir) {
+		return nil
+	}
+	if statRegular(filepath.Join(dir, "bun.lock")) {
+		return []Target{{
+			Ecosystem: intel.EcosystemNPM,
+			Path:      filepath.Join(dir, "bun.lock"),
+			Source:    "bun.lock",
 		}}
 	}
 	return nil

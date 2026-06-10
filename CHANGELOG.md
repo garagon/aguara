@@ -15,6 +15,19 @@ name.
 
 ### Added
 
+- **bun.lock and yarn Berry lockfile parsing** (`aguara check` /
+  `aguara audit`). A freshly cloned Bun or Yarn v2+ project can now be
+  audited before install: `bun.lock` (the text lockfile; the legacy
+  binary `bun.lockb` stays out of scope) and `yarn.lock` Berry (v2+) join
+  the existing `pnpm-lock.yaml` / `package-lock.json` / classic
+  `yarn.lock` parsers. Both resolve `npm:` aliases to the real registry
+  package -- Bun records it as the resolved first element, Berry as the
+  `resolution:` field -- so a compromised package cannot hide behind a
+  local alias. Conservative, like the other npm parsers: only exact
+  registry tuples are emitted; git/file/workspace/patch sources and
+  ranges are skipped, and results dedupe on (name, version). A Berry
+  lockfile previously errored out as unsupported; it is now parsed.
+
 - **agent-policy analyzer** (`internal/engine/agentpolicy/`), the
   eleventh scan analyzer. Reads `.claude/settings.json` /
   `settings.local.json` and flags Claude Code host configuration that is

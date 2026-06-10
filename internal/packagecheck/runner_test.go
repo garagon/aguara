@@ -108,6 +108,68 @@ func TestRunner_ResolvesNpmAliasToRealCompromisedPackage(t *testing.T) {
 	}
 }
 
+// TestRunner_BunLockAliasResolvesToReal: a bun.lock alias (safe-ipc ->
+// node-ipc@9.2.3) is matched against the real package, not the alias.
+func TestRunner_BunLockAliasResolvesToReal(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Records: []intel.Record{{
+			ID: "MAL-TEST-NPM-node-ipc", Ecosystem: intel.EcosystemNPM,
+			Name: "node-ipc", Kind: intel.KindMalicious, Versions: []string{"9.2.3"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, err := Discover(filepath.Join("testdata", "bun-alias-compromised"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1 (hits=%+v)", len(res.Hits), res.Hits)
+	}
+	if got := res.Hits[0].Ref.Name; got != "node-ipc" {
+		t.Errorf("hit ref name = %q, want node-ipc (alias must not leak as safe-ipc)", got)
+	}
+	if res.Ecosystems[0].Source != "bun.lock" {
+		t.Errorf("source = %q, want bun.lock", res.Ecosystems[0].Source)
+	}
+}
+
+// TestRunner_YarnBerryAliasResolvesToReal: a yarn Berry alias descriptor
+// resolves (via resolution:) to the real node-ipc@9.2.3 and matches.
+func TestRunner_YarnBerryAliasResolvesToReal(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		GeneratedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Records: []intel.Record{{
+			ID: "MAL-TEST-NPM-node-ipc", Ecosystem: intel.EcosystemNPM,
+			Name: "node-ipc", Kind: intel.KindMalicious, Versions: []string{"9.2.3"},
+		}},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	targets, err := Discover(filepath.Join("testdata", "yarn-berry-alias-compromised"), []string{intel.EcosystemNPM})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	res, err := runner.Run(targets)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1 (hits=%+v)", len(res.Hits), res.Hits)
+	}
+	if got := res.Hits[0].Ref.Name; got != "node-ipc" {
+		t.Errorf("hit ref name = %q, want node-ipc (Berry alias must resolve to real)", got)
+	}
+	if res.Ecosystems[0].Source != "yarn.lock" {
+		t.Errorf("source = %q, want yarn.lock", res.Ecosystems[0].Source)
+	}
+}
+
 func TestRunner_CleanProjectReturnsZeroFindings(t *testing.T) {
 	// The matcher knows about a malicious package the fixture does
 	// NOT carry. Expect zero hits, one EcosystemResult with
