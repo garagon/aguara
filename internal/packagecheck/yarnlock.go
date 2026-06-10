@@ -258,12 +258,18 @@ func hasYarnBerryMetadata(content string) bool {
 }
 
 // yarnBerryResolutionRe captures the quoted resolution string in a yarn
-// Berry entry body (`  resolution: "lodash@npm:4.17.21"`).
-var yarnBerryResolutionRe = regexp.MustCompile(`^\s+resolution:\s+"([^"]+)"`)
+// Berry entry body (`  resolution: "lodash@npm:4.17.21"`). The indent is
+// anchored to EXACTLY two spaces -- the block-body level Berry always
+// emits -- so a nested dependency literally named `resolution` (four-
+// space indent under `dependencies:`) is never mistaken for the block's
+// own resolution, even in a hand-edited block with reordered or missing
+// top-level fields.
+var yarnBerryResolutionRe = regexp.MustCompile(`^  resolution:\s+"([^"]+)"`)
 
 // yarnBerryVersionRe captures the unquoted version in a Berry entry body
-// (`  version: 4.17.21`).
-var yarnBerryVersionRe = regexp.MustCompile(`^\s+version:\s+(\S+)`)
+// (`  version: 4.17.21`), anchored to exactly two spaces for the same
+// reason as yarnBerryResolutionRe.
+var yarnBerryVersionRe = regexp.MustCompile(`^  version:\s+(\S+)`)
 
 // parseYarnBerryLock parses a yarn Berry (v2+) yarn.lock. Berry's body
 // carries an authoritative `resolution:` field that is ALREADY

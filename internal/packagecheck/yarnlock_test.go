@@ -226,6 +226,31 @@ func TestParseYarnLock_BerryAliasRetainingResolution(t *testing.T) {
 	require.Equal(t, []string{"node-ipc@9.2.3"}, refSet(refs), "must resolve to the real package, not the alias")
 }
 
+func TestParseYarnLock_BerryNestedFieldsNotMiscaptured(t *testing.T) {
+	// A nested dependency named "version"/"resolution" (4-space indent)
+	// must not be mistaken for the block's own fields. The first entry
+	// has correct top-level fields plus such nested deps; the second has
+	// NO top-level version (only a nested one) and must be skipped.
+	refs, err := ParseYarnLock(writeYarn(t, `__metadata:
+  version: 8
+
+"good@npm:1.0.0":
+  version: 1.0.0
+  resolution: "good@npm:1.0.0"
+  dependencies:
+    version: "npm:9.9.9"
+    resolution: "npm:8.8.8"
+
+"sneaky@npm:2.0.0":
+  resolution: "sneaky@npm:2.0.0"
+  dependencies:
+    version: "npm:9.9.9"
+`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"good@1.0.0"}, refSet(refs),
+		"nested version/resolution must not be captured; the no-top-level-version block is skipped")
+}
+
 func TestParseYarnLock_BerrySkipsNonRegistry(t *testing.T) {
 	// patch:, git, and exec: resolutions are not public-registry and
 	// must be skipped (no @npm: protocol in the resolution).
