@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.23.0 (2026-06-07; main carries unreleased #203 pnpm-policy + #204 pnpm aliases + #207 engine registry + agentpolicy). 193 YAML rules + 51 analyzer-emitted (244 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 11 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.24.0 (2026-06-10; aggregates #203/#204/#206 pnpm posture + alias resolution, #207 engine registry refactor, #208 agent-policy, #209 bun/yarn-berry lockfiles, #210 instruction-file weighting). 193 YAML rules + 51 analyzer-emitted (244 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 11 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -157,7 +157,7 @@ When any of these values change, update ALL references across the vault:
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.23.0)
+- Version number (currently v0.24.0)
 
 Use `Grep` to find all occurrences before updating.
 
