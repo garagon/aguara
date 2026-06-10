@@ -385,6 +385,9 @@ var helperPrefixes = map[string]bool{
 	"sudo": true, "command": true, "exec": true, "env": true,
 }
 
+// envAssignRe matches a leading KEY=value environment assignment.
+var envAssignRe = regexp.MustCompile(`^[A-Za-z_]\w*=`)
+
 // fetchCommands are the binaries whose invocation IS a network fetch.
 // Matched on the resolved command's base name so a benign absolute
 // helper whose name merely contains "fetch" (e.g.
@@ -417,7 +420,12 @@ func isRepoRelativeCommand(cmd string) bool {
 			i++
 			continue
 		}
-		if helperPrefixes[base] || strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") {
+		// A KEY=value env assignment is only skippable BEFORE the
+		// command/interpreter. After an interpreter, the next token is
+		// the script argument, even if it contains "=" (e.g.
+		// ./.claude/mint=prod.sh).
+		if helperPrefixes[base] || strings.HasPrefix(tok, "-") ||
+			(!viaInterp && envAssignRe.MatchString(tok)) {
 			i++
 			continue
 		}
@@ -461,15 +469,23 @@ func splitRule(rule string) (tool, arg string, ok bool) {
 	return rule[:open], rule[open+1 : len(rule)-1], true
 }
 
-// locate returns the 1-based line number and trimmed text of the first
-// line containing anchor, or (0, anchor) when not found.
+// locate returns the 1-based line number for anchor and the anchor
+// itself as MatchedText. MatchedText is the specific dangerous token,
+// NOT the whole source line, so a minified settings.json whose line also
+// holds an unrelated secret does not echo that secret into output. The
+// JSON-escaped form of the anchor is also searched, so a hook command
+// containing escaped quotes (eval "$(curl ...)") matches the raw
+// `\"`-escaped line. When the anchor cannot be located (deeper JSON
+// escaping), the line falls back to 1 -- never 0 -- to keep the
+// 1-indexed finding contract that inline-ignore relies on.
 func locate(lines []string, anchor string) (int, string) {
+	escaped := strings.ReplaceAll(anchor, `"`, `\"`)
 	for i, ln := range lines {
-		if strings.Contains(ln, anchor) {
-			return i + 1, strings.TrimSpace(ln)
+		if strings.Contains(ln, anchor) || (escaped != anchor && strings.Contains(ln, escaped)) {
+			return i + 1, anchor
 		}
 	}
-	return 0, anchor
+	return 1, anchor
 }
 
 // isTarget matches only a Claude Code settings file under a .claude/
