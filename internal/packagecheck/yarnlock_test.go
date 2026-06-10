@@ -187,6 +187,22 @@ __metadata:
 	}
 }
 
+func TestParseYarnLock_BerryAliasRetainingResolution(t *testing.T) {
+	// Defensive: if a Berry resolution ever retains the alias ident
+	// (alias@npm:real@npm:version) instead of normalizing to the real
+	// package, the real package (the segment before the version) is
+	// still extracted, not the alias.
+	refs, err := ParseYarnLock(writeYarn(t, `__metadata:
+  version: 8
+
+"safe-ipc@npm:node-ipc@9.2.3":
+  version: 9.2.3
+  resolution: "safe-ipc@npm:node-ipc@npm:9.2.3"
+`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"node-ipc@9.2.3"}, refSet(refs), "must resolve to the real package, not the alias")
+}
+
 func TestParseYarnLock_BerrySkipsNonRegistry(t *testing.T) {
 	// patch:, git, and exec: resolutions are not public-registry and
 	// must be skipped (no @npm: protocol in the resolution).

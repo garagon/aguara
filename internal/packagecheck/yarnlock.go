@@ -326,14 +326,19 @@ func parseYarnBerryLock(target Target, content string) ([]PackageRef, error) {
 	return refs, nil
 }
 
-// yarnBerryRegistryName returns the real package name from a Berry
-// resolution of the form `<name>@npm:<version>`, and ok=false when the
-// resolution is not an npm-registry resolution (no `@npm:` protocol) or
-// the name is not a usable npm identifier.
+// yarnBerryRegistryName returns the real package name from a Berry npm
+// resolution. Real Yarn normalizes an aliased resolution to the real
+// package (`my-lodash@npm:lodash@4.17.20` resolves to `lodash@npm:4.17.20`),
+// so the common shape is `<name>@npm:<version>`. To also be correct if a
+// resolution ever retains the alias (`alias@npm:real@npm:version`), the
+// name is taken as the `@npm:`-delimited segment immediately before the
+// version, i.e. the second-to-last segment. ok=false when the resolution
+// has no `@npm:` protocol (workspace:/patch:/git/... are not registry
+// packages) or the name is not a usable npm identifier.
 func yarnBerryRegistryName(resolution string) (string, bool) {
-	idx := strings.Index(resolution, "@npm:")
-	if idx <= 0 {
+	parts := strings.Split(resolution, "@npm:")
+	if len(parts) < 2 {
 		return "", false
 	}
-	return validNPMName(resolution[:idx])
+	return validNPMName(parts[len(parts)-2])
 }
