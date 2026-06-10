@@ -29,12 +29,12 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "CRITICAL",
 			Category: category,
 			Analyzer: rulemeta.AnalyzerAgentPolicy,
-			Description: "A hook command in .claude/settings.json fetches a remote resource and " +
-				"pipes or chains it into an interpreter (curl | sh, wget && node, eval $(curl ...)). " +
-				"Claude Code runs project hooks automatically after the one-time workspace-trust " +
-				"prompt -- a SessionStart hook fires the moment a session opens in the repo -- so a " +
-				"checked-in settings.json with this shape is remote code execution triggered just by " +
-				"opening someone else's repository.",
+			Description: "A hook command in .claude/settings.json pipes a remote fetch into an " +
+				"interpreter (curl | sh) or runs it through command substitution (eval / sh -c " +
+				"\"$(curl ...)\"). Claude Code runs project hooks automatically after the one-time " +
+				"workspace-trust prompt -- a SessionStart hook fires the moment a session opens in the " +
+				"repo -- so a checked-in settings.json with this shape is remote code execution " +
+				"triggered just by opening someone else's repository.",
 			Remediation: "Remove the fetch-and-execute hook from .claude/settings.json. Hooks must " +
 				"never download and run remote code. If a setup step is genuinely needed, vendor the " +
 				"script into the repo, pin it, and review it; never pipe a network fetch into a shell.",

@@ -47,34 +47,29 @@ const AnalyzerName = rulemeta.AnalyzerAgentPolicy
 
 var (
 	// hookFetchExecRe matches a fetch PIPED directly into an interpreter
-	// (`curl … | sh`): the only form where the downloaded bytes
-	// unambiguously become the interpreter's input. An optional wrapper
-	// between the pipe and the interpreter is allowed (sudo / command /
-	// exec / env VAR=…, or an absolute/relative path such as /bin/bash),
-	// so `curl … | sudo sh` is covered. A "&&"/";" CHAIN is deliberately
-	// NOT treated as fetch-exec here: `curl health && bash build.sh`
-	// runs two unrelated commands. The genuine chain form -- download a
-	// file, then run THAT file -- is handled by fetchThenRunsFile, and
-	// the command-substitution form by evalSubstRe.
+	// (`curl … | sh`): a form where the downloaded bytes unambiguously
+	// become the interpreter's input. An optional wrapper between the
+	// pipe and the interpreter is allowed (sudo / command / exec /
+	// env VAR=…, or an absolute/relative path such as /bin/bash), so
+	// `curl … | sudo sh` is covered.
 	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
+	//
+	// Scope boundary (deliberate, under-report before false-positive):
+	// only the pipe and command-substitution forms are detected, because
+	// in both the fetched bytes provably reach the interpreter. The
+	// "download to a temp file, then run that file in a separate
+	// statement" form (`curl -o /tmp/a …; bash /tmp/a`) is NOT matched
+	// here -- telling it apart from a benign hook that fetches a health
+	// check and then runs an unrelated local script requires modeling
+	// shell command segments, redirection, curl's stdout-vs-file
+	// semantics, and execution order, which a regex cannot do without
+	// false positives. Such a line is still flagged by the pattern
+	// engine's download-and-execute rules; agent-policy adds the
+	// agent-config framing for the unambiguous forms.
 	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source|(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\s+-c)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
-	// outputFlagRe captures the file a download is explicitly written to:
-	// a short flag cluster ending in o/O (-o, -O, -qO, -sLo), --output,
-	// or a shell redirect.
-	outputFlagRe = regexp.MustCompile(`(?i)(?:\s-[a-z]*[oO]\s+|--output(?:-document)?[=\s]+|>\s*)['"]?([^\s'";|&]+)`)
-	// fetchURLRe captures URLs in the command; when no explicit output
-	// file is given (curl -O, wget default), the download lands at the
-	// URL's basename.
-	fetchURLRe = regexp.MustCompile(`(?i)(https?|ftp)://[^\s'";|&]+`)
-	// interpCmdPrefix matches an interpreter at a COMMAND position
-	// (start of command or after a shell separator), optionally
-	// path-qualified / sudo-wrapped, followed by whitespace before its
-	// script argument. Anchoring to a command position prevents the
-	// "sh" inside a filename like "setup.sh" from matching.
-	interpCmdPrefix = "(?i)(?:^|[\\s;&|(`])(?:sudo\\s+|command\\s+|exec\\s+|[~./][^\\s]*/)?(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\\s+"
 )
 
 // envExecVars are environment variables whose presence in a committed
@@ -206,7 +201,7 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 				if cmd == "" {
 					continue
 				}
-				if hookFetchExecRe.MatchString(cmd) || evalSubstRe.MatchString(cmd) || fetchThenRunsFile(cmd) {
+				if hookFetchExecRe.MatchString(cmd) || evalSubstRe.MatchString(cmd) {
 					emit(RuleHookFetchExec,
 						fmt.Sprintf("A %s hook command downloads a remote resource and runs it through an interpreter, which Claude Code executes automatically when a session opens in this repo.", event),
 						cmd,
@@ -215,74 +210,6 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 			}
 		}
 	}
-}
-
-// fetchThenRunsFile reports whether a command downloads a resource and
-// then runs that same file through an interpreter, even when the two
-// statements are separated by a newline (which the inline pipe regex
-// does not cross). The downloaded file's name must match the file the
-// interpreter runs, so an unrelated fetch and a later unrelated
-// interpreter call do not trip it.
-func fetchThenRunsFile(cmd string) bool {
-	for _, name := range downloadedNames(cmd) {
-		// Require an interpreter at a command position and a token
-		// boundary after the name, so a downloaded "/tmp/h" does not
-		// prefix-match a later "/tmp/healthcheck.sh" and "sh" inside a
-		// filename is not read as a shell.
-		runRe, err := regexp.Compile(interpCmdPrefix + `[^\n]*?` + regexp.QuoteMeta(name) + `(?:["'\s;|&)]|$)`)
-		if err != nil {
-			continue
-		}
-		if runRe.MatchString(cmd) {
-			return true
-		}
-	}
-	return false
-}
-
-// downloadedNames returns the file name(s) a curl/wget download lands at.
-// An explicit output target (-o / --output / redirect) wins; otherwise
-// the download uses the URL's basename (curl -O, wget default).
-func downloadedNames(cmd string) []string {
-	if !fetchURLRe.MatchString(cmd) && !strings.Contains(strings.ToLower(cmd), "curl") &&
-		!strings.Contains(strings.ToLower(cmd), "wget") {
-		return nil
-	}
-	var explicit []string
-	for _, m := range outputFlagRe.FindAllStringSubmatch(cmd, -1) {
-		f := strings.Trim(m[1], `'"`)
-		if f != "" && !isURL(f) {
-			explicit = append(explicit, f)
-		}
-	}
-	if len(explicit) > 0 {
-		return explicit
-	}
-	var names []string
-	for _, u := range fetchURLRe.FindAllString(cmd, -1) {
-		if b := urlBasename(u); b != "" {
-			names = append(names, b)
-		}
-	}
-	return names
-}
-
-func isURL(s string) bool {
-	return fetchURLRe.MatchString(s)
-}
-
-// urlBasename returns the last path segment of a URL, stripping any
-// query/fragment, or "" when there is none.
-func urlBasename(u string) string {
-	if i := strings.IndexAny(u, "?#"); i >= 0 {
-		u = u[:i]
-	}
-	u = strings.TrimRight(u, "/")
-	seg := u[strings.LastIndexByte(u, '/')+1:]
-	if seg == "" || strings.Contains(seg, ":") { // bare host, no path
-		return ""
-	}
-	return seg
 }
 
 // checkEnv flags an env block that sets a code-execution variable.
