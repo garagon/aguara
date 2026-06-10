@@ -212,18 +212,24 @@ func TestParseYarnLock_BerryCRLF(t *testing.T) {
 
 func TestParseYarnLock_BerryAliasRetainingResolution(t *testing.T) {
 	// Defensive: if a Berry resolution ever retains the alias ident
-	// (alias@npm:real@npm:version) instead of normalizing to the real
-	// package, the real package (the segment before the version) is
-	// still extracted, not the alias.
-	refs, err := ParseYarnLock(writeYarn(t, `__metadata:
+	// instead of normalizing to the real package, the real package is
+	// still extracted, not the alias -- in either the single-@npm:
+	// embedded form (alias@npm:real@version) or a double-@npm: form.
+	for _, resolution := range []string{
+		"safe-ipc@npm:node-ipc@9.2.3",     // alias retained, real embedded as name@version
+		"safe-ipc@npm:node-ipc@npm:9.2.3", // alias retained, double @npm:
+	} {
+		refs, err := ParseYarnLock(writeYarn(t, `__metadata:
   version: 8
 
 "safe-ipc@npm:node-ipc@9.2.3":
   version: 9.2.3
-  resolution: "safe-ipc@npm:node-ipc@npm:9.2.3"
+  resolution: "`+resolution+`"
 `))
-	require.NoError(t, err)
-	require.Equal(t, []string{"node-ipc@9.2.3"}, refSet(refs), "must resolve to the real package, not the alias")
+		require.NoError(t, err)
+		require.Equal(t, []string{"node-ipc@9.2.3"}, refSet(refs),
+			"must resolve to the real package, not the alias, for resolution %q", resolution)
+	}
 }
 
 func TestParseYarnLock_BerryNestedFieldsNotMiscaptured(t *testing.T) {

@@ -352,17 +352,38 @@ func parseYarnBerryLock(target Target, content string) ([]PackageRef, error) {
 
 // yarnBerryRegistryName returns the real package name from a Berry npm
 // resolution. Real Yarn normalizes an aliased resolution to the real
-// package (`my-lodash@npm:lodash@4.17.20` resolves to `lodash@npm:4.17.20`),
-// so the common shape is `<name>@npm:<version>`. To also be correct if a
-// resolution ever retains the alias (`alias@npm:real@npm:version`), the
-// name is taken as the `@npm:`-delimited segment immediately before the
-// version, i.e. the second-to-last segment. ok=false when the resolution
-// has no `@npm:` protocol (workspace:/patch:/git/... are not registry
-// packages) or the name is not a usable npm identifier.
+// package -- `my-lodash@npm:lodash@4.17.20` resolves to `lodash@npm:4.17.20`
+// (verified against Yarn 4; the alias survives only in the descriptor
+// key, which this parser does not read). The text after `@npm:` is the
+// resolved reference; it is either:
+//
+//	bare version       `lodash@npm:4.17.20`            -> name before @npm:
+//	embedded name@ver  `alias@npm:node-ipc@9.2.3`      -> name = node-ipc
+//
+// Handling both shapes makes the result correct whether Yarn normalizes
+// the resolution or ever retains the alias ident, so an alias never
+// hides the real package. ok=false when there is no `@npm:` protocol
+// (workspace:/patch:/git/... are not registry packages) or the name is
+// not a usable npm identifier.
 func yarnBerryRegistryName(resolution string) (string, bool) {
-	parts := strings.Split(resolution, "@npm:")
-	if len(parts) < 2 {
+	idx := strings.Index(resolution, "@npm:")
+	if idx <= 0 {
 		return "", false
 	}
-	return validNPMName(parts[len(parts)-2])
+	after := resolution[idx+len("@npm:"):]
+	// Strip Yarn resolution metadata: `::key=val...` and `#builtin<...>`.
+	if i := strings.Index(after, "::"); i >= 0 {
+		after = after[:i]
+	}
+	if i := strings.IndexByte(after, '#'); i >= 0 {
+		after = after[:i]
+	}
+	// A '@' in `after` (past any leading scope '@') means it carries an
+	// embedded name@version -- the real package -- so the name is the
+	// part before that final '@'. Otherwise `after` is a bare version
+	// and the name is the segment before `@npm:`.
+	if at := strings.LastIndexByte(after, '@'); at > 0 {
+		return validNPMName(after[:at])
+	}
+	return validNPMName(resolution[:idx])
 }
