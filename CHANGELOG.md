@@ -5,52 +5,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.24.0] - 2026-06-10
 
-Aguara now checks the trust layer around AI agents and pnpm projects.
-A new agent-policy analyzer reads a repo's Claude Code configuration and
-flags settings that are dangerous to inherit from a clone; pnpm posture
-checks verify a project uses pnpm v11's supply-chain controls; and
-`pnpm-lock.yaml` parsing is hardened so an alias-shaped lockfile entry
-cannot hide a compromised registry package behind a local dependency
-name.
+Extends Aguara's trust layer in both directions: what an AI agent is
+about to obey, and what a package manager is about to install. On the
+agent side, a cloned repo's Claude Code settings are now vetted before
+their hooks and helpers run, and agent instruction files like
+`.cursorrules` and `AGENTS.md` are treated as the high-trust prompt
+surfaces they are. On the package side, pnpm projects are checked for
+weakened supply-chain policy, and Bun and Yarn Berry lockfiles join the
+pre-install parsers, so every major npm-family lockfile can now be
+audited before a single install script runs. The rule catalog grows to
+244 cataloged detections (193 YAML + 51 analyzer-emitted) and gains an
+`agent-trust` category. Everything stays deterministic and offline:
+no package execution, no network calls during a scan. Existing rule
+IDs, severities, and the `Severity` JSON encoding are unchanged.
 
 ### Added
 
-- **bun.lock and yarn Berry lockfile parsing** (`aguara check` /
-  `aguara audit`). A freshly cloned Bun or Yarn v2+ project can now be
-  audited before install: `bun.lock` (the text lockfile) and `yarn.lock`
-  Berry (v2+) join the existing `pnpm-lock.yaml` / `package-lock.json` /
-  classic `yarn.lock` parsers. Both resolve `npm:` aliases to the real
-  registry package -- Bun records it as the resolved first element, Berry
-  as the `resolution:` field -- so a compromised package cannot hide
-  behind a local alias. Conservative, like the other npm parsers: only
-  exact registry tuples are emitted; git/file/workspace/patch sources and
-  ranges are skipped, and results dedupe on (name, version). A Berry
-  lockfile previously errored out as unsupported; it is now parsed.
-  The legacy binary `bun.lockb` is not parsed (it cannot be read without
-  running Bun); a repo whose only lockfile is `bun.lockb` fails with a
-  clear message to commit the text `bun.lock` instead, rather than
-  passing as audited with zero packages read.
-
-- **Agent instruction files treated as a high-trust prompt-injection
-  surface.** Files an AI editor auto-loads and follows as directives --
-  `.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, and
-  `copilot-instructions.md` -- are now run through the prompt-injection
-  (NLP) analyzer even when they have no `.md` extension, and a finding in
-  one is weighted up rather than getting the documentation penalty a
-  README receives. An injected directive in these files is what the agent
-  actually obeys, so the same payload scores higher here than in prose.
-  No new rules or analyzer. The directory-scoped Cursor and Windsurf rule
-  formats (`.cursor/rules/*.mdc`, `.windsurf/rules/*`) and pattern-rule
-  coverage of the extensionless files are a follow-up. `CLAUDE.md` is
-  intentionally left out for now, since it is so widely used for
-  legitimate project instructions that flagging it would be noisy.
-
-- **agent-policy analyzer** (`internal/engine/agentpolicy/`), the
-  eleventh scan analyzer. Reads `.claude/settings.json` /
-  `settings.local.json` and flags Claude Code host configuration that is
-  dangerous to inherit from a cloned repo (after the one-time
-  workspace-trust prompt, its hooks and helpers run automatically), with
-  eight new rules in a new `agent-trust` category:
+- **agent-policy analyzer** (`internal/engine/agentpolicy/`). A cloned
+  repo can ship a `.claude/settings.json` that Claude Code loads when
+  the workspace is trusted; from then on its hooks and credential
+  helpers run automatically. The new analyzer reads
+  `.claude/settings.json` / `settings.local.json` and flags host
+  configuration that is dangerous to inherit from someone else's repo,
+  with eight new rules in the new `agent-trust` category:
   - `AGENTCFG_HOOK_FETCH_EXEC_001` (CRITICAL): a hook command downloads
     and runs remote code (`curl | sh`, `eval $(curl ...)`), executed
     automatically when a session opens in the repo.
@@ -58,7 +35,7 @@ name.
     code-execution variable (`NODE_OPTIONS --require`, `LD_PRELOAD`,
     `BASH_ENV`, and similar).
   - `AGENTCFG_BYPASS_PERMS_001` (HIGH): `permissions.defaultMode` is
-    `bypassPermissions`, pre-disabling the tool-approval prompt.
+    `bypassPermissions`, weakening tool approval for the workspace.
   - `AGENTCFG_MCP_AUTOAPPROVE_001` (MEDIUM):
     `enableAllProjectMcpServers: true` auto-loads every `.mcp.json`
     server.
@@ -69,17 +46,35 @@ name.
   - `AGENTCFG_HELPER_REPO_SCRIPT_001` (MEDIUM): a credential helper
     (`apiKeyHelper`, `awsAuthRefresh`) runs a repo-shipped script.
   - `AGENTCFG_PERMS_WEAK_MODE_001` (LOW): `defaultMode` is `acceptEdits`
-    or `auto` shipped as a project default.
+    shipped as a project default.
 
   A missing setting is treated as the secure default and never fires;
   the analyzer judges the dangerous shape of a value, not the presence
-  of hooks or permissions. Malformed JSON is silent. Rule catalog grows
-  to 244 cataloged detections (193 YAML + 51 analyzer-emitted).
+  of hooks or permissions. Claude Code is the first agent-policy
+  surface; the same posture applies to other agent host configs.
 
-- **pnpm-policy analyzer** (`internal/engine/pnpmpolicy/`), the tenth
-  scan analyzer. Reads `pnpm-workspace.yaml` and flags supply-chain
-  settings weakened below the pnpm v11 defaults, with nine new rules
-  (all category `supply-chain`):
+- **Agent instruction files treated as a high-trust prompt surface.**
+  Files agentic coding tools load as persistent context --
+  `.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, and
+  `copilot-instructions.md` -- are now run through the prompt-injection
+  (NLP) analyzer even when they have no `.md` extension, and a finding
+  in one is weighted up rather than getting the documentation penalty a
+  README receives. An injected directive in these files is closer to
+  the agent's operating instructions than to prose, so the same payload
+  scores higher here. The directory-scoped Cursor and Windsurf rule
+  formats (`.cursor/rules/*.mdc`, `.windsurf/rules/*`) and pattern-rule
+  coverage of the extensionless files are a follow-up. `CLAUDE.md` is
+  intentionally left out for now: it is so widely used for legitimate
+  project instructions that flagging it needs a dedicated
+  false-positive pass first.
+
+- **pnpm-policy analyzer** (`internal/engine/pnpmpolicy/`). pnpm v11
+  ships real supply-chain controls -- build-script approval, a release
+  age window, exotic-source blocking -- but a single
+  `pnpm-workspace.yaml` line can quietly turn them off. The new
+  analyzer reads `pnpm-workspace.yaml` and flags settings weakened
+  below the v11 defaults, with nine new rules (all category
+  `supply-chain`):
   - `PNPM_DANGEROUS_BUILDS_001` (HIGH): `dangerouslyAllowAllBuilds: true`
     lets every dependency run install-time lifecycle scripts without
     approval.
@@ -104,8 +99,23 @@ name.
   `pnpm-workspace.yaml` match (verified against pnpm 11.5.2: a
   kebab-case key there is silently ignored by pnpm, so flagging it
   would be a false positive). YAML merge keys (`<<:`) are expanded, and
-  each finding points at the exact line. Rule catalog grows to 236
-  cataloged detections (193 YAML + 43 analyzer-emitted).
+  each finding points at the exact line.
+
+- **bun.lock and yarn Berry lockfile parsing** (`aguara check` /
+  `aguara audit`). A freshly cloned Bun or Yarn v2+ project can now be
+  audited before install: `bun.lock` (the text lockfile) and `yarn.lock`
+  Berry (v2+) join the existing `pnpm-lock.yaml` / `package-lock.json` /
+  classic `yarn.lock` parsers. Both resolve `npm:` aliases to the real
+  registry package -- Bun records it as the resolved first element, Berry
+  as the `resolution:` field -- so a compromised package cannot hide
+  behind a local alias. Conservative, like the other npm parsers: only
+  exact registry tuples are emitted; git/file/workspace/patch sources and
+  ranges are skipped, and results dedupe on (name, version). A Berry
+  lockfile previously errored out as unsupported; it is now parsed.
+  The legacy binary `bun.lockb` is not parsed (it cannot be read without
+  running Bun); a repo whose only lockfile is `bun.lockb` fails with a
+  clear message to commit the text `bun.lock` instead, rather than
+  passing as audited with zero packages read.
 
 - **`npm:` alias resolution in `pnpm-lock.yaml`** (`aguara check` /
   `aguara audit`). An alias-shaped lockfile entry such as
