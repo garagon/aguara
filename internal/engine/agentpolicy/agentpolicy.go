@@ -1,20 +1,26 @@
 // Package agentpolicy is a small, auditable analyzer for AI-agent host
-// configuration posture. It reads a project's Claude Code settings file
-// (.claude/settings.json, .claude/settings.local.json) and reports
-// settings that are dangerous to inherit from a cloned repository: hooks
-// that download and run remote code, environment variables that inject
-// code into spawned processes, a default permission mode that bypasses
-// the approval prompt, auto-approval of project MCP servers, allow rules
-// that pre-approve dangerous commands or secret reads, and credential
-// helpers that run repo-shipped scripts.
+// configuration posture. Its first supported surface is Claude Code
+// project settings: it reads .claude/settings.json (and the local
+// .claude/settings.local.json) and reports values that are risky to
+// inherit from a repository -- hooks that download and run remote code,
+// environment variables that inject code into spawned processes, a
+// bypass-oriented permission default, auto-approval of project MCP
+// servers, allow rules that pre-approve dangerous commands or secret
+// reads, and credential helpers that run repo-shipped scripts.
 //
-// Threat model (verified against current Claude Code docs): a checked-in
-// .claude/settings.json is loaded for anyone who opens the repo, and
-// after the one-time workspace-trust prompt its hooks and helpers run
-// AUTOMATICALLY, without per-action approval (a SessionStart hook fires
-// on session open). So the question this analyzer asks is not "did the
-// developer configure something" but "is this value dangerous to
-// inherit from someone else's repo."
+// Threat model (verified against current Claude Code docs): the
+// project-level .claude/settings.json can be committed with a repo and
+// is applied for anyone who opens it, and after the one-time
+// workspace-trust prompt its hooks and helpers run automatically (a
+// SessionStart hook fires on session open). Project settings cannot
+// silently grant the strongest modes -- Claude Code keeps workspace
+// trust, network approval, and suspicious-command checks, and ignores a
+// project-supplied "auto" mode -- but they can weaken or preconfigure
+// approval behavior and run code. So the question this analyzer asks is
+// not "did the developer configure something" but "is this value risky
+// to inherit from a repository." (.claude/settings.local.json is local,
+// usually gitignored posture, not repo-supplied; it is scanned too, but
+// the repo-shipped threat framing applies to settings.json.)
 //
 // Design rules (same discipline as pnpm-policy):
 //   - Exact target. Only .claude/settings(.local).json. A generic
@@ -286,14 +292,17 @@ func (a *Analyzer) checkPermissions(raw json.RawMessage, emit emitFunc) {
 	switch strings.TrimSpace(p.DefaultMode) {
 	case "bypassPermissions":
 		emit(RuleBypassPerms,
-			"permissions.defaultMode is bypassPermissions, pre-disabling the tool-approval prompt for anyone who clones the repo.",
+			"permissions.defaultMode is bypassPermissions, a bypass-oriented default that weakens the tool-approval prompt for the project after workspace trust.",
 			"bypassPermissions",
-			"Remove defaultMode: bypassPermissions from the committed settings; it is a per-developer local choice.")
-	case "acceptEdits", "auto":
+			"Remove defaultMode: bypassPermissions from the project settings; auto-approval is a per-developer local choice, not a project default.")
+	case "acceptEdits":
+		// Only acceptEdits: Claude Code IGNORES defaultMode "auto" when it
+		// comes from project/local settings, so a repo cannot grant itself
+		// auto mode and flagging it would be a false positive.
 		emit(RulePermsWeakMode,
-			fmt.Sprintf("permissions.defaultMode is %q, an auto-approving mode shipped as a project default.", p.DefaultMode),
+			"permissions.defaultMode is \"acceptEdits\", an edit-auto-approving mode set as a project default.",
 			"defaultMode",
-			"Leave defaultMode unset in committed settings so each developer opts into a faster mode locally.")
+			"Leave defaultMode unset in project settings so each developer opts into a faster mode locally.")
 	}
 
 	for _, rule := range p.Allow {

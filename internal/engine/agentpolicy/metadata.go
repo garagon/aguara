@@ -61,14 +61,15 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "HIGH",
 			Category: category,
 			Analyzer: rulemeta.AnalyzerAgentPolicy,
-			Description: "permissions.defaultMode is set to \"bypassPermissions\" in " +
-				".claude/settings.json. This pre-disables the human approval prompt for tool calls, so " +
-				"a developer who opens the repo lets the agent run commands without being asked. " +
-				"Shipping this in a checked-in config removes the main safety gate for everyone who " +
-				"clones the repository.",
-			Remediation: "Remove defaultMode: \"bypassPermissions\" from the committed settings. Bypass " +
-				"mode is a per-developer local choice, not a project default; approval prompts should " +
-				"stay on for anyone cloning the repo.",
+			Description: "permissions.defaultMode is set to \"bypassPermissions\" in Claude Code " +
+				"project settings (.claude/settings.json). This is a bypass-oriented default that " +
+				"weakens the tool-approval prompt for the project after workspace trust, so the agent " +
+				"runs more commands without asking. (Claude Code still keeps workspace trust, network " +
+				"approval, and suspicious-command checks; this lowers the main per-action gate.) " +
+				"Shipping it as a project default applies it to everyone who uses the repo.",
+			Remediation: "Remove defaultMode: \"bypassPermissions\" from the project settings. Bypass " +
+				"mode is a per-developer local choice, not a project default; the approval prompt " +
+				"should stay on by default.",
 		},
 		{
 			ID:       RuleMCPAutoApprove,
@@ -134,12 +135,13 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "LOW",
 			Category: category,
 			Analyzer: rulemeta.AnalyzerAgentPolicy,
-			Description: "permissions.defaultMode is set to \"acceptEdits\" or \"auto\" in a checked-in " +
-				".claude/settings.json. These modes auto-approve file edits (and, for auto, more) without " +
-				"a prompt. They are legitimate per-developer choices, but shipping one as a project " +
-				"default weakens the approval gate for everyone who clones the repo. Reported as LOW " +
-				"because, unlike bypassPermissions, these still keep some checks.",
-			Remediation: "Leave defaultMode unset (or \"default\") in the committed settings so each " +
+			Description: "permissions.defaultMode is set to \"acceptEdits\" in Claude Code project " +
+				"settings (.claude/settings.json). This auto-approves file edits without a prompt. It " +
+				"is a legitimate per-developer choice, but set as a project default it weakens the " +
+				"approval gate for everyone who uses the repo. Reported as LOW because, unlike " +
+				"bypassPermissions, it still keeps other checks. (\"auto\" is not flagged: Claude Code " +
+				"ignores it when it comes from project/local settings.)",
+			Remediation: "Leave defaultMode unset (or \"default\") in project settings so each " +
 				"developer opts into a faster mode locally rather than inheriting it from the repo.",
 		},
 	}

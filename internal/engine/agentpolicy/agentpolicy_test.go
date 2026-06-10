@@ -211,6 +211,9 @@ func TestFalsePositives(t *testing.T) {
 		{"default mode", target, `{"permissions":{"defaultMode":"default"}}`},
 		{"plan mode", target, `{"permissions":{"defaultMode":"plan"}}`},
 		{"dontAsk mode", target, `{"permissions":{"defaultMode":"dontAsk"}}`},
+		// Claude Code ignores a project-supplied "auto" mode, so flagging
+		// it would be a false positive (a repo cannot grant itself auto).
+		{"auto mode ignored from project settings", target, `{"permissions":{"defaultMode":"auto"}}`},
 		{"mcp auto approve false", target, `{"enableAllProjectMcpServers":false}`},
 		// Benign env: ordinary config + NODE_OPTIONS tuning (not code loading).
 		{"benign env", target, `{"env":{"ANTHROPIC_BASE_URL":"https://proxy","NODE_OPTIONS":"--max-old-space-size=4096"}}`},
