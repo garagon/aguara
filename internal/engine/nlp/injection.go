@@ -40,6 +40,12 @@ func NewInjectionAnalyzer() *InjectionAnalyzer {
 func (a *InjectionAnalyzer) Name() string { return "nlp-injection" }
 
 func (a *InjectionAnalyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
+	// Agent instruction files (.cursorrules, AGENTS.md, ...) carry
+	// free-form directives the agent obeys, so run the markdown injection
+	// pipeline on them even when they have no .md extension.
+	if types.IsAgentInstructionFile(target.RelPath) {
+		return a.analyzeMarkdown(ctx, target)
+	}
 	ext := strings.ToLower(filepath.Ext(target.RelPath))
 	switch ext {
 	case ".md", ".markdown", ".txt":

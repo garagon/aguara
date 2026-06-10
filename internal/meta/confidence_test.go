@@ -22,7 +22,7 @@ func TestAdjustConfidenceCodeBlockDowngrade(t *testing.T) {
 func TestAdjustConfidenceCorrelationBoost(t *testing.T) {
 	findings := []types.Finding{
 		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: 0.85},
-		{RuleID: "R2", FilePath: "a.md", Line: 7, Confidence: 0.85}, // within 5 lines
+		{RuleID: "R2", FilePath: "a.md", Line: 7, Confidence: 0.85},  // within 5 lines
 		{RuleID: "R3", FilePath: "a.md", Line: 50, Confidence: 0.85}, // far away, no boost
 	}
 
@@ -102,8 +102,23 @@ func TestAdjustConfidenceFileTypeMultiplier(t *testing.T) {
 
 	result := meta.AdjustConfidence(findings)
 	require.InDelta(t, 0.765, result[0].Confidence, 0.01) // .md: 0.85 * 0.9
-	require.InDelta(t, 0.85, result[1].Confidence, 0.01)   // .py: no change
-	require.InDelta(t, 0.85, result[2].Confidence, 0.01)   // .yaml: no change
+	require.InDelta(t, 0.85, result[1].Confidence, 0.01)  // .py: no change
+	require.InDelta(t, 0.85, result[2].Confidence, 0.01)  // .yaml: no change
+}
+
+func TestAdjustConfidenceInstructionFileBoost(t *testing.T) {
+	findings := []types.Finding{
+		{RuleID: "R1", FilePath: "README.md", Line: 5, Confidence: 0.70},
+		{RuleID: "R2", FilePath: ".cursorrules", Line: 5, Confidence: 0.70},
+		{RuleID: "R3", FilePath: "AGENTS.md", Line: 5, Confidence: 0.70},
+		{RuleID: "R4", FilePath: ".cursorrules", Line: 50, Confidence: 0.90}, // boost would exceed 1.0
+	}
+
+	result := meta.AdjustConfidence(findings)
+	require.InDelta(t, 0.63, result[0].Confidence, 0.01)  // README.md: 0.70 * 0.9 doc penalty
+	require.InDelta(t, 0.875, result[1].Confidence, 0.01) // .cursorrules: 0.70 * 1.25 boost
+	require.InDelta(t, 0.875, result[2].Confidence, 0.01) // AGENTS.md: 0.70 * 1.25 boost
+	require.InDelta(t, 1.0, result[3].Confidence, 0.001)  // 0.90 * 1.25 clamped to 1.0
 }
 
 func TestAdjustConfidenceZeroConfidenceUntouched(t *testing.T) {
