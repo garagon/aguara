@@ -80,10 +80,10 @@ func TestParseNuGet_CsprojAttributeAndChildVersion(t *testing.T) {
 	// Unresolved.Prop entry skips because $(UndefinedVersion)
 	// has no PropertyGroup binding.
 	want := map[string]string{
-		"Newtonsoft.Json":              "13.0.3",
-		"Serilog":                      "3.1.1",
-		"Microsoft.Extensions.Logging": "8.0.0",
-		"Polly":                        "8.2.0",
+		"Newtonsoft.Json":               "13.0.3",
+		"Serilog":                       "3.1.1",
+		"Microsoft.Extensions.Logging":  "8.0.0",
+		"Polly":                         "8.2.0",
 	}
 	if len(refs) != len(want) {
 		t.Fatalf("refs = %d, want %d (refs=%+v)", len(refs), len(want), refs)

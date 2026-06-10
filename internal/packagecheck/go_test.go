@@ -23,8 +23,8 @@ func TestParseGoSum_DedupesGoModSuffix(t *testing.T) {
 		t.Fatalf("refs = %d, want %d (refs=%+v)", got, want, refs)
 	}
 	want := map[string]string{
-		"example.com/malicious-mod":   "v1.2.3",
-		"github.com/stretchr/testify": "v1.10.0",
+		"example.com/malicious-mod":       "v1.2.3",
+		"github.com/stretchr/testify":     "v1.10.0",
 	}
 	for _, r := range refs {
 		if r.Ecosystem != intel.EcosystemGo {
