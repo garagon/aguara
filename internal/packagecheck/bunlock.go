@@ -74,7 +74,9 @@ func ParseBunLock(target Target) ([]PackageRef, error) {
 
 	inPackages := false
 	depth := 0
-	for _, line := range strings.Split(string(data), "\n") {
+	// Normalize CRLF so Windows checkouts parse identically.
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for _, line := range strings.Split(content, "\n") {
 		if !inPackages {
 			if bunPackagesKeyRe.MatchString(line) {
 				inPackages = true

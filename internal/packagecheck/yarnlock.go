@@ -76,7 +76,9 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open yarn.lock: %w", err)
 	}
-	content := string(data)
+	// Normalize CRLF so a Windows checkout's `:\r` block headers are not
+	// missed (which would skip every block and read zero packages).
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
 	// Berry detection. A v2+ yarn.lock opens with a `__metadata:`
 	// block; v1 never has one. Berry uses a different (YAML-shaped)

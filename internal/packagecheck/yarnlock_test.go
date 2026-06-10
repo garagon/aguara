@@ -3,6 +3,7 @@ package packagecheck
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,6 +186,15 @@ __metadata:
 		require.Equal(t, intel.EcosystemNPM, r.Ecosystem)
 		require.Equal(t, "yarn.lock", r.Source)
 	}
+}
+
+func TestParseYarnLock_BerryCRLF(t *testing.T) {
+	// A Windows/CRLF checkout must parse identically to LF.
+	lf := "__metadata:\n  version: 8\n\n\"lodash@npm:4.17.21\":\n  version: 4.17.21\n  resolution: \"lodash@npm:4.17.21\"\n"
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+	refs, err := ParseYarnLock(writeYarn(t, crlf))
+	require.NoError(t, err)
+	require.Equal(t, []string{"lodash@4.17.21"}, refSet(refs), "CRLF Berry lockfile must read its packages")
 }
 
 func TestParseYarnLock_BerryAliasRetainingResolution(t *testing.T) {
