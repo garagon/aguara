@@ -52,7 +52,7 @@ var (
 	// pipe and the interpreter is allowed (sudo / command / exec /
 	// env VAR=…, or an absolute/relative path such as /bin/bash), so
 	// `curl … | sudo sh` is covered.
-	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`)
+	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
@@ -170,6 +170,13 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 			MatchedText: text,
 			Remediation: rem,
 			Analyzer:    AnalyzerName,
+			// High, fixed confidence: these are deterministic structural
+			// matches on a known config schema, not heuristics. It also
+			// lets the finding hold its own in cross-rule dedup -- a hook
+			// like `curl | sh` also trips the pattern matcher's
+			// download-and-execute rule on the same line, and without a
+			// confidence the agent-config framing would always be dropped.
+			Confidence: 0.9,
 		})
 	}
 
@@ -338,9 +345,11 @@ func isBroadCommandRule(rule string) bool {
 	// A dangerous command at the head of the rule, with a wildcard tail.
 	// Claude Bash rules wildcard either with a space (Bash(curl *)) or a
 	// colon prefix form (Bash(curl:*)); the binary is the first token up
-	// to the first space or colon.
+	// to the first space or colon. An absolute path (Bash(/bin/rm *)) is
+	// reduced to its base name so it still matches the dangerous list.
 	head := strings.ToLower(strings.Fields(arg)[0])
 	head = strings.SplitN(head, ":", 2)[0]
+	head = filepath.Base(strings.Trim(head, `'"`))
 	if dangerousBinaries[head] && strings.Contains(arg, "*") {
 		return true
 	}
