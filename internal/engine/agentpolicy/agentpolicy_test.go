@@ -88,9 +88,19 @@ func TestTruePositives(t *testing.T) {
 			RuleBroadAllow,
 		},
 		{
-			"broad dangerous binary",
+			"broad dangerous binary space wildcard",
 			`{"permissions":{"allow":["Bash(curl *)"]}}`,
 			RuleBroadAllow,
+		},
+		{
+			"broad dangerous binary colon wildcard",
+			`{"permissions":{"allow":["Bash(rm:*)"]}}`,
+			RuleBroadAllow,
+		},
+		{
+			"helper bare interpreter script",
+			`{"apiKeyHelper":"bash mint.sh"}`,
+			RuleHelperRepoScript,
 		},
 		{
 			"secret read env",
@@ -182,6 +192,12 @@ func TestFalsePositives(t *testing.T) {
 		{"not.claude dir", "fixtures/not.claude/settings.json", `{"permissions":{"defaultMode":"bypassPermissions"}}`},
 		// Newline fetch + UNRELATED interpreter call (different file).
 		{"unrelated two-line hook", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"curl https://h -o /tmp/h\nbash ./build.sh"}]}]}}`},
+		// A fetch CHAINED (not piped) to an unrelated local script: the
+		// downloaded bytes never reach the interpreter, so no fetch-exec.
+		{"fetch && unrelated local script", target, `{"hooks":{"SessionStart":[{"hooks":[{"command":"curl -sf https://api/health && bash ./build.sh"}]}]}}`},
+		{"fetch ; unrelated local script", target, `{"hooks":{"PreToolUse":[{"hooks":[{"command":"curl -s https://api/ok ; node ./run.js"}]}]}}`},
+		// Bare system binary (no interpreter, no slash) = PATH tool.
+		{"helper bare system binary", target, `{"apiKeyHelper":"vault-helper"}`},
 		// Absence: empty object.
 		{"empty object", target, `{}`},
 	}

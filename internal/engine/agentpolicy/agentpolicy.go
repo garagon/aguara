@@ -46,25 +46,27 @@ import (
 const AnalyzerName = rulemeta.AnalyzerAgentPolicy
 
 var (
-	// hookFetchExecRe matches a command that downloads a resource and
-	// runs it through an interpreter: a pipe or "&&"/";" chain into a
-	// shell/runtime. An optional wrapper between the chain and the
-	// interpreter is allowed (sudo / command / exec / env VAR=…, or an
-	// absolute/relative path to the interpreter such as /bin/bash), so
-	// `curl … | sudo sh` and `wget … && /bin/bash x` are covered.
-	// Deliberately narrow beyond that: deeper indirection is out of
-	// scope (under-report before false-positive). evalSubstRe covers
-	// the eval/exec "$(curl …)" wrapping form.
-	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?(?:\||&&|;)\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`)
-	// evalSubstRe catches `eval "$(curl ...)"` / `exec $(wget ...)`,
-	// where the interpreter wraps the fetch rather than following it.
-	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
-	// fetchOutputRe captures the file a curl/wget download is written to
-	// (-o / -O / --output / shell redirect). interpRunFileRe is then
-	// built per-file to confirm an interpreter runs THAT SAME file, so a
-	// newline-separated "curl -o /tmp/a\nbash /tmp/a" is caught while an
-	// unrelated two-line hook (curl health-check; bash build.sh) is not.
-	fetchOutputRe = regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^\n]*?(?:-o|-O|--output|>)\s*('?"?)([^\s'";|&]+)`)
+	// hookFetchExecRe matches a fetch PIPED directly into an interpreter
+	// (`curl … | sh`): the only form where the downloaded bytes
+	// unambiguously become the interpreter's input. An optional wrapper
+	// between the pipe and the interpreter is allowed (sudo / command /
+	// exec / env VAR=…, or an absolute/relative path such as /bin/bash),
+	// so `curl … | sudo sh` is covered. A "&&"/";" CHAIN is deliberately
+	// NOT treated as fetch-exec here: `curl health && bash build.sh`
+	// runs two unrelated commands. The genuine chain form -- download a
+	// file, then run THAT file -- is handled by fetchThenRunsFile, and
+	// the command-substitution form by evalSubstRe.
+	hookFetchExecRe = regexp.MustCompile(`(?i)\b(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`)
+	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
+	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
+	// command substitution.
+	evalSubstRe = regexp.MustCompile(`(?i)\b(eval|exec|source|(?:sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\s+-c)\b[^\n]*\$\(\s*(curl|wget|iwr|fetch)\b`)
+	// fetchOutputRe captures the file a curl/wget download is written to:
+	// a short flag cluster ending in o/O (-o, -O, -qO, -sLo), --output,
+	// or a shell redirect. fetchThenRunsFile then confirms an interpreter
+	// runs THAT SAME file, so a newline-separated "curl -o /tmp/a\nbash
+	// /tmp/a" is caught while an unrelated two-line hook is not.
+	fetchOutputRe = regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^\n]*?(?:\s-[a-z]*[oO]\s+|--output(?:-document)?[=\s]+|>\s*)('?"?)([^\s'";|&]+)`)
 	interpRe      = `(?i)\b(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php)\b`
 )
 
@@ -349,12 +351,15 @@ func isBroadCommandRule(rule string) bool {
 		return false
 	}
 	arg = strings.TrimSpace(arg)
-	if arg == "*" || arg == "" {
+	if arg == "*" || arg == "" || arg == ":*" {
 		return true
 	}
-	// A dangerous command at the head of the rule, with a wildcard tail
-	// (Bash(curl *), Bash(rm -rf *)). The leading token is the binary.
+	// A dangerous command at the head of the rule, with a wildcard tail.
+	// Claude Bash rules wildcard either with a space (Bash(curl *)) or a
+	// colon prefix form (Bash(curl:*)); the binary is the first token up
+	// to the first space or colon.
 	head := strings.ToLower(strings.Fields(arg)[0])
+	head = strings.SplitN(head, ":", 2)[0]
 	if dangerousBinaries[head] && strings.Contains(arg, "*") {
 		return true
 	}
@@ -386,14 +391,17 @@ func isSecretReadRule(rule string) bool {
 	return false
 }
 
-// helperWrappers are leading tokens to skip when locating the script a
-// helper command actually runs: interpreters (so `bash ./x.sh` is seen
-// as running ./x.sh) and privilege/exec wrappers.
-var helperWrappers = map[string]bool{
-	"sudo": true, "command": true, "exec": true, "env": true,
+// scriptInterpreters take a script-path argument, so a bare filename
+// after one is a repo-relative script (`bash mint.sh` runs ./mint.sh).
+var scriptInterpreters = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ash": true,
 	"node": true, "deno": true, "bun": true, "python": true,
 	"python3": true, "ruby": true, "perl": true, "php": true,
+}
+
+// helperPrefixes are privilege/exec wrappers to skip (not interpreters).
+var helperPrefixes = map[string]bool{
+	"sudo": true, "command": true, "exec": true, "env": true,
 }
 
 // fetchCommands are the binaries whose invocation IS a network fetch.
@@ -419,10 +427,16 @@ func isRepoRelativeCommand(cmd string) bool {
 	}
 	fields := strings.Fields(c)
 	i := 0
+	viaInterp := false
 	for i < len(fields) {
 		tok := fields[i]
 		base := strings.ToLower(filepath.Base(tok))
-		if helperWrappers[base] || strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") {
+		if scriptInterpreters[base] {
+			viaInterp = true
+			i++
+			continue
+		}
+		if helperPrefixes[base] || strings.HasPrefix(tok, "-") || strings.Contains(tok, "=") {
 			i++
 			continue
 		}
@@ -448,7 +462,10 @@ func isRepoRelativeCommand(cmd string) bool {
 		strings.Contains(target, ".claude/") || strings.Contains(target, "/") {
 		return true
 	}
-	return false
+	// A bare filename run through an interpreter (`bash mint.sh`) is a
+	// repo-relative script; a bare token with no interpreter is treated
+	// as a system binary on PATH and not flagged.
+	return viaInterp
 }
 
 // splitRule parses a "Tool(arg)" permission rule into (tool, arg). A
