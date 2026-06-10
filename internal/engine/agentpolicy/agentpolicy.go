@@ -69,7 +69,7 @@ var (
 	// shell separators (; & |) and newlines, so the fetch and the
 	// pipe-to-interpreter are the SAME segment -- `curl health; echo x |
 	// sh` does not match.
-	hookFetchExecRe = regexp.MustCompile(`(?i)(?:^|[;&|(])\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n;&|]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
+	hookFetchExecRe = regexp.MustCompile(`(?i)(?:^|[;&|(\n])\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(curl|wget|iwr|invoke-webrequest|fetch)\b[^\n;&|]*?\|\s*(?:sudo\s+|command\s+|exec\s+|env\s+(?:\S+=\S+\s+)*|[~./][^\s|;&]*/)*(sh|bash|zsh|dash|ash|node|deno|bun|python3?|ruby|perl|php|iex|invoke-expression)\b`)
 	// evalSubstRe catches `eval "$(curl ...)"`, `exec $(wget ...)`, and
 	// `sh -c "$(curl ...)"`: an interpreter running the fetched bytes via
 	// command substitution.
@@ -424,6 +424,7 @@ var scriptInterpreters = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ash": true,
 	"node": true, "deno": true, "bun": true, "python": true,
 	"python3": true, "ruby": true, "perl": true, "php": true,
+	"pwsh": true, "powershell": true,
 }
 
 // helperPrefixes are privilege/exec wrappers to skip (not interpreters).
