@@ -188,6 +188,19 @@ __metadata:
 	}
 }
 
+func TestParseYarnLock_V1WithMetadataCommentStillParsedAsV1(t *testing.T) {
+	// A classic v1 lockfile containing `__metadata:` only in a comment
+	// must NOT be routed to the Berry parser (which would read zero
+	// packages and hide every v1 dependency).
+	refs, err := ParseYarnLock(writeYarn(t, `# __metadata: this is just a comment, not a Berry header
+lodash@^4.17.21:
+  version "4.17.21"
+  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#abc"
+`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"lodash@4.17.21"}, refSet(refs), "v1 lockfile must parse as v1 despite a __metadata: comment")
+}
+
 func TestParseYarnLock_BerryCRLF(t *testing.T) {
 	// A Windows/CRLF checkout must parse identically to LF.
 	lf := "__metadata:\n  version: 8\n\n\"lodash@npm:4.17.21\":\n  version: 4.17.21\n  resolution: \"lodash@npm:4.17.21\"\n"

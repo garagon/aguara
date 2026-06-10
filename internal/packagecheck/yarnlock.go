@@ -80,11 +80,14 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 	// missed (which would skip every block and read zero packages).
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 
-	// Berry detection. A v2+ yarn.lock opens with a `__metadata:`
-	// block; v1 never has one. Berry uses a different (YAML-shaped)
-	// grammar, so route it to the Berry parser rather than the v1 line
-	// walker.
-	if strings.Contains(content, "__metadata:") {
+	// Berry detection. A v2+ yarn.lock has a top-level `__metadata:`
+	// block header; v1 never does. Match a real header line (the whole
+	// line is `__metadata:`, unindented and uncommented), not any
+	// occurrence -- otherwise a v1 lockfile with `# __metadata:` in a
+	// comment would route to the Berry parser and read zero packages,
+	// hiding every v1 dependency. Berry uses a different (YAML-shaped)
+	// grammar, so route it to the Berry parser rather than the v1 walker.
+	if hasYarnBerryMetadata(content) {
 		return parseYarnBerryLock(target, content)
 	}
 
@@ -239,6 +242,19 @@ func isExactYarnVersion(v string) bool {
 		return false
 	}
 	return !strings.ContainsAny(v, " \t^~*<>=|:/")
+}
+
+// hasYarnBerryMetadata reports whether content has a top-level
+// `__metadata:` block header -- the whole line (minus trailing
+// whitespace) is `__metadata:`, so an indented occurrence or a comment
+// like `# __metadata:` does not count.
+func hasYarnBerryMetadata(content string) bool {
+	for _, ln := range strings.Split(content, "\n") {
+		if strings.TrimRight(ln, " \t") == "__metadata:" {
+			return true
+		}
+	}
+	return false
 }
 
 // yarnBerryResolutionRe captures the quoted resolution string in a yarn
