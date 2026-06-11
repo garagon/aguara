@@ -123,9 +123,9 @@ func main() {
 		// --allow-empty exists for the one legitimate case --
 		// bootstrapping a brand-new generated file where the
 		// maintainer wants the empty stub committed.
-		if len(snap.Records) == 0 && !allowEmpty {
+		if len(snap.Records) == 0 && len(snap.AllVersions) == 0 && !allowEmpty {
 			fmt.Fprintf(os.Stderr,
-				"update-intel: %s (%s) produced 0 records. The zip may be paired with the wrong --ecosystem or have no malicious entries.\n"+
+				"update-intel: %s (%s) produced 0 records and 0 all-versions entries. The zip may be paired with the wrong --ecosystem or have no malicious entries.\n"+
 					"             Pass --allow-empty to commit an empty snapshot anyway.\n",
 				zipPath, eco)
 			os.Exit(1)
@@ -135,8 +135,10 @@ func main() {
 		}
 		merged.Sources = append(merged.Sources, snap.Sources...)
 		merged.Records = append(merged.Records, snap.Records...)
+		merged.AllVersions = append(merged.AllVersions, snap.AllVersions...)
 	}
 	osvimport.SortRecords(merged.Records)
+	merged.AllVersions = osvimport.SortAndDedupeAllVersions(merged.AllVersions)
 
 	jsonBytes, err := intel.MarshalSnapshotJSON(merged)
 	if err != nil {

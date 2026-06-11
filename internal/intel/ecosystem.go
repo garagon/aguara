@@ -96,8 +96,8 @@ var ecosystemRegistry = []EcosystemSpec{
 	},
 }
 
-func nameLowerTrim(s string) string     { return strings.ToLower(strings.TrimSpace(s)) }
-func nameTrimKeepCase(s string) string  { return strings.TrimSpace(s) }
+func nameLowerTrim(s string) string    { return strings.ToLower(strings.TrimSpace(s)) }
+func nameTrimKeepCase(s string) string { return strings.TrimSpace(s) }
 
 // CanonicaliseEcosystem maps a user-provided ecosystem alias to its
 // OSV bucket key. Returns "" when the value is not in the registry,

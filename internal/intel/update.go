@@ -173,6 +173,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 		}
 		merged.Sources = append(merged.Sources, snap.Sources...)
 		merged.Records = append(merged.Records, snap.Records...)
+		merged.AllVersions = append(merged.AllVersions, snap.AllVersions...)
 		per = append(per, EcosystemResult{
 			Ecosystem:    eco,
 			RecordsKept:  len(snap.Records),
@@ -277,6 +278,16 @@ func dedupeSources(snap *Snapshot) {
 func sortRecords(snap *Snapshot) {
 	sort.SliceStable(snap.Records, func(i, j int) bool {
 		a, b := snap.Records[i], snap.Records[j]
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.ID < b.ID
+	})
+	sort.SliceStable(snap.AllVersions, func(i, j int) bool {
+		a, b := snap.AllVersions[i], snap.AllVersions[j]
 		if a.Ecosystem != b.Ecosystem {
 			return a.Ecosystem < b.Ecosystem
 		}

@@ -526,6 +526,18 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 			}},
 		}
 		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
+		require.Equal(t, osvimport.StatusAllVersionsKept, status)
+	})
+	t.Run("bounded malicious ranges stay dropped (C3-B residual)", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID: "MAL-5",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "x", Ecosystem: "Go"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{{"introduced": "1.0.0"}, {"fixed": "1.2.0"}}}},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
 		require.Equal(t, osvimport.StatusRangesOnlyMalicious, status)
 	})
 	t.Run("malicious with neither versions nor ranges", func(t *testing.T) {
@@ -653,3 +665,49 @@ func TestImportFromZipRejectsOversize(t *testing.T) {
 // Deterministic encoding of the embedded snapshot is covered by the
 // intel package (TestEncodeSnapshotGZIPDeterministic) now that the
 // build-time format is gzipped JSON rather than a rendered Go literal.
+
+// ---------------------------------------------------------------------------
+// All-versions entries through the production Import path (C3-A)
+
+func TestImport_AllVersionsEntries(t *testing.T) {
+	mk := func(id string, eco string, name string, ranges []rangeFixture, versions []string, summary string) []byte {
+		return mustMarshal(t, osvRecordFixture{
+			ID:      id,
+			Summary: summary,
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: name, Ecosystem: eco},
+				Versions: versions,
+				Ranges:   ranges,
+			}},
+		})
+	}
+	allVer := []rangeFixture{{Type: "SEMVER", Events: []map[string]string{{"introduced": "0"}}}}
+	emptyEvents := []rangeFixture{{Type: "SEMVER", Events: []map[string]string{}}}
+	bounded := []rangeFixture{{Type: "SEMVER", Events: []map[string]string{{"introduced": "1.0.0"}, {"fixed": "1.2.0"}}}}
+
+	snap, err := osvimport.Import([][]byte{
+		mk("MAL-A", "npm", "evil-a", allVer, nil, ""),                           // -> entry
+		mk("MAL-B", "PyPI", "evil-b", allVer, nil, ""),                          // -> entry (pypi)
+		mk("MAL-C", "npm", "evil-c", bounded, nil, ""),                          // bounded: NOT an entry (C3-B)
+		mk("GO-1", "npm", "cve-pkg", allVer, nil, "Some generic vulnerability"), // no signal: dropped
+		mk("MAL-D", "npm", "evil-a", allVer, nil, ""),                           // distinct ID, same pkg: second entry
+		mk("MAL-A", "npm", "evil-a", allVer, nil, ""),                           // exact duplicate: deduped
+		mk("MAL-E", "npm", "kept-pkg", nil, []string{"1.0.0"}, ""),              // exact versions: normal record
+		mk("MAL-F", "npm", "no-events", emptyEvents, nil, ""),                   // empty events: asserts nothing, no entry
+	}, osvimport.Options{})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(snap.Records) != 1 || snap.Records[0].ID != "MAL-E" {
+		t.Fatalf("want 1 exact record (MAL-E), got %+v", snap.Records)
+	}
+	// Canonical ecosystem is the OSV bucket form ("PyPI"); the
+	// matcher normalizes at lookup. Sort: ecosystem, name, ID
+	// ("PyPI" < "npm" in byte order).
+	want := []intel.AllVersionsEntry{
+		{ID: "MAL-B", Ecosystem: "PyPI", Name: "evil-b"},
+		{ID: "MAL-A", Ecosystem: "npm", Name: "evil-a"},
+		{ID: "MAL-D", Ecosystem: "npm", Name: "evil-a"},
+	}
+	require.Equal(t, want, snap.AllVersions)
+}

@@ -36,9 +36,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		label := snapshotLabel(snap)
 		// Embedded intel ships with the binary: show its age for
 		// provenance, never a stale warning.
-		fmt.Fprintf(w, "  Embedded (%s): %s (%s), %d records\n",
+		extra := ""
+		if n := len(snap.AllVersions); n > 0 {
+			extra = fmt.Sprintf(" + %d all-versions entries", n)
+		}
+		fmt.Fprintf(w, "  Embedded (%s): %s (%s), %d records%s\n",
 			label, snap.GeneratedAt.Format("2006-01-02"),
-			humanizeAgeDays(ageDaysSince(snap.GeneratedAt, now)), len(snap.Records))
+			humanizeAgeDays(ageDaysSince(snap.GeneratedAt, now)), len(snap.Records), extra)
 	}
 
 	store, err := intel.DefaultStore()
