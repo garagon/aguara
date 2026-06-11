@@ -29,6 +29,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/jsrisk"
 	"github.com/garagon/aguara/internal/engine/nlp"
+	"github.com/garagon/aguara/internal/engine/npmpolicy"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
 	"github.com/garagon/aguara/internal/engine/pnpmpolicy"
 	"github.com/garagon/aguara/internal/engine/pyrisk"
@@ -52,6 +53,7 @@ func DefaultAnalyzers() []scanner.Analyzer {
 		jsrisk.New(),
 		pyrisk.New(),
 		rsbuild.New(),
+		npmpolicy.New(),
 		pnpmpolicy.New(),
 		agentpolicy.New(),
 		nlp.NewInjectionAnalyzer(),
@@ -80,6 +82,7 @@ func RuleMetadata() []rulemeta.Rule {
 	out = append(out, jsrisk.RuleMetadata()...)
 	out = append(out, pyrisk.RuleMetadata()...)
 	out = append(out, rsbuild.RuleMetadata()...)
+	out = append(out, npmpolicy.RuleMetadata()...)
 	out = append(out, pnpmpolicy.RuleMetadata()...)
 	out = append(out, agentpolicy.RuleMetadata()...)
 	out = append(out, nlp.RuleMetadata()...)
