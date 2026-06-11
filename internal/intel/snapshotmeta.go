@@ -36,11 +36,11 @@ type SnapshotMeta struct {
 	// GzipSHA256 is the sha256 of the gzipped blob bytes (binds the blob).
 	GzipSHA256 string `json:"gzip_sha256"`
 	// JSONSHA256 is the sha256 of the decompressed JSON (defense in depth).
-	JSONSHA256 string `json:"json_sha256"`
-	GzipBytes  int    `json:"gzip_bytes"`
-	JSONBytes  int    `json:"json_bytes"`
-	RecordCount int    `json:"record_count"`
-	SourceCount int    `json:"source_count"`
+	JSONSHA256  string    `json:"json_sha256"`
+	GzipBytes   int       `json:"gzip_bytes"`
+	JSONBytes   int       `json:"json_bytes"`
+	RecordCount int       `json:"record_count"`
+	SourceCount int       `json:"source_count"`
 	Ecosystems  []string  `json:"ecosystems"`
 	GeneratedAt time.Time `json:"generated_at"`
 	// ToolVersion is the aguara version that produced the bundle. Set by

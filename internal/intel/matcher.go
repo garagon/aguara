@@ -48,6 +48,14 @@ type Matcher struct {
 	// A separator that can never appear in a package name keeps
 	// the key collision-free without a real composite-key type.
 	byKey map[string][]*Record
+	// allVersions maps indexKey(ecosystem, name) to the advisory IDs
+	// of its AllVersionsEntry rows: every version of the package is
+	// malicious, no version comparison needed. Distinct advisory IDs
+	// are all kept (mirroring the Records contract: separate IDs are
+	// useful provenance for cross-source correlation); duplicates are
+	// collapsed and tombstones (withdrawn records with the same ID)
+	// remove individual IDs.
+	allVersions map[string][]string
 }
 
 // NewMatcher builds a Matcher from the given snapshots. Withdrawn
@@ -70,7 +78,10 @@ type Matcher struct {
 // are useful provenance (e.g. one OSV ID, one Socket ID) and must
 // both surface so cross-source correlation works.
 func NewMatcher(snapshots ...Snapshot) *Matcher {
-	m := &Matcher{byKey: make(map[string][]*Record)}
+	m := &Matcher{
+		byKey:       make(map[string][]*Record),
+		allVersions: make(map[string][]string),
+	}
 
 	// First pass: collect tombstones. Any (ecosystem, name, ID)
 	// tuple that has a Withdrawn record in any snapshot is dead --
@@ -125,6 +136,29 @@ func NewMatcher(snapshots ...Snapshot) *Matcher {
 			m.byKey[key] = append(m.byKey[key], &recCopy)
 		}
 	}
+
+	// All-versions entries: distinct advisory IDs per (ecosystem,
+	// name) are all kept, in snapshot order (manual-first), with
+	// duplicates collapsed; a tombstone for the same (key, ID) kills
+	// that ID just like it kills a record.
+	seenEntry := make(map[string]struct{})
+	for _, snap := range snapshots {
+		for _, e := range snap.AllVersions {
+			key := indexKey(e.Ecosystem, e.Name)
+			if key == "" || e.ID == "" {
+				continue
+			}
+			idKey := key + "\x00" + e.ID
+			if _, dead := tombstones[idKey]; dead {
+				continue
+			}
+			if _, dup := seenEntry[idKey]; dup {
+				continue
+			}
+			seenEntry[idKey] = struct{}{}
+			m.allVersions[key] = append(m.allVersions[key], e.ID)
+		}
+	}
 	return m
 }
 
@@ -171,7 +205,7 @@ func unionVersions(a, b []string) []string {
 // can show the on-disk location without the caller threading it back
 // through.
 func (m *Matcher) MatchPackage(in MatchInput) []Match {
-	if m == nil || len(m.byKey) == 0 {
+	if m == nil || (len(m.byKey) == 0 && len(m.allVersions) == 0) {
 		return nil
 	}
 	key := indexKey(in.Ecosystem, in.Name)
@@ -179,9 +213,6 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 		return nil
 	}
 	candidates := m.byKey[key]
-	if len(candidates) == 0 {
-		return nil
-	}
 	allowRanges := ecosystemSupportsRanges(normalizeEcosystem(in.Ecosystem))
 	var out []Match
 	for _, rec := range candidates {
@@ -203,7 +234,40 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 		}
 		out = append(out, Match{Record: *rec, Path: in.Path})
 	}
+
+	// All-versions entry: any installed version of this package is
+	// malicious; no version comparison is involved. Skipped when a
+	// full record with the same advisory ID already matched, so one
+	// advisory never produces two findings.
+	for _, id := range m.allVersions[key] {
+		dup := false
+		for _, mt := range out {
+			if mt.Record.ID == id {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, Match{Record: synthesizeAllVersionsRecord(id, in), Path: in.Path})
+		}
+	}
 	return out
+}
+
+// synthesizeAllVersionsRecord builds the user-facing record for an
+// all-versions match. Summary and reference are derived from the
+// advisory ID so the stored entry stays three strings.
+func synthesizeAllVersionsRecord(id string, in MatchInput) Record {
+	return Record{
+		ID:        id,
+		Ecosystem: normalizeEcosystem(in.Ecosystem),
+		Name:      in.Name,
+		Kind:      KindMalicious,
+		Summary:   "Every version of " + in.Name + " is marked malicious (" + id + ").",
+		References: []string{
+			"https://osv.dev/vulnerability/" + id,
+		},
+	}
 }
 
 // ecosystemSupportsRanges reports whether MatchPackage will evaluate

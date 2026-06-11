@@ -65,14 +65,14 @@ func TestUpdateMergesPerEcosystem(t *testing.T) {
 	perEco := map[string]intel.Snapshot{
 		intel.EcosystemNPM: {
 			SchemaVersion: intel.CurrentSchemaVersion,
-			Sources: []intel.SourceMeta{{Name: "osv.dev/npm", Kind: intel.SourceOSV}},
+			Sources:       []intel.SourceMeta{{Name: "osv.dev/npm", Kind: intel.SourceOSV}},
 			Records: []intel.Record{
 				{ID: "MAL-NPM-1", Ecosystem: intel.EcosystemNPM, Name: "evil", Versions: []string{"1.0.0"}},
 			},
 		},
 		intel.EcosystemPyPI: {
 			SchemaVersion: intel.CurrentSchemaVersion,
-			Sources: []intel.SourceMeta{{Name: "osv.dev/PyPI", Kind: intel.SourceOSV}},
+			Sources:       []intel.SourceMeta{{Name: "osv.dev/PyPI", Kind: intel.SourceOSV}},
 			Records: []intel.Record{
 				{ID: "MAL-PY-1", Ecosystem: intel.EcosystemPyPI, Name: "evil", Versions: []string{"0.1.0"}},
 			},

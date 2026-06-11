@@ -77,9 +77,78 @@ type osvRecord struct {
 }
 
 type osvAffected struct {
-	Package  osvPackage        `json:"package"`
-	Versions []string          `json:"versions,omitempty"`
-	Ranges   []json.RawMessage `json:"ranges,omitempty"`
+	Package  osvPackage `json:"package"`
+	Versions []string   `json:"versions,omitempty"`
+	Ranges   []osvRange `json:"ranges,omitempty"`
+}
+
+type osvRange struct {
+	Type   string              `json:"type"`
+	Events []map[string]string `json:"events"`
+}
+
+// rangesAllVersionsShape reports whether every range consists solely
+// of introduced 0/absent events: the "every version is malicious"
+// shape. Any other event key (fixed, last_affected, limit, future
+// additions) bounds the range and disqualifies the record from the
+// compact all-versions encoding.
+func rangesAllVersionsShape(in []osvRange) bool {
+	if len(in) == 0 {
+		return false
+	}
+	for _, r := range in {
+		introduced := false
+		for _, ev := range r.Events {
+			for k, v := range ev {
+				if k != "introduced" {
+					return false
+				}
+				if v != "" && v != "0" {
+					return false
+				}
+				introduced = true
+			}
+		}
+		// A range with no events (or only empty maps) asserts
+		// nothing; flagging every version from it would invent
+		// coverage OSV never stated.
+		if !introduced {
+			return false
+		}
+	}
+	return true
+}
+
+// convertRanges maps OSV ranges onto intel.VersionRange. Each OSV
+// range may carry several introduced/fixed event pairs; OSV events
+// come ordered, so pairs are formed sequentially: an introduced event
+// opens a range, a fixed/last_affected event closes it.
+func convertRanges(in []osvRange) []intel.VersionRange {
+	var out []intel.VersionRange
+	for _, r := range in {
+		cur := intel.VersionRange{Type: r.Type}
+		open := false
+		for _, ev := range r.Events {
+			if v, ok := ev["introduced"]; ok {
+				if open {
+					out = append(out, cur)
+					cur = intel.VersionRange{Type: r.Type}
+				}
+				cur.Introduced = v
+				open = true
+			}
+			if v, ok := ev["fixed"]; ok {
+				cur.Fixed = v
+			}
+			if v, ok := ev["last_affected"]; ok {
+				cur.LastAffected = v
+			}
+		}
+		if open {
+			out = append(out, cur)
+		}
+	}
+	return out
 }
 
 type osvPackage struct {
@@ -146,16 +215,19 @@ func Import(raw [][]byte, opts Options) (intel.Snapshot, error) {
 	}}
 
 	for _, b := range raw {
-		rec, ok := convertOSVRecord(b, ecoFilter)
+		rec, entries, ok := convertOSVRecord(b, ecoFilter)
 		if !ok {
 			continue
 		}
 		snap.Records = append(snap.Records, rec...)
+		snap.AllVersions = append(snap.AllVersions, entries...)
 	}
 
 	// Stable order for reproducible builds: ecosystem, name, ID.
 	// Without this the embedded snapshot would re-shuffle on every
 	// regeneration even when the upstream OSV slice is identical.
+	snap.AllVersions = SortAndDedupeAllVersions(snap.AllVersions)
+
 	sort.SliceStable(snap.Records, func(i, j int) bool {
 		a, b := snap.Records[i], snap.Records[j]
 		if a.Ecosystem != b.Ecosystem {
@@ -179,16 +251,16 @@ func Import(raw [][]byte, opts Options) (intel.Snapshot, error) {
 //
 // Returns (records, true) on a kept advisory; (nil, false) on
 // anything dropped by the filter.
-func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record, bool) {
+func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record, []intel.AllVersionsEntry, bool) {
 	var osv osvRecord
 	if err := json.Unmarshal(raw, &osv); err != nil {
 		// Malformed record: drop rather than abort the whole
 		// import. A single bad row in a 100k-record OSV dump
 		// must not deny-of-service the rest of the snapshot.
-		return nil, false
+		return nil, nil, false
 	}
 	if osv.ID == "" || len(osv.Affected) == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 
 	// A withdrawn-in-OSV record passes through as a withdrawn
@@ -203,6 +275,7 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 	keywordHit := hasKeywordMatch(osv)
 
 	var out []intel.Record
+	var entries []intel.AllVersionsEntry
 	for _, aff := range osv.Affected {
 		eco := canonicaliseEcosystem(aff.Package.Ecosystem)
 		if eco == "" {
@@ -221,9 +294,20 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 		// copy keeps matching forever after the retraction.
 		if !withdrawn {
 			if len(aff.Versions) == 0 {
-				// Runtime matcher consults exact Versions only;
-				// a ranges-only live record is unreachable.
-				// Skip rather than emit dead data.
+				// No exact versions. If the record is malicious and
+				// every range is the all-versions shape, it becomes a
+				// compact AllVersionsEntry: an exact (ecosystem, name)
+				// lookup is its whole evaluation, no version grammar
+				// involved. Bounded malicious ranges remain skipped
+				// here (C3-B territory); CVE-flavoured records are
+				// dropped as before.
+				if (signal || keywordHit) && rangesAllVersionsShape(aff.Ranges) {
+					entries = append(entries, intel.AllVersionsEntry{
+						ID:        osv.ID,
+						Ecosystem: eco,
+						Name:      aff.Package.Name,
+					})
+				}
 				continue
 			}
 			// Filter: keep when there is a high-confidence
@@ -247,10 +331,10 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 			Withdrawn:  withdrawn,
 		})
 	}
-	if len(out) == 0 {
-		return nil, false
+	if len(out) == 0 && len(entries) == 0 {
+		return nil, nil, false
 	}
-	return out, true
+	return out, entries, true
 }
 
 // RecordStatus is the per-record verdict the filter funnel produces.
@@ -280,16 +364,19 @@ const (
 	// StatusKept: the record survives the filter and becomes an
 	// intel.Record in the snapshot.
 	StatusKept
-	// StatusRangesOnlyMalicious: like StatusRangesOnly (only version
-	// ranges, no exact versions, so the record is dropped from the
-	// snapshot today), but the record ALSO passes the malicious
-	// signal-or-keyword gate. This is the population range-aware
-	// matching (spec C3) would unlock; splitting it from
-	// StatusRangesOnly lets measurement tooling report
-	// `malicious AND ranges-only` per ecosystem without changing what
-	// the importer keeps. Appended at the end of the enum so existing
-	// status values are stable.
+	// StatusRangesOnlyMalicious: only version ranges with REAL
+	// bounds (fixed / last_affected / non-zero introduced), no exact
+	// versions, and the record passes the malicious gate. Dropped
+	// from the snapshot today; this is the bounded-range residual
+	// (C3-B). Appended after StatusKept so existing status values
+	// are stable.
 	StatusRangesOnlyMalicious
+	// StatusAllVersionsKept: no exact versions, malicious, and every
+	// range is the all-versions shape (introduced 0/absent, nothing
+	// else). The importer KEEPS these as compact
+	// Snapshot.AllVersions entries (C3-A), so measurement tooling
+	// must count them as kept intel, not dropped.
+	StatusAllVersionsKept
 )
 
 // ClassifyForEcosystem walks a raw OSV record and reports how a
@@ -336,7 +423,23 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 		// nor ranges has nothing range support could unlock, so it
 		// stays in the plain ranges-only bucket regardless of signal.
 		if malicious && len(aff.Ranges) > 0 {
-			return intel.Record{}, StatusRangesOnlyMalicious
+			rec := intel.Record{
+				ID:         osv.ID,
+				Aliases:    append([]string(nil), osv.Aliases...),
+				Ecosystem:  canon,
+				Name:       aff.Package.Name,
+				Kind:       intel.KindMalicious,
+				Summary:    pickSummary(osv),
+				Ranges:     convertRanges(aff.Ranges),
+				References: extractReferenceURLs(osv.References),
+			}
+			if rangesAllVersionsShape(aff.Ranges) {
+				// Mirrors Import: these ship as compact
+				// Snapshot.AllVersions entries.
+				return rec, StatusAllVersionsKept
+			}
+			// Bounded malicious ranges: still dropped (C3-B).
+			return rec, StatusRangesOnlyMalicious
 		}
 		return intel.Record{}, StatusRangesOnly
 	}
@@ -353,6 +456,39 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 		Versions:   append([]string(nil), aff.Versions...),
 		References: extractReferenceURLs(osv.References),
 	}, StatusKept
+}
+
+// SortAndDedupeAllVersions sorts entries (ecosystem, name, ID) and
+// removes duplicates, mirroring SortRecords' reproducible-build role
+// for the all_versions section. Exported for the snapshot generator.
+func SortAndDedupeAllVersions(in []intel.AllVersionsEntry) []intel.AllVersionsEntry {
+	sort.SliceStable(in, func(i, j int) bool {
+		a, b := in[i], in[j]
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.ID < b.ID
+	})
+	return dedupeAllVersions(in)
+}
+
+// dedupeAllVersions removes consecutive duplicates from a sorted
+// entry slice (same ID, ecosystem, name).
+func dedupeAllVersions(in []intel.AllVersionsEntry) []intel.AllVersionsEntry {
+	if len(in) < 2 {
+		return in
+	}
+	out := in[:1]
+	for _, e := range in[1:] {
+		last := out[len(out)-1]
+		if e != last {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // buildEcosystemFilter returns a set keyed by the canonical

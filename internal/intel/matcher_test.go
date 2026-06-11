@@ -477,3 +477,105 @@ func TestMatcherDistinctIDsExactAndRangeBothMatch(t *testing.T) {
 	require.Len(t, hit, 2, "distinct IDs (manual exact + OSV range) both surface at the matcher layer")
 	require.Equal(t, "SOCKET-2026-05-24-trapdoor", hit[0].Record.ID, "manual advisory keeps first/display priority")
 }
+
+// ---------------------------------------------------------------------------
+// All-versions entries (C3-A)
+
+func TestMatcher_AllVersionsEntryMatchesAnyVersion(t *testing.T) {
+	snap := intel.Snapshot{AllVersions: []intel.AllVersionsEntry{
+		{ID: "MAL-2026-0001", Ecosystem: intel.EcosystemNPM, Name: "evil-pkg"},
+	}}
+	m := intel.NewMatcher(snap)
+	for _, v := range []string{"0.0.1", "9.9.9", "1.0.0-beta.1", "not-even-semver"} {
+		got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "evil-pkg", Version: v})
+		if len(got) != 1 {
+			t.Fatalf("version %q: want 1 match, got %d", v, len(got))
+		}
+		rec := got[0].Record
+		if rec.ID != "MAL-2026-0001" || rec.Kind != intel.KindMalicious {
+			t.Errorf("unexpected record: %+v", rec)
+		}
+		if rec.Summary == "" || len(rec.References) == 0 {
+			t.Errorf("synthesized record must carry summary and reference: %+v", rec)
+		}
+	}
+	// Different package stays silent.
+	if got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "good-pkg", Version: "1.0.0"}); len(got) != 0 {
+		t.Errorf("unrelated package matched: %v", got)
+	}
+}
+
+func TestMatcher_AllVersionsTombstoned(t *testing.T) {
+	live := intel.Snapshot{AllVersions: []intel.AllVersionsEntry{
+		{ID: "MAL-X", Ecosystem: intel.EcosystemNPM, Name: "pkg"},
+	}}
+	retract := intel.Snapshot{Records: []intel.Record{
+		{ID: "MAL-X", Ecosystem: intel.EcosystemNPM, Name: "pkg", Withdrawn: true},
+	}}
+	m := intel.NewMatcher(live, retract)
+	if got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "pkg", Version: "1.0.0"}); len(got) != 0 {
+		t.Errorf("tombstoned all-versions entry still matched: %v", got)
+	}
+}
+
+func TestMatcher_AllVersionsDedupesAgainstRecordWithSameID(t *testing.T) {
+	snap := intel.Snapshot{
+		Records: []intel.Record{
+			{ID: "MAL-X", Ecosystem: intel.EcosystemNPM, Name: "pkg", Kind: intel.KindMalicious, Versions: []string{"1.0.0"}},
+		},
+		AllVersions: []intel.AllVersionsEntry{
+			{ID: "MAL-X", Ecosystem: intel.EcosystemNPM, Name: "pkg"},
+		},
+	}
+	m := intel.NewMatcher(snap)
+	// Exact version hit: the record matches; the entry must not add a
+	// second finding for the same advisory.
+	got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "pkg", Version: "1.0.0"})
+	if len(got) != 1 {
+		t.Fatalf("want 1 match, got %d", len(got))
+	}
+	// Non-listed version: the record misses, the entry covers it.
+	got = m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "pkg", Version: "2.0.0"})
+	if len(got) != 1 {
+		t.Fatalf("want 1 entry match for unlisted version, got %d", len(got))
+	}
+}
+
+func TestMatcher_AllVersionsKeepsDistinctIDs(t *testing.T) {
+	// Mirrors the Records contract: distinct advisory IDs for the same
+	// package are useful provenance and all surface, manual-first;
+	// exact duplicates collapse.
+	manual := intel.Snapshot{AllVersions: []intel.AllVersionsEntry{
+		{ID: "MANUAL-1", Ecosystem: intel.EcosystemNPM, Name: "pkg"},
+	}}
+	osv := intel.Snapshot{AllVersions: []intel.AllVersionsEntry{
+		{ID: "MAL-2", Ecosystem: intel.EcosystemNPM, Name: "pkg"},
+		{ID: "MANUAL-1", Ecosystem: intel.EcosystemNPM, Name: "pkg"}, // duplicate: collapsed
+	}}
+	m := intel.NewMatcher(manual, osv)
+	got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: "pkg", Version: "1.0.0"})
+	if len(got) != 2 || got[0].Record.ID != "MANUAL-1" || got[1].Record.ID != "MAL-2" {
+		t.Fatalf("want [MANUAL-1, MAL-2], got %v", got)
+	}
+}
+
+func TestSnapshot_AllVersionsRoundTrip(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		AllVersions: []intel.AllVersionsEntry{
+			{ID: "MAL-1", Ecosystem: intel.EcosystemNPM, Name: "a"},
+			{ID: "MAL-2", Ecosystem: "pypi", Name: "b"},
+		},
+	}
+	gz, err := intel.EncodeSnapshotGZIP(snap)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	back, err := intel.DecodeSnapshotGZIP(gz)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(back.AllVersions) != 2 || back.AllVersions[0] != snap.AllVersions[0] {
+		t.Fatalf("round trip lost entries: %+v", back.AllVersions)
+	}
+}

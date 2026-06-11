@@ -58,12 +58,33 @@ type Snapshot struct {
 	GeneratedAt   time.Time    `json:"generated_at"`
 	Sources       []SourceMeta `json:"sources"`
 	Records       []Record     `json:"records"`
+	// AllVersions lists packages where EVERY version is marked
+	// malicious (OSV range shape: introduced 0/absent, no fixed, no
+	// last_affected). They are stored as compact entries instead of
+	// full Records because they need no version matching at all: an
+	// exact (ecosystem, name) lookup is the whole evaluation. The
+	// 2026-06-11 measurement found 99%+ of malicious range-only OSV
+	// records have this shape (197K npm, 6.4K PyPI); storing them as
+	// full Records would cost ~80 MB of heap, entries cost ~10 MB.
+	// Parallel to Records on purpose: old binaries ignore the field,
+	// new binaries accept snapshots without it (no format break).
+	AllVersions []AllVersionsEntry `json:"all_versions,omitempty"`
 	// SHA256 is optional metadata (set by the build-time generator
 	// or `aguara update`). It is NOT used to validate the snapshot
 	// during load -- the loader validates by re-parsing the JSON
 	// and enforcing size caps. The field is preserved so callers
 	// can show provenance to the user.
 	SHA256 string `json:"sha256,omitempty"`
+}
+
+// AllVersionsEntry marks every version of (Ecosystem, Name) as
+// malicious, attributed to advisory ID. Summary and reference URL are
+// synthesized at match time from the ID, so the entry stays three
+// strings.
+type AllVersionsEntry struct {
+	ID        string `json:"id"`
+	Ecosystem string `json:"ecosystem"`
+	Name      string `json:"name"`
 }
 
 // CurrentSchemaVersion is the on-disk schema version this build

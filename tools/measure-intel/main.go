@@ -295,15 +295,14 @@ type ecosystemReport struct {
 	// population range-aware matching (spec C3) would unlock per
 	// ecosystem.
 	RangesOnlyMaliciousRecords int `json:"ranges_only_malicious_records"`
-	// RangesOnlyMaliciousAllVersions: the subset of malicious
-	// ranges-only records whose every range is the "all versions"
-	// shape (introduced 0/absent, no fixed, no last_affected). These
-	// need NO version-ordering grammar to match: any installed version
-	// is affected. The C3 cost/benefit hinges on this split.
-	RangesOnlyMaliciousAllVersions int `json:"ranges_only_malicious_all_versions"`
-	SignalOrKeywordKept            int `json:"signal_or_keyword_kept_records"`
-	NeitherDroppedRecords          int `json:"neither_dropped_records"`
-	FinalKeptRecords               int `json:"final_kept_records"`
+	// KeptAllVersionsEntries: malicious records with only
+	// all-versions-shaped ranges, kept as compact
+	// Snapshot.AllVersions entries (C3-A). Counted as kept intel and
+	// included in the encoded blob below.
+	KeptAllVersionsEntries int `json:"kept_all_versions_entries"`
+	SignalOrKeywordKept    int `json:"signal_or_keyword_kept_records"`
+	NeitherDroppedRecords  int `json:"neither_dropped_records"`
+	FinalKeptRecords       int `json:"final_kept_records"`
 	// Timing
 	ParseDurationMS  int64 `json:"parse_duration_ms"`
 	RenderDurationMS int64 `json:"render_duration_ms"`
@@ -331,6 +330,7 @@ func measure(job measureJob) (ecosystemReport, error) {
 
 	parseStart := time.Now()
 	var kept []intel.Record
+	var entries []intel.AllVersionsEntry
 	for _, entry := range zr.File {
 		if !strings.HasSuffix(entry.Name, ".json") {
 			continue
@@ -359,9 +359,12 @@ func measure(job measureJob) (ecosystemReport, error) {
 			r.EcosystemMatchedRecords++
 			r.RangesOnlyDroppedRecords++
 			r.RangesOnlyMaliciousRecords++
-			if rangesAreAllVersions(data, job.ecosystem) {
-				r.RangesOnlyMaliciousAllVersions++
-			}
+		case osvimport.StatusAllVersionsKept:
+			r.EcosystemMatchedRecords++
+			r.KeptAllVersionsEntries++
+			entries = append(entries, intel.AllVersionsEntry{
+				ID: rec.ID, Ecosystem: rec.Ecosystem, Name: rec.Name,
+			})
 		case osvimport.StatusNeither:
 			r.EcosystemMatchedRecords++
 			r.NeitherDroppedRecords++
@@ -390,13 +393,15 @@ func measure(job measureJob) (ecosystemReport, error) {
 			RetrievedAt: time.Date(2026, time.May, 16, 0, 0, 0, 0, time.UTC),
 			License:     "CC-BY-4.0",
 		}},
-		Records: kept,
+		Records:     kept,
+		AllVersions: osvimport.SortAndDedupeAllVersions(entries),
 	}
 	gz, err := intel.EncodeSnapshotGZIP(snap)
 	if err != nil {
 		return r, fmt.Errorf("encode snapshot: %w", err)
 	}
 	r.GeneratedSourceBytes = int64(len(gz))
+
 	r.RenderDurationMS = time.Since(encodeStart).Milliseconds()
 
 	return r, nil
@@ -416,57 +421,9 @@ func readZipEntry(entry *zip.File) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(rc, cap))
 }
 
-// rangesAreAllVersions reports whether EVERY range on the target
-// ecosystem's affected entry is the "all versions" shape: an
-// introduced event of "0" (or absent) with no fixed and no
-// last_affected. Such records affect every version of the package and
-// need no version-ordering grammar to match. Pure data inspection -
-// this does NOT mirror importer filter logic.
-func rangesAreAllVersions(raw []byte, ecosystem string) bool {
-	var rec struct {
-		Affected []struct {
-			Package struct {
-				Ecosystem string `json:"ecosystem"`
-			} `json:"package"`
-			Ranges []struct {
-				Events []map[string]string `json:"events"`
-			} `json:"ranges"`
-		} `json:"affected"`
-	}
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return false
-	}
-	eco := strings.ToLower(strings.TrimSpace(ecosystem))
-	sawRange := false
-	for _, aff := range rec.Affected {
-		if strings.ToLower(strings.TrimSpace(aff.Package.Ecosystem)) != eco {
-			continue
-		}
-		for _, rg := range aff.Ranges {
-			sawRange = true
-			for _, ev := range rg.Events {
-				// Allowlist: the only event compatible with the
-				// "all versions" shape is introduced 0/absent. Any
-				// other key (fixed, last_affected, limit, or future
-				// additions) bounds the range and requires version
-				// ordering.
-				for k, v := range ev {
-					if k != "introduced" {
-						return false
-					}
-					if v != "" && v != "0" {
-						return false
-					}
-				}
-			}
-		}
-	}
-	return sawRange
-}
-
 func renderMarkdown(w io.Writer, reports []ecosystemReport) error {
 	var buf bytes.Buffer
-	fmt.Fprintln(&buf, "| Ecosystem | Zip (MB) | Total | Matched | Withdrawn | Ranges-only | Ranges-only MALICIOUS | ...of which ALL-VERSIONS | Neither | Kept (final) | Gz blob (MB) | Parse (s) |")
+	fmt.Fprintln(&buf, "| Ecosystem | Zip (MB) | Total | Matched | Withdrawn | Ranges-only dropped | Bounded-ranges MALICIOUS (dropped) | All-versions KEPT | Neither | Kept records | Gz blob (MB) | Parse (s) |")
 	fmt.Fprintln(&buf, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for _, r := range reports {
 		fmt.Fprintf(&buf, "| %s | %.1f | %d | %d | %d | %d | **%d** | **%d** | %d | **%d** | %.2f | %.1f |\n",
@@ -477,7 +434,7 @@ func renderMarkdown(w io.Writer, reports []ecosystemReport) error {
 			r.WithdrawnRecords,
 			r.RangesOnlyDroppedRecords,
 			r.RangesOnlyMaliciousRecords,
-			r.RangesOnlyMaliciousAllVersions,
+			r.KeptAllVersionsEntries,
 			r.NeitherDroppedRecords,
 			r.FinalKeptRecords,
 			float64(r.GeneratedSourceBytes)/1024/1024,
@@ -487,8 +444,8 @@ func renderMarkdown(w io.Writer, reports []ecosystemReport) error {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "Columns:")
 	fmt.Fprintln(&buf, "- **Total**: every JSON record in the zip.")
-	fmt.Fprintln(&buf, "- **Ranges-only MALICIOUS**: ranges-only records that ALSO pass the malicious signal/keyword gate - the population range-aware matching (spec C3) would unlock.")
-	fmt.Fprintln(&buf, "- **...of which ALL-VERSIONS**: malicious ranges-only records whose every range is introduced-0 with no fixed/last_affected. Matching these needs no version-ordering grammar: every version is affected.")
+	fmt.Fprintln(&buf, "- **Bounded-ranges MALICIOUS (dropped)**: malicious records whose ranges carry real version bounds; still dropped (C3-B residual).")
+	fmt.Fprintln(&buf, "- **All-versions KEPT**: malicious all-versions-shaped records kept as compact Snapshot.AllVersions entries (C3-A); included in the gz blob figure.")
 	fmt.Fprintln(&buf, "- **Matched**: records whose `affected[].package.ecosystem` matches the target.")
 	fmt.Fprintln(&buf, "- **Withdrawn**: OSV-retracted; counted in Matched, passed through as tombstones (not in Kept).")
 	fmt.Fprintln(&buf, "- **Ranges-only**: matched records dropped because the runtime matcher cannot consume version ranges yet.")

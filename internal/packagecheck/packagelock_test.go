@@ -372,3 +372,37 @@ func TestDiscover_PicksPackageLock(t *testing.T) {
 	require.Equal(t, "package-lock.json", targets[0].Source)
 	require.Equal(t, intel.EcosystemNPM, targets[0].Ecosystem)
 }
+
+// TestRunner_AllVersionsEntryFlagsLockfilePackage proves the C3-A
+// end-to-end: a compact all-versions entry (no Record, no version
+// list, no range evaluation) flags a lockfile package at any version
+// through the same Runner path `aguara check` uses.
+func TestRunner_AllVersionsEntryFlagsLockfilePackage(t *testing.T) {
+	snap := intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		AllVersions: []intel.AllVersionsEntry{
+			{ID: "MAL-2026-7777", Ecosystem: "npm", Name: "evil-sdk"},
+		},
+	}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+
+	target := writeLock(t, `{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "myapp", "version": "1.0.0" },
+	    "node_modules/evil-sdk": { "version": "3.1.4", "resolved": "https://registry.npmjs.org/evil-sdk/-/evil-sdk-3.1.4.tgz" },
+	    "node_modules/safe": { "version": "1.0.0", "resolved": "https://registry.npmjs.org/safe/-/safe-1.0.0.tgz" }
+	  }
+	}`)
+	res, err := runner.Run([]Target{target})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var hits []string
+	for _, h := range res.Hits {
+		hits = append(hits, h.Ref.Name+"@"+h.Ref.Version+" -> "+h.Record.ID)
+	}
+	if len(hits) != 1 || hits[0] != "evil-sdk@3.1.4 -> MAL-2026-7777" {
+		t.Fatalf("want exactly the all-versions hit, got %v", hits)
+	}
+}

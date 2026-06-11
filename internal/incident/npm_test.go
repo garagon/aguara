@@ -278,13 +278,13 @@ func TestCheckNPM_MiniShaiHulud_NeighborVersionDoesNotFalsePositive(t *testing.T
 	// against accidental range expansion when adding manual intel.
 	dir := t.TempDir()
 	nm := filepath.Join(dir, "node_modules")
-	writeNPMPackage(t, nm, "@antv/g2", "5.4.8")                   // current latest, clean
-	writeNPMPackage(t, nm, "@antv/g6", "5.1.1")                   // current latest, clean
-	writeNPMPackage(t, nm, "size-sensor", "1.0.3")                // current latest, clean
-	writeNPMPackage(t, nm, "@antv/data-set", "0.11.8")            // current latest, clean
-	writeNPMPackage(t, nm, "echarts-for-react", "3.0.6")          // current latest, clean
-	writeNPMPackage(t, nm, "@antv/g-image-exporter", "1.0.42")    // current latest, clean
-	writeNPMPackage(t, nm, "@antv/infographic", "0.2.19")         // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g2", "5.4.8")                // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g6", "5.1.1")                // current latest, clean
+	writeNPMPackage(t, nm, "size-sensor", "1.0.3")             // current latest, clean
+	writeNPMPackage(t, nm, "@antv/data-set", "0.11.8")         // current latest, clean
+	writeNPMPackage(t, nm, "echarts-for-react", "3.0.6")       // current latest, clean
+	writeNPMPackage(t, nm, "@antv/g-image-exporter", "1.0.42") // current latest, clean
+	writeNPMPackage(t, nm, "@antv/infographic", "0.2.19")      // current latest, clean
 
 	result, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
 	if err != nil {
