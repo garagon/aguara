@@ -47,10 +47,12 @@ func RuleMetadata() []rulemeta.Rule {
 			Description: "package.json defines an install-time lifecycle script (preinstall, " +
 				"install, postinstall, preprepare, prepare, postprepare, prepublish, prepack, " +
 				"postpack) whose body runs Node or Bun on local JavaScript: node index.js, " +
-				"node ./scripts/setup.mjs, node -e/--eval, bun run x, or bun ./setup.mjs. npm " +
-				"runs these hooks automatically on install, so executing the package's own JS " +
-				"is the first hop of supply-chain droppers like the Red Hat/Miasma worm, which " +
-				"shipped a preinstall hook running node index.js. Detection walks the parsed " +
+				"node ./scripts/setup.mjs, node -e/--eval, bun run x, or bun ./setup.mjs. This " +
+				"declares an install-time execution path: in npm versions or configurations " +
+				"where dependency scripts are allowed to run (the default before npm v12, or " +
+				"under an allowScripts approval after it), this code executes during install. " +
+				"That execution is the first hop of supply-chain droppers like the Red " +
+				"Hat/Miasma worm, which shipped a preinstall hook running node index.js. Detection walks the parsed " +
 				"scripts object, so a same-named key elsewhere in the manifest and brace-bearing " +
 				"shell expansions in sibling scripts do not cause a false positive or a miss.",
 			Remediation: "Install-time code execution should be unnecessary for most packages. " +

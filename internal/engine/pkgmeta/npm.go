@@ -835,7 +835,9 @@ func detectLocalJSLifecycle(pkg *manifest) []types.Finding {
 			Severity: ruleInfo[RuleLocalJSLifecycle].SeverityLevel(),
 			Category: ruleInfo[RuleLocalJSLifecycle].Category,
 			Description: "package.json runs " + runtime + " on local JavaScript from the `" + key +
-				"` lifecycle script, which npm executes automatically during install. " +
+				"` lifecycle script, an install-time execution path. In npm versions or " +
+				"configurations where dependency scripts are allowed, this code runs during " +
+				"install. " +
 				"Install-time execution of a package's own JS is the first hop of supply-chain " +
 				"droppers; the Red Hat/Miasma worm shipped a preinstall hook running `node index.js`.",
 			FilePath: pkg.path,

@@ -74,7 +74,10 @@ func RuleMetadata() []rulemeta.Rule {
 				"\"none\": a tarball URL bypasses the registry's versioning, provenance, and " +
 				"advisory surface entirely, so v12 makes consuming one an explicit decision. A " +
 				"committed value pins the relaxed behavior through the upgrade (\"root\" bounds " +
-				"it to direct dependencies; \"all\" includes transitive ones).",
+				"it to direct dependencies; \"all\" includes transitive ones). npm 11.16 " +
+				"honors the key from a project .npmrc while warning that project-level " +
+				"support for it may end in the next major; the relaxation applies wherever " +
+				"the value loads (project, user, or CI config).",
 			Remediation: "Remove allow-remote from the committed .npmrc so the npm v12 default " +
 				"(none) applies, or replace URL tarball dependencies with registry versions. If " +
 				"one is genuinely required, prefer allow-remote=root over all, and pin the " +
