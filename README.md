@@ -118,7 +118,7 @@ JSON output carries both sub-results (`.check` and `.scan`) plus per-section cou
 
 Aguara matches package names and versions against a threat-intel snapshot built from:
 
-- **[OSV.dev](https://osv.dev)** — high-confidence records only: OpenSSF Malicious Packages (`MAL-` namespace), records flagged malicious-package origin, and keyword-qualified records with exact affected versions. Generic CVE / DoS records are filtered out at import time, so Aguara stays focused on malicious packages, not general SCA.
+- **[OSV.dev](https://osv.dev)** — high-confidence records only: OpenSSF Malicious Packages (`MAL-` namespace), records flagged malicious-package origin, and keyword-qualified records with exact affected versions. Version ranges and all-versions advisories are imported only from the firm malicious-package signals, never from keywords - a keyword false positive on a range would flag every version below the bound. Generic CVE / DoS records are filtered out at import time, so Aguara stays focused on malicious packages, not general SCA.
 - **[OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages)** — surfaced through the OSV import above.
 - **Manual emergency advisories** — a short hand-curated list of high-priority incidents, taking display precedence when an advisory ID also appears in OSV.
 
@@ -134,16 +134,16 @@ aguara check . --fresh     # refresh only the ecosystems this run touches, then 
 
 | Ecosystem | Evidence read | Coverage |
 |---|---|---|
-| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock` (classic v1 + Berry v2+), `bun.lock` | Strong malicious-package coverage; the lockfiles work before install. `npm:` alias entries resolve to the real registry package in pnpm-lock, package-lock, Berry yarn.lock, and bun.lock, so an alias cannot hide a compromised package; classic yarn.lock v1 has no clean real-package field, so aliased entries are skipped (conservative) rather than mis-attributed. |
-| PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage. |
+| npm | `node_modules`, pnpm `.pnpm` store, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock` (classic v1 + Berry v2+), `bun.lock` | Strong malicious-package coverage: exact versions, semver ranges, and all-versions advisories; the lockfiles work before install. `npm:` alias entries resolve to the real registry package in pnpm-lock, package-lock, Berry yarn.lock, and bun.lock, so an alias cannot hide a compromised package; classic yarn.lock v1 has no clean real-package field, so aliased entries are skipped (conservative) rather than mis-attributed. |
+| PyPI | `site-packages`, `.pth`, pip/uv/npx caches | Strong malicious-package + persistence coverage; exact versions and all-versions advisories. |
 | RubyGems | `Gemfile.lock` | Strong malicious-package coverage. |
 | NuGet | `packages.lock.json`, `*.csproj`/`*.fsproj`/`*.vbproj` | Strong exact-version coverage. |
-| Go | `go.sum`, `go.mod` | Parser ready; limited exact-version embedded matches today. |
-| crates.io | `Cargo.lock` (public registry only) | Parser ready; range-aware matching deferred. |
-| Packagist | `composer.lock` | Parser ready; range-aware matching deferred. |
-| Maven | `pom.xml`, Gradle lockfiles | Parser ready; range-aware matching deferred. |
+| Go | `go.sum`, `go.mod` | Parser ready; exact-version and all-versions matches (the OSV malicious set for Go is small). |
+| crates.io | `Cargo.lock` (public registry only) | Parser ready; exact-version and all-versions matches. |
+| Packagist | `composer.lock` | Parser ready; exact-version and all-versions matches. |
+| Maven | `pom.xml`, Gradle lockfiles | Parser ready; exact-version matches. |
 
-Aguara focuses on known malicious-package records and high-confidence advisories. General CVE/range matching is the next layer, not a claim today.
+Aguara focuses on known malicious-package records and high-confidence advisories. An advisory that marks every version of a package malicious matches in any ecosystem; version-range evaluation is npm semver only, by measurement - over 99% of malicious range advisories are the all-versions shape, so per-ecosystem version grammars would buy almost nothing. General CVE/range matching is a different product layer, not a claim today.
 
 ## Behavioral Detection
 
@@ -225,7 +225,7 @@ brew install garagon/tap/aguara
 ### Docker
 
 ```bash
-docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.25.0 check /repo
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.26.0 check /repo
 ```
 
 Multi-arch (`linux/amd64` + `linux/arm64`), runs as non-root UID 10001, base images digest-pinned, and signed at the digest with Cosign plus SPDX SBOM and SLSA provenance attestations. Pin a specific release tag for reproducibility.
@@ -234,7 +234,7 @@ Multi-arch (`linux/amd64` + `linux/arm64`), runs as non-root UID 10001, base ima
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.25.0 sh
+  | VERSION=v0.26.0 sh
 ```
 
 `install.sh` downloads `checksums.txt` and verifies the archive's SHA256 against it, aborting if neither `sha256sum` nor `shasum` is available. This catches a tampered archive at the registry layer but does not verify the Cosign signature on `checksums.txt` itself; for full keyless-signature verification on the curl-pipe path, follow the Cosign step in [Verifying signed releases](#verifying-signed-releases). Default install location is `~/.local/bin`; override with `INSTALL_DIR` for CI or containers.
@@ -242,11 +242,11 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
 ### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.25.0
+- uses: garagon/aguara@v0.26.0
   with:
     path: .
     fail-on: high
-    version: v0.25.0
+    version: v0.26.0
 ```
 
 Both pins are required: the action ref pins the composite action and its install script, and `version:` pins the Aguara binary it installs. Setting both keeps the workflow reproducible and dependabot-friendly. See [`action.yml`](action.yml) for all inputs.
@@ -284,15 +284,15 @@ GitHub Code Scanning, GitLab SAST, and plain Docker-in-CI examples are below.
 
 ```yaml
 # GitHub Action with SARIF upload (needs security-events: write)
-- uses: garagon/aguara@v0.25.0
-  with: { path: ., severity: medium, fail-on: high, version: v0.25.0 }
+- uses: garagon/aguara@v0.26.0
+  with: { path: ., severity: medium, fail-on: high, version: v0.26.0 }
 ```
 
 ```yaml
 # GitLab CI
 security-scan:
   script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.25.0 sh
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.26.0 sh
     - aguara scan . --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
@@ -302,7 +302,7 @@ security-scan:
 ## What Aguara Is Not
 
 - **Not a full SCA platform.** It matches known malicious-package records and high-confidence advisories, not every CVE across every version range.
-- **Not a CVE scanner for arbitrary ranges.** Range-aware OSV matching is the next layer, not a claim today.
+- **Not a CVE scanner for arbitrary ranges.** Malicious-package advisories match across versions (all-versions advisories everywhere, semver ranges for npm); general CVE range evaluation is not a claim today.
 - **Not a hosted dashboard.** There is no SaaS account, no upload, no telemetry.
 - **Not an LLM judge.** Detection is deterministic static analysis; there are no model calls.
 
@@ -349,7 +349,7 @@ A separate `aguara check` / `aguara audit` path inspects installed package trees
 Every release is signed with [Cosign](https://github.com/sigstore/cosign) keyless, ships an SPDX SBOM per archive, and is built with `-trimpath` for reproducibility. The container image is signed at the digest with SBOM + SLSA provenance attestations.
 
 ```bash
-VERSION=v0.25.0
+VERSION=v0.26.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
@@ -397,7 +397,7 @@ Suppress individual findings inline with `# aguara-ignore RULE_ID` (also `-next-
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale and is not a supported surface for v0.25.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
+Aguara Watch is being reworked. The previous public observatory is stale and is not a supported surface for v0.26.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
 
 ## Contributing
 

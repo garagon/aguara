@@ -3,6 +3,53 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.26.0] - 2026-06-11
+
+Threat-intel coverage grows by an order of magnitude. Until now the
+advisory importer kept only records with exact affected versions; OSV
+advisories that describe affected versions as ranges were dropped. A
+measurement pass (#216) showed over 99% of those malicious range
+advisories share one shape: every version of the package is malicious.
+Matching that shape needs no version comparison at all, so this release
+imports them - around 196,000 npm and 6,400 PyPI packages that were
+invisible to `aguara check` before now flag at any installed version.
+Checks stay offline and deterministic; the JSON output contract is
+unchanged.
+
+### Added
+
+- **All-versions advisory matching** (#217): OSV malicious records
+  whose ranges mark every version affected (`introduced: 0`, no upper
+  bound) are imported as a compact `(ecosystem, package) -> advisory ID`
+  set and matched by name alone, in any ecosystem. The match result
+  carries a synthesized summary and the `osv.dev` reference for the
+  advisory. The snapshot format gains a parallel `all_versions`
+  section: old binaries ignore it, new binaries accept old snapshots.
+  Both range channels require the firm malicious-package signal
+  (`MAL-` namespace or OpenSSF malicious-packages origin); the
+  keyword channel qualifies exact-version records only, because a
+  keyword false positive on a range would flag every version below
+  the bound.
+- **npm bounded-range advisories** (#218): malicious npm records with
+  real version boundaries are now kept at import and evaluated by the
+  existing semver engine (introduced inclusive, fixed exclusive,
+  verified against real OSV shapes). OSV `limit` events close the open
+  segment conservatively - versions at or above the limit never match.
+  Ranges the matcher cannot evaluate (GIT-typed, empty events) are
+  dropped rather than imported dead. npm only, by measurement: the
+  bounded-range residual outside npm is single digits.
+- **Regenerated embedded snapshot** (OSV 2026-06-11): 26,268 records
+  plus 202,526 all-versions entries (was 23,926 records, no entries).
+  Blob 1.0 -> 3.1 MB gzipped; measured steady-state intel heap 32.7 MB.
+  `aguara status` reports the all-versions entry count alongside
+  records.
+
+### Changed
+
+- README coverage table updated per ecosystem: all-versions advisories
+  match everywhere, version-range evaluation is npm semver only -
+  documented as a measured decision, not a deferral.
+
 ## [0.25.0] - 2026-06-11
 
 npm v12 (estimated July 2026) makes install-time trust explicit:
