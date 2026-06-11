@@ -3,6 +3,51 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+npm v12 (estimated July 2026) makes install-time trust explicit:
+dependency install scripts, git dependencies, and remote tarballs stop
+behaving as implicit defaults. Aguara now reviews those trust decisions
+before install.
+
+### Added
+
+- **npm-policy analyzer** (`internal/engine/npmpolicy/`), the twelfth
+  scan analyzer. Reads `package.json` (the `allowScripts` policy) and
+  the project `.npmrc`, and flags install-trust decisions weakened
+  below the npm v12 baseline, with four rules (category
+  `supply-chain`): `NPM_DANGEROUS_ALL_SCRIPTS_001` (HIGH, the
+  documented approve-all escape hatch left committed),
+  `NPM_ALLOW_SCRIPTS_UNPINNED_001` (MEDIUM, name-only approvals or
+  `allow-scripts-pin=false`), `NPM_ALLOW_GIT_RELAXED_001` and
+  `NPM_ALLOW_REMOTE_RELAXED_001` (MEDIUM, resolution pinned open
+  against the v12 default of none). A missing setting never fires.
+  Parser behavior is verified against real npm 11.16.0: pinned vs
+  name-only approvals, deny entries, inline comments, quoted values,
+  repeated keys (last-wins), empty boolean assignments, and manifest
+  key case-sensitivity.
+- **npm v12 readiness findings** (pkgmeta): two INFO rules,
+  `NPM_GIT_INSTALL_TRUST_001` and `NPM_REMOTE_INSTALL_TRUST_001`, turn
+  git and remote-tarball dependency declarations into migration
+  information - which explicit trust exceptions the project will need
+  under npm v12 - with exact line anchors. INFO severity never fails
+  default CI thresholds. URL classification follows npm's actual
+  install gates (verified via EALLOWGIT / EALLOWREMOTE): hosted
+  repository URLs need allow-git; archive, tarball and release
+  endpoints need allow-remote; a `.git` URL on an unknown host is a
+  remote dependency unless it uses a `git+` scheme (this also corrects
+  the pre-existing git classification in the lifecycle and optional-git
+  rules). Credentialed source URLs are redacted from finding output.
+
+### Changed
+
+- **`SUPPLY_026` wording** no longer claims npm always runs lifecycle
+  hooks automatically: it now describes the install-time execution path
+  as conditional on npm versions or configurations where dependency
+  scripts are allowed, matching the npm v12 model.
+- Rule catalog grows to 250 cataloged detections (193 YAML + 57
+  analyzer-emitted) across 12 analyzers.
+
 ## [0.24.0] - 2026-06-10
 
 Extends Aguara's trust layer in both directions: what an AI agent is
