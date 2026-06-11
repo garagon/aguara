@@ -77,8 +77,9 @@ type osvRecord struct {
 }
 
 type osvAffected struct {
-	Package  osvPackage `json:"package"`
-	Versions []string   `json:"versions,omitempty"`
+	Package  osvPackage        `json:"package"`
+	Versions []string          `json:"versions,omitempty"`
+	Ranges   []json.RawMessage `json:"ranges,omitempty"`
 }
 
 type osvPackage struct {
@@ -279,6 +280,16 @@ const (
 	// StatusKept: the record survives the filter and becomes an
 	// intel.Record in the snapshot.
 	StatusKept
+	// StatusRangesOnlyMalicious: like StatusRangesOnly (only version
+	// ranges, no exact versions, so the record is dropped from the
+	// snapshot today), but the record ALSO passes the malicious
+	// signal-or-keyword gate. This is the population range-aware
+	// matching (spec C3) would unlock; splitting it from
+	// StatusRangesOnly lets measurement tooling report
+	// `malicious AND ranges-only` per ecosystem without changing what
+	// the importer keeps. Appended at the end of the enum so existing
+	// status values are stable.
+	StatusRangesOnlyMalicious
 )
 
 // ClassifyForEcosystem walks a raw OSV record and reports how a
@@ -316,10 +327,20 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 	if osv.Withdrawn != "" {
 		return intel.Record{}, StatusWithdrawn
 	}
+	malicious := hasHighConfidenceSignal(osv) || hasKeywordMatch(osv)
 	if len(aff.Versions) == 0 {
+		// Dropped either way (the matcher consumes exact versions, and
+		// ranges are gated per ecosystem); the status split only
+		// reports whether range support would make this record
+		// eligible for the snapshot. A record with neither versions
+		// nor ranges has nothing range support could unlock, so it
+		// stays in the plain ranges-only bucket regardless of signal.
+		if malicious && len(aff.Ranges) > 0 {
+			return intel.Record{}, StatusRangesOnlyMalicious
+		}
 		return intel.Record{}, StatusRangesOnly
 	}
-	if !hasHighConfidenceSignal(osv) && !hasKeywordMatch(osv) {
+	if !malicious {
 		return intel.Record{}, StatusNeither
 	}
 	return intel.Record{
