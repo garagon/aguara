@@ -30,6 +30,12 @@ type osvRecordFixture struct {
 type affectedFixture struct {
 	Package  packageFixture `json:"package"`
 	Versions []string       `json:"versions,omitempty"`
+	Ranges   []rangeFixture `json:"ranges,omitempty"`
+}
+
+type rangeFixture struct {
+	Type   string              `json:"type"`
+	Events []map[string]string `json:"events"`
 }
 
 type packageFixture struct {
@@ -449,14 +455,14 @@ func TestImportAcceptsAllEightCanonicalEcosystems(t *testing.T) {
 // as `--ecosystem crates.io`.
 func TestImportAcceptsAliases(t *testing.T) {
 	aliasToCanonical := map[string]string{
-		"python":  "PyPI",
-		"rust":    "crates.io",
-		"cargo":   "crates.io",
-		"java":    "Maven",
-		"dotnet":  "NuGet",
-		"ruby":    "RubyGems",
-		"php":     "Packagist",
-		"golang":  "Go",
+		"python": "PyPI",
+		"rust":   "crates.io",
+		"cargo":  "crates.io",
+		"java":   "Maven",
+		"dotnet": "NuGet",
+		"ruby":   "RubyGems",
+		"php":    "Packagist",
+		"golang": "Go",
 	}
 	for alias, canon := range aliasToCanonical {
 		t.Run(alias, func(t *testing.T) {
@@ -506,9 +512,40 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "RubyGems")
 		require.Equal(t, osvimport.StatusWithdrawn, status)
 	})
-	t.Run("ranges only", func(t *testing.T) {
+	t.Run("ranges only, malicious signal", func(t *testing.T) {
+		// MAL- prefixed: passes the signal gate, but carries no exact
+		// versions. Still dropped from the snapshot; the dedicated
+		// status reports the population range-aware matching (spec C3)
+		// would unlock.
 		rec := osvRecordFixture{
 			ID: "MAL-3",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "x", Ecosystem: "Go"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{{"introduced": "0"}}}},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
+		require.Equal(t, osvimport.StatusRangesOnlyMalicious, status)
+	})
+	t.Run("malicious with neither versions nor ranges", func(t *testing.T) {
+		// Nothing range support could unlock: stays in the plain
+		// ranges-only bucket so the C3 measurement is not skewed.
+		rec := osvRecordFixture{
+			ID: "MAL-4",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "x", Ecosystem: "Go"},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
+		require.Equal(t, osvimport.StatusRangesOnly, status)
+	})
+	t.Run("ranges only, no malicious signal", func(t *testing.T) {
+		// CVE-flavoured ranges-only record: dropped, and range support
+		// would NOT make it eligible (fails the malicious gate).
+		rec := osvRecordFixture{
+			ID:      "GO-2026-0001",
+			Summary: "Some generic vulnerability",
 			Affected: []affectedFixture{{
 				Package: packageFixture{Name: "x", Ecosystem: "Go"},
 			}},
