@@ -73,6 +73,35 @@ func RuleMetadata() []rulemeta.Rule {
 				"CI job) that does not execute install/build/test scripts. Trusted " +
 				"publishing should only run from a vetted, minimal-scope environment.",
 		},
+		{
+			ID:       RuleGitInstallTrust,
+			Name:     "npm v12 readiness: git dependency needs install trust",
+			Severity: "INFO",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerPkgMeta,
+			Description: "package.json declares a dependency that resolves from a git source. " +
+				"npm v12 defaults allow-git to \"none\", so installing this project under v12 " +
+				"will require an explicit install-trust exception for git dependencies. This " +
+				"is readiness information, not an attack signal: it identifies the trust " +
+				"exceptions a team must review before the upgrade.",
+			Remediation: "Replace git sources with registry versions where possible. For the " +
+				"ones that remain, grant a reviewed exception (prefer allow-git=root over " +
+				"all) so the v12 upgrade does not break installs or silently broaden trust.",
+		},
+		{
+			ID:       RuleRemoteInstallTrust,
+			Name:     "npm v12 readiness: remote tarball needs install trust",
+			Severity: "INFO",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerPkgMeta,
+			Description: "package.json declares a dependency that resolves from a remote URL " +
+				"tarball. npm v12 defaults allow-remote to \"none\", so installing this " +
+				"project under v12 will require an explicit install-trust exception for " +
+				"remote tarballs. This is readiness information, not an attack signal.",
+			Remediation: "Replace URL tarballs with registry versions where possible. For the " +
+				"ones that remain, pin the exact tarball and grant a reviewed exception " +
+				"(prefer allow-remote=root over all) before upgrading to npm v12.",
+		},
 	}
 }
 

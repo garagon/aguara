@@ -810,11 +810,35 @@ func TestIsGitDep_NonGitHubHosts(t *testing.T) {
 		{"https://gitlab.com/group/pkg.git", true},
 		{"https://gitlab.com/group/pkg.git#abc1234", true},
 		{"https://bitbucket.org/team/pkg.git", true},
-		{"https://git.example.com/team/pkg.git", true},
-		{"https://git.example.com/team/pkg.git#v1", true},
+		// Ground truth npm 11.16.0: a .git URL on an UNKNOWN host is a
+		// remote dependency (EALLOWREMOTE), not git - npm only treats
+		// http(s) as git via hosted-git-info domains or a git+ scheme.
+		{"https://git.example.com/team/pkg.git", false},
+		{"https://git.example.com/team/pkg.git#v1", false},
+		{"git+https://git.example.com/team/pkg.git", true},
 		{"ssh://git@gitlab.com/group/pkg.git", true},
-		// Non-.git HTTPS URLs are not git deps (could be tarball etc.).
-		{"https://gitlab.com/group/pkg", false},
+		// Repo-root HTTPS URLs on hosted-git domains ARE git deps:
+		// ground truth npm 11.16.0 normalizes them to git+https specs
+		// and gates them with EALLOWGIT, not EALLOWREMOTE.
+		{"https://gitlab.com/group/pkg", true},
+		{"https://github.com/owner/repo", true},
+		// Deeper paths on the same hosts stay remote tarballs
+		// (EALLOWREMOTE): archives, release downloads, tarball
+		// endpoints, codeload.
+		{"https://github.com/org/repo/archive/main.tar.gz", false},
+		{"https://github.com/org/repo/releases/download/v1/pkg.tgz", false},
+		{"https://github.com/org/repo/tarball/main", false},
+		{"https://codeload.github.com/org/repo/tar.gz/main", false},
+		// /tree/<ref> is a git committish (EALLOWGIT).
+		{"https://github.com/org/repo/tree/main", true},
+		// userinfo and port do not change the classification.
+		{"https://token123@github.com/org/repo.git", true},
+		{"https://github.com:443/org/repo.git", true},
+		// gitlab subgroups are git; gitlab /-/ download endpoints are not.
+		{"https://gitlab.com/group/subgroup/repo", true},
+		{"https://gitlab.com/group/repo/-/archive/main/repo-main.tar.gz", false},
+		// Unknown hosts without .git stay non-git.
+		{"https://git.example.com/group/pkg", false},
 		// HTTPS to a registry-shaped URL is not a git dep.
 		{"https://registry.npmjs.org/some-pkg/-/some-pkg-1.0.0.tgz", false},
 	}
@@ -1159,5 +1183,173 @@ func TestLocalJSLifecycle_LineAnchoredToScripts(t *testing.T) {
 	}
 	if line != 6 {
 		t.Errorf("SUPPLY_026 line = %d, want 6 (scripts entry, not the dep on line 3)", line)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// npm v12 install-trust readiness
+
+func readinessIDs(fs []types.Finding) (git, remote int) {
+	for _, f := range fs {
+		switch f.RuleID {
+		case RuleGitInstallTrust:
+			git++
+		case RuleRemoteInstallTrust:
+			remote++
+		}
+	}
+	return
+}
+
+func TestInstallTrustReadiness_GitAndRemoteDeps(t *testing.T) {
+	doc := `{
+  "name": "x",
+  "dependencies": {
+    "a": "github:owner/repo",
+    "b": "https://example.com/pkg-1.0.0.tgz",
+    "c": "^1.0.0"
+  },
+  "devDependencies": {
+    "d": "git+https://github.com/o/r.git"
+  }
+}`
+	fs := analyze(t, "package.json", doc)
+	git, remote := readinessIDs(fs)
+	if git != 2 || remote != 1 {
+		t.Fatalf("want 2 git + 1 remote readiness findings, got git=%d remote=%d (%v)", git, remote, func() []string {
+			var o []string
+			for _, f := range fs {
+				o = append(o, f.RuleID)
+			}
+			return o
+		}())
+	}
+	for _, f := range fs {
+		if f.RuleID == RuleGitInstallTrust || f.RuleID == RuleRemoteInstallTrust {
+			if f.Severity != types.SeverityInfo {
+				t.Errorf("%s: want INFO, got %v", f.RuleID, f.Severity)
+			}
+			if f.Line == 0 {
+				t.Errorf("%s: missing line anchor", f.RuleID)
+			}
+		}
+	}
+}
+
+func TestInstallTrustReadiness_SuppressedByStrongerGitRules(t *testing.T) {
+	// With a lifecycle script present, NPM_LIFECYCLE_GIT_001 covers every
+	// git dep at higher severity; git readiness stays silent. Remote
+	// readiness has no stronger sibling and still fires.
+	doc := `{
+  "name": "x",
+  "scripts": {"postinstall": "node setup.js"},
+  "dependencies": {
+    "a": "github:owner/repo",
+    "b": "https://example.com/pkg-1.0.0.tgz"
+  }
+}`
+	fs := analyze(t, "package.json", doc)
+	git, remote := readinessIDs(fs)
+	if git != 0 {
+		t.Errorf("git readiness should be suppressed under lifecycle scripts, got %d", git)
+	}
+	if remote != 1 {
+		t.Errorf("want 1 remote readiness finding, got %d", remote)
+	}
+	// optionalDependencies git deps stay with NPM_OPTIONAL_GIT_001 only.
+	doc2 := `{"name":"x","optionalDependencies":{"a":"github:owner/repo"}}`
+	fs2 := analyze(t, "package.json", doc2)
+	git2, _ := readinessIDs(fs2)
+	if git2 != 0 {
+		t.Errorf("optionalDependencies git dep should not double-fire readiness, got %d", git2)
+	}
+	hasOptional := false
+	for _, f := range fs2 {
+		if f.RuleID == RuleOptionalGit {
+			hasOptional = true
+		}
+	}
+	if !hasOptional {
+		t.Errorf("NPM_OPTIONAL_GIT_001 expected for optional git dep")
+	}
+}
+
+func TestInstallTrustReadiness_LocalSourcesStaySilent(t *testing.T) {
+	// npm v12 keeps allow-file / allow-directory defaults, so file:,
+	// link:, workspace: and local paths are not readiness findings.
+	doc := `{
+  "name": "x",
+  "dependencies": {
+    "a": "file:../local",
+    "b": "link:../linked",
+    "c": "workspace:*",
+    "d": "./vendored",
+    "e": "^2.0.0"
+  }
+}`
+	fs := analyze(t, "package.json", doc)
+	git, remote := readinessIDs(fs)
+	if git != 0 || remote != 0 {
+		t.Errorf("local sources fired readiness: git=%d remote=%d", git, remote)
+	}
+}
+
+func TestInstallTrustReadiness_RemoteURLCredentialsRedacted(t *testing.T) {
+	// Signed URLs and query-string auth must never reach finding output.
+	doc := `{"name":"x","dependencies":{"blob":"https://user:secret@cdn.example.com/blob.tgz?token=hunter2supersecret"}}`
+	fs := analyze(t, "package.json", doc)
+	for _, f := range fs {
+		if f.RuleID != RuleRemoteInstallTrust {
+			continue
+		}
+		for _, field := range []string{f.Description, f.MatchedText} {
+			if containsAny(field, "hunter2supersecret", "secret@") {
+				t.Fatalf("credential leaked into finding output: %q", field)
+			}
+		}
+		return
+	}
+	t.Fatal("expected a remote readiness finding")
+}
+
+func TestInstallTrustReadiness_GitURLCredentialsRedacted(t *testing.T) {
+	doc := `{"name":"x","dependencies":{"viz":"git+https://cdn.example.com/repo.git?token=hunter2supersecret"}}`
+	fs := analyze(t, "package.json", doc)
+	for _, f := range fs {
+		if f.RuleID != RuleGitInstallTrust {
+			continue
+		}
+		if containsAny(f.Description+f.MatchedText, "hunter2supersecret") {
+			t.Fatalf("credential leaked into git readiness output")
+		}
+		return
+	}
+	t.Fatal("expected a git readiness finding")
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestInstallTrustReadiness_HostedHTTPSURLsAreGitNotRemote(t *testing.T) {
+	// Ground truth npm 11.16.0: a bare https URL on a known git host is
+	// normalized to a git spec and gated by EALLOWGIT, so the readiness
+	// advice must point at allow-git, not allow-remote.
+	doc := `{"name":"x","dependencies":{
+  "a": "https://github.com/org/repo",
+  "b": "https://gitlab.com/org/repo",
+  "c": "https://cdn.example.com/repo.git?token=secret123abc",
+  "d": "https://cdn.example.com/pkg-1.0.0.tgz"
+}}`
+	fs := analyze(t, "package.json", doc)
+	git, remote := readinessIDs(fs)
+	// c (.git on unknown host) is a REMOTE dep per npm ground truth.
+	if git != 2 || remote != 2 {
+		t.Fatalf("want 2 git + 2 remote, got git=%d remote=%d", git, remote)
 	}
 }
