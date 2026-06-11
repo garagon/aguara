@@ -3,12 +3,15 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.25.0] - 2026-06-11
 
 npm v12 (estimated July 2026) makes install-time trust explicit:
 dependency install scripts, git dependencies, and remote tarballs stop
 behaving as implicit defaults. Aguara now reviews those trust decisions
-before install.
+before install, in CI, and before an agent inherits them. Everything
+stays deterministic and offline: no package execution, no network calls
+during a scan. Existing rule IDs, severities, and the `Severity` JSON
+encoding are unchanged.
 
 ### Added
 

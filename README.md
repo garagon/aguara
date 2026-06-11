@@ -225,7 +225,7 @@ brew install garagon/tap/aguara
 ### Docker
 
 ```bash
-docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.24.0 check /repo
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.25.0 check /repo
 ```
 
 Multi-arch (`linux/amd64` + `linux/arm64`), runs as non-root UID 10001, base images digest-pinned, and signed at the digest with Cosign plus SPDX SBOM and SLSA provenance attestations. Pin a specific release tag for reproducibility.
@@ -234,7 +234,7 @@ Multi-arch (`linux/amd64` + `linux/arm64`), runs as non-root UID 10001, base ima
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
-  | VERSION=v0.24.0 sh
+  | VERSION=v0.25.0 sh
 ```
 
 `install.sh` downloads `checksums.txt` and verifies the archive's SHA256 against it, aborting if neither `sha256sum` nor `shasum` is available. This catches a tampered archive at the registry layer but does not verify the Cosign signature on `checksums.txt` itself; for full keyless-signature verification on the curl-pipe path, follow the Cosign step in [Verifying signed releases](#verifying-signed-releases). Default install location is `~/.local/bin`; override with `INSTALL_DIR` for CI or containers.
@@ -242,11 +242,11 @@ curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh \
 ### GitHub Action
 
 ```yaml
-- uses: garagon/aguara@v0.24.0
+- uses: garagon/aguara@v0.25.0
   with:
     path: .
     fail-on: high
-    version: v0.24.0
+    version: v0.25.0
 ```
 
 Both pins are required: the action ref pins the composite action and its install script, and `version:` pins the Aguara binary it installs. Setting both keeps the workflow reproducible and dependabot-friendly. See [`action.yml`](action.yml) for all inputs.
@@ -284,15 +284,15 @@ GitHub Code Scanning, GitLab SAST, and plain Docker-in-CI examples are below.
 
 ```yaml
 # GitHub Action with SARIF upload (needs security-events: write)
-- uses: garagon/aguara@v0.24.0
-  with: { path: ., severity: medium, fail-on: high, version: v0.24.0 }
+- uses: garagon/aguara@v0.25.0
+  with: { path: ., severity: medium, fail-on: high, version: v0.25.0 }
 ```
 
 ```yaml
 # GitLab CI
 security-scan:
   script:
-    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.24.0 sh
+    - curl -fsSL https://raw.githubusercontent.com/garagon/aguara/main/install.sh | VERSION=v0.25.0 sh
     - aguara scan . --format sarif -o gl-sast-report.sarif --fail-on high
   artifacts:
     reports:
@@ -349,7 +349,7 @@ A separate `aguara check` / `aguara audit` path inspects installed package trees
 Every release is signed with [Cosign](https://github.com/sigstore/cosign) keyless, ships an SPDX SBOM per archive, and is built with `-trimpath` for reproducibility. The container image is signed at the digest with SBOM + SLSA provenance attestations.
 
 ```bash
-VERSION=v0.24.0
+VERSION=v0.25.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
@@ -397,7 +397,7 @@ Suppress individual findings inline with `# aguara-ignore RULE_ID` (also `-next-
 
 ## Aguara Watch
 
-Aguara Watch is being reworked. The previous public observatory is stale and is not a supported surface for v0.24.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
+Aguara Watch is being reworked. The previous public observatory is stale and is not a supported surface for v0.25.0. The supported surfaces are the CLI, GitHub Action, Docker image, signed releases, and Go library.
 
 ## Contributing
 
