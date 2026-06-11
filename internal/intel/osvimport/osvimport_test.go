@@ -564,6 +564,50 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 			{Type: "SEMVER", Introduced: "3.0.0", Fixed: "4.0.0"},
 		}, got2.Ranges)
 	})
+	t.Run("keyword-qualified ranges never import (signal-only channels)", func(t *testing.T) {
+		// A keyword hit qualifies exact-version records only. On the
+		// range channels the blast radius of a keyword false positive
+		// is every version below the bound (real leak: axios,
+		// @angular/core, playwright CVEs whose text or reference
+		// slugs matched), so both channels require the firm
+		// malicious-package signal.
+		allVersions := osvRecordFixture{
+			ID:      "GHSA-kw-allver",
+			Summary: "Malicious package found in acme-lib",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "acme-lib", Ecosystem: "npm"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{{"introduced": "0"}}}},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, allVersions), "npm")
+		require.Equal(t, osvimport.StatusRangesOnly, status)
+
+		bounded := osvRecordFixture{
+			ID:      "GHSA-kw-bounded",
+			Summary: "Malicious package found in acme-lib",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "acme-lib", Ecosystem: "npm"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{{"introduced": "0"}, {"fixed": "1.2.3"}}}},
+			}},
+		}
+		_, status = osvimport.ClassifyForEcosystem(mustMarshal(t, bounded), "npm")
+		require.Equal(t, osvimport.StatusRangesOnly, status)
+
+		// The same keyword-qualified record WITH exact versions keeps
+		// importing: the exact channel is where keywords belong.
+		exact := osvRecordFixture{
+			ID:      "GHSA-kw-exact",
+			Summary: "Malicious package found in acme-lib",
+			Affected: []affectedFixture{{
+				Package:  packageFixture{Name: "acme-lib", Ecosystem: "npm"},
+				Versions: []string{"1.0.0"},
+			}},
+		}
+		_, status = osvimport.ClassifyForEcosystem(mustMarshal(t, exact), "npm")
+		require.Equal(t, osvimport.StatusKept, status)
+	})
 	t.Run("git-typed npm ranges import as nothing", func(t *testing.T) {
 		rec := osvRecordFixture{
 			ID: "MAL-9",

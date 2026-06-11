@@ -118,7 +118,7 @@ JSON output carries both sub-results (`.check` and `.scan`) plus per-section cou
 
 Aguara matches package names and versions against a threat-intel snapshot built from:
 
-- **[OSV.dev](https://osv.dev)** — high-confidence records only: OpenSSF Malicious Packages (`MAL-` namespace), records flagged malicious-package origin, and keyword-qualified records with affected versions - exact lists, npm semver ranges, or the all-versions shape. Generic CVE / DoS records are filtered out at import time, so Aguara stays focused on malicious packages, not general SCA.
+- **[OSV.dev](https://osv.dev)** — high-confidence records only: OpenSSF Malicious Packages (`MAL-` namespace), records flagged malicious-package origin, and keyword-qualified records with exact affected versions. Version ranges and all-versions advisories are imported only from the firm malicious-package signals, never from keywords - a keyword false positive on a range would flag every version below the bound. Generic CVE / DoS records are filtered out at import time, so Aguara stays focused on malicious packages, not general SCA.
 - **[OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages)** — surfaced through the OSV import above.
 - **Manual emergency advisories** — a short hand-curated list of high-priority incidents, taking display precedence when an advisory ID also appears in OSV.
 
@@ -225,7 +225,7 @@ brew install garagon/tap/aguara
 ### Docker
 
 ```bash
-docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.25.0 check /repo
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.26.0 check /repo
 ```
 
 Multi-arch (`linux/amd64` + `linux/arm64`), runs as non-root UID 10001, base images digest-pinned, and signed at the digest with Cosign plus SPDX SBOM and SLSA provenance attestations. Pin a specific release tag for reproducibility.

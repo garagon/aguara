@@ -11,7 +11,7 @@ advisories that describe affected versions as ranges were dropped. A
 measurement pass (#216) showed over 99% of those malicious range
 advisories share one shape: every version of the package is malicious.
 Matching that shape needs no version comparison at all, so this release
-imports them - around 197,000 npm and 6,400 PyPI packages that were
+imports them - around 196,000 npm and 6,400 PyPI packages that were
 invisible to `aguara check` before now flag at any installed version.
 Checks stay offline and deterministic; the JSON output contract is
 unchanged.
@@ -25,6 +25,11 @@ unchanged.
   carries a synthesized summary and the `osv.dev` reference for the
   advisory. The snapshot format gains a parallel `all_versions`
   section: old binaries ignore it, new binaries accept old snapshots.
+  Both range channels require the firm malicious-package signal
+  (`MAL-` namespace or OpenSSF malicious-packages origin); the
+  keyword channel qualifies exact-version records only, because a
+  keyword false positive on a range would flag every version below
+  the bound.
 - **npm bounded-range advisories** (#218): malicious npm records with
   real version boundaries are now kept at import and evaluated by the
   existing semver engine (introduced inclusive, fixed exclusive,
@@ -33,8 +38,8 @@ unchanged.
   Ranges the matcher cannot evaluate (GIT-typed, empty events) are
   dropped rather than imported dead. npm only, by measurement: the
   bounded-range residual outside npm is single digits.
-- **Regenerated embedded snapshot** (OSV 2026-06-11): 26,533 records
-  plus 202,607 all-versions entries (was 23,926 records, no entries).
+- **Regenerated embedded snapshot** (OSV 2026-06-11): 26,268 records
+  plus 202,526 all-versions entries (was 23,926 records, no entries).
   Blob 1.0 -> 3.1 MB gzipped; measured steady-state intel heap 32.7 MB.
   `aguara status` reports the all-versions entry count alongside
   records.

@@ -311,10 +311,15 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 				// every range is the all-versions shape, it becomes a
 				// compact AllVersionsEntry: an exact (ecosystem, name)
 				// lookup is its whole evaluation, no version grammar
-				// involved. Bounded malicious ranges remain skipped
-				// here (C3-B territory); CVE-flavoured records are
-				// dropped as before.
-				if (signal || keywordHit) && rangesAllVersionsShape(aff.Ranges) {
+				// involved. The range channels require the firm
+				// signal (MAL- / OpenSSF origins), NOT the keyword
+				// gate: a keyword false positive on an exact-version
+				// record flags a handful of versions, but the same
+				// false positive on a range flags every version below
+				// the bound (measured leak: axios, @angular/core,
+				// playwright CVEs arriving as "malicious"). The
+				// keyword channel stays exact-version only.
+				if signal && rangesAllVersionsShape(aff.Ranges) {
 					entries = append(entries, intel.AllVersionsEntry{
 						ID:        osv.ID,
 						Ecosystem: eco,
@@ -327,8 +332,9 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 				// matcher's range evaluation is gated to npm's semver
 				// grammar (ecosystemSupportsRanges), so importing
 				// bounded ranges for any other ecosystem would embed
-				// dead data. Measured residual: npm 1,095 / PyPI 4.
-				if (signal || keywordHit) && eco == "npm" {
+				// dead data. Signal-only, same reasoning as the
+				// all-versions channel above.
+				if signal && eco == "npm" {
 					// A range whose events never open (no introduced)
 					// converts to nothing, and a range type the
 					// matcher cannot evaluate (e.g. GIT) would import
@@ -452,15 +458,17 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 	if osv.Withdrawn != "" {
 		return intel.Record{}, StatusWithdrawn
 	}
-	malicious := hasHighConfidenceSignal(osv) || hasKeywordMatch(osv)
+	signal := hasHighConfidenceSignal(osv)
+	malicious := signal || hasKeywordMatch(osv)
 	if len(aff.Versions) == 0 {
-		// Dropped either way (the matcher consumes exact versions, and
-		// ranges are gated per ecosystem); the status split only
-		// reports whether range support would make this record
-		// eligible for the snapshot. A record with neither versions
-		// nor ranges has nothing range support could unlock, so it
-		// stays in the plain ranges-only bucket regardless of signal.
-		if malicious && len(aff.Ranges) > 0 {
+		// Mirrors Import: the range channels (all-versions entries and
+		// npm bounded ranges) require the firm malicious-package
+		// signal, never the keyword gate - a keyword false positive
+		// on a range flags every version below the bound. A record
+		// with neither versions nor ranges has nothing range support
+		// could unlock, so it stays in the plain ranges-only bucket
+		// regardless of signal.
+		if signal && len(aff.Ranges) > 0 {
 			rec := intel.Record{
 				ID:         osv.ID,
 				Aliases:    append([]string(nil), osv.Aliases...),
