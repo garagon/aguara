@@ -579,3 +579,40 @@ func TestSnapshot_AllVersionsRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost entries: %+v", back.AllVersions)
 	}
 }
+
+func TestMatcher_NPMBoundedRanges_RealOSVShapes(t *testing.T) {
+	// Real npm OSV bounded shapes (extracted 2026-06-11 from the live
+	// bucket): an open-ended introduced range and an introduced-0 +
+	// fixed range. OSV semantics: introduced inclusive, fixed exclusive.
+	snap := intel.Snapshot{Records: []intel.Record{
+		{ // MAL-2022-219 shape: {introduced: 1.2.2}
+			ID: "MAL-2022-219", Ecosystem: intel.EcosystemNPM, Name: "perp",
+			Kind:   intel.KindMalicious,
+			Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "1.2.2"}},
+		},
+		{ // MAL-2022-455 shape: {introduced: 0, fixed: 6.72.11}
+			ID: "MAL-2022-455", Ecosystem: intel.EcosystemNPM, Name: "apollo",
+			Kind:   intel.KindMalicious,
+			Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "0", Fixed: "6.72.11"}},
+		},
+	}}
+	m := intel.NewMatcher(snap)
+	cases := []struct {
+		name, version string
+		want          bool
+	}{
+		{"perp", "1.2.1", false},  // below introduced
+		{"perp", "1.2.2", true},   // introduced inclusive
+		{"perp", "9.9.9", true},   // open-ended
+		{"apollo", "0.0.1", true}, // from 0
+		{"apollo", "6.72.10", true},
+		{"apollo", "6.72.11", false}, // fixed exclusive
+		{"apollo", "7.0.0", false},
+	}
+	for _, c := range cases {
+		got := m.MatchPackage(intel.MatchInput{Ecosystem: "npm", Name: c.name, Version: c.version})
+		if (len(got) > 0) != c.want {
+			t.Errorf("%s@%s: want match=%v, got %d matches", c.name, c.version, c.want, len(got))
+		}
+	}
+}
