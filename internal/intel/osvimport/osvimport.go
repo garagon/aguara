@@ -143,6 +143,19 @@ func convertRanges(in []osvRange) []intel.VersionRange {
 			if v, ok := ev["last_affected"]; ok {
 				cur.LastAffected = v
 			}
+			if v, ok := ev["limit"]; ok && v != "" {
+				// OSV `limit` caps the range's domain (exclusive):
+				// versions below it follow the events as stated,
+				// versions at/above it are outside the range. Closing
+				// the open segment at the limit is therefore
+				// conservative-correct (never flags above the limit),
+				// and events past the limit are outside the domain,
+				// so processing stops for this range.
+				if open && cur.Fixed == "" && cur.LastAffected == "" {
+					cur.Fixed = v
+				}
+				break
+			}
 		}
 		if open {
 			out = append(out, cur)
@@ -307,6 +320,31 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 						Ecosystem: eco,
 						Name:      aff.Package.Name,
 					})
+					continue
+				}
+				// Bounded malicious ranges (real version bounds) ship
+				// as full Records WITH Ranges - npm only (C3-B): the
+				// matcher's range evaluation is gated to npm's semver
+				// grammar (ecosystemSupportsRanges), so importing
+				// bounded ranges for any other ecosystem would embed
+				// dead data. Measured residual: npm 1,095 / PyPI 4.
+				if (signal || keywordHit) && eco == "npm" {
+					// A range whose events never open (no introduced)
+					// converts to nothing, and a range type the
+					// matcher cannot evaluate (e.g. GIT) would import
+					// as dead data; both are dropped.
+					if rngs := evaluableRanges(convertRanges(aff.Ranges)); len(rngs) > 0 {
+						out = append(out, intel.Record{
+							ID:         osv.ID,
+							Aliases:    append([]string(nil), osv.Aliases...),
+							Ecosystem:  eco,
+							Name:       aff.Package.Name,
+							Kind:       intel.KindMalicious,
+							Summary:    pickSummary(osv),
+							Ranges:     rngs,
+							References: extractReferenceURLs(osv.References),
+						})
+					}
 				}
 				continue
 			}
@@ -438,7 +476,20 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 				// Snapshot.AllVersions entries.
 				return rec, StatusAllVersionsKept
 			}
-			// Bounded malicious ranges: still dropped (C3-B).
+			rec.Ranges = evaluableRanges(rec.Ranges)
+			if len(rec.Ranges) == 0 {
+				// Every range converted to nothing (empty events,
+				// limit-only): the record asserts nothing usable and
+				// Import drops it.
+				return intel.Record{}, StatusRangesOnly
+			}
+			if canon == "npm" {
+				// npm bounded ranges ship as full Records (C3-B):
+				// the matcher's semver range evaluation covers them.
+				return rec, StatusKept
+			}
+			// Bounded malicious ranges outside npm: still dropped
+			// (the range gate is npm-only).
 			return rec, StatusRangesOnlyMalicious
 		}
 		return intel.Record{}, StatusRangesOnly
@@ -473,6 +524,20 @@ func SortAndDedupeAllVersions(in []intel.AllVersionsEntry) []intel.AllVersionsEn
 		return a.ID < b.ID
 	})
 	return dedupeAllVersions(in)
+}
+
+// evaluableRanges keeps only ranges whose Type the matcher's semver
+// engine can evaluate (SEMVER / ECOSYSTEM); a GIT or unknown-typed
+// range would import as dead data the matcher silently skips.
+func evaluableRanges(in []intel.VersionRange) []intel.VersionRange {
+	var out []intel.VersionRange
+	for _, r := range in {
+		switch strings.ToUpper(strings.TrimSpace(r.Type)) {
+		case "SEMVER", "ECOSYSTEM":
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // dedupeAllVersions removes consecutive duplicates from a sorted

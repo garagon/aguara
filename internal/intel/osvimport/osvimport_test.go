@@ -528,6 +528,54 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "Go")
 		require.Equal(t, osvimport.StatusAllVersionsKept, status)
 	})
+	t.Run("limit closes the open segment conservatively", func(t *testing.T) {
+		// OSV `limit` caps the range domain (exclusive). The open
+		// segment closes at the limit - versions below stay covered,
+		// versions at/above never match - and closed pairs before the
+		// limit are preserved.
+		rec := osvRecordFixture{
+			ID: "MAL-7",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "x", Ecosystem: "npm"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{{"introduced": "1.0.0"}, {"limit": "2.0.0"}}}},
+			}},
+		}
+		got, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "npm")
+		require.Equal(t, osvimport.StatusKept, status)
+		require.Equal(t, []intel.VersionRange{{Type: "SEMVER", Introduced: "1.0.0", Fixed: "2.0.0"}}, got.Ranges)
+
+		// Closed pair before a later limited segment survives.
+		rec2 := osvRecordFixture{
+			ID: "MAL-8",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "y", Ecosystem: "npm"},
+				Ranges: []rangeFixture{{Type: "SEMVER",
+					Events: []map[string]string{
+						{"introduced": "1.0.0"}, {"fixed": "1.2.0"},
+						{"introduced": "3.0.0"}, {"limit": "4.0.0"},
+					}}},
+			}},
+		}
+		got2, status2 := osvimport.ClassifyForEcosystem(mustMarshal(t, rec2), "npm")
+		require.Equal(t, osvimport.StatusKept, status2)
+		require.Equal(t, []intel.VersionRange{
+			{Type: "SEMVER", Introduced: "1.0.0", Fixed: "1.2.0"},
+			{Type: "SEMVER", Introduced: "3.0.0", Fixed: "4.0.0"},
+		}, got2.Ranges)
+	})
+	t.Run("git-typed npm ranges import as nothing", func(t *testing.T) {
+		rec := osvRecordFixture{
+			ID: "MAL-9",
+			Affected: []affectedFixture{{
+				Package: packageFixture{Name: "z", Ecosystem: "npm"},
+				Ranges: []rangeFixture{{Type: "GIT",
+					Events: []map[string]string{{"introduced": "abc123"}}}},
+			}},
+		}
+		_, status := osvimport.ClassifyForEcosystem(mustMarshal(t, rec), "npm")
+		require.Equal(t, osvimport.StatusRangesOnly, status)
+	})
 	t.Run("bounded malicious ranges stay dropped (C3-B residual)", func(t *testing.T) {
 		rec := osvRecordFixture{
 			ID: "MAL-5",
@@ -698,8 +746,17 @@ func TestImport_AllVersionsEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	if len(snap.Records) != 1 || snap.Records[0].ID != "MAL-E" {
-		t.Fatalf("want 1 exact record (MAL-E), got %+v", snap.Records)
+	// MAL-C (npm bounded ranges) now ships as a Record WITH Ranges
+	// (C3-B); MAL-E keeps its exact versions; MAL-F (empty events)
+	// converts to nothing and is dropped as dead data.
+	if len(snap.Records) != 2 {
+		t.Fatalf("want 2 records (MAL-C bounded + MAL-E exact), got %+v", snap.Records)
+	}
+	if snap.Records[0].ID != "MAL-C" || len(snap.Records[0].Ranges) != 1 || len(snap.Records[0].Versions) != 0 {
+		t.Fatalf("MAL-C should be a ranges-only record: %+v", snap.Records[0])
+	}
+	if snap.Records[1].ID != "MAL-E" {
+		t.Fatalf("want MAL-E second, got %+v", snap.Records[1])
 	}
 	// Canonical ecosystem is the OSV bucket form ("PyPI"); the
 	// matcher normalizes at lookup. Sort: ecosystem, name, ID

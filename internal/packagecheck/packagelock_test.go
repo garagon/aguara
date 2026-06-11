@@ -406,3 +406,43 @@ func TestRunner_AllVersionsEntryFlagsLockfilePackage(t *testing.T) {
 		t.Fatalf("want exactly the all-versions hit, got %v", hits)
 	}
 }
+
+// TestRunner_NPMBoundedRangeFlagsInRangeOnly proves C3-B end to end:
+// a ranges-only npm record (no exact versions) flags a lockfile
+// package inside the range and stays silent outside it.
+func TestRunner_NPMBoundedRangeFlagsInRangeOnly(t *testing.T) {
+	snap := intel.Snapshot{Records: []intel.Record{{
+		ID: "MAL-2026-RANGE", Ecosystem: "npm", Name: "evil-range",
+		Kind:   intel.KindMalicious,
+		Ranges: []intel.VersionRange{{Type: "SEMVER", Introduced: "1.0.0", Fixed: "2.0.0"}},
+	}}}
+	runner := &Runner{Matcher: intel.NewMatcher(snap)}
+	target := writeLock(t, `{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "myapp", "version": "1.0.0" },
+	    "node_modules/evil-range": { "version": "1.5.0", "resolved": "https://registry.npmjs.org/evil-range/-/evil-range-1.5.0.tgz" }
+	  }
+	}`)
+	res, err := runner.Run([]Target{target})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Record.ID != "MAL-2026-RANGE" {
+		t.Fatalf("in-range version should flag, got %+v", res.Hits)
+	}
+	target2 := writeLock(t, `{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "myapp", "version": "1.0.0" },
+	    "node_modules/evil-range": { "version": "2.0.0", "resolved": "https://registry.npmjs.org/evil-range/-/evil-range-2.0.0.tgz" }
+	  }
+	}`)
+	res2, err := runner.Run([]Target{target2})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res2.Hits) != 0 {
+		t.Fatalf("fixed version (exclusive) must not flag, got %+v", res2.Hits)
+	}
+}
