@@ -29,10 +29,12 @@ const AnalyzerName = "pkgmeta"
 
 // Rule IDs emitted by this analyzer.
 const (
-	RuleLifecycleGit     = "NPM_LIFECYCLE_GIT_001"
-	RuleOptionalGit      = "NPM_OPTIONAL_GIT_001"
-	RulePublishSurface   = "NPM_PUBLISH_SURFACE_001"
-	RuleLocalJSLifecycle = "SUPPLY_026"
+	RuleLifecycleGit       = "NPM_LIFECYCLE_GIT_001"
+	RuleOptionalGit        = "NPM_OPTIONAL_GIT_001"
+	RulePublishSurface     = "NPM_PUBLISH_SURFACE_001"
+	RuleLocalJSLifecycle   = "SUPPLY_026"
+	RuleGitInstallTrust    = "NPM_GIT_INSTALL_TRUST_001"
+	RuleRemoteInstallTrust = "NPM_REMOTE_INSTALL_TRUST_001"
 )
 
 // localJSLifecycleKeys are the lifecycle hooks where a package running its
@@ -230,6 +232,195 @@ func findDepLine(raw []byte, section, name string) int {
 
 // --- classifiers ---
 
+// isRemoteTarballDep reports whether a dependency value points at a
+// remote URL tarball: an http(s) URL that is not a git source. npm v12
+// defaults allow-remote to "none", so resolving one requires an
+// explicit install-trust exception.
+func isRemoteTarballDep(version string) bool {
+	v := strings.ToLower(strings.TrimSpace(version))
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return false
+	}
+	return !isGitDep(version)
+}
+
+// detectInstallTrustReadiness emits the npm v12 readiness findings:
+// INFO-severity, per dependency, for sources npm v12 will no longer
+// resolve without an explicit trust exception (allow-git /
+// allow-remote). This is posture information, not an attack signal: it
+// tells a team which exceptions the project will need before the v12
+// upgrade, and it never fails a build on default thresholds.
+//
+// Suppression mirrors this file's existing philosophy of one finding
+// per concern:
+//   - git readiness is suppressed entirely when a lifecycle script is
+//     present (NPM_LIFECYCLE_GIT_001 already covers every git dep with
+//     higher severity) and skips optionalDependencies (covered by
+//     NPM_OPTIONAL_GIT_001);
+//   - remote-tarball readiness has no stronger sibling and always
+//     fires. file:, link: and workspace: sources are NOT findings:
+//     npm v12 keeps allow-file / allow-directory at their current
+//     defaults.
+func detectInstallTrustReadiness(pkg *manifest) []types.Finding {
+	sections := []struct {
+		name string
+		deps map[string]string
+	}{
+		{"dependencies", pkg.Dependencies},
+		{"devDependencies", pkg.DevDependencies},
+		{"optionalDependencies", pkg.OptionalDependencies},
+		{"peerDependencies", pkg.PeerDependencies},
+	}
+	gitCovered := hasLifecycleScript(pkg.Scripts)
+	var findings []types.Finding
+	for _, sec := range sections {
+		names := make([]string, 0, len(sec.deps))
+		for n := range sec.deps {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			v := sec.deps[n]
+			ref := sec.name + "." + n
+			switch {
+			case isGitDep(v):
+				if gitCovered || sec.name == "optionalDependencies" {
+					continue // a stronger git rule already covers this dep
+				}
+				safe := sanitizeTarballURL(v)
+				findings = append(findings, types.Finding{
+					RuleID:   RuleGitInstallTrust,
+					RuleName: ruleInfo[RuleGitInstallTrust].Name,
+					Severity: types.SeverityInfo,
+					Category: ruleInfo[RuleGitInstallTrust].Category,
+					Description: ref + " resolves from a git source (" + safe + "). npm v12 " +
+						"readiness: npm v12 defaults allow-git to \"none\", so installing this " +
+						"project will require an explicit install-trust exception for git " +
+						"dependencies.",
+					FilePath:    pkg.path,
+					Line:        findDepLine(pkg.raw, sec.name, n),
+					MatchedText: ref + " = " + safe,
+					Analyzer:    AnalyzerName,
+					Confidence:  0.9,
+					Remediation: "Replace the git source with a registry version where possible. " +
+						"If it is genuinely required, grant a reviewed exception (prefer " +
+						"allow-git=root over all) before upgrading to npm v12.",
+				})
+			case isRemoteTarballDep(v):
+				safe := sanitizeTarballURL(v)
+				findings = append(findings, types.Finding{
+					RuleID:   RuleRemoteInstallTrust,
+					RuleName: ruleInfo[RuleRemoteInstallTrust].Name,
+					Severity: types.SeverityInfo,
+					Category: ruleInfo[RuleRemoteInstallTrust].Category,
+					Description: ref + " resolves from a remote URL tarball (" + safe + "). npm " +
+						"v12 readiness: npm v12 defaults allow-remote to \"none\", so installing " +
+						"this project will require an explicit install-trust exception for " +
+						"remote tarballs.",
+					FilePath:    pkg.path,
+					Line:        findDepLine(pkg.raw, sec.name, n),
+					MatchedText: ref + " = " + safe,
+					Analyzer:    AnalyzerName,
+					Confidence:  0.9,
+					Remediation: "Replace the URL tarball with a registry version where " +
+						"possible. If it is genuinely required, pin the exact tarball and " +
+						"grant a reviewed exception (prefer allow-remote=root over all) before " +
+						"upgrading to npm v12.",
+				})
+			}
+		}
+	}
+	return findings
+}
+
+// isHostedGitDomainURL reports whether an http(s) URL matches a shape
+// npm's hosted-git-info resolves as a git spec. The host comparison
+// strips userinfo and port (ground truth: "https://token@github.com/
+// org/repo.git" and "https://github.com:443/org/repo.git" both gate as
+// EALLOWGIT). Path handling approximates hosted-git-info's templates,
+// bounded to the shapes ground-truthed against npm 11.16.0:
+//
+//	github.com/owner/repo[.git][/tree/...]  -> git
+//	github.com/owner/repo/tarball|archive|releases/... -> remote
+//	codeload.github.com/...                  -> remote (not in the set)
+//	gist.github.com/<id>                     -> git
+//	gitlab.com/group[/subgroup...]/repo      -> git (unless /-/ archive paths)
+//	bitbucket.org/owner/repo                 -> git
+//
+// The approximation is deliberately bounded rather than a full
+// hosted-git-info port; an exotic hosted endpoint that escapes it
+// classifies as remote, and the cost is INFO-level readiness advice
+// naming allow-remote instead of allow-git.
+func isHostedGitDomainURL(u string) bool {
+	rest := u[strings.Index(u, "://")+3:]
+	host := rest
+	path := ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		host = rest[:i]
+		path = strings.Trim(rest[i+1:], "/")
+	}
+	if i := strings.LastIndexByte(host, '@'); i >= 0 {
+		host = host[i+1:] // strip userinfo
+	}
+	if i := strings.IndexByte(host, ':'); i >= 0 {
+		host = host[:i] // strip port
+	}
+	host = strings.TrimPrefix(host, "www.")
+	segs := 0
+	if path != "" {
+		segs = strings.Count(path, "/") + 1
+	}
+	switch host {
+	case "github.com":
+		path = strings.TrimSuffix(path, ".git")
+		if segs == 2 {
+			return true
+		}
+		// owner/repo/tree/<committish...> is a git ref; tarball/,
+		// archive/, releases/ and anything else are download endpoints.
+		if segs > 2 {
+			parts := strings.SplitN(path, "/", 4)
+			return parts[2] == "tree"
+		}
+		return false
+	case "gist.github.com":
+		return segs >= 1
+	case "gitlab.com":
+		// Subgroups give variable depth; gitlab's download endpoints
+		// live under "/-/" (e.g. /-/archive/...).
+		return segs >= 2 && !strings.Contains("/"+path+"/", "/-/")
+	case "bitbucket.org":
+		return segs == 2
+	}
+	return false
+}
+
+// hasTarballExt reports whether a URL path ends in an archive extension
+// npm fetches as a remote tarball even on hosted-git domains (ground
+// truth: /archive/x.tar.gz, /releases/download/.../pkg.tgz and .zip all
+// gate as EALLOWREMOTE).
+func hasTarballExt(u string) bool {
+	for _, ext := range []string{".tgz", ".tar.gz", ".tar", ".zip"} {
+		if strings.HasSuffix(u, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeTarballURL prepares a remote source spec (tarball or git URL) for inclusion in
+// finding output: userinfo is stripped (via sanitizeGitURL) and the
+// query string is removed entirely, because signed URLs and
+// query-string auth (?token=..., ?X-Amz-Signature=...) carry
+// credentials that must not be copied into Description/MatchedText.
+func sanitizeTarballURL(version string) string {
+	safe := sanitizeGitURL(version)
+	if i := strings.Index(safe, "?"); i >= 0 {
+		safe = safe[:i] + "?[query removed]"
+	}
+	return safe
+}
+
 // isGitDep reports whether a dependency value points at a git source rather
 // than the npm registry. npm accepts several shorthand forms; we cover the
 // ones that actually resolve to executable git content during install.
@@ -245,6 +436,11 @@ func isGitDep(version string) bool {
 	if i := strings.Index(noFrag, "#"); i >= 0 {
 		noFrag = noFrag[:i]
 	}
+	// Strip a query string as well: "repo.git?token=x" is still a git
+	// URL to npm.
+	if i := strings.Index(noFrag, "?"); i >= 0 {
+		noFrag = noFrag[:i]
+	}
 	switch {
 	case strings.HasPrefix(lower, "git+"):
 		return true
@@ -258,12 +454,20 @@ func isGitDep(version string) bool {
 		return true
 	case strings.HasPrefix(lower, "gist:"):
 		return true
-	// Any HTTP(S) URL ending in .git resolves as a git dependency in npm.
-	// Covers github.com, gitlab.com, bitbucket.org, gitea instances, and
-	// self-hosted hosts. The .git suffix on a real URL is unambiguous;
-	// it does not collide with registry or filesystem specs.
-	case strings.Contains(noFrag, "://") && strings.HasSuffix(noFrag, ".git"):
+	case strings.HasPrefix(lower, "ssh://"):
+		// Ground truth npm 11.16.0: ssh:// specs resolve as git
+		// (EALLOWGIT).
 		return true
+	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
+		// Ground truth npm 11.16.0: a plain http(s) URL is a git spec
+		// ONLY when hosted-git-info recognizes the host (github.com,
+		// gist.github.com, gitlab.com, bitbucket.org - any path depth,
+		// including /tree/<branch> and gitlab subgroups) and the path is
+		// not an archive download (.tgz/.tar.gz/.tar/.zip, which gate as
+		// EALLOWREMOTE even on those hosts). A .git suffix on an unknown
+		// host is still a REMOTE dependency (EALLOWREMOTE) unless the
+		// spec uses an explicit git+ scheme.
+		return isHostedGitDomainURL(noFrag) && !hasTarballExt(noFrag)
 	}
 	// owner/repo or owner/repo#ref shorthand. Strip the #fragment first so
 	// a valid semver-fragment shorthand like "owner/repo#semver:^1.2.3"
@@ -597,6 +801,7 @@ func detect(pkg *manifest) []types.Finding {
 	var out []types.Finding
 	out = append(out, detectLifecycleGit(pkg)...)
 	out = append(out, detectOptionalGit(pkg)...)
+	out = append(out, detectInstallTrustReadiness(pkg)...)
 	if f := detectPublishSurface(pkg); f != nil {
 		out = append(out, *f)
 	}
@@ -681,7 +886,7 @@ func detectLifecycleGit(pkg *manifest) []types.Finding {
 		if d.Section == "optionalDependencies" && isSuspiciousPackageName(d.Name) {
 			sev = types.SeverityCritical
 		}
-		safeVersion := sanitizeGitURL(d.Version)
+		safeVersion := sanitizeTarballURL(d.Version)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleLifecycleGit,
 			RuleName: ruleInfo[RuleLifecycleGit].Name,
@@ -737,7 +942,7 @@ func detectOptionalGit(pkg *manifest) []types.Finding {
 		if isSuspiciousPackageName(n) {
 			sev = types.SeverityHigh
 		}
-		safeVersion := sanitizeGitURL(v)
+		safeVersion := sanitizeTarballURL(v)
 		findings = append(findings, types.Finding{
 			RuleID:   RuleOptionalGit,
 			RuleName: ruleInfo[RuleOptionalGit].Name,
