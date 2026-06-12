@@ -3,6 +3,55 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.27.0] - 2026-06-12
+
+The terminal experience grows up. Every Aguara command now speaks the
+same visual language, adapts to where its output is going, and the
+parsers that read attacker-controlled files gain a native fuzz harness
+that runs nightly. JSON, SARIF, and markdown outputs are unchanged.
+
+### Added
+
+- **Shared terminal style layer** (#221): one palette, severity icons,
+  section headers, and separators across `scan`, `check`, `audit`,
+  `explain`, and `clean` - commands no longer hand-roll their own ANSI
+  codes. `aguara audit` opens with a framed header, lists findings in
+  aligned columns under `PACKAGE CHECK` and `CONTENT SCAN` sections,
+  and closes with a framed verdict (green PASS, yellow FINDINGS, red
+  FAIL). New `--verbose` flag on `audit` lists every content finding
+  instead of capping at 10. `aguara --help` groups commands by
+  workflow and shows copy-paste examples; `scan` and `audit` close
+  with a `Next: aguara explain <rule>` hint for the most severe
+  finding.
+- **Native fuzz harness** (#223): 22 Go fuzz targets covering every
+  parser that touches untrusted input - the ten lockfile parsers
+  behind `aguara check`, the pattern engine with its NFKC
+  normalization and 8-decoder rescan, the markdown/JSON/YAML NLP
+  extractor, the JS/Python/Rust scanners, the policy analyzers, and
+  the custom-rule loader. Each target asserts the parser never panics
+  and never emits a finding without a rule ID. Seed corpora run inside
+  `make test`; a nightly workflow fuzzes each target for 60 seconds
+  and uploads any crasher as a reproducible artifact. `make fuzz` runs
+  the same loop locally. Initial shakeout: ~37M executions, zero
+  crashes.
+
+### Fixed
+
+- **Terminal detection** (#220): color and the progress spinner now
+  turn themselves off when stdout is not an interactive terminal -
+  piped output, file redirection, and CI logs no longer collect ANSI
+  escape codes or spinner frames. `NO_COLOR` now covers every command,
+  including `explain` and `clean`, which previously ignored it.
+  Separators and the spinner size themselves to the real terminal
+  width. `aguara audit` renders the FINDINGS verdict in yellow instead
+  of green: exit code 0 with unresolved findings is not a clean pass.
+
+### Changed
+
+- Dependency updates: Go modules minor/patch group (#222);
+  `actions/checkout` v6, `github/codeql-action` v4,
+  `goreleaser-action` 7.2.2 (#186, #187, #188).
+
 ## [0.26.0] - 2026-06-11
 
 Threat-intel coverage grows by an order of magnitude. Until now the
