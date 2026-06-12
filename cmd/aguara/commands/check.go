@@ -12,6 +12,7 @@ import (
 
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/spf13/cobra"
 )
@@ -958,23 +959,32 @@ func writeCheckJSON(result *incident.CheckResult) error {
 }
 
 func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
+	st := output.NewStyle(flagNoColor)
+	width := output.DetectWidth(os.Stdout)
+	sep := st.Separator(width)
+
 	ecosystem := plan.singleEcoToken()
 	envLabel := singleEcoEnvLabel(ecosystem)
 	if envLabel == "" {
 		envLabel = "project dependencies"
 	}
-	fmt.Printf("\nScanning %s: %s\n", envLabel, result.Environment)
+
+	fmt.Printf("\n%s\n", sep)
+	fmt.Printf("  %s\n", st.Bold("AGUARA CHECK"))
+	var meta string
 	switch {
 	case plan.isMulti():
-		fmt.Printf("Packages read: %d  |  Targets found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
+		meta = fmt.Sprintf("%d packages · %d targets", result.PackagesRead, len(result.Ecosystems))
 	case ecosystem == ecoNPM:
-		fmt.Printf("Packages read: %d\n\n", result.PackagesRead)
+		meta = fmt.Sprintf("%d packages", result.PackagesRead)
 	case ecosystem == ecoGo, ecosystem == ecoCargo, ecosystem == ecoComposer,
 		ecosystem == ecoRuby, ecosystem == ecoMaven, ecosystem == ecoNuGet:
-		fmt.Printf("Packages read: %d  |  Lockfiles found: %d\n\n", result.PackagesRead, len(result.Ecosystems))
+		meta = fmt.Sprintf("%d packages · %d lockfiles", result.PackagesRead, len(result.Ecosystems))
 	default:
-		fmt.Printf("Packages read: %d  |  .pth files scanned: %d\n\n", result.PackagesRead, result.PthScanned)
+		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
 	}
+	fmt.Printf("  Scanning %s: %s  ·  %s\n", envLabel, result.Environment, meta)
+	fmt.Printf("%s\n\n", sep)
 
 	// Provenance line: which intel answered this scan, and how old it is.
 	// Suppressed under --ci to keep stdout to findings (a stale local
@@ -982,47 +992,18 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	printIntelFreshness(result.Intel, flagCheckCI)
 
 	if len(result.Findings) == 0 {
-		green := "\033[32m"
-		reset := "\033[0m"
-		if flagNoColor {
-			green = ""
-			reset = ""
-		}
-		fmt.Printf("  %s✔ No compromised packages or artifacts found.%s\n\n", green, reset)
+		fmt.Printf("  %s\n\n", st.OK("No compromised packages or artifacts found."))
 		return nil
 	}
 
-	red := "\033[31m"
-	yellow := "\033[33m"
-	bold := "\033[1m"
-	dim := "\033[2m"
-	reset := "\033[0m"
-	cyan := "\033[36m"
-	if flagNoColor {
-		red = ""
-		yellow = ""
-		bold = ""
-		dim = ""
-		reset = ""
-		cyan = ""
-	}
-
 	for _, f := range result.Findings {
-		var sevColor string
-		switch f.Severity {
-		case incident.SevCritical:
-			sevColor = red + bold
-		case incident.SevWarning:
-			sevColor = yellow
-		default:
-			sevColor = cyan
-		}
-		fmt.Printf("%s%-10s%s %s\n", sevColor, f.Severity, reset, f.Title)
+		label := string(f.Severity)
+		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), f.Title)
 		if f.Path != "" {
-			fmt.Printf("           %sPath: %s%s\n", dim, f.Path, reset)
+			fmt.Printf("             %s\n", st.Dim("Path: "+f.Path))
 		}
 		if f.Detail != "" {
-			fmt.Printf("           %s%s%s\n", dim, f.Detail, reset)
+			fmt.Printf("             %s\n", st.Dim(f.Detail))
 		}
 		fmt.Println()
 	}
@@ -1035,10 +1016,10 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		}
 	}
 	if atRisk > 0 {
-		fmt.Printf("%sCredentials at risk:%s\n", bold, reset)
+		fmt.Printf("%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %-30s %sEXISTS%s  %s%s%s\n", c.Path, red, reset, dim, c.Guidance, reset)
+				fmt.Printf("  %-30s %s  %s\n", c.Path, st.Red("EXISTS"), st.Dim(c.Guidance))
 			}
 		}
 		fmt.Println()
@@ -1051,7 +1032,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	// credentials" guidance; the Python path keeps the
 	// `aguara clean` recommendation since it owns the
 	// persistence-artifact cleanup.
-	fmt.Printf("%sAction required:%s\n", bold, reset)
+	fmt.Printf("%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
 	switch ecosystem {
 	case ecoPython:
 		fmt.Println("  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
@@ -1080,12 +1061,12 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	}
 	var parts []string
 	if critCount > 0 {
-		parts = append(parts, fmt.Sprintf("%s%d critical%s", red, critCount, reset))
+		parts = append(parts, st.RedBold(fmt.Sprintf("%d critical", critCount)))
 	}
 	if warnCount > 0 {
-		parts = append(parts, fmt.Sprintf("%s%d warning%s", yellow, warnCount, reset))
+		parts = append(parts, st.Yellow(fmt.Sprintf("%d warning", warnCount)))
 	}
-	fmt.Printf("\n%s\n", strings.Join(parts, " · "))
+	fmt.Printf("\n%s\n  %s\n%s\n", sep, strings.Join(parts, " · "), sep)
 
 	return nil
 }

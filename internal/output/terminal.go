@@ -18,6 +18,7 @@ const (
 	dim       = "\033[2m"
 	underline = "\033[4m"
 	red       = "\033[31m"
+	green     = "\033[32m"
 	yellow    = "\033[33m"
 	blue      = "\033[34m"
 	magenta   = "\033[35m"
@@ -67,7 +68,7 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 	f.printHeader(w, result)
 
 	if len(result.Findings) == 0 {
-		fmt.Fprintf(w, "\n  %s No security issues found.\n", f.color(cyan, "\u2714"))
+		fmt.Fprintf(w, "\n  %s\n", NewStyle(f.NoColor).OK("No security issues found."))
 	} else {
 		counts := f.countBySeverity(result.Findings)
 		f.printDashboard(w, counts)
@@ -299,37 +300,11 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 }
 
 func (f *TerminalFormatter) severityIcon(sev scanner.Severity) string {
-	switch sev {
-	case scanner.SeverityCritical:
-		return f.color(red+bold, "\u2716")
-	case scanner.SeverityHigh:
-		return f.color(red, "\u25b2")
-	case scanner.SeverityMedium:
-		return f.color(yellow, "\u25a0")
-	case scanner.SeverityLow:
-		return f.color(blue, "\u25cf")
-	case scanner.SeverityInfo:
-		return f.color(cyan, "\u25cb")
-	default:
-		return "?"
-	}
+	return NewStyle(f.NoColor).SeverityIcon(sev.String())
 }
 
 func (f *TerminalFormatter) severityColor(sev scanner.Severity) string {
-	switch sev {
-	case scanner.SeverityCritical:
-		return red + bold
-	case scanner.SeverityHigh:
-		return red
-	case scanner.SeverityMedium:
-		return yellow
-	case scanner.SeverityLow:
-		return blue
-	case scanner.SeverityInfo:
-		return cyan
-	default:
-		return ""
-	}
+	return severityCode(sev.String())
 }
 
 func (f *TerminalFormatter) renderBar(count, max, width int, sev scanner.Severity) string {
