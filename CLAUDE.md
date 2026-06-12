@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.26.0 (2026-06-11; aggregates the C3 range-matching round: #216 measurement, #217 all-versions advisory matching, #218 npm bounded ranges, snapshot regen 26,268 records + 202,526 all-versions entries). 193 YAML rules + 57 analyzer-emitted (250 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 12 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.27.0 (2026-06-12; aggregates the terminal UX round #220 TTY detection + #221 shared style layer + `audit --verbose`, the native fuzz harness #223 with 22 targets + nightly workflow, and dependency bumps). Previous: v0.26.0 (2026-06-11; C3 range-matching round: #216 measurement, #217 all-versions advisory matching, #218 npm bounded ranges, snapshot 26,268 records + 202,526 all-versions entries). 193 YAML rules + 57 analyzer-emitted (250 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 12 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -158,7 +158,7 @@ When any of these values change, update ALL references across the vault:
 - Coverage (currently 80%)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.25.0)
+- Version number (currently v0.27.0)
 
 Use `Grep` to find all occurrences before updating.
 
