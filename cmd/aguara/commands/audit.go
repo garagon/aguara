@@ -9,6 +9,7 @@ import (
 
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
 	"github.com/spf13/cobra"
@@ -23,11 +24,17 @@ var (
 	flagAuditBaseline      string
 	flagAuditWriteBaseline string
 	flagAuditInsecure      bool
+	flagAuditVerbose       bool
 )
 
 var auditCmd = &cobra.Command{
-	Use:   "audit [path]",
-	Short: "Run scan + check together and produce a single verdict",
+	Use:     "audit [path]",
+	GroupID: groupScan,
+	Short:   "Run scan + check together and produce a single verdict",
+	Example: `  aguara audit .               Package check + content scan, one verdict
+  aguara audit . --ci          CI gate: exit 1 on critical, no color
+  aguara audit . --verbose     List every content finding (no cap)
+  aguara audit . --fresh       Refresh threat intel first (network opt-in)`,
 	Long: `Audit a project: run the supply-chain check (compromised packages /
 persistence artifacts) and the content scan (rule-based detection of
 prompt injection, credential leaks, etc.) together, and report a
@@ -50,6 +57,7 @@ func init() {
 	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "If --fresh fails, fall back to previously verified local intel (errors if none is cached)")
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
+	auditCmd.Flags().BoolVar(&flagAuditVerbose, "verbose", false, "List every content finding instead of capping at 10")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -386,56 +394,53 @@ func writeAuditJSON(result *AuditResult) error {
 }
 
 func writeAuditTerminal(result *AuditResult) error {
-	bold := "\033[1m"
-	dim := "\033[2m"
-	red := "\033[31m"
-	green := "\033[32m"
-	yellow := "\033[33m"
-	reset := "\033[0m"
-	if flagNoColor {
-		bold, dim, red, green, yellow, reset = "", "", "", "", "", ""
-	}
+	st := output.NewStyle(flagNoColor)
+	width := output.DetectWidth(os.Stdout)
+	sep := st.Separator(width)
 
-	fmt.Printf("\n%sAguara audit: %s%s\n\n", bold, result.Target, reset)
+	fmt.Printf("\n%s\n", sep)
+	fmt.Printf("  %s\n", st.Bold("AGUARA AUDIT"))
+	fmt.Printf("  Target: %s\n", result.Target)
+	fmt.Printf("%s\n", sep)
 
-	fmt.Printf("%sSupply chain%s\n", bold, reset)
+	fmt.Printf("\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
 	if len(result.Check.Findings) == 0 {
-		fmt.Printf("  %s✔ No compromised packages or artifacts found.%s\n", green, reset)
+		fmt.Printf("\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
 	} else {
 		for _, f := range result.Check.Findings {
-			sev := red
-			if f.Severity == incident.SevWarning {
-				sev = yellow
-			}
-			fmt.Printf("  %s%-10s%s %s\n", sev, f.Severity, reset, f.Title)
+			label := string(f.Severity)
+			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), f.Title)
 			if f.Path != "" {
-				fmt.Printf("           %sPath: %s%s\n", dim, f.Path, reset)
+				fmt.Printf("             %s\n", st.Dim(f.Path))
 			}
 		}
 	}
 
-	fmt.Printf("\n%sContent scan%s\n", bold, reset)
+	fmt.Printf("\n%s\n", st.SectionHeader("CONTENT SCAN", width))
 	if len(result.Scan.Findings) == 0 {
-		fmt.Printf("  %s✔ No content findings.%s\n", green, reset)
+		fmt.Printf("\n  %s\n", st.OK("No content findings."))
 	} else {
-		// Cap the verbose listing -- a noisy repo can dump
-		// hundreds of low-severity findings into the audit
-		// output. Showing all of them buries the verdict.
+		// Cap the listing unless --verbose -- a noisy repo can dump
+		// hundreds of low-severity findings into the audit output,
+		// and showing all of them buries the verdict.
 		const maxList = 10
 		shown := 0
+		fmt.Println()
 		for _, f := range result.Scan.Findings {
-			if shown >= maxList {
+			if !flagAuditVerbose && shown >= maxList {
 				break
 			}
-			fmt.Printf("  %s%-9s%s %s (%s)\n", red, f.Severity.String(), reset, f.RuleName, f.RuleID)
-			if f.FilePath != "" {
-				fmt.Printf("           %s%s:%d%s\n", dim, f.FilePath, f.Line, reset)
-			}
+			label := f.Severity.String()
+			fmt.Printf("  %s %s %s %s\n",
+				st.SeverityIcon(label),
+				st.Bold(st.Cell(f.RuleID, 24)),
+				st.Cell(f.RuleName, 36),
+				st.Cyan(fmt.Sprintf("%s:%d", f.FilePath, f.Line)))
 			shown++
 		}
-		if len(result.Scan.Findings) > maxList {
-			fmt.Printf("  %s... +%d more (full list in --format json)%s\n",
-				dim, len(result.Scan.Findings)-maxList, reset)
+		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
+			fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
+				len(result.Scan.Findings)-maxList)))
 		}
 	}
 
@@ -448,17 +453,40 @@ func writeAuditTerminal(result *AuditResult) error {
 	printIntelFreshness(result.Intel, flagAuditCI)
 
 	// Green is reserved for a clean pass: FINDINGS exits 0 but still
-	// means unresolved findings exist, so it renders yellow.
-	verdictColor := green
-	switch {
-	case result.Verdict.ThresholdExceeded:
-		verdictColor = red
-	case result.Verdict.Status == "findings":
-		verdictColor = yellow
-	}
-	fmt.Printf("\n%s%sVerdict: %s%s (check: %d critical / %d warning, scan: %d critical / %d high)\n",
-		verdictColor, bold, strings.ToUpper(result.Verdict.Status), reset,
+	// means unresolved findings exist, so it renders yellow with the
+	// medium-tier icon; FAIL is red with the critical icon.
+	verdict := fmt.Sprintf("Verdict: %s", strings.ToUpper(result.Verdict.Status))
+	counts := fmt.Sprintf("(check: %d critical / %d warning, scan: %d critical / %d high)",
 		result.Verdict.CheckCriticals, result.Verdict.CheckWarnings,
 		result.Verdict.ScanCriticals, result.Verdict.ScanHighs)
+	var line string
+	switch {
+	case result.Verdict.ThresholdExceeded:
+		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts
+	case result.Verdict.Status == "findings":
+		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
+	default:
+		line = st.Green(st.Bold("✔ "+verdict)) + " " + counts
+	}
+
+	fmt.Printf("\n%s\n  %s\n%s\n", sep, line, sep)
+
+	if rule := topScanRule(result.Scan.Findings); rule != "" {
+		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+rule))
+	}
 	return nil
+}
+
+// topScanRule returns the rule behind the most severe content finding,
+// for the Next hint after the verdict.
+func topScanRule(findings []scanner.Finding) string {
+	best := -1
+	rule := ""
+	for _, f := range findings {
+		if int(f.Severity) > best {
+			best = int(f.Severity)
+			rule = f.RuleID
+		}
+	}
+	return rule
 }

@@ -16,8 +16,9 @@ var (
 )
 
 var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version",
+	Use:     "version",
+	GroupID: groupSetup,
+	Short:   "Print the version",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("aguara %s (commit: %s)\n", Version, Commit)
 		if flagNoUpdateCheck {

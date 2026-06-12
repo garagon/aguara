@@ -23,7 +23,7 @@ func TestTerminalFormatterNoFindings(t *testing.T) {
 	require.NoError(t, f.Format(&buf, result))
 	out := buf.String()
 	require.Contains(t, out, "No security issues found")
-	require.Contains(t, out, "SCAN RESULTS")
+	require.Contains(t, out, "AGUARA SCAN")
 	require.Contains(t, out, "5 files scanned")
 	require.Contains(t, out, "0 findings")
 	require.Contains(t, out, "Target: testdata/benign")
@@ -57,7 +57,7 @@ func TestTerminalFormatterWithFindings(t *testing.T) {
 	require.Contains(t, out, "TEST_001")
 	require.Contains(t, out, "CRITICAL")
 	require.Contains(t, out, "test.md")
-	require.Contains(t, out, "SCAN RESULTS")
+	require.Contains(t, out, "AGUARA SCAN")
 	require.Contains(t, out, "1 files scanned")
 	// Critical finding should show matched text preview
 	require.Contains(t, out, "bad stuff")

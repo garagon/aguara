@@ -14,9 +14,10 @@ import (
 var flagCategory string
 
 var listRulesCmd = &cobra.Command{
-	Use:   "list-rules",
-	Short: "List all available detection rules",
-	RunE:  runListRules,
+	Use:     "list-rules",
+	GroupID: groupRules,
+	Short:   "List all available detection rules",
+	RunE:    runListRules,
 }
 
 func init() {

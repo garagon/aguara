@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +19,9 @@ var (
 )
 
 var cleanCmd = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove compromised packages, malicious files, and persistence artifacts",
+	Use:     "clean",
+	GroupID: groupScan,
+	Short:   "Remove compromised packages, malicious files, and persistence artifacts",
 	Long: `Detects and removes compromised Python packages, quarantines malicious .pth files,
 and disables persistence backdoors. Use --dry-run to preview without changes.`,
 	RunE: runClean,
@@ -109,40 +111,29 @@ func writeCleanJSON(result *incident.CleanResult) error {
 }
 
 func writeCleanTerminal(result *incident.CleanResult) error {
-	red := "\033[31m"
-	green := "\033[32m"
-	bold := "\033[1m"
-	dim := "\033[2m"
-	reset := "\033[0m"
-	if flagNoColor {
-		red = ""
-		green = ""
-		bold = ""
-		dim = ""
-		reset = ""
-	}
+	st := output.NewStyle(flagNoColor)
 
 	done := 0
 	for i, a := range result.Actions {
-		status := green + "\u2714" + reset
+		status := st.Green("\u2714")
 		if a.Error != "" {
-			status = red + "\u2716" + reset
+			status = st.Red("\u2716")
 		}
 		if !a.Done && a.Error == "" {
-			status = dim + "-" + reset
+			status = st.Dim("-")
 		}
 		fmt.Printf("\n[%d/%d] %s %s %s\n", i+1, len(result.Actions), status, a.Type, a.Target)
 		if a.Error != "" {
-			fmt.Printf("       %s%s%s\n", red, a.Error, reset)
+			fmt.Printf("       %s\n", st.Red(a.Error))
 		}
 		if a.Done {
 			done++
 		}
 	}
 
-	fmt.Printf("\n%sCleaned %d/%d issues.%s", bold, done, len(result.Actions), reset)
+	fmt.Printf("\n%s", st.Bold(fmt.Sprintf("Cleaned %d/%d issues.", done, len(result.Actions))))
 	if result.QuarantineDir != "" {
-		fmt.Printf(" Quarantine: %s%s%s", dim, result.QuarantineDir, reset)
+		fmt.Printf(" Quarantine: %s", st.Dim(result.QuarantineDir))
 	}
 	fmt.Println()
 
@@ -154,10 +145,10 @@ func writeCleanTerminal(result *incident.CleanResult) error {
 		}
 	}
 	if atRisk > 0 {
-		fmt.Printf("\n%sIMPORTANT: Rotate these credentials NOW:%s\n", bold+red, reset)
+		fmt.Printf("\n%s\n", st.RedBold("IMPORTANT: Rotate these credentials NOW:"))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %s%-30s%s %s\n", bold, c.Path, reset, c.Guidance)
+				fmt.Printf("  %s %s\n", st.Bold(fmt.Sprintf("%-30s", c.Path)), c.Guidance)
 			}
 		}
 		fmt.Println()
