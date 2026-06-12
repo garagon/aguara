@@ -33,8 +33,9 @@ const defaultIntelBundleBaseURL = "https://github.com/garagon/aguara/releases/do
 var intelBundleBaseURL = defaultIntelBundleBaseURL
 
 var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Refresh the local threat-intel snapshot from Aguara's signed bundle",
+	Use:     "update",
+	GroupID: groupRules,
+	Short:   "Refresh the local threat-intel snapshot from Aguara's signed bundle",
 	Long: `Refresh Aguara's local threat-intel snapshot. Downloads the latest
 Aguara-signed advisory bundle, verifies its Sigstore signature against
 the expected publisher identity and the manifest against the blob, and

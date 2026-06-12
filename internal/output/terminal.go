@@ -18,6 +18,7 @@ const (
 	dim       = "\033[2m"
 	underline = "\033[4m"
 	red       = "\033[31m"
+	green     = "\033[32m"
 	yellow    = "\033[33m"
 	blue      = "\033[34m"
 	magenta   = "\033[35m"
@@ -40,6 +41,16 @@ const (
 type TerminalFormatter struct {
 	NoColor bool
 	Verbose bool
+	// Width is the rendering width for separators and section headers.
+	// Zero falls back to the 72-column default.
+	Width int
+}
+
+func (f *TerminalFormatter) width() int {
+	if f.Width > 0 {
+		return f.Width
+	}
+	return lineWidth
 }
 
 func (f *TerminalFormatter) color(code, text string) string {
@@ -50,16 +61,14 @@ func (f *TerminalFormatter) color(code, text string) string {
 }
 
 func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
-	if f.NoColor {
-		if os.Getenv("NO_COLOR") != "" {
-			f.NoColor = true
-		}
+	if !f.NoColor && os.Getenv("NO_COLOR") != "" {
+		f.NoColor = true
 	}
 
 	f.printHeader(w, result)
 
 	if len(result.Findings) == 0 {
-		fmt.Fprintf(w, "\n  %s No security issues found.\n", f.color(cyan, "\u2714"))
+		fmt.Fprintf(w, "\n  %s\n", NewStyle(f.NoColor).OK("No security issues found."))
 	} else {
 		counts := f.countBySeverity(result.Findings)
 		f.printDashboard(w, counts)
@@ -86,20 +95,20 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 }
 
 func (f *TerminalFormatter) separator() string {
-	return strings.Repeat("\u2500", lineWidth)
+	return strings.Repeat("\u2500", f.width())
 }
 
 func (f *TerminalFormatter) sectionHeader(title string) string {
 	prefix := "\u2500\u2500 " + title + " "
 	displayLen := utf8.RuneCountInString(prefix)
-	remaining := max(lineWidth-displayLen, 0)
+	remaining := max(f.width()-displayLen, 0)
 	return prefix + strings.Repeat("\u2500", remaining)
 }
 
 func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult) {
 	sep := f.separator()
 	fmt.Fprintf(w, "\n%s\n", f.color(dim, sep))
-	fmt.Fprintf(w, "  %s\n", f.color(bold, "AGUARA SCAN RESULTS"))
+	fmt.Fprintf(w, "  %s\n", f.color(bold, "AGUARA SCAN"))
 
 	parts := []string{}
 	if result.Target != "" {
@@ -288,40 +297,32 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
+
+	if rule := topRuleID(result.Findings); rule != "" {
+		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+rule))
+	}
+}
+
+// topRuleID returns the rule behind the most severe finding -- the one
+// the Next hint points `aguara explain` at.
+func topRuleID(findings []scanner.Finding) string {
+	best := -1
+	rule := ""
+	for _, f := range findings {
+		if int(f.Severity) > best {
+			best = int(f.Severity)
+			rule = f.RuleID
+		}
+	}
+	return rule
 }
 
 func (f *TerminalFormatter) severityIcon(sev scanner.Severity) string {
-	switch sev {
-	case scanner.SeverityCritical:
-		return f.color(red+bold, "\u2716")
-	case scanner.SeverityHigh:
-		return f.color(red, "\u25b2")
-	case scanner.SeverityMedium:
-		return f.color(yellow, "\u25a0")
-	case scanner.SeverityLow:
-		return f.color(blue, "\u25cf")
-	case scanner.SeverityInfo:
-		return f.color(cyan, "\u25cb")
-	default:
-		return "?"
-	}
+	return NewStyle(f.NoColor).SeverityIcon(sev.String())
 }
 
 func (f *TerminalFormatter) severityColor(sev scanner.Severity) string {
-	switch sev {
-	case scanner.SeverityCritical:
-		return red + bold
-	case scanner.SeverityHigh:
-		return red
-	case scanner.SeverityMedium:
-		return yellow
-	case scanner.SeverityLow:
-		return blue
-	case scanner.SeverityInfo:
-		return cyan
-	default:
-		return ""
-	}
+	return severityCode(sev.String())
 }
 
 func (f *TerminalFormatter) renderBar(count, max, width int, sev scanner.Severity) string {

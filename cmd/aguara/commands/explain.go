@@ -9,15 +9,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 )
 
 var explainCmd = &cobra.Command{
-	Use:   "explain <RULE_ID>",
-	Short: "Show detailed information about a detection rule",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runExplain,
+	Use:     "explain <RULE_ID>",
+	GroupID: groupRules,
+	Short:   "Show detailed information about a detection rule",
+	Args:    cobra.ExactArgs(1),
+	RunE:    runExplain,
 }
 
 func init() {
@@ -66,64 +68,40 @@ func writeExplainJSON(w io.Writer, r *rulemeta.Rule) error {
 }
 
 func writeExplainTerminal(w io.Writer, found *rulemeta.Rule) error {
-	color := func(code, text string) string {
-		if flagNoColor {
-			return text
-		}
-		return code + text + "\033[0m"
-	}
+	st := output.NewStyle(flagNoColor)
 
-	bold := "\033[1m"
-	dim := "\033[2m"
-	yellow := "\033[33m"
-	cyan := "\033[36m"
-	red := "\033[31m"
-	green := "\033[32m"
-
-	sevColor := cyan
-	switch found.Severity {
-	case "CRITICAL":
-		sevColor = red + bold
-	case "HIGH":
-		sevColor = red
-	case "MEDIUM":
-		sevColor = yellow
-	}
-
-	fmt.Fprintf(w, "\n%s %s\n", color(dim, "Rule:"), color(bold, found.ID))
-	fmt.Fprintf(w, "%s %s\n", color(dim, "Name:"), found.Name)
-	fmt.Fprintf(w, "%s %s\n", color(dim, "Severity:"), color(sevColor, found.Severity))
-	fmt.Fprintf(w, "%s %s\n", color(dim, "Category:"), found.Category)
+	fmt.Fprintf(w, "\n%s %s %s %s\n", st.SeverityIcon(found.Severity), st.Bold(found.ID), found.Name, st.SeverityLabel(found.Severity))
+	fmt.Fprintf(w, "%s %s\n", st.Dim("Category:"), found.Category)
 	if found.Analyzer != "" {
-		fmt.Fprintf(w, "%s %s\n", color(dim, "Analyzer:"), found.Analyzer)
+		fmt.Fprintf(w, "%s %s\n", st.Dim("Analyzer:"), found.Analyzer)
 	}
 
 	if found.Description != "" {
-		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Description:"), found.Description)
+		fmt.Fprintf(w, "\n%s\n%s\n", st.Bold("Description:"), found.Description)
 	}
 
 	if found.Remediation != "" {
-		fmt.Fprintf(w, "\n%s\n%s\n", color(bold, "Remediation:"), color(green, found.Remediation))
+		fmt.Fprintf(w, "\n%s\n%s\n", st.Bold("Remediation:"), st.Green(found.Remediation))
 	}
 
 	if len(found.Patterns) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(bold, "Patterns:"))
+		fmt.Fprintf(w, "\n%s\n", st.Bold("Patterns:"))
 		for i, p := range found.Patterns {
-			fmt.Fprintf(w, "  %d. %s\n", i+1, color(dim, p))
+			fmt.Fprintf(w, "  %d. %s\n", i+1, st.Dim(p))
 		}
 	}
 
 	if len(found.TruePositives) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(bold, "True Positives:"))
+		fmt.Fprintf(w, "\n%s\n", st.Bold("True Positives:"))
 		for _, ex := range found.TruePositives {
-			fmt.Fprintf(w, "  %s %s\n", color(red, "✖"), ex)
+			fmt.Fprintf(w, "  %s %s\n", st.Red("✖"), ex)
 		}
 	}
 
 	if len(found.FalsePositives) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(bold, "False Positives:"))
+		fmt.Fprintf(w, "\n%s\n", st.Bold("False Positives:"))
 		for _, ex := range found.FalsePositives {
-			fmt.Fprintf(w, "  %s %s\n", color(green, "✔"), ex)
+			fmt.Fprintf(w, "  %s %s\n", st.Green("✔"), ex)
 		}
 	}
 
