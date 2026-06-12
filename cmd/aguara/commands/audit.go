@@ -447,9 +447,14 @@ func writeAuditTerminal(result *AuditResult) error {
 	}
 	printIntelFreshness(result.Intel, flagAuditCI)
 
+	// Green is reserved for a clean pass: FINDINGS exits 0 but still
+	// means unresolved findings exist, so it renders yellow.
 	verdictColor := green
-	if result.Verdict.ThresholdExceeded {
+	switch {
+	case result.Verdict.ThresholdExceeded:
 		verdictColor = red
+	case result.Verdict.Status == "findings":
+		verdictColor = yellow
 	}
 	fmt.Printf("\n%s%sVerdict: %s%s (check: %d critical / %d warning, scan: %d critical / %d high)\n",
 		verdictColor, bold, strings.ToUpper(result.Verdict.Status), reset,

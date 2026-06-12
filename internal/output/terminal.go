@@ -40,6 +40,16 @@ const (
 type TerminalFormatter struct {
 	NoColor bool
 	Verbose bool
+	// Width is the rendering width for separators and section headers.
+	// Zero falls back to the 72-column default.
+	Width int
+}
+
+func (f *TerminalFormatter) width() int {
+	if f.Width > 0 {
+		return f.Width
+	}
+	return lineWidth
 }
 
 func (f *TerminalFormatter) color(code, text string) string {
@@ -50,10 +60,8 @@ func (f *TerminalFormatter) color(code, text string) string {
 }
 
 func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
-	if f.NoColor {
-		if os.Getenv("NO_COLOR") != "" {
-			f.NoColor = true
-		}
+	if !f.NoColor && os.Getenv("NO_COLOR") != "" {
+		f.NoColor = true
 	}
 
 	f.printHeader(w, result)
@@ -86,13 +94,13 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 }
 
 func (f *TerminalFormatter) separator() string {
-	return strings.Repeat("\u2500", lineWidth)
+	return strings.Repeat("\u2500", f.width())
 }
 
 func (f *TerminalFormatter) sectionHeader(title string) string {
 	prefix := "\u2500\u2500 " + title + " "
 	displayLen := utf8.RuneCountInString(prefix)
-	remaining := max(lineWidth-displayLen, 0)
+	remaining := max(f.width()-displayLen, 0)
 	return prefix + strings.Repeat("\u2500", remaining)
 }
 

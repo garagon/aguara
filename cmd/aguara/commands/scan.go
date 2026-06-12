@@ -525,6 +525,16 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 func writeOutput(result *scanner.ScanResult) error {
 	output.ToolVersion = Version
 
+	w := os.Stdout
+	if flagOutput != "" {
+		f, err := os.Create(flagOutput)
+		if err != nil {
+			return fmt.Errorf("creating output file: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		w = f
+	}
+
 	var formatter output.Formatter
 	switch strings.ToLower(flagFormat) {
 	case "json":
@@ -534,17 +544,11 @@ func writeOutput(result *scanner.ScanResult) error {
 	case "markdown", "md":
 		formatter = &output.MarkdownFormatter{}
 	default:
-		formatter = &output.TerminalFormatter{NoColor: flagNoColor, Verbose: flagVerbose}
-	}
-
-	w := os.Stdout
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return fmt.Errorf("creating output file: %w", err)
+		formatter = &output.TerminalFormatter{
+			NoColor: flagNoColor,
+			Verbose: flagVerbose,
+			Width:   output.DetectWidth(w),
 		}
-		defer func() { _ = f.Close() }()
-		w = f
 	}
 
 	return formatter.Format(w, result)
@@ -556,7 +560,9 @@ func isTerminalFormat() bool {
 }
 
 func startSpinnerIfTerminal(s *scanner.Scanner, message string) *output.Spinner {
-	if !isTerminalFormat() {
+	// Animate only when stderr is an interactive terminal; piped or
+	// CI stderr would collect raw \r frames as log noise.
+	if !isTerminalFormat() || !output.IsTerminal(os.Stderr) {
 		return nil
 	}
 	sp := output.NewSpinner(os.Stderr)

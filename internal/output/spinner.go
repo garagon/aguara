@@ -15,14 +15,21 @@ var spinnerFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 type Spinner struct {
 	mu      sync.Mutex
 	w       io.Writer
+	width   int
 	message string
 	done    chan struct{}
 	stopped bool
 }
 
-// NewSpinner creates a spinner that writes to w.
+// NewSpinner creates a spinner that writes to w. Frames are padded to
+// the terminal width (capped at 80 columns) so a narrower terminal
+// does not wrap the spinner line into a new row on every tick.
 func NewSpinner(w io.Writer) *Spinner {
-	return &Spinner{w: w}
+	width := 80
+	if detected := DetectWidth(w); detected > 0 && detected < width {
+		width = detected
+	}
+	return &Spinner{w: w, width: width}
 }
 
 // Start begins the spinner animation with the given message.
@@ -55,9 +62,10 @@ func (s *Spinner) Stop() {
 
 	close(s.done)
 
-	// Clear the spinner line
+	// Clear the spinner line. Frames pad to s.width, so clearing the
+	// full width covers any message length.
 	s.mu.Lock()
-	fmt.Fprintf(s.w, "\r%s\r", strings.Repeat(" ", len(s.message)+4))
+	fmt.Fprintf(s.w, "\r%s\r", strings.Repeat(" ", s.width-1))
 	s.mu.Unlock()
 }
 
@@ -74,14 +82,23 @@ func (s *Spinner) loop() {
 			s.mu.Lock()
 			frame := spinnerFrames[i%len(spinnerFrames)]
 			msg := s.message
+			width := s.width
 			s.mu.Unlock()
 
-			// Pad with spaces to overwrite any leftover chars from a longer previous message
-			line := fmt.Sprintf("\r%c %s", frame, msg)
-			padded := fmt.Sprintf("%-80s", line)
+			// Truncate to the terminal width, then pad with spaces to
+			// overwrite any leftover chars from a longer previous message.
+			visible := fmt.Sprintf("%c %s", frame, msg)
+			if runes := []rune(visible); len(runes) > width-1 {
+				visible = string(runes[:width-1])
+			}
+			padded := fmt.Sprintf("\r%-*s", width-1, visible)
 
 			s.mu.Lock()
-			fmt.Fprint(s.w, padded)
+			// A Stop racing this tick may have already cleared the
+			// line; writing one more frame would leave it on screen.
+			if !s.stopped {
+				fmt.Fprint(s.w, padded)
+			}
 			s.mu.Unlock()
 
 			i++

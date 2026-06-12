@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/garagon/aguara/internal/output"
 )
 
 var (
@@ -23,9 +25,27 @@ var rootCmd = &cobra.Command{
 	Use:   "aguara",
 	Short: "Security scanner for AI agent skills and MCP servers",
 	Long:  `Aguara is a security scanner that detects prompt injection, data exfiltration, and credential leaks in AI agent skill definitions and MCP server configurations.`,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		resolveColorMode()
+	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		checkPathHint()
 	},
+}
+
+// resolveColorMode disables color before any command runs when the
+// destination cannot render it: NO_COLOR set (https://no-color.org),
+// --output redirecting to a file, or stdout not attached to an
+// interactive terminal (pipes, CI logs, shell redirection). --no-color
+// stays the explicit override; per-command --ci handling may still
+// disable color afterwards.
+func resolveColorMode() {
+	if flagNoColor {
+		return
+	}
+	if os.Getenv("NO_COLOR") != "" || flagOutput != "" || !output.IsTerminal(os.Stdout) {
+		flagNoColor = true
+	}
 }
 
 func init() {
