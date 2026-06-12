@@ -14,11 +14,12 @@ var (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init [path]",
-	Short: "Initialize Aguara configuration files",
-	Long:  `Scaffolds .aguara.yml, .aguaraignore, and a GitHub Actions workflow for Aguara scanning.`,
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runInit,
+	Use:     "init [path]",
+	GroupID: groupSetup,
+	Short:   "Initialize Aguara configuration files",
+	Long:    `Scaffolds .aguara.yml, .aguaraignore, and a GitHub Actions workflow for Aguara scanning.`,
+	Args:    cobra.MaximumNArgs(1),
+	RunE:    runInit,
 }
 
 func init() {

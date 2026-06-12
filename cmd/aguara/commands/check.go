@@ -67,8 +67,13 @@ var osvIDToEcoToken = func() map[string]string {
 }()
 
 var checkCmd = &cobra.Command{
-	Use:   "check [path]",
-	Short: "Check for compromised packages and persistence artifacts",
+	Use:     "check [path]",
+	GroupID: groupScan,
+	Short:   "Check for compromised packages and persistence artifacts",
+	Example: `  aguara check                       Auto-detect lockfiles in the current dir
+  aguara check --path . --ecosystem npm   Check npm dependencies only
+  aguara check --fresh               Refresh threat intel first (network opt-in)
+  aguara check --ci                  CI gate: exit 1 on critical findings`,
 	Long: `Run from a project root. Aguara discovers installed npm /
 Python environments at the path AND lockfiles for Go, Rust,
 PHP/Composer, Ruby/Bundler, Java/Maven/Gradle, and .NET/NuGet
@@ -983,7 +988,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	default:
 		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
 	}
-	fmt.Printf("  Scanning %s: %s  ·  %s\n", envLabel, result.Environment, meta)
+	fmt.Printf("  Target: %s  ·  %s  ·  %s\n", result.Environment, envLabel, meta)
 	fmt.Printf("%s\n\n", sep)
 
 	// Provenance line: which intel answered this scan, and how old it is.
@@ -992,7 +997,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	printIntelFreshness(result.Intel, flagCheckCI)
 
 	if len(result.Findings) == 0 {
-		fmt.Printf("  %s\n\n", st.OK("No compromised packages or artifacts found."))
+		fmt.Printf("  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
 		return nil
 	}
 

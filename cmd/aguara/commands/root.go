@@ -21,10 +21,26 @@ var (
 	flagNoUpdateCheck bool
 )
 
+// Help groups: every command declares one of these as its GroupID so
+// `aguara --help` reads as workflows instead of an alphabetical list.
+const (
+	groupScan  = "scan"
+	groupRules = "rules"
+	groupSetup = "setup"
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "aguara",
-	Short: "Security scanner for AI agent skills and MCP servers",
-	Long:  `Aguara is a security scanner that detects prompt injection, data exfiltration, and credential leaks in AI agent skill definitions and MCP server configurations.`,
+	Short: "Security engine for AI agent and supply-chain trust",
+	Long: `Aguara is an open source security engine for AI agent and supply-chain
+trust. It detects prompt injection, data exfiltration, credential leaks,
+and known-compromised packages across AI agent skills, MCP servers, CI
+workflows, and dependency lockfiles. No SaaS account, no telemetry, no
+LLM calls; default runs stay offline.`,
+	Example: `  aguara scan ./my-skill     Scan a skill or MCP server directory
+  aguara audit . --ci        Package check + content scan, one verdict, gate CI
+  aguara check               Check dependencies for known-compromised packages
+  aguara explain CRED_001    Show what a rule detects and how to fix it`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		resolveColorMode()
 	},
@@ -50,6 +66,13 @@ func resolveColorMode() {
 
 func init() {
 	rootCmd.Version = Version
+	rootCmd.AddGroup(
+		&cobra.Group{ID: groupScan, Title: "Scan & audit:"},
+		&cobra.Group{ID: groupRules, Title: "Rules & threat intel:"},
+		&cobra.Group{ID: groupSetup, Title: "Setup:"},
+	)
+	rootCmd.SetHelpCommandGroupID(groupSetup)
+	rootCmd.SetCompletionCommandGroupID(groupSetup)
 	rootCmd.PersistentFlags().StringVar(&flagSeverity, "severity", "info", "Minimum severity to report (critical, high, medium, low, info)")
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "terminal", "Output format (terminal, json, sarif, markdown)")
 	rootCmd.PersistentFlags().StringVarP(&flagOutput, "output", "o", "", "Output file path (default: stdout)")

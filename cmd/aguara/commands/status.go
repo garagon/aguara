@@ -11,8 +11,9 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show Aguara version and threat-intel freshness",
+	Use:     "status",
+	GroupID: groupRules,
+	Short:   "Show Aguara version and threat-intel freshness",
 	Long: `Print the binary version, embedded threat-intel snapshot age, and
 local cached snapshot status (if any).
 

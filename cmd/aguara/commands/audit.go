@@ -28,8 +28,13 @@ var (
 )
 
 var auditCmd = &cobra.Command{
-	Use:   "audit [path]",
-	Short: "Run scan + check together and produce a single verdict",
+	Use:     "audit [path]",
+	GroupID: groupScan,
+	Short:   "Run scan + check together and produce a single verdict",
+	Example: `  aguara audit .               Package check + content scan, one verdict
+  aguara audit . --ci          CI gate: exit 1 on critical, no color
+  aguara audit . --verbose     List every content finding (no cap)
+  aguara audit . --fresh       Refresh threat intel first (network opt-in)`,
 	Long: `Audit a project: run the supply-chain check (compromised packages /
 persistence artifacts) and the content scan (rule-based detection of
 prompt injection, credential leaks, etc.) together, and report a
@@ -398,9 +403,9 @@ func writeAuditTerminal(result *AuditResult) error {
 	fmt.Printf("  Target: %s\n", result.Target)
 	fmt.Printf("%s\n", sep)
 
-	fmt.Printf("\n%s\n", st.SectionHeader("SUPPLY CHAIN", width))
+	fmt.Printf("\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
 	if len(result.Check.Findings) == 0 {
-		fmt.Printf("\n  %s\n", st.OK("No compromised packages or artifacts found."))
+		fmt.Printf("\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
 	} else {
 		for _, f := range result.Check.Findings {
 			label := string(f.Severity)
@@ -434,7 +439,7 @@ func writeAuditTerminal(result *AuditResult) error {
 			shown++
 		}
 		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
-			fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose, or --format json)",
+			fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
 				len(result.Scan.Findings)-maxList)))
 		}
 	}
@@ -465,5 +470,23 @@ func writeAuditTerminal(result *AuditResult) error {
 	}
 
 	fmt.Printf("\n%s\n  %s\n%s\n", sep, line, sep)
+
+	if rule := topScanRule(result.Scan.Findings); rule != "" {
+		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+rule))
+	}
 	return nil
+}
+
+// topScanRule returns the rule behind the most severe content finding,
+// for the Next hint after the verdict.
+func topScanRule(findings []scanner.Finding) string {
+	best := -1
+	rule := ""
+	for _, f := range findings {
+		if int(f.Severity) > best {
+			best = int(f.Severity)
+			rule = f.RuleID
+		}
+	}
+	return rule
 }

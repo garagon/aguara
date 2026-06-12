@@ -108,7 +108,7 @@ func (f *TerminalFormatter) sectionHeader(title string) string {
 func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult) {
 	sep := f.separator()
 	fmt.Fprintf(w, "\n%s\n", f.color(dim, sep))
-	fmt.Fprintf(w, "  %s\n", f.color(bold, "AGUARA SCAN RESULTS"))
+	fmt.Fprintf(w, "  %s\n", f.color(bold, "AGUARA SCAN"))
 
 	parts := []string{}
 	if result.Target != "" {
@@ -297,6 +297,24 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
+
+	if rule := topRuleID(result.Findings); rule != "" {
+		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+rule))
+	}
+}
+
+// topRuleID returns the rule behind the most severe finding -- the one
+// the Next hint points `aguara explain` at.
+func topRuleID(findings []scanner.Finding) string {
+	best := -1
+	rule := ""
+	for _, f := range findings {
+		if int(f.Severity) > best {
+			best = int(f.Severity)
+			rule = f.RuleID
+		}
+	}
+	return rule
 }
 
 func (f *TerminalFormatter) severityIcon(sev scanner.Severity) string {

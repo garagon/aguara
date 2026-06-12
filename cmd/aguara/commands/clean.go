@@ -19,8 +19,9 @@ var (
 )
 
 var cleanCmd = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove compromised packages, malicious files, and persistence artifacts",
+	Use:     "clean",
+	GroupID: groupScan,
+	Short:   "Remove compromised packages, malicious files, and persistence artifacts",
 	Long: `Detects and removes compromised Python packages, quarantines malicious .pth files,
 and disables persistence backdoors. Use --dry-run to preview without changes.`,
 	RunE: runClean,

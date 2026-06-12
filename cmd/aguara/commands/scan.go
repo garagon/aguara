@@ -42,8 +42,13 @@ var (
 )
 
 var scanCmd = &cobra.Command{
-	Use:   "scan [path]",
-	Short: "Scan a directory for security issues",
+	Use:     "scan [path]",
+	GroupID: groupScan,
+	Short:   "Scan a directory for security issues",
+	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
+  aguara scan . --severity high      Report only HIGH and CRITICAL findings
+  aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
+  aguara scan . --format sarif -o scan.sarif   For GitHub code scanning`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if flagAuto {
 			if len(args) > 0 {

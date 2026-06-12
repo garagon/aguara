@@ -15,10 +15,11 @@ import (
 )
 
 var explainCmd = &cobra.Command{
-	Use:   "explain <RULE_ID>",
-	Short: "Show detailed information about a detection rule",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runExplain,
+	Use:     "explain <RULE_ID>",
+	GroupID: groupRules,
+	Short:   "Show detailed information about a detection rule",
+	Args:    cobra.ExactArgs(1),
+	RunE:    runExplain,
 }
 
 func init() {

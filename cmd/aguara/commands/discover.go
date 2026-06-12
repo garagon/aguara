@@ -11,11 +11,12 @@ import (
 )
 
 var discoverCmd = &cobra.Command{
-	Use:   "discover",
-	Short: "Discover MCP client configurations on this machine",
-	Long:  `Scans well-known paths for 17 MCP client applications and lists their configured servers.`,
-	Args:  cobra.NoArgs,
-	RunE:  runDiscover,
+	Use:     "discover",
+	GroupID: groupScan,
+	Short:   "Discover MCP client configurations on this machine",
+	Long:    `Scans well-known paths for 17 MCP client applications and lists their configured servers.`,
+	Args:    cobra.NoArgs,
+	RunE:    runDiscover,
 }
 
 func init() {
