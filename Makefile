@@ -36,10 +36,16 @@ SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-v016-audit.json smoke-v016-audit.stderr.txt \
 	smoke-v016-audit-clean.json
 
-.PHONY: build test lint run clean fmt vet wasm wasm-serve bench \
+.PHONY: build test lint run clean fmt vet wasm wasm-serve bench fuzz \
 	bench-docker-image race-docker-image \
 	bench-docker smoke-docker test-race-docker verify-docker \
 	test-install-sh-docker
+
+# Fuzzing knobs. Local runs default to a short budget and low
+# parallelism so a laptop stays usable; the nightly fuzz workflow
+# overrides both (FUZZTIME=60s FUZZPARALLEL=4).
+FUZZTIME ?= 10s
+FUZZPARALLEL ?= 2
 
 build:
 	go build -trimpath $(LDFLAGS) -o $(BINARY) ./cmd/aguara
@@ -50,6 +56,17 @@ test:
 bench:
 	go test -run '^$$' -bench 'BenchmarkCached_(PlainText|StructuredMarkdown|JSONConfig|LargeContent|MixedWorkload)$$' -benchmem -count=3 .
 	go test -run '^$$' -bench 'Benchmark(NLPAnalyzer|ScannerE2E)$$' -benchmem -count=3 ./internal/engine/nlp ./internal/scanner
+
+# Run every Fuzz* target once for FUZZTIME each. Go only accepts one
+# -fuzz pattern per invocation, hence the loop. A found crasher is
+# written to the package's testdata/fuzz/ corpus and fails the run.
+fuzz:
+	@set -e; for pkg in $$(go list ./internal/...); do \
+		for fz in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz' || true); do \
+			echo "── fuzz $$pkg $$fz ($(FUZZTIME))"; \
+			go test -run '^$$' -fuzz "^$$fz\$$" -fuzztime $(FUZZTIME) -parallel $(FUZZPARALLEL) $$pkg; \
+		done; \
+	done
 
 bench-docker-image:
 	docker build -f benchmarks/Dockerfile \

@@ -1,0 +1,40 @@
+# Nightly fuzzing of every parser that consumes untrusted input:
+# lockfile parsers (aguara check), the pattern engine + decoders, the
+# per-format analyzers (YAML / JSON / markdown / JS / Python / Rust),
+# and the custom-rule loader. PRs and pushes run the seed corpus only
+# (part of `make test`); the time-budgeted exploration lives here so
+# it never lands on a contributor's machine.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "14 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Fuzz all targets
+        run: make fuzz FUZZTIME=60s FUZZPARALLEL=4
+
+      # A crasher found by `go test -fuzz` is written into the
+      # package's testdata/fuzz/ corpus; publish it so the failure is
+      # reproducible locally with `go test -run=FuzzName/seedname`.
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: internal/**/testdata/fuzz/**
+          if-no-files-found: ignore
