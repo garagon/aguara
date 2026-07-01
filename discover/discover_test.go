@@ -669,3 +669,113 @@ func TestClientDisplayName_AllClients(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactEnvMasksSensitiveKeys(t *testing.T) {
+	in := map[string]string{
+		"API_KEY":       "sk-123",
+		"GITHUB_TOKEN":  "ghp_x",
+		"DB_PASSWORD":   "hunter2",
+		"MY_SECRET_URL": "https://internal",
+		"AUTH_HEADER":   "Bearer x",
+		"PRIVATE_KEY":   "-----BEGIN",
+		"MY_CREDENTIAL": "x",
+		"PLAIN_SETTING": "visible",
+		"TIMEOUT_MS":    "3000",
+		"lowercase_key": "also-masked",
+	}
+	out := redactEnv(in)
+	for k, v := range out {
+		switch k {
+		case "PLAIN_SETTING", "TIMEOUT_MS":
+			if v == "***REDACTED***" {
+				t.Errorf("%s must stay visible, got redacted", k)
+			}
+		default:
+			if v != "***REDACTED***" {
+				t.Errorf("%s must be redacted, got %q", k, v)
+			}
+		}
+	}
+	if len(out) != len(in) {
+		t.Errorf("redactEnv changed map size: %d != %d", len(out), len(in))
+	}
+	// Original map must be untouched.
+	if in["API_KEY"] != "sk-123" {
+		t.Error("redactEnv mutated its input")
+	}
+	// Empty map short-circuits.
+	if got := redactEnv(nil); got != nil {
+		t.Errorf("redactEnv(nil) = %v, want nil", got)
+	}
+}
+
+func TestResultRedacted(t *testing.T) {
+	r := &Result{Clients: []ClientResult{{
+		Client: "cursor",
+		Path:   "/tmp/mcp.json",
+		Servers: []MCPServer{{
+			Name:    "srv",
+			Command: "npx",
+			Env:     map[string]string{"API_KEY": "sk-123", "MODE": "prod"},
+		}},
+	}}}
+
+	red := r.Redacted()
+	if got := red.Clients[0].Servers[0].Env["API_KEY"]; got != "***REDACTED***" {
+		t.Errorf("API_KEY = %q, want redacted", got)
+	}
+	if got := red.Clients[0].Servers[0].Env["MODE"]; got != "prod" {
+		t.Errorf("MODE = %q, want prod", got)
+	}
+	// The source result keeps the secret (redaction is copy-on-write).
+	if got := r.Clients[0].Servers[0].Env["API_KEY"]; got != "sk-123" {
+		t.Errorf("Redacted mutated the source: %q", got)
+	}
+}
+
+func TestScanWithTempHome(t *testing.T) {
+	// Point HOME at a temp dir with a single cursor config so Scan
+	// exercises the real KnownClients walk without touching the
+	// machine's actual configs. Only asserts on the cursor entry:
+	// other clients simply find nothing under the temp HOME.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestConfig(t, cursorDir, "mcp.json", map[string]mcpServerJSON{
+		"scanner": {Command: "npx", Args: []string{"-y", "some-mcp"}, Env: map[string]string{"API_KEY": "sk-1"}},
+	})
+
+	result, err := Scan()
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	var cursor *ClientResult
+	for i := range result.Clients {
+		if result.Clients[i].Client == "cursor" {
+			cursor = &result.Clients[i]
+		}
+	}
+	if cursor == nil {
+		t.Fatalf("cursor config not discovered; clients: %+v", result.Clients)
+	}
+	if len(cursor.Servers) != 1 || cursor.Servers[0].Name != "scanner" {
+		t.Fatalf("unexpected servers: %+v", cursor.Servers)
+	}
+
+	// AllServers flattens with the client name attached.
+	all := result.AllServers()
+	found := false
+	for _, s := range all {
+		if s.Client == "cursor" && s.Server.Name == "scanner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("AllServers missing the cursor/scanner entry")
+	}
+}
