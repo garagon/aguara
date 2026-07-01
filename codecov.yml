@@ -1,0 +1,12 @@
+# Coverage reporting is informational only: it never turns a PR red.
+# CI correctness gates live in .github/workflows/ci.yml.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment: false
