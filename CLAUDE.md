@@ -155,7 +155,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 When any of these values change, update ALL references across the vault:
 - Rule count (currently 193 YAML / 250 cataloged)
 - Test count (currently ~750)
-- Coverage (currently 80%)
+- Coverage (currently 82% on the Codecov badge; badge scope excludes tools/ and benchmarks/)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
 - Version number (currently v0.27.0)
