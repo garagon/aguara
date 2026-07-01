@@ -1,5 +1,13 @@
 # Coverage reporting is informational only: it never turns a PR red.
 # CI correctness gates live in .github/workflows/ci.yml.
+
+# The badge measures the shipped scanner. Dev-side utilities (intel
+# data-pipeline scripts, benchmark harness) are excluded: they are not
+# part of the product users install and have no test suite by design.
+ignore:
+  - "tools/**"
+  - "benchmarks/**"
+
 coverage:
   status:
     project:
