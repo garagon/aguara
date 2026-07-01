@@ -8,7 +8,7 @@ Aguara v0.27.0 (2026-06-12; aggregates the terminal UX round #220 TTY detection 
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
-GitHub: 48 stars, 6 forks. 0 open PRs, 0 open issues. 7 awesome-list PRs pending review in external repos. 7 forks on garagon account (pending cleanup after awesome-list PRs resolve).
+GitHub: 84 stars, 15 forks. 3 awesome-list PRs pending review in external repos (sbilly/awesome-security, Puliczek/awesome-mcp-security, ottosulin/awesome-ai-security; 3 others merged, forks deleted 2026-07-01). Issue #230: external contributor building an out-of-tree ATR rule pack for `--rules` (welcomed; link from README when it ships).
 
 Pattern matcher already uses an Aho-Corasick keyword prefilter (active in production since v0.14.0). Real perf is ~210ms/op on the synthetic bench (was ~770ms without AC), so do not treat "pattern matcher perf" as an open backlog item unless pprof shows a concrete regression. Pending improvements: WASM build (cmd/wasm/ incomplete), adoption/marketing.
 
@@ -189,7 +189,7 @@ Content must pass ALL four stages before being marked `status: ready`.
 - **wong2/awesome-mcp-servers** does NOT accept PRs - must use mcpservers.org/submit web form.
 - **GitHub topics**: 15 keywords max useful for SEO.
 - **OpenAlternative.co / OpenSourceAlternative.to**: Don't accept CLIs. Descartados.
-- **awesome-go**: Blocked until July 2026 (requires 5-month repo age). Also needs Codecov badge integration.
+- **awesome-go**: Eligible 2026-07-17 (repo created 2026-02-17; requires 5-month age). Codecov badge shipped via coverage workflow; entry draft in the vault's awesome-lists channel.
 - **Official MCP Registry**: Only accepts npm/TypeScript packages. Not applicable for Go.
 - Distribution channels with submission tracking: `DOCS/Aguara/distribution/`.
 - Demo video: Remotion project at `/Users/dev/Dev/videos/aguara-demo/`. Terminal segments recorded with VHS (charmbracelet/vhs), slides as React components, rendered with `npx remotion render AguaraDemo output.mp4`.
