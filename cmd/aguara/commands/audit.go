@@ -78,6 +78,7 @@ type AuditResult struct {
 	Scan    *scanner.ScanResult   `json:"scan"`
 	Verdict AuditVerdict          `json:"verdict"`
 	Triage  AuditTriage           `json:"triage"`
+	Handoff AuditAgentHandoff     `json:"agent_handoff"`
 	Intel   incident.IntelSummary `json:"intel"`
 }
 
@@ -111,6 +112,16 @@ type AuditTriageReason struct {
 	Kind     string `json:"kind"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
+}
+
+// AuditAgentHandoff translates the triage decision into guidance for AI coding
+// agents and other automation that might otherwise install, test, build, or run
+// project-defined commands immediately after cloning a repository.
+type AuditAgentHandoff struct {
+	Status         string   `json:"status"` // "allowed" | "review_only" | "blocked"
+	Summary        string   `json:"summary"`
+	AllowedActions []string `json:"allowed_actions"`
+	BlockedActions []string `json:"blocked_actions"`
 }
 
 func runAudit(cmd *cobra.Command, args []string) error {
@@ -217,6 +228,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	}
 	result.Verdict = verdict
 	result.Triage = computeAuditTriage(result)
+	result.Handoff = computeAuditAgentHandoff(result.Triage)
 
 	// 4. Emit.
 	if flagFormat == "json" {
@@ -474,6 +486,48 @@ func hasAnyFindings(result *AuditResult) bool {
 	return len(result.Check.Findings) > 0 || len(result.Scan.Findings) > 0
 }
 
+func computeAuditAgentHandoff(triage AuditTriage) AuditAgentHandoff {
+	switch triage.Decision {
+	case "stop":
+		return AuditAgentHandoff{
+			Status:  "blocked",
+			Summary: "Do not hand this repository to an agent for execution yet.",
+			AllowedActions: []string{
+				"Inspect files and lockfiles.",
+				"Explain Aguara findings.",
+				"Propose remediation patches.",
+			},
+			BlockedActions: []string{
+				"Do not run package install scripts.",
+				"Do not run build, test, CI, or project automation.",
+				"Do not execute project-defined agent hooks or tools.",
+			},
+		}
+	case "review":
+		return AuditAgentHandoff{
+			Status:  "review_only",
+			Summary: "Limit agent work to inspection and remediation until findings are reviewed.",
+			AllowedActions: []string{
+				"Inspect source, lockfiles, configs, and findings.",
+				"Explain risk and propose patches.",
+				"Edit files only when a reviewer approves the trust decision.",
+			},
+			BlockedActions: []string{
+				"Do not run install, build, test, or project automation until review is complete.",
+				"Do not accept agent or MCP configuration from this repository as trusted yet.",
+			},
+		}
+	default:
+		return AuditAgentHandoff{
+			Status:  "allowed",
+			Summary: "No audit finding requires limiting agent handoff.",
+			AllowedActions: []string{
+				"Proceed with normal agent workflow under the repository owner's policy.",
+			},
+		}
+	}
+}
+
 func writeAuditJSON(result *AuditResult) error {
 	w := os.Stdout
 	if flagOutput != "" {
@@ -583,6 +637,28 @@ func writeAuditTerminal(result *AuditResult) error {
 		}
 		if len(result.Triage.RecommendedNextSteps) > 0 {
 			fmt.Printf("  %s\n", st.Dim("Next: "+result.Triage.RecommendedNextSteps[0]))
+		}
+	}
+
+	if result.Handoff.Status != "" {
+		var handoffLine string
+		switch result.Handoff.Status {
+		case "blocked":
+			handoffLine = st.SeverityIcon("CRITICAL") + " " + st.RedBold("Agent handoff: BLOCKED")
+		case "review_only":
+			handoffLine = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold("Agent handoff: REVIEW ONLY"))
+		default:
+			handoffLine = st.Green(st.Bold("✔ Agent handoff: ALLOWED"))
+		}
+		fmt.Printf("  %s\n", handoffLine)
+		if result.Handoff.Summary != "" {
+			fmt.Printf("  %s\n", st.Dim(result.Handoff.Summary))
+		}
+		if len(result.Handoff.AllowedActions) > 0 {
+			fmt.Printf("  %s\n", st.Dim("Allowed: "+result.Handoff.AllowedActions[0]))
+		}
+		if len(result.Handoff.BlockedActions) > 0 {
+			fmt.Printf("  %s\n", st.Dim("Blocked: "+result.Handoff.BlockedActions[0]))
 		}
 	}
 
