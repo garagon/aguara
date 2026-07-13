@@ -166,6 +166,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	clean.Verdict = v
 	clean.Triage = computeAuditTriage(clean)
 	clean.Handoff = computeAuditAgentHandoff(clean.Triage)
+	clean.Plan = computeAuditActionPlan(clean)
 
 	fetch, restore := captureStdout(t)
 	require.NoError(t, writeAuditTerminal(clean))
@@ -178,6 +179,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	require.Contains(t, out, "Verdict: PASS")
 	require.Contains(t, out, "Triage: PROCEED")
 	require.Contains(t, out, "Agent handoff: ALLOWED")
+	require.Contains(t, out, "Action plan: install=yes execute=yes trust_state=allowed")
 	require.NotContains(t, out, "Next: aguara explain")
 
 	// Findings on both sides + threshold exceeded: red verdict path,
@@ -195,6 +197,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	bad.Verdict = v
 	bad.Triage = computeAuditTriage(bad)
 	bad.Handoff = computeAuditAgentHandoff(bad.Triage)
+	bad.Plan = computeAuditActionPlan(bad)
 
 	fetch, restore = captureStdout(t)
 	require.NoError(t, writeAuditTerminal(bad))
@@ -205,6 +208,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	require.Contains(t, out, "Verdict: FAIL")
 	require.Contains(t, out, "Triage: STOP")
 	require.Contains(t, out, "Agent handoff: BLOCKED")
+	require.Contains(t, out, "Action plan: install=no execute=no trust_state=blocked")
 	require.Contains(t, out, "Next: aguara explain SUPPLY_003")
 
 	resetFlags()
