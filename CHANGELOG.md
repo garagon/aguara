@@ -3,6 +3,15 @@
 All notable changes to Aguara are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- README positioning now leads with when to run Aguara - before
+  install, before CI, or before handing a repo to an AI coding agent -
+  and adds a short "When to Use Aguara" section mapping real trust
+  decisions to the corresponding commands.
+
 ## [0.27.0] - 2026-06-12
 
 The terminal experience grows up. Every Aguara command now speaks the

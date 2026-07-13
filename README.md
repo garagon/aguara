@@ -3,7 +3,7 @@
   <p align="center">
     Open source security engine for AI agent and supply-chain trust.
     <br />
-    Aguara checks the things modern projects and agents are about to trust: packages, lockfiles, install scripts, MCP configs, CI workflows, and agent tools. It runs locally, deterministically, and before execution.
+    Run it before install, before CI, or before handing a repo to an AI coding agent. Aguara checks packages, lockfiles, install scripts, package-manager policy, MCP configs, CI workflows, agent settings, and instruction files locally and deterministically.
   </p>
 </p>
 
@@ -21,6 +21,7 @@
 
 <p align="center">
   <a href="#why-aguara">Why Aguara</a> &bull;
+  <a href="#when-to-use-aguara">When to use it</a> &bull;
   <a href="#what-aguara-checks">What it checks</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#before-install-before-delegation-before-ci">Before install / delegation / CI</a> &bull;
@@ -47,15 +48,29 @@ Aguara checks those trust points before they execute or become part of your work
 
 So Aguara looks at the trust layer around your project and your agents, locally and deterministically, before it runs.
 
+## When to Use Aguara
+
+Use Aguara when the next step would grant trust to a repository:
+
+| Moment | Question | Command |
+|---|---|---|
+| Before installing a cloned repo | Does this project resolve to a known-malicious package, including aliases or lockfile-only evidence? | `aguara check .` |
+| Before handing a repo to an AI coding agent | Are there agent instructions, settings, MCP configs, or tool definitions that change what the agent will obey or run? | `aguara scan .` |
+| Before CI executes project code | Do package intel and content findings together make this build unsafe to run or merge? | `aguara audit . --ci` |
+| When adopting a new gate | Can we keep old findings visible without failing every build on day one? | `aguara audit . --write-baseline .aguara-baseline.json` |
+| When reviewing package-manager posture | Has the repo weakened npm or pnpm install-time trust decisions? | `aguara scan .` |
+
+The output is meant for a developer, maintainer, CI job, or agent workflow that needs a clear preflight signal: proceed, review first, or stop.
+
 ## What Aguara Checks
 
 | Surface | Examples | Command |
 |---|---|---|
 | Packages and lockfiles | npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET | `aguara check .` |
-| Package manager policy | pnpm supply-chain settings in `pnpm-workspace.yaml` | `aguara scan .`, `aguara audit .` |
+| Package manager policy | npm v12 install-trust decisions in `package.json` / `.npmrc`; pnpm supply-chain settings in `pnpm-workspace.yaml` | `aguara scan .`, `aguara audit .` |
 | Install scripts | npm lifecycle hooks, install-time JS / Python / Rust behavior | `aguara scan .`, `aguara check .` |
 | MCP configs | Claude Desktop, Cursor, VS Code, Cline, and 13 more | `aguara discover`, `aguara scan --auto` |
-| Agent skills and tools | skills, prompts, tool descriptions | `aguara scan <path>` |
+| Agent skills and tools | skills, prompts, tool descriptions, persistent instruction files, agent host settings | `aguara scan <path>` |
 | CI workflows | GitHub Actions trust-chain risks | `aguara scan .github/workflows` |
 | Combined audit | packages + content, one verdict | `aguara audit . --ci` |
 
