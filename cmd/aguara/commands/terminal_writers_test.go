@@ -164,6 +164,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	v, err := computeAuditVerdict(clean, "critical")
 	require.NoError(t, err)
 	clean.Verdict = v
+	clean.Triage = computeAuditTriage(clean)
 
 	fetch, restore := captureStdout(t)
 	require.NoError(t, writeAuditTerminal(clean))
@@ -174,6 +175,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	require.Contains(t, out, "No known-compromised packages")
 	require.Contains(t, out, "No content findings")
 	require.Contains(t, out, "Verdict: PASS")
+	require.Contains(t, out, "Triage: PROCEED")
 	require.NotContains(t, out, "Next: aguara explain")
 
 	// Findings on both sides + threshold exceeded: red verdict path,
@@ -189,6 +191,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	v, err = computeAuditVerdict(bad, "critical")
 	require.NoError(t, err)
 	bad.Verdict = v
+	bad.Triage = computeAuditTriage(bad)
 
 	fetch, restore = captureStdout(t)
 	require.NoError(t, writeAuditTerminal(bad))
@@ -197,6 +200,7 @@ func TestWriteAuditTerminal(t *testing.T) {
 	require.Contains(t, out, "evil-pkg 1.0.0")
 	require.Contains(t, out, "SUPPLY_003")
 	require.Contains(t, out, "Verdict: FAIL")
+	require.Contains(t, out, "Triage: STOP")
 	require.Contains(t, out, "Next: aguara explain SUPPLY_003")
 
 	resetFlags()

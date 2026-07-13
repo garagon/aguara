@@ -77,6 +77,7 @@ type AuditResult struct {
 	Check   *incident.CheckResult `json:"check"`
 	Scan    *scanner.ScanResult   `json:"scan"`
 	Verdict AuditVerdict          `json:"verdict"`
+	Triage  AuditTriage           `json:"triage"`
 	Intel   incident.IntelSummary `json:"intel"`
 }
 
@@ -93,6 +94,23 @@ type AuditVerdict struct {
 	ScanLows          int    `json:"scan_lows"`
 	ScanInfos         int    `json:"scan_infos"`
 	ThresholdExceeded bool   `json:"threshold_exceeded"`
+}
+
+// AuditTriage translates the raw findings and CI gate into a product-level
+// decision a human reviewer or agent workflow can act on. It is additive JSON:
+// exit codes, verdict.status, and threshold_exceeded remain the compatibility
+// contract for machines that already consume audit output.
+type AuditTriage struct {
+	Decision             string              `json:"decision"` // "proceed" | "review" | "stop"
+	Summary              string              `json:"summary"`
+	Reasons              []AuditTriageReason `json:"reasons"`
+	RecommendedNextSteps []string            `json:"recommended_next_steps"`
+}
+
+type AuditTriageReason struct {
+	Kind     string `json:"kind"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
 func runAudit(cmd *cobra.Command, args []string) error {
@@ -198,6 +216,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		return vErr
 	}
 	result.Verdict = verdict
+	result.Triage = computeAuditTriage(result)
 
 	// 4. Emit.
 	if flagFormat == "json" {
@@ -378,6 +397,83 @@ func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, e
 	return v, nil
 }
 
+func computeAuditTriage(result *AuditResult) AuditTriage {
+	t := AuditTriage{
+		Decision: "proceed",
+		Summary:  "No package or content findings require review before proceeding.",
+		RecommendedNextSteps: []string{
+			"Proceed with normal review, install, CI, or agent handoff.",
+		},
+	}
+	if result == nil || result.Check == nil || result.Scan == nil {
+		return t
+	}
+
+	addReason := func(kind, severity, message string) {
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     kind,
+			Severity: severity,
+			Message:  message,
+		})
+	}
+
+	if result.Verdict.ThresholdExceeded {
+		addReason("gate_exceeded", "critical", "The configured audit gate was crossed.")
+	}
+	if result.Verdict.CheckCriticals > 0 {
+		addReason("known_malicious_package", "critical", "A package in the resolved dependency evidence is known malicious.")
+	}
+	if result.Verdict.ScanCriticals > 0 {
+		addReason("critical_content_finding", "critical", "Critical content findings are present in files this repository asks you to trust.")
+	}
+	if result.Scan.Baseline != nil && result.Scan.Baseline.Applied {
+		s := result.Scan.Baseline
+		switch {
+		case s.GateCount > 0:
+			addReason("baseline_new_findings", "warning", "A baseline was applied, but new or non-baselineable scan findings still remain.")
+		case s.Baselined > 0:
+			addReason("baseline_existing_findings", "info", "Existing scan findings were kept visible but did not gate this run because they are in the baseline.")
+		}
+	}
+
+	switch {
+	case hasCriticalTriageReason(t.Reasons):
+		t.Decision = "stop"
+		t.Summary = "Do not install, execute CI, or hand this repository to an agent until the critical findings are resolved."
+		t.RecommendedNextSteps = []string{
+			"Do not run package install scripts or project automation yet.",
+			"Review the critical package and content findings first.",
+			"Remove or replace known-malicious packages and inspect flagged trust surfaces.",
+		}
+	case hasAnyFindings(result):
+		t.Decision = "review"
+		t.Summary = "Findings are present; review them before installing, running CI, or handing this repository to an agent."
+		t.RecommendedNextSteps = []string{
+			"Review the findings and remediation guidance.",
+			"Use aguara explain <rule> for the highest-impact content finding.",
+			"Proceed only after the trust decision is understood.",
+		}
+		if len(t.Reasons) == 0 {
+			addReason("findings_present", "warning", "Package or content findings are present below the stop threshold.")
+		}
+	}
+
+	return t
+}
+
+func hasCriticalTriageReason(reasons []AuditTriageReason) bool {
+	for _, r := range reasons {
+		if strings.EqualFold(r.Severity, "critical") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyFindings(result *AuditResult) bool {
+	return len(result.Check.Findings) > 0 || len(result.Scan.Findings) > 0
+}
+
 func writeAuditJSON(result *AuditResult) error {
 	w := os.Stdout
 	if flagOutput != "" {
@@ -470,6 +566,25 @@ func writeAuditTerminal(result *AuditResult) error {
 	}
 
 	fmt.Printf("\n%s\n  %s\n%s\n", sep, line, sep)
+
+	if result.Triage.Decision != "" {
+		var triageLine string
+		switch result.Triage.Decision {
+		case "stop":
+			triageLine = st.SeverityIcon("CRITICAL") + " " + st.RedBold("Triage: STOP")
+		case "review":
+			triageLine = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold("Triage: REVIEW"))
+		default:
+			triageLine = st.Green(st.Bold("✔ Triage: PROCEED"))
+		}
+		fmt.Printf("  %s\n", triageLine)
+		if result.Triage.Summary != "" {
+			fmt.Printf("  %s\n", st.Dim(result.Triage.Summary))
+		}
+		if len(result.Triage.RecommendedNextSteps) > 0 {
+			fmt.Printf("  %s\n", st.Dim("Next: "+result.Triage.RecommendedNextSteps[0]))
+		}
+	}
 
 	if rule := topScanRule(result.Scan.Findings); rule != "" {
 		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+rule))

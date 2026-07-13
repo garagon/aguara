@@ -57,6 +57,7 @@ func TestAuditCleanProject(t *testing.T) {
 	require.NotNil(t, result.Scan)
 	require.Equal(t, "pass", result.Verdict.Status)
 	require.False(t, result.Verdict.ThresholdExceeded)
+	require.Equal(t, "proceed", result.Triage.Decision)
 	require.Empty(t, result.Check.Findings)
 }
 
@@ -87,6 +88,9 @@ func TestAuditDetectsCompromisedNPMPackage(t *testing.T) {
 		"default audit (no gate) with criticals present must report tri-state 'findings', not 'pass'")
 	require.False(t, result.Verdict.ThresholdExceeded,
 		"no --ci / --fail-on means no gate; ThresholdExceeded must stay false")
+	require.Equal(t, "stop", result.Triage.Decision,
+		"triage answers whether to trust this repo now, independently from default audit exit policy")
+	requireTriageReason(t, result.Triage, "known_malicious_package")
 }
 
 func TestAuditCIFailsOnCritical(t *testing.T) {
@@ -276,6 +280,78 @@ func TestAuditVerdictRejectsInvalidThreshold(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid --fail-on")
 }
 
+func TestAuditTriageTable(t *testing.T) {
+	cases := []struct {
+		name         string
+		result       *AuditResult
+		threshold    string
+		wantDecision string
+		wantReason   string
+	}{
+		{
+			name:         "clean proceeds",
+			result:       stubAuditResult(t, 0, 0, 0, 0, 0, 0),
+			wantDecision: "proceed",
+		},
+		{
+			name:         "check critical stops without gate",
+			result:       stubAuditResult(t, 1, 0, 0, 0, 0, 0),
+			wantDecision: "stop",
+			wantReason:   "known_malicious_package",
+		},
+		{
+			name:         "scan critical stops without gate",
+			result:       stubAuditResult(t, 0, 0, 1, 0, 0, 0),
+			wantDecision: "stop",
+			wantReason:   "critical_content_finding",
+		},
+		{
+			name:         "warnings review below critical gate",
+			result:       stubAuditResult(t, 0, 1, 0, 0, 0, 0),
+			threshold:    "critical",
+			wantDecision: "review",
+			wantReason:   "findings_present",
+		},
+		{
+			name:         "gate exceeded stops",
+			result:       stubAuditResult(t, 0, 1, 0, 0, 0, 0),
+			threshold:    "warning",
+			wantDecision: "stop",
+			wantReason:   "gate_exceeded",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := computeAuditVerdict(tc.result, tc.threshold)
+			require.NoError(t, err)
+			tc.result.Verdict = v
+
+			got := computeAuditTriage(tc.result)
+			require.Equal(t, tc.wantDecision, got.Decision)
+			require.NotEmpty(t, got.Summary)
+			require.NotEmpty(t, got.RecommendedNextSteps)
+			if tc.wantReason != "" {
+				requireTriageReason(t, got, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestAuditTriageDocumentsBaselineVisibility(t *testing.T) {
+	result := stubAuditResult(t, 0, 0, 0, 0, 0, 1)
+	result.Scan.Baseline = &types.BaselineSummary{
+		Applied:   true,
+		Total:     3,
+		Baselined: 3,
+	}
+	result.Verdict = AuditVerdict{Status: "pass"}
+
+	got := computeAuditTriage(result)
+	require.Equal(t, "review", got.Decision)
+	requireTriageReason(t, got, "baseline_existing_findings")
+}
+
 // stubAuditResult builds a minimal AuditResult with the requested
 // finding counts. Used in the verdict unit tests.
 func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH, checkI, scanI int) *AuditResult {
@@ -301,4 +377,14 @@ func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH, checkI, scanI i
 		scan.Findings = append(scan.Findings, types.Finding{Severity: scanner.SeverityInfo})
 	}
 	return &AuditResult{Check: check, Scan: scan}
+}
+
+func requireTriageReason(t *testing.T, triage AuditTriage, kind string) {
+	t.Helper()
+	for _, r := range triage.Reasons {
+		if r.Kind == kind {
+			return
+		}
+	}
+	t.Fatalf("expected triage reason %q in %#v", kind, triage.Reasons)
 }

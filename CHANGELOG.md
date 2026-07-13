@@ -7,6 +7,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- `aguara audit` JSON now includes an additive `triage` block with a
+  deterministic `proceed` / `review` / `stop` decision, reasons, and
+  next steps for humans, CI dashboards, and agent workflows. The
+  existing `verdict.status`, `threshold_exceeded`, and exit-code
+  behavior are unchanged.
 - README positioning now leads with when to run Aguara - before
   install, before CI, or before handing a repo to an AI coding agent -
   and adds a short "When to Use Aguara" section mapping real trust
