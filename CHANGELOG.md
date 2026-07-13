@@ -12,6 +12,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   next steps for humans, CI dashboards, and agent workflows. The
   existing `verdict.status`, `threshold_exceeded`, and exit-code
   behavior are unchanged.
+- `aguara audit` now also emits agent handoff guidance derived from
+  triage, with explicit `allowed`, `review_only`, or `blocked` status
+  plus allowed and blocked actions for agent workflows. This gives AI
+  coding tools a safer pre-execution contract without changing scan
+  findings, gates, or exit codes.
 - README positioning now leads with when to run Aguara - before
   install, before CI, or before handing a repo to an AI coding agent -
   and adds a short "When to Use Aguara" section mapping real trust

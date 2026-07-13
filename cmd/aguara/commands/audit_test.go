@@ -58,6 +58,7 @@ func TestAuditCleanProject(t *testing.T) {
 	require.Equal(t, "pass", result.Verdict.Status)
 	require.False(t, result.Verdict.ThresholdExceeded)
 	require.Equal(t, "proceed", result.Triage.Decision)
+	require.Equal(t, "allowed", result.Handoff.Status)
 	require.Empty(t, result.Check.Findings)
 }
 
@@ -91,6 +92,8 @@ func TestAuditDetectsCompromisedNPMPackage(t *testing.T) {
 	require.Equal(t, "stop", result.Triage.Decision,
 		"triage answers whether to trust this repo now, independently from default audit exit policy")
 	requireTriageReason(t, result.Triage, "known_malicious_package")
+	require.Equal(t, "blocked", result.Handoff.Status)
+	require.NotEmpty(t, result.Handoff.BlockedActions)
 }
 
 func TestAuditCIFailsOnCritical(t *testing.T) {
@@ -350,6 +353,57 @@ func TestAuditTriageDocumentsBaselineVisibility(t *testing.T) {
 	got := computeAuditTriage(result)
 	require.Equal(t, "review", got.Decision)
 	requireTriageReason(t, got, "baseline_existing_findings")
+}
+
+func TestAuditAgentHandoffTable(t *testing.T) {
+	cases := []struct {
+		name          string
+		decision      string
+		wantStatus    string
+		wantAllowed   bool
+		wantBlocked   bool
+		summaryNeedle string
+	}{
+		{
+			name:          "proceed allows normal handoff",
+			decision:      "proceed",
+			wantStatus:    "allowed",
+			wantAllowed:   true,
+			summaryNeedle: "No audit finding",
+		},
+		{
+			name:          "review limits handoff to review only",
+			decision:      "review",
+			wantStatus:    "review_only",
+			wantAllowed:   true,
+			wantBlocked:   true,
+			summaryNeedle: "Limit agent work",
+		},
+		{
+			name:          "stop blocks execution handoff",
+			decision:      "stop",
+			wantStatus:    "blocked",
+			wantAllowed:   true,
+			wantBlocked:   true,
+			summaryNeedle: "Do not hand",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := computeAuditAgentHandoff(AuditTriage{Decision: tc.decision})
+			require.Equal(t, tc.wantStatus, got.Status)
+			require.Contains(t, got.Summary, tc.summaryNeedle)
+			if tc.wantAllowed {
+				require.NotEmpty(t, got.AllowedActions)
+			}
+			if tc.wantBlocked {
+				require.NotEmpty(t, got.BlockedActions)
+			} else {
+				require.Empty(t, got.BlockedActions)
+			}
+		})
+	}
 }
 
 // stubAuditResult builds a minimal AuditResult with the requested
