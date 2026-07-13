@@ -59,6 +59,9 @@ func TestAuditCleanProject(t *testing.T) {
 	require.False(t, result.Verdict.ThresholdExceeded)
 	require.Equal(t, "proceed", result.Triage.Decision)
 	require.Equal(t, "allowed", result.Handoff.Status)
+	require.Equal(t, "allowed", result.Plan.TrustState)
+	require.True(t, result.Plan.CanInstallDependencies)
+	require.True(t, result.Plan.CanExecuteProjectCode)
 	require.Empty(t, result.Check.Findings)
 }
 
@@ -94,6 +97,11 @@ func TestAuditDetectsCompromisedNPMPackage(t *testing.T) {
 	requireTriageReason(t, result.Triage, "known_malicious_package")
 	require.Equal(t, "blocked", result.Handoff.Status)
 	require.NotEmpty(t, result.Handoff.BlockedActions)
+	require.Equal(t, "blocked", result.Plan.TrustState)
+	require.False(t, result.Plan.CanInstallDependencies)
+	require.False(t, result.Plan.CanExecuteProjectCode)
+	require.False(t, result.Plan.CanUseRepoAgentConfig)
+	require.Contains(t, result.Plan.Priority, "known_malicious_package")
 }
 
 func TestAuditCIFailsOnCritical(t *testing.T) {
@@ -401,6 +409,84 @@ func TestAuditAgentHandoffTable(t *testing.T) {
 				require.NotEmpty(t, got.BlockedActions)
 			} else {
 				require.Empty(t, got.BlockedActions)
+			}
+		})
+	}
+}
+
+func TestAuditActionPlanTable(t *testing.T) {
+	cases := []struct {
+		name        string
+		result      *AuditResult
+		decision    string
+		handoff     string
+		wantTrust   string
+		wantInstall bool
+		wantExec    bool
+		wantConfig  bool
+		wantExplain bool
+		ruleID      string
+		wantCommand string
+	}{
+		{
+			name:        "allowed can execute",
+			result:      stubAuditResult(t, 0, 0, 0, 0, 0, 0),
+			decision:    "proceed",
+			handoff:     "allowed",
+			wantTrust:   "allowed",
+			wantInstall: true,
+			wantExec:    true,
+			wantConfig:  true,
+			wantExplain: true,
+		},
+		{
+			name:        "review only blocks execution but allows explanation",
+			result:      stubAuditResult(t, 0, 1, 0, 1, 0, 0),
+			decision:    "review",
+			handoff:     "review_only",
+			wantTrust:   "review_only",
+			wantInstall: false,
+			wantExec:    false,
+			wantConfig:  false,
+			wantExplain: true,
+			ruleID:      "HIGH_RULE",
+			wantCommand: "aguara explain HIGH_RULE",
+		},
+		{
+			name:        "blocked prevents project execution",
+			result:      stubAuditResult(t, 1, 0, 1, 0, 0, 0),
+			decision:    "stop",
+			handoff:     "blocked",
+			wantTrust:   "blocked",
+			wantInstall: false,
+			wantExec:    false,
+			wantConfig:  false,
+			wantExplain: true,
+			ruleID:      "CRITICAL_RULE",
+			wantCommand: "aguara explain CRITICAL_RULE",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.result.Triage = AuditTriage{
+				Decision: tc.decision,
+				Reasons:  []AuditTriageReason{{Kind: "test_reason", Severity: "warning"}},
+			}
+			tc.result.Handoff = AuditAgentHandoff{Status: tc.handoff}
+			if len(tc.result.Scan.Findings) > 0 && tc.ruleID != "" {
+				tc.result.Scan.Findings[0].RuleID = tc.ruleID
+			}
+
+			got := computeAuditActionPlan(tc.result)
+			require.Equal(t, tc.wantTrust, got.TrustState)
+			require.Equal(t, tc.wantInstall, got.CanInstallDependencies)
+			require.Equal(t, tc.wantExec, got.CanExecuteProjectCode)
+			require.Equal(t, tc.wantConfig, got.CanUseRepoAgentConfig)
+			require.Equal(t, tc.wantExplain, got.CanExplainFindings)
+			require.Contains(t, got.Priority, "test_reason")
+			if tc.wantCommand != "" {
+				require.Contains(t, got.NextCommands, tc.wantCommand)
 			}
 		})
 	}

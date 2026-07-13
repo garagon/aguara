@@ -17,6 +17,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plus allowed and blocked actions for agent workflows. This gives AI
   coding tools a safer pre-execution contract without changing scan
   findings, gates, or exit codes.
+- `aguara audit` JSON now includes an additive `action_plan` block with
+  machine-readable permissions for install, execution, CI, repo agent
+  config, editing, and finding explanation. It is derived from triage
+  and agent handoff so wrappers and MCP clients can apply the same
+  trust decision without parsing prose.
 - README positioning now leads with when to run Aguara - before
   install, before CI, or before handing a repo to an AI coding agent -
   and adds a short "When to Use Aguara" section mapping real trust

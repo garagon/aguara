@@ -79,6 +79,7 @@ type AuditResult struct {
 	Verdict AuditVerdict          `json:"verdict"`
 	Triage  AuditTriage           `json:"triage"`
 	Handoff AuditAgentHandoff     `json:"agent_handoff"`
+	Plan    AuditActionPlan       `json:"action_plan"`
 	Intel   incident.IntelSummary `json:"intel"`
 }
 
@@ -122,6 +123,21 @@ type AuditAgentHandoff struct {
 	Summary        string   `json:"summary"`
 	AllowedActions []string `json:"allowed_actions"`
 	BlockedActions []string `json:"blocked_actions"`
+}
+
+// AuditActionPlan is a compact machine-readable contract for agents and
+// wrappers that need booleans instead of prose before they decide whether to
+// install dependencies, run tests, execute CI, or only inspect the repository.
+type AuditActionPlan struct {
+	TrustState             string   `json:"trust_state"` // "allowed" | "review_only" | "blocked"
+	CanInstallDependencies bool     `json:"can_install_dependencies"`
+	CanExecuteProjectCode  bool     `json:"can_execute_project_code"`
+	CanRunCI               bool     `json:"can_run_ci"`
+	CanUseRepoAgentConfig  bool     `json:"can_use_repo_agent_config"`
+	CanEditFiles           bool     `json:"can_edit_files"`
+	CanExplainFindings     bool     `json:"can_explain_findings"`
+	Priority               []string `json:"priority"`
+	NextCommands           []string `json:"next_commands"`
 }
 
 func runAudit(cmd *cobra.Command, args []string) error {
@@ -229,6 +245,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	result.Verdict = verdict
 	result.Triage = computeAuditTriage(result)
 	result.Handoff = computeAuditAgentHandoff(result.Triage)
+	result.Plan = computeAuditActionPlan(result)
 
 	// 4. Emit.
 	if flagFormat == "json" {
@@ -528,6 +545,65 @@ func computeAuditAgentHandoff(triage AuditTriage) AuditAgentHandoff {
 	}
 }
 
+func computeAuditActionPlan(result *AuditResult) AuditActionPlan {
+	plan := AuditActionPlan{
+		TrustState:             "allowed",
+		CanInstallDependencies: true,
+		CanExecuteProjectCode:  true,
+		CanRunCI:               true,
+		CanUseRepoAgentConfig:  true,
+		CanEditFiles:           true,
+		CanExplainFindings:     true,
+	}
+	if result == nil {
+		return plan
+	}
+
+	switch result.Handoff.Status {
+	case "blocked":
+		plan.TrustState = "blocked"
+		plan.CanInstallDependencies = false
+		plan.CanExecuteProjectCode = false
+		plan.CanRunCI = false
+		plan.CanUseRepoAgentConfig = false
+	case "review_only":
+		plan.TrustState = "review_only"
+		plan.CanInstallDependencies = false
+		plan.CanExecuteProjectCode = false
+		plan.CanRunCI = false
+		plan.CanUseRepoAgentConfig = false
+	default:
+		plan.TrustState = "allowed"
+	}
+
+	plan.Priority = auditActionPriority(result.Triage)
+	plan.NextCommands = auditActionNextCommands(result)
+	return plan
+}
+
+func auditActionPriority(triage AuditTriage) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range triage.Reasons {
+		if seen[r.Kind] {
+			continue
+		}
+		seen[r.Kind] = true
+		out = append(out, r.Kind)
+	}
+	return out
+}
+
+func auditActionNextCommands(result *AuditResult) []string {
+	if result == nil || result.Scan == nil {
+		return nil
+	}
+	if rule := topScanRule(result.Scan.Findings); rule != "" {
+		return []string{"aguara explain " + rule}
+	}
+	return nil
+}
+
 func writeAuditJSON(result *AuditResult) error {
 	w := os.Stdout
 	if flagOutput != "" {
@@ -660,6 +736,19 @@ func writeAuditTerminal(result *AuditResult) error {
 		if len(result.Handoff.BlockedActions) > 0 {
 			fmt.Printf("  %s\n", st.Dim("Blocked: "+result.Handoff.BlockedActions[0]))
 		}
+	}
+
+	if result.Plan.TrustState != "" {
+		execStatus := "yes"
+		installStatus := "yes"
+		if !result.Plan.CanExecuteProjectCode {
+			execStatus = "no"
+		}
+		if !result.Plan.CanInstallDependencies {
+			installStatus = "no"
+		}
+		fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
+			installStatus, execStatus, result.Plan.TrustState)))
 	}
 
 	if rule := topScanRule(result.Scan.Findings); rule != "" {
