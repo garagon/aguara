@@ -36,7 +36,7 @@ SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-v016-audit.json smoke-v016-audit.stderr.txt \
 	smoke-v016-audit-clean.json
 
-.PHONY: build test lint run clean fmt vet wasm wasm-serve bench fuzz \
+.PHONY: build test lint run clean fmt vet wasm wasm-serve bench trustbench fuzz \
 	bench-docker-image race-docker-image \
 	bench-docker smoke-docker test-race-docker verify-docker \
 	test-install-sh-docker
@@ -56,6 +56,9 @@ test:
 bench:
 	go test -run '^$$' -bench 'BenchmarkCached_(PlainText|StructuredMarkdown|JSONConfig|LargeContent|MixedWorkload)$$' -benchmem -count=3 .
 	go test -run '^$$' -bench 'Benchmark(NLPAnalyzer|ScannerE2E)$$' -benchmem -count=3 ./internal/engine/nlp ./internal/scanner
+
+trustbench: build
+	go run ./trustbench/cmd/trustbench -binary ./aguara -manifest trustbench/manifest.yaml
 
 # Run every Fuzz* target once for FUZZTIME each. Go only accepts one
 # -fuzz pattern per invocation, hence the loop. A found crasher is

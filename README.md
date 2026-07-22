@@ -324,6 +324,18 @@ security-scan:
 
 Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use them for your application source and CVE coverage, and use Aguara for the trust layer around it — packages, lockfiles, install-time behavior, MCP configs, CI workflows, and agent tools.
 
+## Research and quality
+
+[Aguara Trust Bench](trustbench/README.md) executes the public CLI against a
+versioned positive/benign corpus and reports precision, recall, benign-case
+false-positive rate, and per-surface results. It is a regression gate for the
+complete product path, not a direct call into individual analyzers.
+
+The short technical report [Before Execution: A Deterministic Trust Layer for
+AI Agents and Software Supply Chains](research/before-execution.md) describes
+the threat model, architecture, evaluation method, and explicit limits behind
+that approach.
+
 ## Rules
 
 Aguara exposes **250 cataloged detections** through `aguara list-rules`:
