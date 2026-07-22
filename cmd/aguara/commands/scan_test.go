@@ -4,14 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/stretchr/testify/require"
 )
+
+type countingTransport struct {
+	calls atomic.Int32
+}
+
+func (t *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	return nil, errors.New("unexpected network request")
+}
 
 // resetFlags resets all global flags to defaults between test runs.
 func resetFlags() {
@@ -82,6 +93,34 @@ func scanToFile(t *testing.T, args ...string) []byte {
 	data, err := os.ReadFile(outFile)
 	require.NoError(t, err)
 	return data
+}
+
+func TestScanDoesNotCheckForUpdatesOverNetwork(t *testing.T) {
+	resetFlags()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# safe\n"), 0o600))
+	outFile := filepath.Join(t.TempDir(), "out.json")
+
+	transport := &countingTransport{}
+	previousTransport := http.DefaultTransport
+	previousVersion := Version
+	http.DefaultTransport = transport
+	Version = "0.27.0"
+
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs([]string{"scan", dir, "--format", "json", "-o", outFile})
+	t.Cleanup(func() {
+		http.DefaultTransport = previousTransport
+		Version = previousVersion
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	require.Zero(t, transport.calls.Load(), "scan must not contact a release API")
 }
 
 func TestScanChangedFilesRejectsSymlink(t *testing.T) {
