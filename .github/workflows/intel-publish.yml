@@ -43,7 +43,7 @@ jobs:
           # string for the manifest's tool_version.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           cache: true
