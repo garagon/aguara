@@ -486,8 +486,10 @@ func TestDecisionImpactReachesPublicAPI(t *testing.T) {
 	for _, r := range rules {
 		byID[r.ID] = r
 	}
-	if got := byID["CMDEXEC_013"].DecisionImpact; got != "context" {
-		t.Fatalf("CMDEXEC_013 decision impact = %q, want context", got)
+	for _, id := range []string{"CMDEXEC_013", "EXTDL_009", "EXTDL_011", "MCPCFG_004"} {
+		if got := byID[id].DecisionImpact; got != "context" {
+			t.Fatalf("%s decision impact = %q, want context", id, got)
+		}
 	}
 	if got := byID["SUPPLY_003"].DecisionImpact; got != "review" {
 		t.Fatalf("SUPPLY_003 decision impact = %q, want review", got)

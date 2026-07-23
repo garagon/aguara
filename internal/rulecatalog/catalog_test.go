@@ -62,13 +62,11 @@ func TestBuildAssignsDecisionImpact(t *testing.T) {
 			"%s must expose the same decision impact as scanner findings", r.ID)
 	}
 
-	shell, err := rulecatalog.FindByID(rulecatalog.Options{}, "CMDEXEC_013")
-	require.NoError(t, err)
-	require.Equal(t, rulemeta.DecisionImpactContext, shell.DecisionImpact)
-
-	pip, err := rulecatalog.FindByID(rulecatalog.Options{}, "EXTDL_009")
-	require.NoError(t, err)
-	require.Equal(t, rulemeta.DecisionImpactContext, pip.DecisionImpact)
+	for _, id := range []string{"CMDEXEC_013", "EXTDL_009", "EXTDL_011", "MCPCFG_004"} {
+		contextRule, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
+		require.NoError(t, err)
+		require.Equal(t, rulemeta.DecisionImpactContext, contextRule.DecisionImpact)
+	}
 
 	dangerous, err := rulecatalog.FindByID(rulecatalog.Options{}, "SUPPLY_003")
 	require.NoError(t, err)

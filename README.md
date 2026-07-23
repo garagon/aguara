@@ -62,7 +62,7 @@ Use Aguara when the next step would grant trust to a repository:
 
 The output is meant for a developer, maintainer, CI job, or agent workflow that needs a clear preflight signal: proceed, review first, or stop.
 
-Findings remain visible, but visibility is not the same as a reason to block execution. `aguara audit` marks ordinary local shell-script execution (`CMDEXEC_013`) and ordinary `pip install` commands (`EXTDL_009`) as supporting `context`; they can help explain a nearby chain without forcing an agent handoff into review-only mode by themselves. Every other built-in or custom rule defaults to `review`, and an explicit `--fail-on` policy remains authoritative for both classes.
+Findings remain visible, but visibility is not the same as a reason to block execution. `aguara audit` marks ordinary local shell-script execution (`CMDEXEC_013`), ordinary `pip install` and system-package installation commands (`EXTDL_009`, `EXTDL_011`), and a configured remote MCP endpoint (`MCPCFG_004`) as supporting `context`. They describe trust boundaries or nearby behavior without forcing an agent handoff into review-only mode by themselves. Every other built-in or custom rule defaults to `review`, and an explicit `--fail-on` policy remains authoritative for both classes.
 
 ## What Aguara Checks
 
@@ -357,7 +357,7 @@ below covers both phases:
 | PkgMeta | `package.json` JSON | npm lifecycle + git-source / publish-surface chains, install-time local JS |
 | JSRisk | JavaScript single-pass | Obfuscation, install-time daemonization, CI secret harvest, OIDC runner pivot, DNS-TXT exfil, Bun second stage, GitHub C2, host-trust tampering |
 | PyRisk | Python install-hook scanner | `setup.py`/`__init__.py` that fetch remote JS and run it via `node -e` (flow-sensitive) |
-| Script Risk | Python + shell evidence scanner | Decoded Python payload execution, structured systemd/cron persistence, and unencrypted pip dependency sources in local scripts |
+| Script Risk | Python + shell evidence scanner | Decoded or remotely fetched Python execution, sensitive-context transmission, world-writable permissions, systemd/cron persistence, and unencrypted pip/npm sources |
 | RSBuild | Cargo build-script scanner | `build.rs` reading wallet/keystore material and sending it to a network sink (flow-sensitive) |
 | Npm Policy | `package.json` + `.npmrc` | npm v12 install-trust decisions weakened or pinned open: the `dangerously-allow-all-scripts` escape hatch, unpinned `allowScripts` approvals, `allow-git` / `allow-remote` relaxed; plus INFO readiness findings for git and remote-tarball dependencies that will need explicit trust under npm v12 |
 | Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |

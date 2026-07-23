@@ -40,8 +40,11 @@ internal/
     pkgmeta/           PkgMeta: package.json lifecycle / git-source chains
     jsrisk/            JSRisk: JavaScript install-time / runtime behavior
     pyrisk/            PyRisk: Python install-hook remote-JS execution
-    scriptrisk/        Script Risk: decoded execution, persistence, unsafe pip sources
+    scriptrisk/        Script Risk: decoded execution, persistence, unsafe package sources
+    skillpolicy/       Skill Policy: SKILL.md frontmatter trust posture
+    skillchain/        Skill Chain: instruction-to-helper project correlation
     rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
+    npmpolicy/         Npm Policy: package.json / .npmrc install trust
     pnpmpolicy/        Pnpm Policy: pnpm-workspace.yaml supply-chain posture
     agentpolicy/       Agent Policy: .claude/settings.json host-config posture
     nlp/               NLP: goldmark AST walker, keyword classifier
