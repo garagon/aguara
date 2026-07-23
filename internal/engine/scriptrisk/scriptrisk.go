@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	RulePythonDecodeExec  = "PY_DECODE_EXEC_001"
-	RulePythonRemoteExec  = "PY_REMOTE_FETCH_EXEC_001"
-	RuleSystemPersistence = "SC-EX-007"
-	RuleUnsafePipSource   = "SHELL_UNSAFE_PIP_SOURCE_001"
-	RuleUnsafeNPMSource   = "SHELL_UNSAFE_NPM_SOURCE_001"
-	AnalyzerName          = rulemeta.AnalyzerScriptRisk
-	maxTaintHops          = 2
+	RulePythonDecodeExec   = "PY_DECODE_EXEC_001"
+	RulePythonRemoteExec   = "PY_REMOTE_FETCH_EXEC_001"
+	RulePythonContextExfil = "PY_CONTEXT_EXFIL_001"
+	RuleSystemPersistence  = "SC-EX-007"
+	RuleUnsafePipSource    = "SHELL_UNSAFE_PIP_SOURCE_001"
+	RuleUnsafeNPMSource    = "SHELL_UNSAFE_NPM_SOURCE_001"
+	AnalyzerName           = rulemeta.AnalyzerScriptRisk
+	maxTaintHops           = 2
 )
 
 type Analyzer struct{}
@@ -38,6 +39,8 @@ var (
 	pyIdentRe       = regexp.MustCompile(`[A-Za-z_]\w*`)
 	pyDecoderCallRe = regexp.MustCompile(`(?i)\b(?:base64\.)?(?:b64decode|urlsafe_b64decode)\s*\(|\bzlib\.decompress\s*\(|\bbytes\.fromhex\s*\(|\bcodecs\.decode\s*\(`)
 	pyExecRe        = regexp.MustCompile(`\b(?:exec|eval)\s*\((.*)`)
+	pyForRe         = regexp.MustCompile(`^for\s+([A-Za-z_]\w*)\s+in\s+(.+):$`)
+	pyWriteMethodRe = regexp.MustCompile(`(?i)\bmethod\s*=\s*['"](?:post|put|patch)['"]`)
 
 	pySystemdDirAssignRe = regexp.MustCompile(`^([A-Za-z_]\w*)\s*=.*\bPath\.home\s*\(\s*\).*['"]\.config['"].*['"]systemd['"].*['"]user['"]`)
 	pySystemdLiteralRe   = regexp.MustCompile(`(?i)(?:~|/home/[^/'"\s]+|/root)/\.config/systemd/user/[^'"\s]+\.(?:service|timer)`)
@@ -97,6 +100,9 @@ func analyzePython(target *scanner.Target) []types.Finding {
 	}
 	if line, text, ok := findRemoteFetchExec(codeStatements); ok {
 		findings = append(findings, finding(RulePythonRemoteExec, target, line, text))
+	}
+	if line, text, ok := findContextExfil(codeStatements, sourceStatements); ok {
+		findings = append(findings, finding(RulePythonContextExfil, target, line, text))
 	}
 	if line, text, ok := findPersistence(codeStatements, sourceStatements); ok {
 		findings = append(findings, finding(RuleSystemPersistence, target, line, text))
@@ -395,6 +401,296 @@ func referencesPythonResponseBody(s string, responses map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+type pythonSendBindings struct {
+	postCalls           map[string]bool
+	requestConstructors map[string]bool
+	urlopenCalls        map[string]bool
+}
+
+func findContextExfil(codeStmts, sourceStmts []statement) (int, string, bool) {
+	// This is deliberately a file-level correlation, not a claim that the
+	// sensitive value reaches the request body. The source itself is limited
+	// to high-trust files, and the sink must be a real imported HTTP write.
+	sourceLine := firstSensitiveContextRead(codeStmts, sourceStmts)
+	if sourceLine == 0 {
+		return 0, "", false
+	}
+
+	globalBindings := newPythonSendBindings()
+	bindingsByScope := map[int]pythonSendBindings{}
+	requestVarsByScope := map[int]map[string]bool{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+		scope := scopes[i]
+		bindings := &globalBindings
+		if scope != -1 {
+			local, ok := bindingsByScope[scope]
+			if !ok {
+				local = clonePythonSendBindings(globalBindings)
+			}
+			bindings = &local
+		}
+		updatePythonSendBindings(codeText, bindings)
+		if scope != -1 {
+			bindingsByScope[scope] = *bindings
+		}
+		if codeSt.line <= sourceLine {
+			continue
+		}
+		requestVars := requestVarsByScope[scope]
+		if requestVars == nil {
+			requestVars = map[string]bool{}
+			requestVarsByScope[scope] = requestVars
+		}
+
+		if m := pyAssignRe.FindStringSubmatch(codeText); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(requestVars, lhs)
+			if callsAny(rhs, bindings.requestConstructors) &&
+				(strings.Contains(rhs, "data=") || pyWriteMethodRe.MatchString(sourceText)) {
+				requestVars[lhs] = true
+			}
+		}
+		if callsAny(codeText, bindings.postCalls) {
+			return codeSt.line, sourceText, true
+		}
+		if !callsAny(codeText, bindings.urlopenCalls) {
+			continue
+		}
+		if strings.Contains(codeText, "data=") || referencesBoolSet(codeText, requestVars) {
+			return codeSt.line, sourceText, true
+		}
+	}
+	return 0, "", false
+}
+
+func firstSensitiveContextRead(codeStmts, sourceStmts []statement) int {
+	sensitiveVars := map[int]map[string]bool{}
+	pathVars := map[int]map[string]bool{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		scope := scopes[i]
+		sensitive := sensitiveVars[scope]
+		if sensitive == nil {
+			sensitive = map[string]bool{}
+			sensitiveVars[scope] = sensitive
+		}
+		paths := pathVars[scope]
+		if paths == nil {
+			paths = map[string]bool{}
+			pathVars[scope] = paths
+		}
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+
+		if m := pyForRe.FindStringSubmatch(sourceText); m != nil {
+			if hasStrongContextLiteral(m[2]) {
+				sensitive[m[1]] = true
+			} else {
+				delete(sensitive, m[1])
+			}
+		}
+		if m := pyAssignRe.FindStringSubmatch(sourceText); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(paths, lhs)
+			if hasStrongContextLiteral(rhs) || referencesBoolSet(rhs, sensitive) ||
+				referencesBoolSet(rhs, paths) {
+				paths[lhs] = true
+			}
+		}
+		if hasDirectSensitiveRead(codeText, sourceText) ||
+			hasReadFromPathVariable(codeText, paths) {
+			return codeSt.line
+		}
+	}
+	return 0
+}
+
+func hasStrongContextLiteral(s string) bool {
+	s = strings.ToLower(s)
+	for _, token := range []string{
+		".bash_history", ".zsh_history", ".python_history",
+		"memory.md", ".git-credentials", ".netrc",
+		".aws/credentials", ".kube/config", ".docker/config.json",
+	} {
+		if containsContextPathToken(s, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsContextPathToken(s, token string) bool {
+	for start := 0; ; {
+		i := strings.Index(s[start:], token)
+		if i < 0 {
+			return false
+		}
+		i += start
+		beforeOK := i == 0 || contextPathBoundary(s[i-1])
+		end := i + len(token)
+		afterOK := end == len(s) || contextPathBoundary(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = i + len(token)
+	}
+}
+
+func contextPathBoundary(b byte) bool {
+	return !isIdentByte(b) && b != '.' && b != '-'
+}
+
+func hasDirectSensitiveRead(codeText, sourceText string) bool {
+	if !hasStrongContextLiteral(sourceText) {
+		return false
+	}
+	return strings.Contains(codeText, ".read_text(") ||
+		strings.Contains(codeText, ".read_bytes(") ||
+		(containsCall(codeText, "open") && containsCall(codeText, "read"))
+}
+
+func hasReadFromPathVariable(codeText string, paths map[string]bool) bool {
+	for name := range paths {
+		if containsCall(codeText, name+".read_text") ||
+			containsCall(codeText, name+".read_bytes") ||
+			containsCall(codeText, name+".read") {
+			return true
+		}
+		if containsCall(codeText, "open") && referencesBoolSet(codeText, map[string]bool{name: true}) {
+			return true
+		}
+	}
+	return false
+}
+
+func newPythonSendBindings() pythonSendBindings {
+	return pythonSendBindings{
+		postCalls:           map[string]bool{},
+		requestConstructors: map[string]bool{},
+		urlopenCalls:        map[string]bool{},
+	}
+}
+
+func clonePythonSendBindings(src pythonSendBindings) pythonSendBindings {
+	dst := newPythonSendBindings()
+	for name := range src.postCalls {
+		dst.postCalls[name] = true
+	}
+	for name := range src.requestConstructors {
+		dst.requestConstructors[name] = true
+	}
+	for name := range src.urlopenCalls {
+		dst.urlopenCalls[name] = true
+	}
+	return dst
+}
+
+func updatePythonSendBindings(text string, b *pythonSendBindings) {
+	if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+		dropPythonSendBinding(b, m[1])
+	}
+	if m := pyDefRe.FindStringSubmatch(text); m != nil {
+		dropPythonSendBinding(b, m[1])
+	}
+	if strings.HasPrefix(text, "import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			module, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch module {
+			case "requests", "httpx":
+				for _, method := range []string{"post", "put", "patch"} {
+					b.postCalls[alias+"."+method] = true
+				}
+			case "urllib":
+				b.requestConstructors[alias+".request.Request"] = true
+				b.urlopenCalls[alias+".request.urlopen"] = true
+			case "urllib.request":
+				b.requestConstructors[alias+".Request"] = true
+				b.urlopenCalls[alias+".urlopen"] = true
+			}
+		}
+	}
+	for _, module := range []string{"requests", "httpx"} {
+		prefix := "from " + module + " import "
+		if !strings.HasPrefix(text, prefix) {
+			continue
+		}
+		for _, item := range strings.Split(strings.TrimPrefix(text, prefix), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			method, alias := fields[0], fields[0]
+			if method != "post" && method != "put" && method != "patch" {
+				continue
+			}
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			b.postCalls[alias] = true
+		}
+	}
+	if strings.HasPrefix(text, "from urllib.request import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from urllib.request import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			name, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch name {
+			case "Request":
+				b.requestConstructors[alias] = true
+			case "urlopen":
+				b.urlopenCalls[alias] = true
+			}
+		}
+	}
+	if strings.HasPrefix(text, "from urllib import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from urllib import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 || fields[0] != "request" {
+				continue
+			}
+			alias := fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			b.requestConstructors[alias+".Request"] = true
+			b.urlopenCalls[alias+".urlopen"] = true
+		}
+	}
+}
+
+func dropPythonSendBinding(b *pythonSendBindings, name string) {
+	for _, calls := range []map[string]bool{b.postCalls, b.requestConstructors, b.urlopenCalls} {
+		for call := range calls {
+			if call == name || strings.HasPrefix(call, name+".") {
+				delete(calls, call)
+			}
+		}
+	}
 }
 
 type pythonBindings struct {

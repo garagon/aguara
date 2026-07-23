@@ -187,6 +187,7 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 		"PNPM_BUILD_APPROVAL_PENDING_001":     {Severity: "MEDIUM", Category: "supply-chain"},
 		"PY_DECODE_EXEC_001":                  {Severity: "CRITICAL", Category: "supply-chain-exfil"},
 		"PY_REMOTE_FETCH_EXEC_001":            {Severity: "CRITICAL", Category: "supply-chain-exfil"},
+		"PY_CONTEXT_EXFIL_001":                {Severity: "HIGH", Category: "supply-chain-exfil"},
 		"SC-EX-007":                           {Severity: "CRITICAL", Category: "supply-chain-exfil"},
 		"SHELL_UNSAFE_PIP_SOURCE_001":         {Severity: "MEDIUM", Category: "supply-chain"},
 		"SHELL_UNSAFE_NPM_SOURCE_001":         {Severity: "MEDIUM", Category: "supply-chain"},
@@ -297,7 +298,7 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"AGENTCFG_BROAD_ALLOW_001", "AGENTCFG_SECRET_READ_ALLOW_001",
 		"AGENTCFG_HELPER_REPO_SCRIPT_001", "AGENTCFG_PERMS_WEAK_MODE_001",
 		// script-risk public consts (SC-EX-007 migrated from YAML).
-		"PY_DECODE_EXEC_001", "PY_REMOTE_FETCH_EXEC_001", "SC-EX-007",
+		"PY_DECODE_EXEC_001", "PY_REMOTE_FETCH_EXEC_001", "PY_CONTEXT_EXFIL_001", "SC-EX-007",
 		"SHELL_UNSAFE_PIP_SOURCE_001", "SHELL_UNSAFE_NPM_SOURCE_001",
 	}
 	for _, id := range emitted {

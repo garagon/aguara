@@ -11,7 +11,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   decoded or character-constructed Python values reaching `exec`/`eval`,
   remote Python response bodies flowing into execution, structured systemd
   or cron persistence, and real pip/npm commands using unencrypted dependency
-  sources.
+  sources. Python files that read high-trust local context and then perform a
+  bound HTTP write are also surfaced for review.
   The existing `SC-EX-007` persistence rule keeps its ID while moving from a
   flat pattern to the script analyzer, so saved policies remain compatible.
 
