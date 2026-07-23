@@ -4,6 +4,8 @@ Aguara ships with **192 built-in pattern rules** across 13 categories, plus anal
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
+Each catalog entry also exposes a `decision_impact`. Most findings are `review`: they independently require a trust decision before execution. `CMDEXEC_013` (ordinary local shell-script execution) and `EXTDL_009` (ordinary `pip install`) are `context`: they stay visible and can strengthen a nearby chain, but do not restrict the default `aguara audit` agent handoff on their own. Custom rules default to `review`; explicit `--fail-on` gates still apply to both classes.
+
 For writing custom rules, see the [Custom Rules](#custom-rules) section below or the [Contributing Guide](CONTRIBUTING.md).
 
 ---

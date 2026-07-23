@@ -18,6 +18,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/rulecatalog"
+	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
@@ -54,6 +55,9 @@ const (
 
 	DeduplicateFull         = types.DeduplicateFull
 	DeduplicateSameRuleOnly = types.DeduplicateSameRuleOnly
+
+	DecisionImpactContext = types.DecisionImpactContext
+	DecisionImpactReview  = types.DecisionImpactReview
 )
 
 // Re-export discover types so consumers don't need a separate import.
@@ -84,11 +88,12 @@ type RuleOverride struct {
 // pkgmeta, jsrisk, nlp, toxicflow). The omitempty tag keeps JSON
 // output compact for the common case.
 type RuleInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Severity string `json:"severity"`
-	Category string `json:"category"`
-	Analyzer string `json:"analyzer,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Severity       string `json:"severity"`
+	Category       string `json:"category"`
+	Analyzer       string `json:"analyzer,omitempty"`
+	DecisionImpact string `json:"decision_impact"`
 }
 
 // RuleDetail provides full information about a rule, including patterns and examples.
@@ -104,6 +109,7 @@ type RuleDetail struct {
 	Severity       string   `json:"severity"`
 	Category       string   `json:"category"`
 	Analyzer       string   `json:"analyzer,omitempty"`
+	DecisionImpact string   `json:"decision_impact"`
 	Description    string   `json:"description"`
 	Remediation    string   `json:"remediation,omitempty"`
 	Patterns       []string `json:"patterns"`
@@ -215,11 +221,12 @@ func ListRules(opts ...Option) []RuleInfo {
 	infos := make([]RuleInfo, len(cat))
 	for i, r := range cat {
 		infos[i] = RuleInfo{
-			ID:       r.ID,
-			Name:     r.Name,
-			Severity: r.Severity,
-			Category: r.Category,
-			Analyzer: r.Analyzer,
+			ID:             r.ID,
+			Name:           r.Name,
+			Severity:       r.Severity,
+			Category:       r.Category,
+			Analyzer:       r.Analyzer,
+			DecisionImpact: r.DecisionImpact,
 		}
 	}
 	return infos
@@ -245,6 +252,7 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 		Severity:       r.Severity,
 		Category:       r.Category,
 		Analyzer:       r.Analyzer,
+		DecisionImpact: r.DecisionImpact,
 		Description:    r.Description,
 		Remediation:    r.Remediation,
 		Patterns:       r.Patterns,
@@ -344,10 +352,11 @@ func (sc *Scanner) ListRules() []RuleInfo {
 	infos := make([]RuleInfo, len(compiled))
 	for i, r := range compiled {
 		infos[i] = RuleInfo{
-			ID:       r.ID,
-			Name:     r.Name,
-			Severity: r.Severity.String(),
-			Category: r.Category,
+			ID:             r.ID,
+			Name:           r.Name,
+			Severity:       r.Severity.String(),
+			Category:       r.Category,
+			DecisionImpact: rulemeta.DecisionImpactFor(r.ID),
 		}
 	}
 	return infos
@@ -372,6 +381,7 @@ func (sc *Scanner) ExplainRule(id string) (*RuleDetail, error) {
 				Name:           r.Name,
 				Severity:       r.Severity.String(),
 				Category:       r.Category,
+				DecisionImpact: rulemeta.DecisionImpactFor(r.ID),
 				Description:    r.Description,
 				Remediation:    r.Remediation,
 				Patterns:       patterns,

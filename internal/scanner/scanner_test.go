@@ -71,6 +71,56 @@ func TestScannerOrchestrator(t *testing.T) {
 	require.Equal(t, "R1", result.Findings[0].RuleID)
 }
 
+func TestScannerAssignsDecisionImpactAfterPostProcessing(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))
+
+	s := scanner.New(1)
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			{RuleID: "CMDEXEC_013", Severity: types.SeverityLow, Line: 1},
+			{RuleID: "SUPPLY_003", Severity: types.SeverityCritical, Line: 2},
+			{RuleID: "CUSTOM_TEAM_RULE_001", Severity: types.SeverityMedium, Line: 3},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 3)
+
+	impact := make(map[string]string, len(result.Findings))
+	for _, f := range result.Findings {
+		impact[f.RuleID] = f.DecisionImpact
+	}
+	require.Equal(t, "context", impact["CMDEXEC_013"])
+	require.Equal(t, "review", impact["SUPPLY_003"])
+	require.Equal(t, "review", impact["CUSTOM_TEAM_RULE_001"])
+}
+
+func TestScannerDedupCannotHideReviewImpact(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))
+
+	s := scanner.New(1)
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			// The context rule deliberately has higher severity so it wins
+			// the visible-finding selection. The collapsed review rule must
+			// still keep the line review-gated.
+			{RuleID: "CMDEXEC_013", Severity: types.SeverityHigh, Line: 1},
+			{RuleID: "SUPPLY_010", Severity: types.SeverityLow, Line: 1},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+	require.Equal(t, "CMDEXEC_013", result.Findings[0].RuleID)
+	require.Equal(t, types.DecisionImpactReview, result.Findings[0].DecisionImpact)
+}
+
 func TestScannerDisabledRules(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))

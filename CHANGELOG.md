@@ -19,6 +19,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Findings and rule metadata now expose a `decision_impact` of `review`
+  or `context`. Ordinary local shell-script execution and ordinary
+  `pip install` commands remain visible as supporting context, but no
+  longer force the default audit triage or agent handoff into review-only
+  mode by themselves. All other built-in and custom rules default to
+  review, and explicit `--fail-on` gates remain authoritative.
+- An accepted scan baseline now produces `triage.decision: proceed` when
+  no new or non-baselineable finding remains. Existing findings stay
+  visible in the report and baseline summary.
 - `aguara audit` JSON now includes an additive `triage` block with a
   deterministic `proceed` / `review` / `stop` decision, reasons, and
   next steps for humans, CI dashboards, and agent workflows. The

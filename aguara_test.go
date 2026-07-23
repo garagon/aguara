@@ -429,10 +429,51 @@ func TestListRules(t *testing.T) {
 	}
 	// Verify all rules have required fields.
 	for _, r := range rules {
-		if r.ID == "" || r.Name == "" || r.Severity == "" || r.Category == "" {
+		if r.ID == "" || r.Name == "" || r.Severity == "" || r.Category == "" ||
+			r.DecisionImpact == "" {
 			t.Errorf("rule missing fields: %+v", r)
 		}
 	}
+}
+
+func TestDecisionImpactReachesPublicAPI(t *testing.T) {
+	rules := aguara.ListRules()
+	byID := make(map[string]aguara.RuleInfo, len(rules))
+	for _, r := range rules {
+		byID[r.ID] = r
+	}
+	if got := byID["CMDEXEC_013"].DecisionImpact; got != "context" {
+		t.Fatalf("CMDEXEC_013 decision impact = %q, want context", got)
+	}
+	if got := byID["SUPPLY_003"].DecisionImpact; got != "review" {
+		t.Fatalf("SUPPLY_003 decision impact = %q, want review", got)
+	}
+
+	detail, err := aguara.ExplainRule("CMDEXEC_013")
+	if err != nil {
+		t.Fatalf("ExplainRule: %v", err)
+	}
+	if detail.DecisionImpact != "context" {
+		t.Fatalf("ExplainRule decision impact = %q, want context", detail.DecisionImpact)
+	}
+
+	result, err := aguara.ScanContent(
+		context.Background(),
+		"Run the local setup script:\nbash install.sh\n",
+		"notes.md",
+	)
+	if err != nil {
+		t.Fatalf("ScanContent: %v", err)
+	}
+	for _, f := range result.Findings {
+		if f.RuleID == "CMDEXEC_013" {
+			if f.DecisionImpact != "context" {
+				t.Fatalf("finding decision impact = %q, want context", f.DecisionImpact)
+			}
+			return
+		}
+	}
+	t.Fatal("expected CMDEXEC_013 finding")
 }
 
 func TestListRulesIncludesAnalyzerRules(t *testing.T) {

@@ -25,18 +25,25 @@ func Deduplicate(findings []types.Finding) []types.Finding {
 // PROMPT_INJECTION finding that out-severities a co-located MCP_007 / CRED_*
 // finding would win the dedup and leave the secret-bearing context line
 // unscrubbed in JSON / SARIF output.
+//
+// DecisionImpact also carries forward conservatively: if any finding in a
+// collapsed group independently requires review, the visible survivor remains
+// review-impact even when a context rule wins the severity/confidence tie.
 func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) []types.Finding {
 	// Pass 1: same-rule dedup
 	byRule := make(map[string]types.Finding)
 	for _, f := range findings {
 		k := fmt.Sprintf("%s:%s:%d", f.FilePath, f.RuleID, f.Line)
 		if existing, ok := byRule[k]; ok {
-			carry := mergeSensitive(existing, f)
+			carrySensitive := mergeSensitive(existing, f)
+			carryImpact := mergeDecisionImpact(existing, f)
 			if f.Severity > existing.Severity {
-				f.Sensitive = carry
+				f.Sensitive = carrySensitive
+				f.DecisionImpact = carryImpact
 				byRule[k] = f
 			} else {
-				existing.Sensitive = carry
+				existing.Sensitive = carrySensitive
+				existing.DecisionImpact = carryImpact
 				byRule[k] = existing
 			}
 		} else {
@@ -57,14 +64,17 @@ func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) [
 	for _, f := range byRule {
 		k := fmt.Sprintf("%s:%d", f.FilePath, f.Line)
 		if existing, ok := byLine[k]; ok {
-			carry := mergeSensitive(existing, f)
+			carrySensitive := mergeSensitive(existing, f)
+			carryImpact := mergeDecisionImpact(existing, f)
 			if f.Severity > existing.Severity ||
 				(f.Severity == existing.Severity && f.Confidence > existing.Confidence) ||
 				(f.Severity == existing.Severity && f.Confidence == existing.Confidence && f.RuleID < existing.RuleID) {
-				f.Sensitive = carry
+				f.Sensitive = carrySensitive
+				f.DecisionImpact = carryImpact
 				byLine[k] = f
 			} else {
-				existing.Sensitive = carry
+				existing.Sensitive = carrySensitive
+				existing.DecisionImpact = carryImpact
 				byLine[k] = existing
 			}
 		} else {
@@ -86,4 +96,15 @@ func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) [
 func mergeSensitive(a, b types.Finding) bool {
 	return a.Sensitive || b.Sensitive ||
 		a.Category == "credential-leak" || b.Category == "credential-leak"
+}
+
+func mergeDecisionImpact(a, b types.Finding) string {
+	if a.DecisionImpact == "" && b.DecisionImpact == "" {
+		return ""
+	}
+	if a.DecisionImpact == types.DecisionImpactContext &&
+		b.DecisionImpact == types.DecisionImpactContext {
+		return types.DecisionImpactContext
+	}
+	return types.DecisionImpactReview
 }

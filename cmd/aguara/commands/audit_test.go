@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
@@ -356,11 +357,112 @@ func TestAuditTriageDocumentsBaselineVisibility(t *testing.T) {
 		Total:     3,
 		Baselined: 3,
 	}
+	result.scanGate = nil
+	result.scanGateSet = true
 	result.Verdict = AuditVerdict{Status: "pass"}
 
 	got := computeAuditTriage(result)
-	require.Equal(t, "review", got.Decision)
+	require.Equal(t, "proceed", got.Decision)
+	require.Zero(t, got.ReviewFindings)
 	requireTriageReason(t, got, "baseline_existing_findings")
+}
+
+func TestAuditTriageDecisionImpact(t *testing.T) {
+	contextFinding := types.Finding{
+		RuleID:         "CMDEXEC_013",
+		Severity:       scanner.SeverityLow,
+		DecisionImpact: rulemeta.DecisionImpactContext,
+	}
+	reviewFinding := types.Finding{
+		RuleID:         "SUPPLY_003",
+		Severity:       scanner.SeverityHigh,
+		DecisionImpact: rulemeta.DecisionImpactReview,
+	}
+
+	t.Run("context only proceeds and allows execution", func(t *testing.T) {
+		result := stubAuditResult(t, 0, 0, 0, 0, 0, 0)
+		result.Scan.Findings = []types.Finding{contextFinding}
+		result.scanGate = result.Scan.Findings
+		result.scanGateSet = true
+
+		v, err := computeAuditVerdict(result, "")
+		require.NoError(t, err)
+		result.Verdict = v
+		result.Triage = computeAuditTriage(result)
+		result.Handoff = computeAuditAgentHandoff(result.Triage)
+		result.Plan = computeAuditActionPlan(result)
+
+		require.Equal(t, "proceed", result.Triage.Decision)
+		require.Equal(t, 1, result.Triage.ContextObservations)
+		require.Zero(t, result.Triage.ReviewFindings)
+		requireTriageReason(t, result.Triage, "context_observations")
+		require.Equal(t, "allowed", result.Handoff.Status)
+		require.True(t, result.Plan.CanInstallDependencies)
+		require.True(t, result.Plan.CanExecuteProjectCode)
+	})
+
+	t.Run("context plus review requires review", func(t *testing.T) {
+		result := stubAuditResult(t, 0, 0, 0, 0, 0, 0)
+		result.Scan.Findings = []types.Finding{contextFinding, reviewFinding}
+		result.scanGate = result.Scan.Findings
+		result.scanGateSet = true
+
+		v, err := computeAuditVerdict(result, "")
+		require.NoError(t, err)
+		result.Verdict = v
+		result.Triage = computeAuditTriage(result)
+		result.Handoff = computeAuditAgentHandoff(result.Triage)
+
+		require.Equal(t, "review", result.Triage.Decision)
+		require.Equal(t, 1, result.Triage.ContextObservations)
+		require.Equal(t, 1, result.Triage.ReviewFindings)
+		require.Equal(t, "review_only", result.Handoff.Status)
+	})
+
+	t.Run("explicit fail-on remains authoritative for context", func(t *testing.T) {
+		result := stubAuditResult(t, 0, 0, 0, 0, 0, 0)
+		result.Scan.Findings = []types.Finding{contextFinding}
+		result.scanGate = result.Scan.Findings
+		result.scanGateSet = true
+
+		v, err := computeAuditVerdict(result, "info")
+		require.NoError(t, err)
+		result.Verdict = v
+		got := computeAuditTriage(result)
+
+		require.True(t, result.Verdict.ThresholdExceeded)
+		require.Equal(t, "stop", got.Decision)
+		requireTriageReason(t, got, "gate_exceeded")
+		require.Contains(t, got.Summary, "configured audit gate")
+		require.NotContains(t, got.Summary, "critical findings")
+	})
+
+	t.Run("baseline gates only new review findings", func(t *testing.T) {
+		result := stubAuditResult(t, 0, 0, 0, 0, 0, 0)
+		result.Scan.Findings = []types.Finding{contextFinding, reviewFinding}
+		result.Scan.Baseline = &types.BaselineSummary{
+			Applied:   true,
+			Total:     2,
+			Baselined: 1,
+			GateCount: 1,
+		}
+		result.scanGate = []types.Finding{reviewFinding}
+		result.scanGateSet = true
+
+		gateResult := *result
+		gateScan := *result.Scan
+		gateScan.Findings = result.scanGate
+		gateResult.Scan = &gateScan
+		v, err := computeAuditVerdict(&gateResult, "critical")
+		require.NoError(t, err)
+		result.Verdict = v
+
+		got := computeAuditTriage(result)
+		require.Equal(t, "review", got.Decision)
+		require.Equal(t, 1, got.ContextObservations)
+		require.Equal(t, 1, got.ReviewFindings)
+		requireTriageReason(t, got, "baseline_new_findings")
+	})
 }
 
 func TestAuditAgentHandoffTable(t *testing.T) {

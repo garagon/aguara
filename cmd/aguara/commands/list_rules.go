@@ -53,14 +53,15 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tCATEGORY\tANALYZER\n")
-	fmt.Fprintf(tw, "--\t----\t--------\t--------\t--------\n")
+	fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tIMPACT\tCATEGORY\tANALYZER\n")
+	fmt.Fprintf(tw, "--\t----\t--------\t------\t--------\t--------\n")
 	for _, r := range cat {
 		analyzer := r.Analyzer
 		if analyzer == "" {
 			analyzer = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Severity, r.Category, analyzer)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ID, r.Name, r.Severity, r.DecisionImpact, r.Category, analyzer)
 	}
 	_ = tw.Flush()
 	fmt.Fprintf(w, "\n%d rules loaded\n", len(cat))

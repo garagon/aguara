@@ -50,6 +50,7 @@ func TestExplainJSON(t *testing.T) {
 	require.Equal(t, "PROMPT_INJECTION_001", info.ID)
 	require.Equal(t, "CRITICAL", info.Severity)
 	require.Equal(t, "prompt-injection", info.Category)
+	require.Equal(t, rulemeta.DecisionImpactReview, info.DecisionImpact)
 	require.Empty(t, info.Analyzer, "YAML pattern rules have no analyzer; omitempty must keep the field absent")
 	require.NotEmpty(t, info.Patterns)
 	require.NotEmpty(t, info.TruePositives)
@@ -78,6 +79,7 @@ func TestExplainAnalyzerRuleJSON(t *testing.T) {
 	require.Equal(t, "JS_DNS_TXT_EXFIL_001", info.ID)
 	require.Equal(t, rulemeta.AnalyzerJSRisk, info.Analyzer)
 	require.Equal(t, "supply-chain", info.Category)
+	require.Equal(t, rulemeta.DecisionImpactReview, info.DecisionImpact)
 	require.NotEmpty(t, info.Description)
 	require.NotEmpty(t, info.Remediation)
 }
@@ -101,6 +103,8 @@ func TestExplainAnalyzerRuleTerminal(t *testing.T) {
 
 	out := buf.String()
 	require.Contains(t, out, "GHA_PWN_REQUEST_001")
+	require.Contains(t, out, "Decision impact:")
+	require.Contains(t, out, rulemeta.DecisionImpactReview)
 	require.True(t, strings.Contains(out, "Analyzer:") && strings.Contains(out, rulemeta.AnalyzerCITrust),
 		"analyzer rule terminal output must print the Analyzer: line; got: %s", out)
 }

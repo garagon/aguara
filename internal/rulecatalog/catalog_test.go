@@ -47,7 +47,30 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 		require.Equalf(t, analyzer, rec.Analyzer, "analyzer for %s", id)
 		require.NotEmptyf(t, rec.Severity, "%s severity must be set", id)
 		require.NotEmptyf(t, rec.Category, "%s category must be set", id)
+		require.NotEmptyf(t, rec.DecisionImpact, "%s decision impact must be set", id)
 	}
+}
+
+func TestBuildAssignsDecisionImpact(t *testing.T) {
+	cat, err := rulecatalog.Build(rulecatalog.Options{})
+	require.NoError(t, err)
+
+	for _, r := range cat {
+		require.Equalf(t, rulemeta.DecisionImpactFor(r.ID), r.DecisionImpact,
+			"%s must expose the same decision impact as scanner findings", r.ID)
+	}
+
+	shell, err := rulecatalog.FindByID(rulecatalog.Options{}, "CMDEXEC_013")
+	require.NoError(t, err)
+	require.Equal(t, rulemeta.DecisionImpactContext, shell.DecisionImpact)
+
+	pip, err := rulecatalog.FindByID(rulecatalog.Options{}, "EXTDL_009")
+	require.NoError(t, err)
+	require.Equal(t, rulemeta.DecisionImpactContext, pip.DecisionImpact)
+
+	dangerous, err := rulecatalog.FindByID(rulecatalog.Options{}, "SUPPLY_003")
+	require.NoError(t, err)
+	require.Equal(t, rulemeta.DecisionImpactReview, dangerous.DecisionImpact)
 }
 
 func TestBuildSortsByID(t *testing.T) {

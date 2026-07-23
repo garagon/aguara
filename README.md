@@ -62,6 +62,8 @@ Use Aguara when the next step would grant trust to a repository:
 
 The output is meant for a developer, maintainer, CI job, or agent workflow that needs a clear preflight signal: proceed, review first, or stop.
 
+Findings remain visible, but visibility is not the same as a reason to block execution. `aguara audit` marks ordinary local shell-script execution (`CMDEXEC_013`) and ordinary `pip install` commands (`EXTDL_009`) as supporting `context`; they can help explain a nearby chain without forcing an agent handoff into review-only mode by themselves. Every other built-in or custom rule defaults to `review`, and an explicit `--fail-on` policy remains authoritative for both classes.
+
 ## What Aguara Checks
 
 | Surface | Examples | Command |
@@ -297,6 +299,8 @@ detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
 ```
 
 GitHub Code Scanning, GitLab SAST, and plain Docker-in-CI examples are below.
+
+JSON findings and rule metadata include `decision_impact: "context" | "review"`. The additive `audit.triage` block also reports `context_observations` and `review_findings`, so an agent or CI wrapper can apply Aguara's trust decision without hiding lower-impact evidence or inferring policy from severity alone.
 
 ```yaml
 # GitHub Action with SARIF upload (needs security-events: write)

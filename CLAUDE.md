@@ -79,6 +79,7 @@ All thirteen implement the `Analyzer` interface (`internal/scanner/analyzer.go`)
 ### Key Package Relationships
 
 - `internal/types/` - Lowest layer. `Finding`, `Severity`, `ScanResult`. No internal imports. **`Severity` is `type int`, serializes as a number in JSON (0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL), NOT a string.**
+- `Finding.DecisionImpact` and catalog `Rule.DecisionImpact` are the trust-decision layer, not a replacement for severity. Unknown and custom rule IDs default to `review`; only explicitly classified context rules may avoid restricting the default audit handoff. Findings remain visible and explicit `--fail-on` gates remain authoritative.
 - `internal/rules/` - YAML to CompiledRule. `builtin/` embeds 13 YAML files via `go:embed`.
 - `internal/scanner/` - Orchestrator. Discovers files, spawns workers, runs analyzers, applies inline ignore filtering, aggregates results. Imports `meta/` for post-processing.
 - `internal/meta/` - Dedup, scoring, correlation. Imports `types/` only (NOT `scanner/` - this prevents import cycles).

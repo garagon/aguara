@@ -72,6 +72,7 @@ func writeExplainTerminal(w io.Writer, found *rulemeta.Rule) error {
 
 	fmt.Fprintf(w, "\n%s %s %s %s\n", st.SeverityIcon(found.Severity), st.Bold(found.ID), found.Name, st.SeverityLabel(found.Severity))
 	fmt.Fprintf(w, "%s %s\n", st.Dim("Category:"), found.Category)
+	fmt.Fprintf(w, "%s %s\n", st.Dim("Decision impact:"), found.DecisionImpact)
 	if found.Analyzer != "" {
 		fmt.Fprintf(w, "%s %s\n", st.Dim("Analyzer:"), found.Analyzer)
 	}

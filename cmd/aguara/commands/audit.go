@@ -10,6 +10,7 @@ import (
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/output"
+	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
 	"github.com/spf13/cobra"
@@ -81,6 +82,9 @@ type AuditResult struct {
 	Handoff AuditAgentHandoff     `json:"agent_handoff"`
 	Plan    AuditActionPlan       `json:"action_plan"`
 	Intel   incident.IntelSummary `json:"intel"`
+
+	scanGate    []types.Finding
+	scanGateSet bool
 }
 
 // AuditVerdict is the single-line summary the CLI prints under
@@ -105,6 +109,8 @@ type AuditVerdict struct {
 type AuditTriage struct {
 	Decision             string              `json:"decision"` // "proceed" | "review" | "stop"
 	Summary              string              `json:"summary"`
+	ContextObservations  int                 `json:"context_observations"`
+	ReviewFindings       int                 `json:"review_findings"`
 	Reasons              []AuditTriageReason `json:"reasons"`
 	RecommendedNextSteps []string            `json:"recommended_next_steps"`
 }
@@ -232,6 +238,8 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	}
 
 	fullScan := scanResult.Findings
+	result.scanGate = scanGate
+	result.scanGateSet = true
 	scanResult.Findings = scanGate
 	verdict, vErr := computeAuditVerdict(result, flagAuditFailOn)
 	scanResult.Findings = fullScan
@@ -437,6 +445,17 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 	if result == nil || result.Check == nil || result.Scan == nil {
 		return t
 	}
+	for _, f := range result.Scan.Findings {
+		if f.DecisionImpact == rulemeta.DecisionImpactContext {
+			t.ContextObservations++
+		}
+	}
+	t.ReviewFindings = len(result.Check.Findings)
+	for _, f := range auditScanGateFindings(result) {
+		if f.DecisionImpact != rulemeta.DecisionImpactContext {
+			t.ReviewFindings++
+		}
+	}
 
 	addReason := func(kind, severity, message string) {
 		t.Reasons = append(t.Reasons, AuditTriageReason{
@@ -466,7 +485,8 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 	}
 
 	switch {
-	case hasCriticalTriageReason(t.Reasons):
+	case hasTriageReason(t.Reasons, "known_malicious_package") ||
+		hasTriageReason(t.Reasons, "critical_content_finding"):
 		t.Decision = "stop"
 		t.Summary = "Do not install, execute CI, or hand this repository to an agent until the critical findings are resolved."
 		t.RecommendedNextSteps = []string{
@@ -474,7 +494,15 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 			"Review the critical package and content findings first.",
 			"Remove or replace known-malicious packages and inspect flagged trust surfaces.",
 		}
-	case hasAnyFindings(result):
+	case result.Verdict.ThresholdExceeded:
+		t.Decision = "stop"
+		t.Summary = "The configured audit gate was crossed; review the gated findings before executing this repository."
+		t.RecommendedNextSteps = []string{
+			"Do not run package install scripts or project automation yet.",
+			"Review findings at or above the configured threshold.",
+			"Proceed only when the repository satisfies the selected policy.",
+		}
+	case t.ReviewFindings > 0:
 		t.Decision = "review"
 		t.Summary = "Findings are present; review them before installing, running CI, or handing this repository to an agent."
 		t.RecommendedNextSteps = []string{
@@ -485,22 +513,40 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 		if len(t.Reasons) == 0 {
 			addReason("findings_present", "warning", "Package or content findings are present below the stop threshold.")
 		}
+	case result.Scan.Baseline != nil && result.Scan.Baseline.Applied &&
+		result.Scan.Baseline.Baselined > 0:
+		t.Summary = "Existing findings remain visible, but the baseline accepted them and no new finding requires review."
+		t.RecommendedNextSteps = []string{
+			"Proceed with normal review, install, CI, or agent handoff.",
+			"Keep the baseline under version control and review new findings when they appear.",
+		}
+	case t.ContextObservations > 0:
+		addReason("context_observations", "info",
+			"Supporting observations are visible, but none independently requires review.")
+		t.Summary = "Only supporting context was found; no finding independently requires review before proceeding."
+		t.RecommendedNextSteps = []string{
+			"Proceed with normal review, install, CI, or agent handoff.",
+			"Use the context observations when reviewing nearby higher-impact findings.",
+		}
 	}
 
 	return t
 }
 
-func hasCriticalTriageReason(reasons []AuditTriageReason) bool {
+func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
 	for _, r := range reasons {
-		if strings.EqualFold(r.Severity, "critical") {
+		if r.Kind == kind {
 			return true
 		}
 	}
 	return false
 }
 
-func hasAnyFindings(result *AuditResult) bool {
-	return len(result.Check.Findings) > 0 || len(result.Scan.Findings) > 0
+func auditScanGateFindings(result *AuditResult) []types.Finding {
+	if result.scanGateSet {
+		return result.scanGate
+	}
+	return result.Scan.Findings
 }
 
 func computeAuditAgentHandoff(triage AuditTriage) AuditAgentHandoff {

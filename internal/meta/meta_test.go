@@ -49,6 +49,54 @@ func TestDedup_FullMode_CrossRuleCollapsed(t *testing.T) {
 	require.Equal(t, "R1", result[0].RuleID, "higher severity should win")
 }
 
+func TestDedupCarriesReviewDecisionImpact(t *testing.T) {
+	findings := []types.Finding{
+		{
+			RuleID:         "CONTEXT_RULE",
+			FilePath:       "a.md",
+			Line:           5,
+			Severity:       types.SeverityHigh,
+			DecisionImpact: types.DecisionImpactContext,
+		},
+		{
+			RuleID:         "REVIEW_RULE",
+			FilePath:       "a.md",
+			Line:           5,
+			Severity:       types.SeverityLow,
+			DecisionImpact: types.DecisionImpactReview,
+		},
+	}
+
+	result := meta.DeduplicateWithMode(findings, types.DeduplicateFull)
+	require.Len(t, result, 1)
+	require.Equal(t, "CONTEXT_RULE", result[0].RuleID, "higher severity still controls the visible finding")
+	require.Equal(t, types.DecisionImpactReview, result[0].DecisionImpact,
+		"a collapsed review finding must keep the line review-gated")
+}
+
+func TestDedupPreservesContextWhenEveryFindingIsContext(t *testing.T) {
+	findings := []types.Finding{
+		{
+			RuleID:         "CONTEXT_A",
+			FilePath:       "a.md",
+			Line:           5,
+			Severity:       types.SeverityLow,
+			DecisionImpact: types.DecisionImpactContext,
+		},
+		{
+			RuleID:         "CONTEXT_B",
+			FilePath:       "a.md",
+			Line:           5,
+			Severity:       types.SeverityLow,
+			DecisionImpact: types.DecisionImpactContext,
+		},
+	}
+
+	result := meta.DeduplicateWithMode(findings, types.DeduplicateFull)
+	require.Len(t, result, 1)
+	require.Equal(t, types.DecisionImpactContext, result[0].DecisionImpact)
+}
+
 func TestDedup_SameRuleOnlyMode_CrossRulePreserved(t *testing.T) {
 	findings := []types.Finding{
 		{RuleID: "R1", FilePath: "a.md", Line: 5, Severity: types.SeverityHigh},

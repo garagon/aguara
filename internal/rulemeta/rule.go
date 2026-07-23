@@ -21,7 +21,11 @@
 // strings.
 package rulemeta
 
-import "github.com/garagon/aguara/internal/types"
+import (
+	"strings"
+
+	"github.com/garagon/aguara/internal/types"
+)
 
 // Rule is the neutral metadata shape for a detection rule.
 //
@@ -47,11 +51,32 @@ type Rule struct {
 	Severity       string   `json:"severity"`
 	Category       string   `json:"category"`
 	Analyzer       string   `json:"analyzer,omitempty"`
+	DecisionImpact string   `json:"decision_impact"`
 	Description    string   `json:"description,omitempty"`
 	Remediation    string   `json:"remediation,omitempty"`
 	Patterns       []string `json:"patterns,omitempty"`
 	TruePositives  []string `json:"true_positives,omitempty"`
 	FalsePositives []string `json:"false_positives,omitempty"`
+}
+
+const (
+	DecisionImpactContext = types.DecisionImpactContext
+	DecisionImpactReview  = types.DecisionImpactReview
+)
+
+// DecisionImpactFor separates observations that help explain a repository
+// from findings that should independently require review before execution.
+// Context rules remain visible in every output and still obey explicit
+// --fail-on policies; they simply do not block the default audit handoff by
+// themselves.
+func DecisionImpactFor(ruleID string) string {
+	switch strings.ToUpper(strings.TrimSpace(ruleID)) {
+	case "CMDEXEC_013", // ordinary local shell-script execution
+		"EXTDL_009": // ordinary pip package installation
+		return DecisionImpactContext
+	default:
+		return DecisionImpactReview
+	}
 }
 
 // Analyzer name constants. Centralised here so a typo in one place

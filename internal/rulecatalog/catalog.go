@@ -113,7 +113,14 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 	// detector.
 	out = append(out, engine.RuleMetadata()...)
 
-	// 5. --disable-rule filter. Applied AFTER merge so users can
+	// 5. Apply the product-level decision impact after both catalog sources
+	// are merged. Custom rules default to review unless Aguara explicitly
+	// classifies their stable ID as supporting context.
+	for i := range out {
+		out[i].DecisionImpact = rulemeta.DecisionImpactFor(out[i].ID)
+	}
+
+	// 6. --disable-rule filter. Applied AFTER merge so users can
 	// disable analyzer rules too (same UX as YAML rules).
 	if len(opts.DisableRuleIDs) > 0 {
 		disabled := make(map[string]struct{}, len(opts.DisableRuleIDs))
@@ -130,7 +137,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 6. Per-rule overrides: drop disabled rules and apply
+	// 7. Per-rule overrides: drop disabled rules and apply
 	// severity overrides. ONLY applied to YAML pattern rules
 	// (Analyzer == ""), matching the scanner contract: the
 	// scanner's rules.ApplyOverrides path operates over
@@ -170,7 +177,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 7. --category filter. Case-insensitive on the Category
+	// 8. --category filter. Case-insensitive on the Category
 	// string; same UX as the legacy YAML-only list-rules.
 	if opts.Category != "" {
 		filtered := out[:0]
@@ -182,7 +189,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 8. Canonical order.
+	// 9. Canonical order.
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
