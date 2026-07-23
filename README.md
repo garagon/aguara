@@ -326,10 +326,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **255 cataloged detections** through `aguara list-rules`:
+Aguara exposes **256 cataloged detections** through `aguara list-rules`:
 
 - **192 embedded YAML pattern rules** across 13 categories
-- **63 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
+- **64 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 

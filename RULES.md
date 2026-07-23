@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-Aguara ships with **192 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**255 cataloged in total**). Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
+Aguara ships with **192 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**256 cataloged in total**). Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 

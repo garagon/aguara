@@ -45,6 +45,17 @@ func RuleMetadata() []rulemeta.Rule {
 				"an explicit allowlist, show the exact fields to the user, obtain consent, and avoid transmitting secrets.",
 		},
 		{
+			ID:       RulePythonWorldWrite,
+			Name:     "Python code applies world-writable permissions",
+			Severity: "MEDIUM",
+			Category: "supply-chain",
+			Analyzer: rulemeta.AnalyzerScriptRisk,
+			Description: "Python code calls a bound os.chmod or executes chmod through subprocess/os with " +
+				"a literal mode that grants write access to every local user.",
+			Remediation: "Use the narrowest owner/group permissions required. Avoid granting write access " +
+				"to other users, especially for logs, configuration, executables, and shared runtime files.",
+		},
+		{
 			ID:       RuleSystemPersistence,
 			Name:     "Systemd or cron persistence installation",
 			Severity: "CRITICAL",

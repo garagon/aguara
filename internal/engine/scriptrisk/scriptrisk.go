@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/garagon/aguara/internal/rulemeta"
@@ -20,6 +21,7 @@ const (
 	RulePythonDecodeExec   = "PY_DECODE_EXEC_001"
 	RulePythonRemoteExec   = "PY_REMOTE_FETCH_EXEC_001"
 	RulePythonContextExfil = "PY_CONTEXT_EXFIL_001"
+	RulePythonWorldWrite   = "PY_WORLD_WRITABLE_001"
 	RuleSystemPersistence  = "SC-EX-007"
 	RuleUnsafePipSource    = "SHELL_UNSAFE_PIP_SOURCE_001"
 	RuleUnsafeNPMSource    = "SHELL_UNSAFE_NPM_SOURCE_001"
@@ -103,6 +105,9 @@ func analyzePython(target *scanner.Target) []types.Finding {
 	}
 	if line, text, ok := findContextExfil(codeStatements, sourceStatements); ok {
 		findings = append(findings, finding(RulePythonContextExfil, target, line, text))
+	}
+	if line, text, ok := findWorldWritable(codeStatements, sourceStatements); ok {
+		findings = append(findings, finding(RulePythonWorldWrite, target, line, text))
 	}
 	if line, text, ok := findPersistence(codeStatements, sourceStatements); ok {
 		findings = append(findings, finding(RuleSystemPersistence, target, line, text))
@@ -691,6 +696,421 @@ func dropPythonSendBinding(b *pythonSendBindings, name string) {
 			}
 		}
 	}
+}
+
+type pythonPermissionBindings struct {
+	subprocessModules map[string]bool
+	subprocessCalls   map[string]bool
+	osModules         map[string]bool
+	osShellCalls      map[string]bool
+	osChmodCalls      map[string]bool
+}
+
+func findWorldWritable(codeStmts, sourceStmts []statement) (int, string, bool) {
+	globalBindings := newPythonPermissionBindings()
+	bindingsByScope := map[int]pythonPermissionBindings{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+		scope := scopes[i]
+		bindings := &globalBindings
+		if scope != -1 {
+			local, ok := bindingsByScope[scope]
+			if !ok {
+				local = clonePythonPermissionBindings(globalBindings)
+			}
+			bindings = &local
+		}
+		updatePythonPermissionBindings(codeText, bindings)
+		if scope != -1 {
+			bindingsByScope[scope] = *bindings
+		}
+
+		for module := range bindings.osModules {
+			if callAppliesWorldWritableMode(sourceText, codeText, module+".chmod") {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for call := range bindings.osChmodCalls {
+			if callAppliesWorldWritableMode(sourceText, codeText, call) {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for module := range bindings.subprocessModules {
+			for _, method := range []string{"run", "Popen", "call", "check_call", "check_output"} {
+				if pythonCommandCallAppliesWorldWritable(sourceText, codeText, module+"."+method, false) {
+					return codeSt.line, sourceText, true
+				}
+			}
+		}
+		for call := range bindings.subprocessCalls {
+			if pythonCommandCallAppliesWorldWritable(sourceText, codeText, call, false) {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for module := range bindings.osModules {
+			for _, method := range []string{"system", "popen"} {
+				if pythonCommandCallAppliesWorldWritable(sourceText, codeText, module+"."+method, true) {
+					return codeSt.line, sourceText, true
+				}
+			}
+		}
+		for call := range bindings.osShellCalls {
+			if pythonCommandCallAppliesWorldWritable(sourceText, codeText, call, true) {
+				return codeSt.line, sourceText, true
+			}
+		}
+	}
+	return 0, "", false
+}
+
+func newPythonPermissionBindings() pythonPermissionBindings {
+	return pythonPermissionBindings{
+		subprocessModules: map[string]bool{},
+		subprocessCalls:   map[string]bool{},
+		osModules:         map[string]bool{},
+		osShellCalls:      map[string]bool{},
+		osChmodCalls:      map[string]bool{},
+	}
+}
+
+func clonePythonPermissionBindings(src pythonPermissionBindings) pythonPermissionBindings {
+	dst := newPythonPermissionBindings()
+	for name := range src.subprocessModules {
+		dst.subprocessModules[name] = true
+	}
+	for name := range src.subprocessCalls {
+		dst.subprocessCalls[name] = true
+	}
+	for name := range src.osModules {
+		dst.osModules[name] = true
+	}
+	for name := range src.osShellCalls {
+		dst.osShellCalls[name] = true
+	}
+	for name := range src.osChmodCalls {
+		dst.osChmodCalls[name] = true
+	}
+	return dst
+}
+
+func updatePythonPermissionBindings(text string, b *pythonPermissionBindings) {
+	if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+		dropPythonPermissionBinding(b, m[1])
+	}
+	if m := pyDefRe.FindStringSubmatch(text); m != nil {
+		dropPythonPermissionBinding(b, m[1])
+	}
+	if strings.HasPrefix(text, "import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			module, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch module {
+			case "subprocess":
+				b.subprocessModules[alias] = true
+			case "os":
+				b.osModules[alias] = true
+			}
+		}
+	}
+	if strings.HasPrefix(text, "from subprocess import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from subprocess import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 || !isSubprocessMethod(fields[0]) {
+				continue
+			}
+			name := fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				name = fields[2]
+			}
+			b.subprocessCalls[name] = true
+		}
+	}
+	if strings.HasPrefix(text, "from os import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from os import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			original, name := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				name = fields[2]
+			}
+			switch original {
+			case "system", "popen":
+				b.osShellCalls[name] = true
+			case "chmod":
+				b.osChmodCalls[name] = true
+			}
+		}
+	}
+}
+
+func dropPythonPermissionBinding(b *pythonPermissionBindings, name string) {
+	for _, names := range []map[string]bool{
+		b.subprocessModules, b.subprocessCalls, b.osModules,
+		b.osShellCalls, b.osChmodCalls,
+	} {
+		delete(names, name)
+	}
+}
+
+func callAppliesWorldWritableMode(sourceText, codeText, call string) bool {
+	for _, args := range pythonCallsArgs(sourceText, codeText, call) {
+		if len(args) >= 2 && pythonModeIsWorldWritable(args[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonCommandCallAppliesWorldWritable(sourceText, codeText, call string, shellAlways bool) bool {
+	for _, args := range pythonCallsArgs(sourceText, codeText, call) {
+		if len(args) == 0 {
+			continue
+		}
+		if argv, ok := pythonLiteralSequence(args[0]); ok {
+			if chmodArgsAreWorldWritable(argv) {
+				return true
+			}
+			continue
+		}
+		if !shellAlways && !keywordArgumentTrue(args[1:], "shell") {
+			continue
+		}
+		command, ok := pythonStringLiteral(args[0])
+		if ok && chmodArgsAreWorldWritable(strings.Fields(command)) {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonCallsArgs(sourceText, codeText, call string) [][]string {
+	var calls [][]string
+	for start := 0; ; {
+		i := strings.Index(codeText[start:], call)
+		if i < 0 {
+			return calls
+		}
+		i += start
+		if i > 0 && isIdentByte(codeText[i-1]) {
+			start = i + len(call)
+			continue
+		}
+		open := i + len(call)
+		for open < len(codeText) && isSpace(codeText[open]) {
+			open++
+		}
+		if open >= len(codeText) || codeText[open] != '(' ||
+			open >= len(sourceText) || sourceText[open] != '(' {
+			start = i + len(call)
+			continue
+		}
+		if body, ok := balancedPythonCallBody(sourceText, open); ok {
+			calls = append(calls, splitPythonArgs(body))
+		}
+		start = open + 1
+	}
+}
+
+func balancedPythonCallBody(text string, open int) (string, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for i := open; i < len(text); i++ {
+		c := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			switch c {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		switch c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				return text[open+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
+func splitPythonArgs(body string) []string {
+	var args []string
+	start, depth := 0, 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			switch c {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		switch c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(body[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	args = append(args, strings.TrimSpace(body[start:]))
+	return args
+}
+
+func pythonLiteralSequence(expr string) ([]string, bool) {
+	expr = strings.TrimSpace(expr)
+	if len(expr) < 2 || expr[0] != '[' && expr[0] != '(' {
+		return nil, false
+	}
+	close := byte(']')
+	if expr[0] == '(' {
+		close = ')'
+	}
+	if expr[len(expr)-1] != close {
+		return nil, false
+	}
+	items := splitPythonArgs(expr[1 : len(expr)-1])
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := pythonStringLiteral(item)
+		if !ok {
+			out = append(out, strings.TrimSpace(item))
+			continue
+		}
+		out = append(out, value)
+	}
+	return out, true
+}
+
+func pythonStringLiteral(expr string) (string, bool) {
+	expr = strings.TrimSpace(expr)
+	if len(expr) < 2 || expr[0] != expr[len(expr)-1] ||
+		(expr[0] != '\'' && expr[0] != '"') {
+		return "", false
+	}
+	return expr[1 : len(expr)-1], true
+}
+
+func keywordArgumentTrue(args []string, name string) bool {
+	prefix := name + "="
+	for _, arg := range args {
+		compact := strings.ReplaceAll(strings.TrimSpace(arg), " ", "")
+		if strings.EqualFold(compact, prefix+"true") {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonModeIsWorldWritable(expr string) bool {
+	expr = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(expr), "_", ""))
+	base := 10
+	switch {
+	case strings.HasPrefix(expr, "0o"):
+		base, expr = 8, strings.TrimPrefix(expr, "0o")
+	case len(expr) == 4 && expr[0] == '0':
+		base, expr = 8, expr[1:]
+	}
+	mode, err := strconv.ParseInt(expr, base, 64)
+	return err == nil && mode >= 0 && mode&0o002 != 0
+}
+
+func chmodModeIsWorldWritable(expr string) bool {
+	expr = strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(expr), "_", ""), "0o")
+	mode, err := strconv.ParseInt(expr, 8, 64)
+	return err == nil && mode >= 0 && mode&0o002 != 0
+}
+
+func chmodArgsAreWorldWritable(args []string) bool {
+	i := 0
+	if i < len(args) && args[i] == "sudo" {
+		i++
+	}
+	if i >= len(args) || filepath.Base(args[i]) != "chmod" {
+		return false
+	}
+	i++
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		i++
+	}
+	if i >= len(args) {
+		return false
+	}
+	mode := args[i]
+	i++
+	if i >= len(args) {
+		return false
+	}
+	if chmodModeIsWorldWritable(mode) {
+		return true
+	}
+	return symbolicModeIsWorldWritable(strings.ToLower(mode))
+}
+
+func symbolicModeIsWorldWritable(mode string) bool {
+	for _, clause := range strings.Split(mode, ",") {
+		op := strings.IndexAny(clause, "+-=")
+		if op <= 0 || op+1 >= len(clause) || clause[op] == '-' {
+			continue
+		}
+		who, perms := clause[:op], clause[op+1:]
+		validWho := true
+		for _, c := range who {
+			if !strings.ContainsRune("ugoa", c) {
+				validWho = false
+				break
+			}
+		}
+		if validWho && strings.Contains(perms, "w") &&
+			(strings.Contains(who, "a") || strings.Contains(who, "o")) {
+			return true
+		}
+	}
+	return false
 }
 
 type pythonBindings struct {
