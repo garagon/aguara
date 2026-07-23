@@ -330,10 +330,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **256 cataloged detections** through `aguara list-rules`:
+Aguara exposes **257 cataloged detections** through `aguara list-rules`:
 
 - **192 embedded YAML pattern rules** across 13 categories
-- **64 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
+- **65 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -345,7 +345,10 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-Thirteen scan analyzers run per file (twelve by default; rug-pull joins with `--monitor`), each catching a different class of attack:
+The scan pipeline combines thirteen per-file analyzers (twelve by default;
+rug-pull joins with `--monitor`) with project-level correlation that connects
+evidence only dangerous when two files form one execution path. The table
+below covers both phases:
 
 | Analyzer | Engine | What it catches |
 |---|---|---|
@@ -361,6 +364,7 @@ Thirteen scan analyzers run per file (twelve by default; rug-pull joins with `--
 | Agent Policy | `.claude/settings.json` JSON | Claude Code host config that is dangerous to inherit from a cloned repo: hooks that fetch-and-execute, code-injection env vars, `bypassPermissions`, MCP auto-approval, dangerous allow rules, repo-shipped credential helpers |
 | NLP | Goldmark AST + JSON/YAML | Prompt injection, tool poisoning, proximity-weighted keyword classification. Agent instruction files (`.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, `copilot-instructions.md`) are scanned even without a `.md` extension and weighted as high-trust prompt surfaces |
 | Toxic Flow | Capability correlation | Dangerous source/sink combinations within a file and across files in a directory |
+| Skill Chain | Instruction-to-helper correlation | A `SKILL.md` directive that requires a local helper to run, bound to strong hidden behavior in that exact helper |
 | Rug-Pull | SHA256 change tracking | Tool descriptions that change between scans (`--monitor`) |
 
 A separate `aguara check` / `aguara audit` path inspects installed package trees and lockfiles against the threat-intel snapshot. All content is NFKC-normalized before scanning to defeat Unicode evasion. Findings carry severity, a dynamic confidence score (0.50–0.95), matched text, file location with context, and remediation. The public Go API and CLI share one engine. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full package layout.

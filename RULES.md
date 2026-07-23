@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-Aguara ships with **192 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**256 cataloged in total**). Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
+Aguara ships with **192 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**257 cataloged in total**). Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
@@ -236,6 +236,12 @@ Detected by the toxic-flow analyzer (Go engine, not YAML rules).
 | TOXIC_001 | HIGH | Sensitive source co-occurs with a dangerous sink in one skill |
 | TOXIC_002 | HIGH | Environment-variable read co-occurs with shell execution |
 | TOXIC_003 | HIGH | External API response co-occurs with code execution |
+
+## Agent Trust
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| AGENT_FORCED_HELPER_RISK_001 | HIGH | Mandatory skill instruction is bound to strong hidden behavior in its referenced local helper |
 
 ---
 

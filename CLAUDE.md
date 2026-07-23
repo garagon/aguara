@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.27.0 (2026-06-12; aggregates the terminal UX round #220 TTY detection + #221 shared style layer + `audit --verbose`, the native fuzz harness #223 with 22 targets + nightly workflow, and dependency bumps). Previous: v0.26.0 (2026-06-11; C3 range-matching round: #216 measurement, #217 all-versions advisory matching, #218 npm bounded ranges, snapshot 26,268 records + 202,526 all-versions entries). 192 YAML rules + 64 analyzer-emitted (256 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 13 scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.27.0 (2026-06-12; aggregates the terminal UX round #220 TTY detection + #221 shared style layer + `audit --verbose`, the native fuzz harness #223 with 22 targets + nightly workflow, and dependency bumps). Previous: v0.26.0 (2026-06-11; C3 range-matching round: #216 measurement, #217 all-versions advisory matching, #218 npm bounded ranges, snapshot 26,268 records + 202,526 all-versions entries). Current tree: 23 fuzz targets, 192 YAML rules + 65 analyzer-emitted (257 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 13 per-file scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, NLP, toxicflow, rugpull) plus the skill-chain project correlation and the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -75,6 +75,13 @@ Analyzer wiring is centralized: add an analyzer in `internal/engine/engine.go` (
 13. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
 All thirteen implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first twelve run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
+
+After per-file analysis, **SkillChain** (`internal/engine/skillchain/`) runs as a
+`CrossFileAccumulator`. It binds mandatory execution instructions in
+`SKILL.md` to the exact local helper path and emits
+`AGENT_FORCED_HELPER_RISK_001` only when that helper contains a strong hidden
+behavior. It shares the cross-file group with ToxicFlow but does not implement
+the per-file `Analyzer` interface.
 
 ### Key Package Relationships
 
@@ -155,7 +162,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 192 YAML / 256 cataloged)
+- Rule count (currently 192 YAML / 257 cataloged)
 - Test count (currently ~750)
 - Coverage (currently 82% on the Codecov badge; badge scope excludes tools/ and benchmarks/)
 - Star/fork count (currently 48/6)

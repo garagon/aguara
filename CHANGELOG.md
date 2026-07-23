@@ -7,6 +7,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Agent-skill scans now correlate mandatory execution instructions in
+  `SKILL.md` with the local helper they reference. A required or hidden helper
+  becomes a review finding only when that exact file contains a strong,
+  unexplained behavior such as an instruction-override payload, a network
+  command execution, or a direct VCS dependency install. Ordinary setup
+  commands, optional diagnostics, comments, and safe helpers remain quiet.
 - Local Python and shell scripts now contribute concrete behavior evidence:
   decoded or character-constructed Python values reaching `exec`/`eval`,
   remote Python response bodies flowing into execution, structured systemd

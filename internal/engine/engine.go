@@ -36,9 +36,11 @@ import (
 	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/engine/scriptrisk"
+	"github.com/garagon/aguara/internal/engine/skillchain"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // DefaultAnalyzers returns fresh instances of the stateless analyzers
@@ -70,7 +72,10 @@ func RegisterDefaults(s *scanner.Scanner) {
 	for _, a := range DefaultAnalyzers() {
 		s.RegisterAnalyzer(a)
 	}
-	s.SetCrossFileAccumulator(toxicflow.NewCrossFileAnalyzer())
+	s.SetCrossFileAccumulator(crossFileGroup{
+		toxicflow.NewCrossFileAnalyzer(),
+		skillchain.New(),
+	})
 }
 
 // RuleMetadata returns the catalog entries for every analyzer-emitted
@@ -88,8 +93,25 @@ func RuleMetadata() []rulemeta.Rule {
 	out = append(out, pnpmpolicy.RuleMetadata()...)
 	out = append(out, agentpolicy.RuleMetadata()...)
 	out = append(out, scriptrisk.RuleMetadata()...)
+	out = append(out, skillchain.RuleMetadata()...)
 	out = append(out, nlp.RuleMetadata()...)
 	out = append(out, toxicflow.RuleMetadata()...)
 	out = append(out, rugpull.RuleMetadata()...)
 	return out
+}
+
+type crossFileGroup []scanner.CrossFileAccumulator
+
+func (g crossFileGroup) Accumulate(relPath string, content string) {
+	for _, analyzer := range g {
+		analyzer.Accumulate(relPath, content)
+	}
+}
+
+func (g crossFileGroup) Finalize() []types.Finding {
+	var findings []types.Finding
+	for _, analyzer := range g {
+		findings = append(findings, analyzer.Finalize()...)
+	}
+	return findings
 }
