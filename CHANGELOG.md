@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `aguara scan` no longer contacts GitHub Releases in the background to
+  check for a newer binary. Local scans now honor Aguara's offline-by-default
+  contract without requiring `--no-update-check`; threat-intel refresh remains
+  an explicit `aguara update` or `--fresh` operation.
+
 ### Changed
 
 - `aguara audit` JSON now includes an additive `triage` block with a
