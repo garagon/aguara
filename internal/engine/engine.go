@@ -35,6 +35,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/pyrisk"
 	"github.com/garagon/aguara/internal/engine/rsbuild"
 	"github.com/garagon/aguara/internal/engine/rugpull"
+	"github.com/garagon/aguara/internal/engine/scriptrisk"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
@@ -56,6 +57,7 @@ func DefaultAnalyzers() []scanner.Analyzer {
 		npmpolicy.New(),
 		pnpmpolicy.New(),
 		agentpolicy.New(),
+		scriptrisk.New(),
 		nlp.NewInjectionAnalyzer(),
 		toxicflow.New(),
 	}
@@ -85,6 +87,7 @@ func RuleMetadata() []rulemeta.Rule {
 	out = append(out, npmpolicy.RuleMetadata()...)
 	out = append(out, pnpmpolicy.RuleMetadata()...)
 	out = append(out, agentpolicy.RuleMetadata()...)
+	out = append(out, scriptrisk.RuleMetadata()...)
 	out = append(out, nlp.RuleMetadata()...)
 	out = append(out, toxicflow.RuleMetadata()...)
 	out = append(out, rugpull.RuleMetadata()...)

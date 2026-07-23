@@ -40,6 +40,7 @@ internal/
     pkgmeta/           PkgMeta: package.json lifecycle / git-source chains
     jsrisk/            JSRisk: JavaScript install-time / runtime behavior
     pyrisk/            PyRisk: Python install-hook remote-JS execution
+    scriptrisk/        Script Risk: decoded execution, persistence, unsafe pip sources
     rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
     pnpmpolicy/        Pnpm Policy: pnpm-workspace.yaml supply-chain posture
     agentpolicy/       Agent Policy: .claude/settings.json host-config posture
@@ -47,7 +48,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           193 embedded rules across 13 YAML files (go:embed)
+    builtin/           192 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown

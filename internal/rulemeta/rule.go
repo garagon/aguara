@@ -70,6 +70,7 @@ const (
 	AnalyzerPnpmPolicy  = "pnpm-policy"
 	AnalyzerAgentPolicy = "agent-policy"
 	AnalyzerNpmPolicy   = "npm-policy"
+	AnalyzerScriptRisk  = "script-risk"
 	AnalyzerPattern     = "" // YAML-driven rules; empty so JSON omits the field
 )
 

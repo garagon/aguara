@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Local Python and shell scripts now contribute concrete behavior evidence:
+  decoded or character-constructed Python values reaching `exec`/`eval`,
+  remote Python response bodies flowing into execution, structured systemd
+  or cron persistence, and real pip/npm commands using unencrypted dependency
+  sources.
+  The existing `SC-EX-007` persistence rule keeps its ID while moving from a
+  flat pattern to the script analyzer, so saved policies remain compatible.
+
 ### Changed
 
 - `aguara audit` JSON now includes an additive `triage` block with a

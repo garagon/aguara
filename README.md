@@ -326,10 +326,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **250 cataloged detections** through `aguara list-rules`:
+Aguara exposes **254 cataloged detections** through `aguara list-rules`:
 
-- **193 embedded YAML pattern rules** across 13 categories
-- **57 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
+- **192 embedded YAML pattern rules** across 13 categories
+- **62 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -341,7 +341,7 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-Twelve scan analyzers run per file (eleven by default; rug-pull joins with `--monitor`), each catching a different class of attack:
+Thirteen scan analyzers run per file (twelve by default; rug-pull joins with `--monitor`), each catching a different class of attack:
 
 | Analyzer | Engine | What it catches |
 |---|---|---|
@@ -350,6 +350,7 @@ Twelve scan analyzers run per file (eleven by default; rug-pull joins with `--mo
 | PkgMeta | `package.json` JSON | npm lifecycle + git-source / publish-surface chains, install-time local JS |
 | JSRisk | JavaScript single-pass | Obfuscation, install-time daemonization, CI secret harvest, OIDC runner pivot, DNS-TXT exfil, Bun second stage, GitHub C2, host-trust tampering |
 | PyRisk | Python install-hook scanner | `setup.py`/`__init__.py` that fetch remote JS and run it via `node -e` (flow-sensitive) |
+| Script Risk | Python + shell evidence scanner | Decoded Python payload execution, structured systemd/cron persistence, and unencrypted pip dependency sources in local scripts |
 | RSBuild | Cargo build-script scanner | `build.rs` reading wallet/keystore material and sending it to a network sink (flow-sensitive) |
 | Npm Policy | `package.json` + `.npmrc` | npm v12 install-trust decisions weakened or pinned open: the `dangerously-allow-all-scripts` escape hatch, unpinned `allowScripts` approvals, `allow-git` / `allow-remote` relaxed; plus INFO readiness findings for git and remote-tarball dependencies that will need explicit trust under npm v12 |
 | Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |
