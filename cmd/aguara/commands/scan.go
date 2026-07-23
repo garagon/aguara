@@ -22,7 +22,6 @@ import (
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/state"
 	"github.com/garagon/aguara/internal/types"
-	"github.com/garagon/aguara/internal/update"
 )
 
 var (
@@ -92,24 +91,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	if flagAuto {
 		return runAutoScan(cmd)
-	}
-
-	// Background update check
-	var updateMsg string
-	if !flagNoUpdateCheck {
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			if r := update.CheckLatest(Version, "garagon/aguara"); r != nil && r.NeedsUpdate() {
-				updateMsg = fmt.Sprintf("\nUpdate available: %s → %s\n", r.Latest, r.UpdateURL)
-			}
-		}()
-		defer func() {
-			<-done
-			if updateMsg != "" {
-				fmt.Fprint(os.Stderr, updateMsg)
-			}
-		}()
 	}
 
 	targetPath := args[0]

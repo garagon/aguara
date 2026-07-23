@@ -27,6 +27,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   The existing `SC-EX-007` persistence rule keeps its ID while moving from a
   flat pattern to the script analyzer, so saved policies remain compatible.
 
+### Fixed
+
+- `aguara scan` no longer contacts GitHub Releases in the background to
+  check for a newer binary. Local scans now honor Aguara's offline-by-default
+  contract without requiring `--no-update-check`; threat-intel refresh remains
+  an explicit `aguara update` or `--fresh` operation.
+
 ### Changed
 
 - Remote MCP endpoint findings now distinguish dedicated MCP URL shapes from
