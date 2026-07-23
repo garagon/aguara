@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Remote MCP endpoint findings now distinguish dedicated MCP URL shapes from
+  ordinary JSON `url` fields. Package metadata, feeds, schemas, and other
+  unrelated URLs stay quiet; a real remote MCP endpoint remains visible as
+  trust context without forcing the default handoff into review by itself.
 - Findings and rule metadata now expose a `decision_impact` of `review`
   or `context`. Ordinary local shell-script execution and ordinary
   `pip install` commands remain visible as supporting context, but no

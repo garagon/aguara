@@ -72,7 +72,8 @@ const (
 func DecisionImpactFor(ruleID string) string {
 	switch strings.ToUpper(strings.TrimSpace(ruleID)) {
 	case "CMDEXEC_013", // ordinary local shell-script execution
-		"EXTDL_009": // ordinary pip package installation
+		"EXTDL_009",  // ordinary pip package installation
+		"MCPCFG_004": // remote MCP endpoint is a trust boundary, not evidence of an attack
 		return DecisionImpactContext
 	default:
 		return DecisionImpactReview
