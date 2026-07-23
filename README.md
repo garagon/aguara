@@ -330,10 +330,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **257 cataloged detections** through `aguara list-rules`:
+Aguara exposes **258 cataloged detections** through `aguara list-rules`:
 
 - **192 embedded YAML pattern rules** across 13 categories
-- **65 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
+- **66 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -345,7 +345,7 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-The scan pipeline combines thirteen per-file analyzers (twelve by default;
+The scan pipeline combines fourteen per-file analyzers (thirteen by default;
 rug-pull joins with `--monitor`) with project-level correlation that connects
 evidence only dangerous when two files form one execution path. The table
 below covers both phases:
@@ -362,6 +362,7 @@ below covers both phases:
 | Npm Policy | `package.json` + `.npmrc` | npm v12 install-trust decisions weakened or pinned open: the `dangerously-allow-all-scripts` escape hatch, unpinned `allowScripts` approvals, `allow-git` / `allow-remote` relaxed; plus INFO readiness findings for git and remote-tarball dependencies that will need explicit trust under npm v12 |
 | Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |
 | Agent Policy | `.claude/settings.json` JSON | Claude Code host config that is dangerous to inherit from a cloned repo: hooks that fetch-and-execute, code-injection env vars, `bypassPermissions`, MCP auto-approval, dangerous allow rules, repo-shipped credential helpers |
+| Skill Policy | `SKILL.md` YAML frontmatter | A whole-value `allowed-tools` wildcard that requests broad tool pre-approval instead of an explicit tool set |
 | NLP | Goldmark AST + JSON/YAML | Prompt injection, tool poisoning, proximity-weighted keyword classification. Agent instruction files (`.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, `copilot-instructions.md`) are scanned even without a `.md` extension and weighted as high-trust prompt surfaces |
 | Toxic Flow | Capability correlation | Dangerous source/sink combinations within a file and across files in a directory |
 | Skill Chain | Instruction-to-helper correlation | A `SKILL.md` directive that requires a local helper to run, bound to strong hidden behavior in that exact helper |

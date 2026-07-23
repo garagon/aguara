@@ -7,6 +7,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Skill posture now flags a whole-value `allowed-tools: '*'` declaration in
+  `SKILL.md`. The structural frontmatter check identifies a request to
+  pre-approve every tool while leaving explicit tool lists, scoped command
+  wildcards, body examples, and malformed metadata quiet.
 - Agent-skill scans now correlate mandatory execution instructions in
   `SKILL.md` with the local helper they reference. A required or hidden helper
   becomes a review finding only when that exact file contains a strong,

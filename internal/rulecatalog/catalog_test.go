@@ -27,17 +27,18 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 
 	// One representative ID per analyzer.
 	want := map[string]string{
-		"JS_DNS_TXT_EXFIL_001":         rulemeta.AnalyzerJSRisk,
-		"GHA_PWN_REQUEST_001":          rulemeta.AnalyzerCITrust,
-		"NPM_LIFECYCLE_GIT_001":        rulemeta.AnalyzerPkgMeta,
-		"TOXIC_001":                    rulemeta.AnalyzerToxicFlow,
-		"TOXIC_CROSS_001":              rulemeta.AnalyzerToxicFlow,
-		"NLP_HIDDEN_INSTRUCTION":       rulemeta.AnalyzerNLP,
-		"AGENT_PERSISTENCE_001":        rulemeta.AnalyzerJSRisk,
-		"PNPM_DANGEROUS_BUILDS_001":    rulemeta.AnalyzerPnpmPolicy,
-		"AGENTCFG_HOOK_FETCH_EXEC_001": rulemeta.AnalyzerAgentPolicy,
-		"PY_DECODE_EXEC_001":           rulemeta.AnalyzerScriptRisk,
-		"AGENT_FORCED_HELPER_RISK_001": rulemeta.AnalyzerSkillChain,
+		"JS_DNS_TXT_EXFIL_001":           rulemeta.AnalyzerJSRisk,
+		"GHA_PWN_REQUEST_001":            rulemeta.AnalyzerCITrust,
+		"NPM_LIFECYCLE_GIT_001":          rulemeta.AnalyzerPkgMeta,
+		"TOXIC_001":                      rulemeta.AnalyzerToxicFlow,
+		"TOXIC_CROSS_001":                rulemeta.AnalyzerToxicFlow,
+		"NLP_HIDDEN_INSTRUCTION":         rulemeta.AnalyzerNLP,
+		"AGENT_PERSISTENCE_001":          rulemeta.AnalyzerJSRisk,
+		"PNPM_DANGEROUS_BUILDS_001":      rulemeta.AnalyzerPnpmPolicy,
+		"AGENTCFG_HOOK_FETCH_EXEC_001":   rulemeta.AnalyzerAgentPolicy,
+		"AGENT_SKILL_WILDCARD_TOOLS_001": rulemeta.AnalyzerSkillPolicy,
+		"PY_DECODE_EXEC_001":             rulemeta.AnalyzerScriptRisk,
+		"AGENT_FORCED_HELPER_RISK_001":   rulemeta.AnalyzerSkillChain,
 		// And one pattern rule from the YAML catalog (analyzer
 		// stays empty for these).
 		"PROMPT_INJECTION_001": rulemeta.AnalyzerPattern,
@@ -326,6 +327,8 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"PY_DECODE_EXEC_001", "PY_REMOTE_FETCH_EXEC_001", "PY_CONTEXT_EXFIL_001",
 		"PY_WORLD_WRITABLE_001", "SC-EX-007",
 		"SHELL_UNSAFE_PIP_SOURCE_001", "SHELL_UNSAFE_NPM_SOURCE_001",
+		// skill-policy frontmatter posture.
+		"AGENT_SKILL_WILDCARD_TOOLS_001",
 		// skill-chain cross-file correlation.
 		"AGENT_FORCED_HELPER_RISK_001",
 	}

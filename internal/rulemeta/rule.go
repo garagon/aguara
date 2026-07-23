@@ -97,6 +97,7 @@ const (
 	AnalyzerNpmPolicy   = "npm-policy"
 	AnalyzerScriptRisk  = "script-risk"
 	AnalyzerSkillChain  = "skill-chain"
+	AnalyzerSkillPolicy = "skill-policy"
 	AnalyzerPattern     = "" // YAML-driven rules; empty so JSON omits the field
 )
 
