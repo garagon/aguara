@@ -1436,7 +1436,7 @@ func finding(id string, target *scanner.Target, line int, matched string) types.
 		RuleID: id, RuleName: r.Name, Severity: r.SeverityLevel(), Category: r.Category,
 		Description: r.Description, FilePath: target.RelPath, Line: line,
 		MatchedText: matched, Remediation: r.Remediation, Analyzer: AnalyzerName,
-		Confidence: 0.95,
+		Confidence: 0.95, Sensitive: id == RulePythonContextExfil,
 	}
 }
 

