@@ -163,6 +163,13 @@ func RedactSensitiveFindings(findings []Finding) {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
+		if isSensitive && findings[i].Line > 0 {
+			// Analyzer findings are allowed to omit Context. Their anchor
+			// line still carries the raw MatchedText and can appear inside a
+			// neighboring finding's context window, so it must participate
+			// in the cross-finding pass independently of Context.
+			sensitiveLines[fileLine{findings[i].FilePath, findings[i].Line}] = true
+		}
 		for j := range findings[i].Context {
 			cl := &findings[i].Context[j]
 			if isSensitive {

