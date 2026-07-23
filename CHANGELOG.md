@@ -38,11 +38,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   action before it runs are treated as the expected safety control, not as a
   TOCTOU finding.
 - Findings and rule metadata now expose a `decision_impact` of `review`
-  or `context`. Ordinary local shell-script execution and ordinary
-  `pip install` commands remain visible as supporting context, but no
-  longer force the default audit triage or agent handoff into review-only
-  mode by themselves. All other built-in and custom rules default to
-  review, and explicit `--fail-on` gates remain authoritative.
+  or `context`. Ordinary local shell-script execution, `pip install`, and
+  system package installation commands remain visible as supporting context,
+  but no longer force the default audit triage or agent handoff into
+  review-only mode by themselves. All other built-in and custom rules default
+  to review, and explicit `--fail-on` gates remain authoritative.
 - An accepted scan baseline now produces `triage.decision: proceed` when
   no new or non-baselineable finding remains. Existing findings stay
   visible in the report and baseline summary.
