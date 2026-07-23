@@ -33,6 +33,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   ordinary JSON `url` fields. Package metadata, feeds, schemas, and other
   unrelated URLs stay quiet; a real remote MCP endpoint remains visible as
   trust context without forcing the default handoff into review by itself.
+- Approval/execution gap detection now requires explicit reuse of a previous
+  or cached approval. Instructions that ask the user to confirm the exact
+  action before it runs are treated as the expected safety control, not as a
+  TOCTOU finding.
 - Findings and rule metadata now expose a `decision_impact` of `review`
   or `context`. Ordinary local shell-script execution and ordinary
   `pip install` commands remain visible as supporting context, but no
