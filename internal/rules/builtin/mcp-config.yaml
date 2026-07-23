@@ -71,7 +71,9 @@ match_mode: any
 remediation: "Use localhost or 127.0.0.1 for MCP server URLs. If a remote server is required, verify its authenticity and use TLS."
 patterns:
   - type: regex
-    value: "(?i)[\"'](serverUrl|url|transport_url)[\"']\\s*:\\s*[\"']https?://[a-zA-Z][a-zA-Z0-9-]*\\.[a-zA-Z][^\"']*[\"']"
+    value: "(?i)[\"'](serverUrl|transport_url)[\"']\\s*:\\s*[\"']https?://[a-zA-Z][a-zA-Z0-9-]*\\.[a-zA-Z][^\"']*[\"']"
+  - type: regex
+    value: "(?i)[\"']url[\"']\\s*:\\s*[\"']https?://(?:mcp\\.[a-zA-Z0-9.-]+(?::[0-9]+)?(?:[/#?][^\"']*)?|[a-zA-Z][a-zA-Z0-9.-]*\\.[a-zA-Z][^\"']*/(?:mcp|sse)(?:[/#?][^\"']*)?)[\"']"
 exclude_patterns:
   - type: regex
     value: "(?i)https?://(www\\.)?example\\.(com|org|net)"
@@ -83,10 +85,13 @@ examples:
   true_positive:
     - "\"serverUrl\": \"https://mcp.example.com/sse\""
     - "\"url\": \"https://remote-server.com:8080/mcp\""
+    - "\"url\": \"https://mcp.vendor.dev:8443/custom-endpoint\""
   false_positive:
     - "\"serverUrl\": \"http://localhost:3000/sse\""
     - "\"url\": \"http://127.0.0.1:8080/mcp\""
     - "\"url\": \"https://docs.example.com/guide\""
+    - "\"url\": \"https://github.com/sponsors/example\""
+    - "\"url\": \"https://feeds.example.net/releases.json\""
 ---
 id: MCPCFG_005
 name: "sudo in MCP server command"

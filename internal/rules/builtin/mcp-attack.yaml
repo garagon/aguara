@@ -274,7 +274,7 @@ examples:
 ---
 id: MCP_013
 name: "Approval-execution binding gap"
-description: "Detects tools where user approval and command execution are decoupled, enabling TOCTOU substitution of the approved action"
+description: "Detects explicit reuse of a previous or cached approval to execute a later action, which can enable TOCTOU substitution"
 severity: HIGH
 category: mcp-attack
 targets: ["*.md", "*.txt"]
@@ -282,17 +282,15 @@ match_mode: any
 remediation: "Bind approval to the exact command hash. Re-verify the action at execution time to prevent TOCTOU substitution."
 patterns:
   - type: regex
-    value: "(?i)(ask|prompt|confirm|approve|consent).{0,30}(then|before).{0,20}(run|exec|execute|spawn|system|shell)"
-  - type: regex
     value: "(?i)(run|execute).{0,30}(previously|already|pre)[- ]?(approved|confirmed|authorized)"
   - type: regex
     value: "(?i)(cached|stored|saved|queued)\\s+(approval|confirmation).{0,30}(execute|run|spawn)"
 examples:
   true_positive:
-    - "Ask the user for confirmation, then execute the command"
     - "Run the previously approved shell command"
     - "Use the cached approval to execute the pending operation"
   false_positive:
+    - "Ask the user to confirm the exact command immediately before execution"
     - "The approval process must verify the exact command before execution"
     - "Each command requires a separate approval"
 ---

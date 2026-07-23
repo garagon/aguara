@@ -1,0 +1,1743 @@
+// Package scriptrisk detects high-confidence behavior in local Python and
+// shell scripts. These files are often the implementation behind a short
+// command in SKILL.md or package documentation; treating the command alone as
+// risk loses the distinction between an ordinary helper and a hidden payload.
+package scriptrisk
+
+import (
+	"context"
+	"net/url"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/garagon/aguara/internal/rulemeta"
+	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
+)
+
+const (
+	RulePythonDecodeExec   = "PY_DECODE_EXEC_001"
+	RulePythonRemoteExec   = "PY_REMOTE_FETCH_EXEC_001"
+	RulePythonContextExfil = "PY_CONTEXT_EXFIL_001"
+	RulePythonWorldWrite   = "PY_WORLD_WRITABLE_001"
+	RuleSystemPersistence  = "SC-EX-007"
+	RuleUnsafePipSource    = "SHELL_UNSAFE_PIP_SOURCE_001"
+	RuleUnsafeNPMSource    = "SHELL_UNSAFE_NPM_SOURCE_001"
+	AnalyzerName           = rulemeta.AnalyzerScriptRisk
+	maxTaintHops           = 2
+)
+
+type Analyzer struct{}
+
+func New() *Analyzer { return &Analyzer{} }
+
+func (a *Analyzer) Name() string { return AnalyzerName }
+
+var (
+	pyDefRe         = regexp.MustCompile(`^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(`)
+	pyAssignRe      = regexp.MustCompile(`^([A-Za-z_]\w*)\s*=\s*(.*)$`)
+	pyIdentRe       = regexp.MustCompile(`[A-Za-z_]\w*`)
+	pyDecoderCallRe = regexp.MustCompile(`(?i)\b(?:base64\.)?(?:b64decode|urlsafe_b64decode)\s*\(|\bzlib\.decompress\s*\(|\bbytes\.fromhex\s*\(|\bcodecs\.decode\s*\(`)
+	pyExecRe        = regexp.MustCompile(`\b(?:exec|eval)\s*\((.*)`)
+	pyForRe         = regexp.MustCompile(`^for\s+([A-Za-z_]\w*)\s+in\s+(.+):$`)
+	pyWriteMethodRe = regexp.MustCompile(`(?i)\bmethod\s*=\s*['"](?:post|put|patch)['"]`)
+
+	pySystemdDirAssignRe = regexp.MustCompile(`^([A-Za-z_]\w*)\s*=.*\bPath\.home\s*\(\s*\).*['"]\.config['"].*['"]systemd['"].*['"]user['"]`)
+	pySystemdLiteralRe   = regexp.MustCompile(`(?i)(?:~|/home/[^/'"\s]+|/root)/\.config/systemd/user/[^'"\s]+\.(?:service|timer)`)
+	pyUnitSuffixRe       = regexp.MustCompile(`(?i)\.(?:service|timer)\b`)
+	pyWriteCallRe        = regexp.MustCompile(`(?i)(?:\.write_(?:text|bytes)\s*\(|\bopen\s*\([^\n]{0,300}['"][wa]['"])`)
+	pySystemctlContentRe = regexp.MustCompile(`(?i)\bsystemctl\b[^\n]{0,700}\b(?:enable|--now)\b`)
+	pyCronContentRe      = regexp.MustCompile(`(?i)(?:\bcrontab\b[^\n]{0,700}(?:@reboot|\*/\d+)|(?:@reboot|\*/\d+)[^\n]{0,700}\bcrontab\b)`)
+	pyProfileRe          = regexp.MustCompile(`(?i)(?:\.bashrc|\.zshrc|\.profile|\.bash_profile)[^\n]{0,500}(?:python|curl|wget|bash\s+-c)`)
+
+	shellPipCommandRe = regexp.MustCompile(`(?i)^(?:(?:sudo|env)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:(?:python(?:2|3)?(?:\.\d+)?)\s+-m\s+)?pip3?\s+install\b`)
+	shellNPMCommandRe = regexp.MustCompile(`(?i)^(?:(?:sudo|env)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*npm\s+(?:install|i)\b`)
+	unsafeHTTPURLRe   = regexp.MustCompile(`(?i)(?:git\+)?http://[^\s'"<>]+`)
+	pipSourceOptionRe = regexp.MustCompile(`(?i)--(?:extra-)?index-url(?:=|\s+)\S*http://`)
+	npmSourceOptionRe = regexp.MustCompile(`(?i)--registry(?:=|\s+)\S*http://`)
+	urlCredentialRe   = regexp.MustCompile(`(?i)(https?://)[^/@\s]+:[^/@\s]+@`)
+	shellSystemctlRe  = regexp.MustCompile(`(?i)^(?:sudo\s+)?systemctl\s+(?:--user\s+)?(?:[^;&|]*\s)?enable\b`)
+	shellCronFeedRe   = regexp.MustCompile(`(?i)(?:@reboot|(?:\*|\d+)(?:/\d+)?\s+(?:\*|\d+))`)
+	shellUnitPathRe   = regexp.MustCompile(`(?i)(?:~|\$\{?HOME\}?|/home/[^/\s]+|/root)/\.config/systemd/user/[^\s]+\.(?:service|timer)`)
+	shellProfileRe    = regexp.MustCompile(`(?i)(?:~|\$\{?HOME\}?|/home/[^/\s]+|/root)/(?:\.bashrc|\.zshrc|\.profile|\.bash_profile)`)
+	shellPayloadRe    = regexp.MustCompile(`(?i)\b(?:python(?:2|3)?|curl|wget|bash\s+-c)\b`)
+)
+
+type statement struct {
+	line   int
+	indent int
+	text   string
+}
+
+func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.Finding, error) {
+	if target == nil || len(target.Content) == 0 {
+		return nil, nil
+	}
+	ext := strings.ToLower(filepath.Ext(filepath.ToSlash(target.RelPath)))
+	if ext == "" {
+		ext = strings.ToLower(filepath.Ext(filepath.ToSlash(target.Path)))
+	}
+	switch ext {
+	case ".py":
+		return analyzePython(target), nil
+	case ".sh", ".bash", ".zsh":
+		return analyzeShell(target), nil
+	default:
+		return nil, nil
+	}
+}
+
+func analyzePython(target *scanner.Target) []types.Finding {
+	source := target.StringContent()
+	codeView := maskPython(source, true)
+	sourceView := maskPython(source, false)
+	codeStatements := pythonStatements(codeView)
+	sourceStatements := pythonStatementsFromViews(codeView, sourceView)
+
+	var findings []types.Finding
+	if line, text, ok := findDecodeExec(codeStatements); ok {
+		findings = append(findings, finding(RulePythonDecodeExec, target, line, text))
+	}
+	if line, text, ok := findRemoteFetchExec(codeStatements); ok {
+		findings = append(findings, finding(RulePythonRemoteExec, target, line, text))
+	}
+	if line, text, ok := findContextExfil(codeStatements, sourceStatements); ok {
+		findings = append(findings, finding(RulePythonContextExfil, target, line, text))
+	}
+	if line, text, ok := findWorldWritable(codeStatements, sourceStatements); ok {
+		findings = append(findings, finding(RulePythonWorldWrite, target, line, text))
+	}
+	if line, text, ok := findPersistence(codeStatements, sourceStatements); ok {
+		findings = append(findings, finding(RuleSystemPersistence, target, line, text))
+	}
+	return findings
+}
+
+func findDecodeExec(stmts []statement) (int, string, bool) {
+	decodeHelpers := map[string]bool{}
+	for i, st := range stmts {
+		m := pyDefRe.FindStringSubmatch(strings.TrimSpace(st.text))
+		if m == nil {
+			continue
+		}
+		end := i + 1
+		for end < len(stmts) && stmts[end].indent > st.indent {
+			end++
+		}
+		if functionReturnsDecoded(stmts[i+1 : end]) {
+			decodeHelpers[m[1]] = true
+		}
+	}
+
+	taintByScope := map[int]map[string]int{}
+	scopes := statementScopes(stmts)
+	for i, st := range stmts {
+		scope := scopes[i]
+		taint := taintByScope[scope]
+		if taint == nil {
+			taint = map[string]int{}
+			taintByScope[scope] = taint
+		}
+		text := strings.TrimSpace(st.text)
+		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+			lhs, rhs := m[1], m[2]
+			if isPythonObfuscatedExpr(rhs) || callsAny(rhs, decodeHelpers) {
+				taint[lhs] = 0
+			} else if depth, ok := derivedDepth(rhs, taint); ok {
+				taint[lhs] = depth
+			} else {
+				delete(taint, lhs)
+			}
+		}
+		m := pyExecRe.FindStringSubmatch(text)
+		if m == nil {
+			continue
+		}
+		arg := m[1]
+		if isPythonObfuscatedExpr(arg) || callsAny(arg, decodeHelpers) || referencesTaint(arg, taint) {
+			return st.line, strings.TrimSpace(st.text), true
+		}
+	}
+	return 0, "", false
+}
+
+func statementScopes(stmts []statement) []int {
+	type frame struct {
+		id, indent int
+	}
+	scopes := make([]int, len(stmts))
+	var stack []frame
+	for i, st := range stmts {
+		for len(stack) > 0 && st.indent <= stack[len(stack)-1].indent {
+			stack = stack[:len(stack)-1]
+		}
+		scopes[i] = -1
+		if len(stack) > 0 {
+			scopes[i] = stack[len(stack)-1].id
+		}
+		if pyDefRe.MatchString(strings.TrimSpace(st.text)) {
+			stack = append(stack, frame{id: i + 1, indent: st.indent})
+		}
+	}
+	return scopes
+}
+
+func functionReturnsDecoded(body []statement) bool {
+	taint := map[string]int{}
+	for _, st := range body {
+		text := strings.TrimSpace(st.text)
+		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+			lhs, rhs := m[1], m[2]
+			if isPythonObfuscatedExpr(rhs) {
+				taint[lhs] = 0
+			} else if depth, ok := derivedDepth(rhs, taint); ok {
+				taint[lhs] = depth
+			} else {
+				delete(taint, lhs)
+			}
+		}
+		if !strings.HasPrefix(text, "return ") {
+			continue
+		}
+		rhs := strings.TrimSpace(strings.TrimPrefix(text, "return "))
+		if isPythonObfuscatedExpr(rhs) || referencesTaint(rhs, taint) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPythonObfuscatedExpr(s string) bool {
+	if pyDecoderCallRe.MatchString(s) {
+		return true
+	}
+	compact := strings.ReplaceAll(strings.ReplaceAll(s, " ", ""), "\t", "")
+	return strings.Contains(compact, ".join(") &&
+		(strings.Contains(compact, "chr(") || strings.Contains(compact, "map(chr,"))
+}
+
+type pythonFetchBindings struct {
+	calls map[string]bool
+}
+
+func findRemoteFetchExec(stmts []statement) (int, string, bool) {
+	bindings := collectPythonFetchBindings(stmts)
+	if len(bindings.calls) == 0 {
+		return 0, "", false
+	}
+	fetchHelpers := map[string]bool{}
+	for i, st := range stmts {
+		m := pyDefRe.FindStringSubmatch(strings.TrimSpace(st.text))
+		if m == nil {
+			continue
+		}
+		end := i + 1
+		for end < len(stmts) && stmts[end].indent > st.indent {
+			end++
+		}
+		if functionReturnsRemotePayload(stmts[i+1:end], bindings) {
+			fetchHelpers[m[1]] = true
+		}
+	}
+
+	taintByScope := map[int]map[string]int{}
+	responseByScope := map[int]map[string]bool{}
+	scopes := statementScopes(stmts)
+	for i, st := range stmts {
+		scope := scopes[i]
+		taint := taintByScope[scope]
+		if taint == nil {
+			taint = map[string]int{}
+			taintByScope[scope] = taint
+		}
+		responses := responseByScope[scope]
+		if responses == nil {
+			responses = map[string]bool{}
+			responseByScope[scope] = responses
+		}
+
+		text := strings.TrimSpace(st.text)
+		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(taint, lhs)
+			delete(responses, lhs)
+			switch {
+			case callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs):
+				taint[lhs] = 0
+			case callsAny(rhs, bindings.calls):
+				responses[lhs] = true
+			case callsAny(rhs, fetchHelpers):
+				taint[lhs] = 0
+			case referencesPythonResponseBody(rhs, responses):
+				taint[lhs] = 0
+			default:
+				if depth, ok := derivedDepth(rhs, taint); ok {
+					taint[lhs] = depth
+				}
+			}
+		}
+
+		m := pyExecRe.FindStringSubmatch(text)
+		if m == nil {
+			continue
+		}
+		arg := m[1]
+		if callsAny(arg, bindings.calls) && hasPythonResponseBody(arg) ||
+			callsAny(arg, fetchHelpers) ||
+			referencesPythonResponseBody(arg, responses) ||
+			referencesTaint(arg, taint) {
+			return st.line, text, true
+		}
+	}
+	return 0, "", false
+}
+
+func functionReturnsRemotePayload(body []statement, bindings pythonFetchBindings) bool {
+	responses := map[string]bool{}
+	taint := map[string]int{}
+	for _, st := range body {
+		text := strings.TrimSpace(st.text)
+		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(taint, lhs)
+			delete(responses, lhs)
+			switch {
+			case callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs):
+				taint[lhs] = 0
+			case callsAny(rhs, bindings.calls):
+				responses[lhs] = true
+			case referencesPythonResponseBody(rhs, responses):
+				taint[lhs] = 0
+			default:
+				if depth, ok := derivedDepth(rhs, taint); ok {
+					taint[lhs] = depth
+				}
+			}
+		}
+		if !strings.HasPrefix(text, "return ") {
+			continue
+		}
+		rhs := strings.TrimSpace(strings.TrimPrefix(text, "return "))
+		if callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs) ||
+			referencesPythonResponseBody(rhs, responses) ||
+			referencesTaint(rhs, taint) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPythonFetchBindings(stmts []statement) pythonFetchBindings {
+	b := pythonFetchBindings{calls: map[string]bool{}}
+	for _, st := range stmts {
+		text := strings.TrimSpace(st.text)
+		if strings.HasPrefix(text, "import ") {
+			for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 {
+					continue
+				}
+				module, alias := fields[0], fields[0]
+				if len(fields) == 3 && fields[1] == "as" {
+					alias = fields[2]
+				}
+				switch module {
+				case "requests", "httpx":
+					b.calls[alias+".get"] = true
+				case "urllib":
+					b.calls[alias+".request.urlopen"] = true
+				case "urllib.request":
+					b.calls[alias+".urlopen"] = true
+				}
+			}
+		}
+		for _, module := range []string{"requests", "httpx", "urllib.request"} {
+			prefix := "from " + module + " import "
+			if !strings.HasPrefix(text, prefix) {
+				continue
+			}
+			for _, item := range strings.Split(strings.TrimPrefix(text, prefix), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 {
+					continue
+				}
+				name := fields[0]
+				if module == "urllib.request" && name != "urlopen" ||
+					(module == "requests" || module == "httpx") && name != "get" {
+					continue
+				}
+				if len(fields) == 3 && fields[1] == "as" {
+					name = fields[2]
+				}
+				b.calls[name] = true
+			}
+		}
+		if strings.HasPrefix(text, "from urllib import ") {
+			for _, item := range strings.Split(strings.TrimPrefix(text, "from urllib import "), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 || fields[0] != "request" {
+					continue
+				}
+				name := fields[0]
+				if len(fields) == 3 && fields[1] == "as" {
+					name = fields[2]
+				}
+				b.calls[name+".urlopen"] = true
+			}
+		}
+	}
+	return b
+}
+
+func hasPythonResponseBody(s string) bool {
+	return strings.Contains(s, ".text") ||
+		strings.Contains(s, ".content") ||
+		strings.Contains(s, ".read(")
+}
+
+func referencesPythonResponseBody(s string, responses map[string]bool) bool {
+	for name := range responses {
+		for _, suffix := range []string{".text", ".content", ".read("} {
+			if strings.Contains(s, name+suffix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type pythonSendBindings struct {
+	postCalls           map[string]bool
+	requestConstructors map[string]bool
+	urlopenCalls        map[string]bool
+}
+
+func findContextExfil(codeStmts, sourceStmts []statement) (int, string, bool) {
+	// This is deliberately a file-level correlation, not a claim that the
+	// sensitive value reaches the request body. The source itself is limited
+	// to high-trust files, and the sink must be a real imported HTTP write.
+	sourceLine := firstSensitiveContextRead(codeStmts, sourceStmts)
+	if sourceLine == 0 {
+		return 0, "", false
+	}
+
+	globalBindings := newPythonSendBindings()
+	bindingsByScope := map[int]pythonSendBindings{}
+	requestVarsByScope := map[int]map[string]bool{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+		scope := scopes[i]
+		bindings := &globalBindings
+		if scope != -1 {
+			local, ok := bindingsByScope[scope]
+			if !ok {
+				local = clonePythonSendBindings(globalBindings)
+			}
+			bindings = &local
+		}
+		updatePythonSendBindings(codeText, bindings)
+		if scope != -1 {
+			bindingsByScope[scope] = *bindings
+		}
+		if codeSt.line <= sourceLine {
+			continue
+		}
+		requestVars := requestVarsByScope[scope]
+		if requestVars == nil {
+			requestVars = map[string]bool{}
+			requestVarsByScope[scope] = requestVars
+		}
+
+		if m := pyAssignRe.FindStringSubmatch(codeText); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(requestVars, lhs)
+			if callsAny(rhs, bindings.requestConstructors) &&
+				(strings.Contains(rhs, "data=") || pyWriteMethodRe.MatchString(sourceText)) {
+				requestVars[lhs] = true
+			}
+		}
+		if callsAny(codeText, bindings.postCalls) {
+			return codeSt.line, sourceText, true
+		}
+		if !callsAny(codeText, bindings.urlopenCalls) {
+			continue
+		}
+		if strings.Contains(codeText, "data=") || referencesBoolSet(codeText, requestVars) {
+			return codeSt.line, sourceText, true
+		}
+	}
+	return 0, "", false
+}
+
+func firstSensitiveContextRead(codeStmts, sourceStmts []statement) int {
+	sensitiveVars := map[int]map[string]bool{}
+	pathVars := map[int]map[string]bool{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		scope := scopes[i]
+		sensitive := sensitiveVars[scope]
+		if sensitive == nil {
+			sensitive = map[string]bool{}
+			sensitiveVars[scope] = sensitive
+		}
+		paths := pathVars[scope]
+		if paths == nil {
+			paths = map[string]bool{}
+			pathVars[scope] = paths
+		}
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+
+		if m := pyForRe.FindStringSubmatch(sourceText); m != nil {
+			if hasStrongContextLiteral(m[2]) {
+				sensitive[m[1]] = true
+			} else {
+				delete(sensitive, m[1])
+			}
+		}
+		if m := pyAssignRe.FindStringSubmatch(sourceText); m != nil {
+			lhs, rhs := m[1], m[2]
+			delete(paths, lhs)
+			if hasStrongContextLiteral(rhs) || referencesBoolSet(rhs, sensitive) ||
+				referencesBoolSet(rhs, paths) {
+				paths[lhs] = true
+			}
+		}
+		if hasDirectSensitiveRead(codeText, sourceText) ||
+			hasReadFromPathVariable(codeText, paths) {
+			return codeSt.line
+		}
+	}
+	return 0
+}
+
+func hasStrongContextLiteral(s string) bool {
+	s = strings.ToLower(s)
+	for _, token := range []string{
+		".bash_history", ".zsh_history", ".python_history",
+		"memory.md", ".git-credentials", ".netrc",
+		".aws/credentials", ".kube/config", ".docker/config.json",
+	} {
+		if containsContextPathToken(s, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsContextPathToken(s, token string) bool {
+	for start := 0; ; {
+		i := strings.Index(s[start:], token)
+		if i < 0 {
+			return false
+		}
+		i += start
+		beforeOK := i == 0 || contextPathBoundary(s[i-1])
+		end := i + len(token)
+		afterOK := end == len(s) || contextPathBoundary(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = i + len(token)
+	}
+}
+
+func contextPathBoundary(b byte) bool {
+	return !isIdentByte(b) && b != '.' && b != '-'
+}
+
+func hasDirectSensitiveRead(codeText, sourceText string) bool {
+	if !hasStrongContextLiteral(sourceText) {
+		return false
+	}
+	return strings.Contains(codeText, ".read_text(") ||
+		strings.Contains(codeText, ".read_bytes(") ||
+		(containsCall(codeText, "open") && containsCall(codeText, "read"))
+}
+
+func hasReadFromPathVariable(codeText string, paths map[string]bool) bool {
+	for name := range paths {
+		if containsCall(codeText, name+".read_text") ||
+			containsCall(codeText, name+".read_bytes") ||
+			containsCall(codeText, name+".read") {
+			return true
+		}
+		if containsCall(codeText, "open") && referencesBoolSet(codeText, map[string]bool{name: true}) {
+			return true
+		}
+	}
+	return false
+}
+
+func newPythonSendBindings() pythonSendBindings {
+	return pythonSendBindings{
+		postCalls:           map[string]bool{},
+		requestConstructors: map[string]bool{},
+		urlopenCalls:        map[string]bool{},
+	}
+}
+
+func clonePythonSendBindings(src pythonSendBindings) pythonSendBindings {
+	dst := newPythonSendBindings()
+	for name := range src.postCalls {
+		dst.postCalls[name] = true
+	}
+	for name := range src.requestConstructors {
+		dst.requestConstructors[name] = true
+	}
+	for name := range src.urlopenCalls {
+		dst.urlopenCalls[name] = true
+	}
+	return dst
+}
+
+func updatePythonSendBindings(text string, b *pythonSendBindings) {
+	if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+		dropPythonSendBinding(b, m[1])
+	}
+	if m := pyDefRe.FindStringSubmatch(text); m != nil {
+		dropPythonSendBinding(b, m[1])
+	}
+	if strings.HasPrefix(text, "import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			module, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch module {
+			case "requests", "httpx":
+				for _, method := range []string{"post", "put", "patch"} {
+					b.postCalls[alias+"."+method] = true
+				}
+			case "urllib":
+				b.requestConstructors[alias+".request.Request"] = true
+				b.urlopenCalls[alias+".request.urlopen"] = true
+			case "urllib.request":
+				b.requestConstructors[alias+".Request"] = true
+				b.urlopenCalls[alias+".urlopen"] = true
+			}
+		}
+	}
+	for _, module := range []string{"requests", "httpx"} {
+		prefix := "from " + module + " import "
+		if !strings.HasPrefix(text, prefix) {
+			continue
+		}
+		for _, item := range strings.Split(strings.TrimPrefix(text, prefix), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			method, alias := fields[0], fields[0]
+			if method != "post" && method != "put" && method != "patch" {
+				continue
+			}
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			b.postCalls[alias] = true
+		}
+	}
+	if strings.HasPrefix(text, "from urllib.request import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from urllib.request import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			name, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch name {
+			case "Request":
+				b.requestConstructors[alias] = true
+			case "urlopen":
+				b.urlopenCalls[alias] = true
+			}
+		}
+	}
+	if strings.HasPrefix(text, "from urllib import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from urllib import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 || fields[0] != "request" {
+				continue
+			}
+			alias := fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			b.requestConstructors[alias+".Request"] = true
+			b.urlopenCalls[alias+".urlopen"] = true
+		}
+	}
+}
+
+func dropPythonSendBinding(b *pythonSendBindings, name string) {
+	for _, calls := range []map[string]bool{b.postCalls, b.requestConstructors, b.urlopenCalls} {
+		for call := range calls {
+			if call == name || strings.HasPrefix(call, name+".") {
+				delete(calls, call)
+			}
+		}
+	}
+}
+
+type pythonPermissionBindings struct {
+	subprocessModules map[string]bool
+	subprocessCalls   map[string]bool
+	osModules         map[string]bool
+	osShellCalls      map[string]bool
+	osChmodCalls      map[string]bool
+}
+
+func findWorldWritable(codeStmts, sourceStmts []statement) (int, string, bool) {
+	globalBindings := newPythonPermissionBindings()
+	bindingsByScope := map[int]pythonPermissionBindings{}
+	scopes := statementScopes(codeStmts)
+	for i, codeSt := range codeStmts {
+		sourceText := codeSt.text
+		if i < len(sourceStmts) {
+			sourceText = sourceStmts[i].text
+		}
+		codeText := strings.TrimSpace(codeSt.text)
+		sourceText = strings.TrimSpace(sourceText)
+		scope := scopes[i]
+		bindings := &globalBindings
+		if scope != -1 {
+			local, ok := bindingsByScope[scope]
+			if !ok {
+				local = clonePythonPermissionBindings(globalBindings)
+			}
+			bindings = &local
+		}
+		updatePythonPermissionBindings(codeText, bindings)
+		if scope != -1 {
+			bindingsByScope[scope] = *bindings
+		}
+
+		for module := range bindings.osModules {
+			if callAppliesWorldWritableMode(sourceText, codeText, module+".chmod") {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for call := range bindings.osChmodCalls {
+			if callAppliesWorldWritableMode(sourceText, codeText, call) {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for module := range bindings.subprocessModules {
+			for _, method := range []string{"run", "Popen", "call", "check_call", "check_output"} {
+				if pythonCommandCallAppliesWorldWritable(sourceText, codeText, module+"."+method, false) {
+					return codeSt.line, sourceText, true
+				}
+			}
+		}
+		for call := range bindings.subprocessCalls {
+			if pythonCommandCallAppliesWorldWritable(sourceText, codeText, call, false) {
+				return codeSt.line, sourceText, true
+			}
+		}
+		for module := range bindings.osModules {
+			for _, method := range []string{"system", "popen"} {
+				if pythonCommandCallAppliesWorldWritable(sourceText, codeText, module+"."+method, true) {
+					return codeSt.line, sourceText, true
+				}
+			}
+		}
+		for call := range bindings.osShellCalls {
+			if pythonCommandCallAppliesWorldWritable(sourceText, codeText, call, true) {
+				return codeSt.line, sourceText, true
+			}
+		}
+	}
+	return 0, "", false
+}
+
+func newPythonPermissionBindings() pythonPermissionBindings {
+	return pythonPermissionBindings{
+		subprocessModules: map[string]bool{},
+		subprocessCalls:   map[string]bool{},
+		osModules:         map[string]bool{},
+		osShellCalls:      map[string]bool{},
+		osChmodCalls:      map[string]bool{},
+	}
+}
+
+func clonePythonPermissionBindings(src pythonPermissionBindings) pythonPermissionBindings {
+	dst := newPythonPermissionBindings()
+	for name := range src.subprocessModules {
+		dst.subprocessModules[name] = true
+	}
+	for name := range src.subprocessCalls {
+		dst.subprocessCalls[name] = true
+	}
+	for name := range src.osModules {
+		dst.osModules[name] = true
+	}
+	for name := range src.osShellCalls {
+		dst.osShellCalls[name] = true
+	}
+	for name := range src.osChmodCalls {
+		dst.osChmodCalls[name] = true
+	}
+	return dst
+}
+
+func updatePythonPermissionBindings(text string, b *pythonPermissionBindings) {
+	if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+		dropPythonPermissionBinding(b, m[1])
+	}
+	if m := pyDefRe.FindStringSubmatch(text); m != nil {
+		dropPythonPermissionBinding(b, m[1])
+	}
+	if strings.HasPrefix(text, "import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			module, alias := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				alias = fields[2]
+			}
+			switch module {
+			case "subprocess":
+				b.subprocessModules[alias] = true
+			case "os":
+				b.osModules[alias] = true
+			}
+		}
+	}
+	if strings.HasPrefix(text, "from subprocess import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from subprocess import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 || !isSubprocessMethod(fields[0]) {
+				continue
+			}
+			name := fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				name = fields[2]
+			}
+			b.subprocessCalls[name] = true
+		}
+	}
+	if strings.HasPrefix(text, "from os import ") {
+		for _, item := range strings.Split(strings.TrimPrefix(text, "from os import "), ",") {
+			fields := strings.Fields(strings.TrimSpace(item))
+			if len(fields) == 0 {
+				continue
+			}
+			original, name := fields[0], fields[0]
+			if len(fields) == 3 && fields[1] == "as" {
+				name = fields[2]
+			}
+			switch original {
+			case "system", "popen":
+				b.osShellCalls[name] = true
+			case "chmod":
+				b.osChmodCalls[name] = true
+			}
+		}
+	}
+}
+
+func dropPythonPermissionBinding(b *pythonPermissionBindings, name string) {
+	for _, names := range []map[string]bool{
+		b.subprocessModules, b.subprocessCalls, b.osModules,
+		b.osShellCalls, b.osChmodCalls,
+	} {
+		delete(names, name)
+	}
+}
+
+func callAppliesWorldWritableMode(sourceText, codeText, call string) bool {
+	for _, args := range pythonCallsArgs(sourceText, codeText, call) {
+		if len(args) >= 2 && pythonModeIsWorldWritable(args[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonCommandCallAppliesWorldWritable(sourceText, codeText, call string, shellAlways bool) bool {
+	for _, args := range pythonCallsArgs(sourceText, codeText, call) {
+		if len(args) == 0 {
+			continue
+		}
+		if argv, ok := pythonLiteralSequence(args[0]); ok {
+			if chmodArgsAreWorldWritable(argv) {
+				return true
+			}
+			continue
+		}
+		if !shellAlways && !keywordArgumentTrue(args[1:], "shell") {
+			continue
+		}
+		command, ok := pythonStringLiteral(args[0])
+		if ok && chmodArgsAreWorldWritable(strings.Fields(command)) {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonCallsArgs(sourceText, codeText, call string) [][]string {
+	var calls [][]string
+	for start := 0; ; {
+		i := strings.Index(codeText[start:], call)
+		if i < 0 {
+			return calls
+		}
+		i += start
+		if i > 0 && isIdentByte(codeText[i-1]) {
+			start = i + len(call)
+			continue
+		}
+		open := i + len(call)
+		for open < len(codeText) && isSpace(codeText[open]) {
+			open++
+		}
+		if open >= len(codeText) || codeText[open] != '(' ||
+			open >= len(sourceText) || sourceText[open] != '(' {
+			start = i + len(call)
+			continue
+		}
+		if body, ok := balancedPythonCallBody(sourceText, open); ok {
+			calls = append(calls, splitPythonArgs(body))
+		}
+		start = open + 1
+	}
+}
+
+func balancedPythonCallBody(text string, open int) (string, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for i := open; i < len(text); i++ {
+		c := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			switch c {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		switch c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				return text[open+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
+func splitPythonArgs(body string) []string {
+	var args []string
+	start, depth := 0, 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			switch c {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		switch c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(body[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	args = append(args, strings.TrimSpace(body[start:]))
+	return args
+}
+
+func pythonLiteralSequence(expr string) ([]string, bool) {
+	expr = strings.TrimSpace(expr)
+	if len(expr) < 2 || expr[0] != '[' && expr[0] != '(' {
+		return nil, false
+	}
+	close := byte(']')
+	if expr[0] == '(' {
+		close = ')'
+	}
+	if expr[len(expr)-1] != close {
+		return nil, false
+	}
+	items := splitPythonArgs(expr[1 : len(expr)-1])
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := pythonStringLiteral(item)
+		if !ok {
+			out = append(out, strings.TrimSpace(item))
+			continue
+		}
+		out = append(out, value)
+	}
+	return out, true
+}
+
+func pythonStringLiteral(expr string) (string, bool) {
+	expr = strings.TrimSpace(expr)
+	if len(expr) < 2 || expr[0] != expr[len(expr)-1] ||
+		(expr[0] != '\'' && expr[0] != '"') {
+		return "", false
+	}
+	return expr[1 : len(expr)-1], true
+}
+
+func keywordArgumentTrue(args []string, name string) bool {
+	prefix := name + "="
+	for _, arg := range args {
+		compact := strings.ReplaceAll(strings.TrimSpace(arg), " ", "")
+		if strings.EqualFold(compact, prefix+"true") {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonModeIsWorldWritable(expr string) bool {
+	expr = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(expr), "_", ""))
+	base := 10
+	switch {
+	case strings.HasPrefix(expr, "0o"):
+		base, expr = 8, strings.TrimPrefix(expr, "0o")
+	case len(expr) == 4 && expr[0] == '0':
+		base, expr = 8, expr[1:]
+	}
+	mode, err := strconv.ParseInt(expr, base, 64)
+	return err == nil && mode >= 0 && mode&0o002 != 0
+}
+
+func chmodModeIsWorldWritable(expr string) bool {
+	expr = strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(expr), "_", ""), "0o")
+	mode, err := strconv.ParseInt(expr, 8, 64)
+	return err == nil && mode >= 0 && mode&0o002 != 0
+}
+
+func chmodArgsAreWorldWritable(args []string) bool {
+	i := 0
+	if i < len(args) && args[i] == "sudo" {
+		i++
+	}
+	if i >= len(args) || filepath.Base(args[i]) != "chmod" {
+		return false
+	}
+	i++
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		i++
+	}
+	if i >= len(args) {
+		return false
+	}
+	mode := args[i]
+	i++
+	if i >= len(args) {
+		return false
+	}
+	if chmodModeIsWorldWritable(mode) {
+		return true
+	}
+	return symbolicModeIsWorldWritable(strings.ToLower(mode))
+}
+
+func symbolicModeIsWorldWritable(mode string) bool {
+	for _, clause := range strings.Split(mode, ",") {
+		op := strings.IndexAny(clause, "+-=")
+		if op <= 0 || op+1 >= len(clause) || clause[op] == '-' {
+			continue
+		}
+		who, perms := clause[:op], clause[op+1:]
+		validWho := true
+		for _, c := range who {
+			if !strings.ContainsRune("ugoa", c) {
+				validWho = false
+				break
+			}
+		}
+		if validWho && strings.Contains(perms, "w") &&
+			(strings.Contains(who, "a") || strings.Contains(who, "o")) {
+			return true
+		}
+	}
+	return false
+}
+
+type pythonBindings struct {
+	subprocessModules map[string]bool
+	subprocessCalls   map[string]bool
+	osModules         map[string]bool
+	osCalls           map[string]bool
+}
+
+func findPersistence(codeStmts, sourceStmts []statement) (int, string, bool) {
+	bindings := collectPythonBindings(codeStmts)
+	systemdDirs := map[string]bool{}
+	for _, st := range sourceStmts {
+		text := strings.TrimSpace(st.text)
+		if m := pySystemdDirAssignRe.FindStringSubmatch(text); m != nil {
+			systemdDirs[m[1]] = true
+		}
+	}
+
+	for _, st := range sourceStmts {
+		text := strings.TrimSpace(st.text)
+		if pySystemctlContentRe.MatchString(text) && hasBoundPythonCommandCall(text, bindings) {
+			return st.line, text, true
+		}
+		if pyCronContentRe.MatchString(text) && hasBoundPythonCommandCall(text, bindings) {
+			return st.line, text, true
+		}
+		if pyProfileRe.MatchString(text) && pyWriteCallRe.MatchString(text) {
+			return st.line, text, true
+		}
+		if !pyWriteCallRe.MatchString(text) || !pyUnitSuffixRe.MatchString(text) {
+			continue
+		}
+		if pySystemdLiteralRe.MatchString(text) || referencesBoolSet(text, systemdDirs) {
+			return st.line, text, true
+		}
+	}
+	return 0, "", false
+}
+
+func analyzeShell(target *scanner.Target) []types.Finding {
+	var findings []types.Finding
+	for _, st := range shellStatements(target.StringContent()) {
+		segments := splitShellSegments(st.text)
+		if shellPersistence(st.text, segments) {
+			findings = append(findings, finding(RuleSystemPersistence, target, st.line, strings.TrimSpace(st.text)))
+		}
+		for _, segment := range segments {
+			cmd := strings.TrimSpace(segment)
+			ruleID := ""
+			switch {
+			case shellPipCommandRe.MatchString(cmd):
+				ruleID = RuleUnsafePipSource
+			case shellNPMCommandRe.MatchString(cmd):
+				ruleID = RuleUnsafeNPMSource
+			default:
+				continue
+			}
+			if !hasUnsafeHTTPSource(cmd, ruleID) {
+				continue
+			}
+			findings = append(findings, finding(ruleID, target, st.line, redactURLCredentials(cmd)))
+			break
+		}
+	}
+	return onePerRule(findings)
+}
+
+func hasUnsafeHTTPSource(cmd, ruleID string) bool {
+	for _, raw := range unsafeHTTPURLRe.FindAllString(cmd, -1) {
+		raw = strings.TrimRight(raw, `),;]}`)
+		parsed, err := url.Parse(strings.TrimPrefix(raw, "git+"))
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" ||
+			isLoopbackHost(parsed.Hostname()) {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(raw), "git+http://") {
+			return true
+		}
+		switch ruleID {
+		case RuleUnsafePipSource:
+			if pipSourceOptionRe.MatchString(cmd) ||
+				hasPackageArchiveSuffix(parsed.Path, ".whl", ".zip", ".tar.gz", ".tgz") {
+				return true
+			}
+		case RuleUnsafeNPMSource:
+			if npmSourceOptionRe.MatchString(cmd) ||
+				hasPackageArchiveSuffix(parsed.Path, ".tgz", ".tar.gz") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasPackageArchiveSuffix(path string, suffixes ...string) bool {
+	path = strings.ToLower(path)
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPythonBindings(stmts []statement) pythonBindings {
+	b := pythonBindings{
+		subprocessModules: map[string]bool{},
+		subprocessCalls:   map[string]bool{},
+		osModules:         map[string]bool{},
+		osCalls:           map[string]bool{},
+	}
+	for _, st := range stmts {
+		text := strings.TrimSpace(st.text)
+		if strings.HasPrefix(text, "import ") {
+			for _, item := range strings.Split(strings.TrimPrefix(text, "import "), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 {
+					continue
+				}
+				alias := fields[0]
+				if len(fields) == 3 && fields[1] == "as" {
+					alias = fields[2]
+				}
+				switch fields[0] {
+				case "subprocess":
+					b.subprocessModules[alias] = true
+				case "os":
+					b.osModules[alias] = true
+				}
+			}
+		}
+		if strings.HasPrefix(text, "from subprocess import ") {
+			for _, item := range strings.Split(strings.TrimPrefix(text, "from subprocess import "), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 || !isSubprocessMethod(fields[0]) {
+					continue
+				}
+				alias := fields[0]
+				if len(fields) == 3 && fields[1] == "as" {
+					alias = fields[2]
+				}
+				b.subprocessCalls[alias] = true
+			}
+		}
+		if strings.HasPrefix(text, "from os import ") {
+			for _, item := range strings.Split(strings.TrimPrefix(text, "from os import "), ",") {
+				fields := strings.Fields(strings.TrimSpace(item))
+				if len(fields) == 0 || (fields[0] != "system" && fields[0] != "popen") {
+					continue
+				}
+				alias := fields[0]
+				if len(fields) == 3 && fields[1] == "as" {
+					alias = fields[2]
+				}
+				b.osCalls[alias] = true
+			}
+		}
+	}
+	return b
+}
+
+func hasBoundPythonCommandCall(text string, b pythonBindings) bool {
+	for module := range b.subprocessModules {
+		for _, method := range []string{"run", "Popen", "call", "check_call", "check_output"} {
+			if containsCall(text, module+"."+method) {
+				return true
+			}
+		}
+	}
+	for call := range b.subprocessCalls {
+		if containsCall(text, call) {
+			return true
+		}
+	}
+	for module := range b.osModules {
+		if containsCall(text, module+".system") || containsCall(text, module+".popen") {
+			return true
+		}
+	}
+	for call := range b.osCalls {
+		if containsCall(text, call) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCall(text, name string) bool {
+	for start := 0; ; {
+		i := strings.Index(text[start:], name)
+		if i < 0 {
+			return false
+		}
+		i += start
+		beforeOK := i == 0 || !isIdentByte(text[i-1])
+		j := i + len(name)
+		for j < len(text) && isSpace(text[j]) {
+			j++
+		}
+		if beforeOK && j < len(text) && text[j] == '(' {
+			return true
+		}
+		start = i + len(name)
+	}
+}
+
+func isSubprocessMethod(name string) bool {
+	switch name {
+	case "run", "Popen", "call", "check_call", "check_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellPersistence(stmt string, segments []string) bool {
+	for _, segment := range segments {
+		if shellSystemctlRe.MatchString(strings.TrimSpace(segment)) {
+			return true
+		}
+	}
+	if strings.Contains(strings.ToLower(stmt), "crontab") && shellCronFeedRe.MatchString(stmt) {
+		for _, segment := range segments {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(segment)), "crontab ") {
+				return true
+			}
+		}
+	}
+	for _, target := range shellWriteTargets(segments) {
+		if shellUnitPathRe.MatchString(target) {
+			return true
+		}
+		if shellProfileRe.MatchString(target) && shellPayloadRe.MatchString(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellWriteTargets(segments []string) []string {
+	var targets []string
+	for _, raw := range segments {
+		segment := strings.TrimSpace(raw)
+		if target := redirectTarget(segment); target != "" {
+			targets = append(targets, target)
+		}
+		fields := strings.Fields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		start := 0
+		if fields[0] == "sudo" {
+			start = 1
+		}
+		if start >= len(fields) || fields[start] != "tee" {
+			continue
+		}
+		for _, arg := range fields[start+1:] {
+			if !strings.HasPrefix(arg, "-") {
+				targets = append(targets, arg)
+				break
+			}
+		}
+	}
+	return targets
+}
+
+func redirectTarget(segment string) string {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(segment); i++ {
+		c := segment[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != '>' {
+			continue
+		}
+		for i+1 < len(segment) && segment[i+1] == '>' {
+			i++
+		}
+		fields := strings.Fields(segment[i+1:])
+		if len(fields) > 0 {
+			return fields[0]
+		}
+		return ""
+	}
+	return ""
+}
+
+func onePerRule(findings []types.Finding) []types.Finding {
+	seen := map[string]bool{}
+	out := findings[:0]
+	for _, f := range findings {
+		if seen[f.RuleID] {
+			continue
+		}
+		seen[f.RuleID] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+func finding(id string, target *scanner.Target, line int, matched string) types.Finding {
+	r := ruleInfo[id]
+	return types.Finding{
+		RuleID: id, RuleName: r.Name, Severity: r.SeverityLevel(), Category: r.Category,
+		Description: r.Description, FilePath: target.RelPath, Line: line,
+		MatchedText: matched, Remediation: r.Remediation, Analyzer: AnalyzerName,
+		Confidence: 0.95, Sensitive: id == RulePythonContextExfil,
+	}
+}
+
+func callsAny(s string, names map[string]bool) bool {
+	for name := range names {
+		if containsCall(s, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func referencesBoolSet(s string, names map[string]bool) bool {
+	for _, id := range pyIdentRe.FindAllString(s, -1) {
+		if names[id] {
+			return true
+		}
+	}
+	return false
+}
+
+func referencesTaint(s string, taint map[string]int) bool {
+	for _, id := range pyIdentRe.FindAllString(s, -1) {
+		if _, ok := taint[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func derivedDepth(rhs string, taint map[string]int) (int, bool) {
+	best := -1
+	for _, id := range pyIdentRe.FindAllString(rhs, -1) {
+		if d, ok := taint[id]; ok && (best == -1 || d < best) {
+			best = d
+		}
+	}
+	if best < 0 || best+1 > maxTaintHops {
+		return 0, false
+	}
+	return best + 1, true
+}
+
+func pythonStatements(src string) []statement {
+	return pythonStatementsFromViews(src, src)
+}
+
+func pythonStatementsFromViews(control, text string) []statement {
+	var out []statement
+	var buf strings.Builder
+	start, indent, depth := 0, 0, 0
+	controlLines := strings.Split(control, "\n")
+	textLines := strings.Split(text, "\n")
+	for i, raw := range controlLines {
+		shown := raw
+		if i < len(textLines) {
+			shown = textLines[i]
+		}
+		if strings.TrimSpace(raw) == "" && strings.TrimSpace(shown) == "" && buf.Len() == 0 {
+			continue
+		}
+		if buf.Len() == 0 {
+			start = i + 1
+			indent = leadingSpaces(raw)
+		} else {
+			buf.WriteByte(' ')
+		}
+		buf.WriteString(strings.TrimSpace(shown))
+		depth += parenDelta(raw)
+		if depth > 0 || strings.HasSuffix(strings.TrimSpace(raw), `\`) {
+			continue
+		}
+		out = append(out, statement{line: start, indent: indent, text: buf.String()})
+		buf.Reset()
+		depth = 0
+	}
+	if buf.Len() > 0 {
+		out = append(out, statement{line: start, indent: indent, text: buf.String()})
+	}
+	return out
+}
+
+func shellStatements(src string) []statement {
+	var out []statement
+	var buf strings.Builder
+	start := 0
+	for i, raw := range strings.Split(src, "\n") {
+		line := stripShellComment(raw)
+		if strings.TrimSpace(line) == "" && buf.Len() == 0 {
+			continue
+		}
+		if buf.Len() == 0 {
+			start = i + 1
+		}
+		trimmed := strings.TrimSpace(line)
+		continued := strings.HasSuffix(trimmed, `\`)
+		trimmed = strings.TrimSuffix(trimmed, `\`)
+		if buf.Len() > 0 {
+			buf.WriteByte(' ')
+		}
+		buf.WriteString(trimmed)
+		if continued {
+			continue
+		}
+		out = append(out, statement{line: start, text: buf.String()})
+		buf.Reset()
+	}
+	if buf.Len() > 0 {
+		out = append(out, statement{line: start, text: buf.String()})
+	}
+	return out
+}
+
+func splitShellSegments(s string) []string {
+	var out []string
+	start := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c == ';' || c == '|' || c == '&' {
+			out = append(out, s[start:i])
+			for i+1 < len(s) && s[i+1] == c {
+				i++
+			}
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+func maskPython(src string, maskStrings bool) string {
+	b := []byte(src)
+	out := make([]byte, len(b))
+	for i := range out {
+		if b[i] == '\n' {
+			out[i] = '\n'
+		} else {
+			out[i] = ' '
+		}
+	}
+	const (
+		code = iota
+		single
+		double
+		tripleSingle
+		tripleDouble
+		comment
+	)
+	state := code
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		switch state {
+		case code:
+			switch {
+			case c == '#':
+				state = comment
+			case c == '\'' && i+2 < len(b) && b[i+1] == '\'' && b[i+2] == '\'':
+				state = tripleSingle
+				i += 2
+			case c == '"' && i+2 < len(b) && b[i+1] == '"' && b[i+2] == '"':
+				state = tripleDouble
+				i += 2
+			case c == '\'':
+				state = single
+				if !maskStrings {
+					out[i] = c
+				}
+			case c == '"':
+				state = double
+				if !maskStrings {
+					out[i] = c
+				}
+			default:
+				out[i] = c
+			}
+		case single, double:
+			if c == '\n' {
+				state = code
+				continue
+			}
+			if !maskStrings {
+				out[i] = c
+			}
+			if c == '\\' && i+1 < len(b) {
+				i++
+				if !maskStrings {
+					out[i] = b[i]
+				}
+				continue
+			}
+			if (state == single && c == '\'') || (state == double && c == '"') {
+				state = code
+			}
+		case tripleSingle:
+			if c == '\'' && i+2 < len(b) && b[i+1] == '\'' && b[i+2] == '\'' {
+				state = code
+				i += 2
+			}
+		case tripleDouble:
+			if c == '"' && i+2 < len(b) && b[i+1] == '"' && b[i+2] == '"' {
+				state = code
+				i += 2
+			}
+		case comment:
+			if c == '\n' {
+				state = code
+			}
+		}
+	}
+	return string(out)
+}
+
+func stripShellComment(s string) string {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c == '#' && (i == 0 || isSpace(s[i-1])) {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+func parenDelta(s string) int {
+	d := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '{':
+			d++
+		case ')', ']', '}':
+			d--
+		}
+	}
+	return d
+}
+
+func leadingSpaces(s string) int {
+	n := 0
+	for n < len(s) && (s[n] == ' ' || s[n] == '\t') {
+		n++
+	}
+	return n
+}
+
+func isSpace(b byte) bool { return b == ' ' || b == '\t' }
+
+func isIdentByte(b byte) bool {
+	return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(host)
+	if strings.HasPrefix(host, "[") {
+		if end := strings.IndexByte(host, ']'); end > 0 {
+			host = host[1:end]
+		}
+	} else if strings.Count(host, ":") == 1 {
+		host = strings.SplitN(host, ":", 2)[0]
+	}
+	return host == "localhost" || host == "::1" || strings.HasPrefix(host, "127.")
+}
+
+func redactURLCredentials(s string) string {
+	return urlCredentialRe.ReplaceAllString(s, `${1}[REDACTED]@`)
+}

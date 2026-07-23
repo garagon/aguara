@@ -29,6 +29,7 @@ func TestListRulesTable(t *testing.T) {
 	out := buf.String()
 	require.Contains(t, out, "ID")
 	require.Contains(t, out, "SEVERITY")
+	require.Contains(t, out, "IMPACT")
 	require.Contains(t, out, "rules loaded")
 }
 
@@ -53,6 +54,14 @@ func TestListRulesJSON(t *testing.T) {
 	require.NotEmpty(t, rules[0].ID)
 	require.NotEmpty(t, rules[0].Severity)
 	require.NotEmpty(t, rules[0].Category)
+	require.NotEmpty(t, rules[0].DecisionImpact)
+
+	byID := make(map[string]rulemeta.Rule, len(rules))
+	for _, r := range rules {
+		byID[r.ID] = r
+	}
+	require.Equal(t, rulemeta.DecisionImpactContext, byID["CMDEXEC_013"].DecisionImpact)
+	require.Equal(t, rulemeta.DecisionImpactReview, byID["SUPPLY_003"].DecisionImpact)
 }
 
 func TestListRulesCategoryFilter(t *testing.T) {

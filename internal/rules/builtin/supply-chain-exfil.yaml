@@ -160,35 +160,6 @@ examples:
   false_positive:
     - "from kubernetes import client; v1.list_namespaced_secret(\"default\")"
 ---
-id: SC-EX-007
-name: "Systemd or cron persistence installation"
-description: "Detects code creating systemd service files, crontab entries, or shell profile modifications for persistence after compromise"
-severity: CRITICAL
-category: supply-chain-exfil
-targets: ["*.py", "*.sh"]
-match_mode: any
-remediation: "Do not install persistence mechanisms from package code. Legitimate services should be installed via documented, opt-in procedures."
-patterns:
-  - type: regex
-    value: "(?i)\\.config/systemd/user/.*\\.service"
-  - type: regex
-    value: "(?i)systemctl\\s+(--user\\s+)?enable"
-  - type: regex
-    value: "(?i)(crontab|/etc/cron\\.d/).*(@reboot|\\*/)"
-  - type: regex
-    value: "(?i)(bashrc|zshrc|profile|bash_profile).*(python|curl|wget|bash\\s+-c)"
-exclude_patterns:
-  - type: regex
-    value: "(?i)^\\s*#"
-examples:
-  true_positive:
-    - "open(os.path.expanduser(\"~/.config/systemd/user/sysmon.service\"), \"w\").write(unit)"
-    - "os.system(\"systemctl --user enable sysmon.service\")"
-    - "with open(os.path.expanduser(\"~/.bashrc\"), \"a\") as f: f.write(\"python3 ~/.backdoor.py &\")"
-  false_positive:
-    - "# systemctl --user enable myservice.service"
-    - "systemctl status nginx"
----
 id: SC-EX-008
 name: "Hardcoded cryptographic key material"
 description: "Detects large RSA public keys or crypto key imports hardcoded in Python source, used by supply-chain malware to encrypt stolen data before exfiltration"

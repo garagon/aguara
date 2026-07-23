@@ -5,6 +5,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Skill posture now flags a whole-value `allowed-tools: '*'` declaration in
+  `SKILL.md`. The structural frontmatter check identifies a request to
+  pre-approve every tool while leaving explicit tool lists, scoped command
+  wildcards, body examples, and malformed metadata quiet.
+- Agent-skill scans now correlate mandatory execution instructions in
+  `SKILL.md` with the local helper they reference. A required or hidden helper
+  becomes a review finding only when that exact file contains a strong,
+  unexplained behavior such as an instruction-override payload, a network
+  command execution, or a direct VCS dependency install. Ordinary setup
+  commands, optional diagnostics, comments, and safe helpers remain quiet.
+- Local Python and shell scripts now contribute concrete behavior evidence:
+  decoded or character-constructed Python values reaching `exec`/`eval`,
+  remote Python response bodies flowing into execution, structured systemd
+  or cron persistence, and real pip/npm commands using unencrypted dependency
+  sources. Python files that read high-trust local context and then perform a
+  bound HTTP write, or that apply literal world-writable permissions through a
+  bound Python API or command, are also surfaced for review.
+  The existing `SC-EX-007` persistence rule keeps its ID while moving from a
+  flat pattern to the script analyzer, so saved policies remain compatible.
+
 ### Fixed
 
 - `aguara scan` no longer contacts GitHub Releases in the background to
@@ -14,6 +36,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Remote MCP endpoint findings now distinguish dedicated MCP URL shapes from
+  ordinary JSON `url` fields. Package metadata, feeds, schemas, and other
+  unrelated URLs stay quiet; a real remote MCP endpoint remains visible as
+  trust context without forcing the default handoff into review by itself.
+- Approval/execution gap detection now requires explicit reuse of a previous
+  or cached approval. Instructions that ask the user to confirm the exact
+  action before it runs are treated as the expected safety control, not as a
+  TOCTOU finding.
+- Findings and rule metadata now expose a `decision_impact` of `review`
+  or `context`. Ordinary local shell-script execution, `pip install`, and
+  system package installation commands remain visible as supporting context,
+  but no longer force the default audit triage or agent handoff into
+  review-only mode by themselves. All other built-in and custom rules default
+  to review, and explicit `--fail-on` gates remain authoritative.
+- An accepted scan baseline now produces `triage.decision: proceed` when
+  no new or non-baselineable finding remains. Existing findings stay
+  visible in the report and baseline summary.
 - `aguara audit` JSON now includes an additive `triage` block with a
   deterministic `proceed` / `review` / `stop` decision, reasons, and
   next steps for humans, CI dashboards, and agent workflows. The

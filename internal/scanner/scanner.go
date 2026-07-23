@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/garagon/aguara/internal/meta"
+	"github.com/garagon/aguara/internal/rulemeta"
 )
 
 // CrossFileAccumulator can accumulate per-file data and finalize cross-file findings.
@@ -252,6 +253,9 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		findings = append(findings, s.crossFileAccumulator.Finalize()...)
 	}
 
+	for i := range findings {
+		findings[i].DecisionImpact = rulemeta.DecisionImpactFor(findings[i].RuleID)
+	}
 	findings = s.postProcess(findings)
 
 	verdict := computeVerdict(findings)

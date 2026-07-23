@@ -20,6 +20,11 @@ const (
 	SeverityCritical
 )
 
+const (
+	DecisionImpactContext = "context"
+	DecisionImpactReview  = "review"
+)
+
 func (s Severity) String() string {
 	switch s {
 	case SeverityCritical:
@@ -92,9 +97,13 @@ type Finding struct {
 	Context     []ContextLine `json:"context,omitempty"`
 	Score       float64       `json:"score,omitempty"`
 	Confidence  float64       `json:"confidence,omitempty"`
-	Remediation string        `json:"remediation,omitempty"`
-	Analyzer    string        `json:"analyzer"`
-	InCodeBlock bool          `json:"in_code_block,omitempty"`
+	// DecisionImpact is "context" for visible supporting observations and
+	// "review" for findings that independently require a trust decision.
+	// Explicit --fail-on policy remains authoritative for both.
+	DecisionImpact string `json:"decision_impact,omitempty"`
+	Remediation    string `json:"remediation,omitempty"`
+	Analyzer       string `json:"analyzer"`
+	InCodeBlock    bool   `json:"in_code_block,omitempty"`
 	// Sensitive marks findings whose MatchedText / matching context line is
 	// expected to capture a real secret value (a credential read combined
 	// with a transmission verb, a cred+exfil NLP combo, a toxic-flow pair
@@ -154,6 +163,13 @@ func RedactSensitiveFindings(findings []Finding) {
 			continue
 		}
 		findings[i].MatchedText = RedactedPlaceholder
+		if isSensitive && findings[i].Line > 0 {
+			// Analyzer findings are allowed to omit Context. Their anchor
+			// line still carries the raw MatchedText and can appear inside a
+			// neighboring finding's context window, so it must participate
+			// in the cross-finding pass independently of Context.
+			sensitiveLines[fileLine{findings[i].FilePath, findings[i].Line}] = true
+		}
 		for j := range findings[i].Context {
 			cl := &findings[i].Context[j]
 			if isSensitive {

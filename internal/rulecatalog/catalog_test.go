@@ -27,15 +27,18 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 
 	// One representative ID per analyzer.
 	want := map[string]string{
-		"JS_DNS_TXT_EXFIL_001":         rulemeta.AnalyzerJSRisk,
-		"GHA_PWN_REQUEST_001":          rulemeta.AnalyzerCITrust,
-		"NPM_LIFECYCLE_GIT_001":        rulemeta.AnalyzerPkgMeta,
-		"TOXIC_001":                    rulemeta.AnalyzerToxicFlow,
-		"TOXIC_CROSS_001":              rulemeta.AnalyzerToxicFlow,
-		"NLP_HIDDEN_INSTRUCTION":       rulemeta.AnalyzerNLP,
-		"AGENT_PERSISTENCE_001":        rulemeta.AnalyzerJSRisk,
-		"PNPM_DANGEROUS_BUILDS_001":    rulemeta.AnalyzerPnpmPolicy,
-		"AGENTCFG_HOOK_FETCH_EXEC_001": rulemeta.AnalyzerAgentPolicy,
+		"JS_DNS_TXT_EXFIL_001":           rulemeta.AnalyzerJSRisk,
+		"GHA_PWN_REQUEST_001":            rulemeta.AnalyzerCITrust,
+		"NPM_LIFECYCLE_GIT_001":          rulemeta.AnalyzerPkgMeta,
+		"TOXIC_001":                      rulemeta.AnalyzerToxicFlow,
+		"TOXIC_CROSS_001":                rulemeta.AnalyzerToxicFlow,
+		"NLP_HIDDEN_INSTRUCTION":         rulemeta.AnalyzerNLP,
+		"AGENT_PERSISTENCE_001":          rulemeta.AnalyzerJSRisk,
+		"PNPM_DANGEROUS_BUILDS_001":      rulemeta.AnalyzerPnpmPolicy,
+		"AGENTCFG_HOOK_FETCH_EXEC_001":   rulemeta.AnalyzerAgentPolicy,
+		"AGENT_SKILL_WILDCARD_TOOLS_001": rulemeta.AnalyzerSkillPolicy,
+		"PY_DECODE_EXEC_001":             rulemeta.AnalyzerScriptRisk,
+		"AGENT_FORCED_HELPER_RISK_001":   rulemeta.AnalyzerSkillChain,
 		// And one pattern rule from the YAML catalog (analyzer
 		// stays empty for these).
 		"PROMPT_INJECTION_001": rulemeta.AnalyzerPattern,
@@ -46,7 +49,28 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 		require.Equalf(t, analyzer, rec.Analyzer, "analyzer for %s", id)
 		require.NotEmptyf(t, rec.Severity, "%s severity must be set", id)
 		require.NotEmptyf(t, rec.Category, "%s category must be set", id)
+		require.NotEmptyf(t, rec.DecisionImpact, "%s decision impact must be set", id)
 	}
+}
+
+func TestBuildAssignsDecisionImpact(t *testing.T) {
+	cat, err := rulecatalog.Build(rulecatalog.Options{})
+	require.NoError(t, err)
+
+	for _, r := range cat {
+		require.Equalf(t, rulemeta.DecisionImpactFor(r.ID), r.DecisionImpact,
+			"%s must expose the same decision impact as scanner findings", r.ID)
+	}
+
+	for _, id := range []string{"CMDEXEC_013", "EXTDL_009", "EXTDL_011", "MCPCFG_004"} {
+		contextRule, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
+		require.NoError(t, err)
+		require.Equal(t, rulemeta.DecisionImpactContext, contextRule.DecisionImpact)
+	}
+
+	dangerous, err := rulecatalog.FindByID(rulecatalog.Options{}, "SUPPLY_003")
+	require.NoError(t, err)
+	require.Equal(t, rulemeta.DecisionImpactReview, dangerous.DecisionImpact)
 }
 
 func TestBuildSortsByID(t *testing.T) {
@@ -184,6 +208,13 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 		"PNPM_TRUST_POLICY_OFF_001":           {Severity: "LOW", Category: "supply-chain"},
 		"PNPM_LEGACY_BUILD_POLICY_001":        {Severity: "INFO", Category: "supply-chain"},
 		"PNPM_BUILD_APPROVAL_PENDING_001":     {Severity: "MEDIUM", Category: "supply-chain"},
+		"PY_DECODE_EXEC_001":                  {Severity: "CRITICAL", Category: "supply-chain-exfil"},
+		"PY_REMOTE_FETCH_EXEC_001":            {Severity: "CRITICAL", Category: "supply-chain-exfil"},
+		"PY_CONTEXT_EXFIL_001":                {Severity: "HIGH", Category: "supply-chain-exfil"},
+		"PY_WORLD_WRITABLE_001":               {Severity: "MEDIUM", Category: "supply-chain"},
+		"SC-EX-007":                           {Severity: "CRITICAL", Category: "supply-chain-exfil"},
+		"SHELL_UNSAFE_PIP_SOURCE_001":         {Severity: "MEDIUM", Category: "supply-chain"},
+		"SHELL_UNSAFE_NPM_SOURCE_001":         {Severity: "MEDIUM", Category: "supply-chain"},
 	}
 	for id, w := range cases {
 		rec, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
@@ -290,6 +321,14 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"AGENTCFG_BYPASS_PERMS_001", "AGENTCFG_MCP_AUTOAPPROVE_001",
 		"AGENTCFG_BROAD_ALLOW_001", "AGENTCFG_SECRET_READ_ALLOW_001",
 		"AGENTCFG_HELPER_REPO_SCRIPT_001", "AGENTCFG_PERMS_WEAK_MODE_001",
+		// script-risk public consts (SC-EX-007 migrated from YAML).
+		"PY_DECODE_EXEC_001", "PY_REMOTE_FETCH_EXEC_001", "PY_CONTEXT_EXFIL_001",
+		"PY_WORLD_WRITABLE_001", "SC-EX-007",
+		"SHELL_UNSAFE_PIP_SOURCE_001", "SHELL_UNSAFE_NPM_SOURCE_001",
+		// skill-policy frontmatter posture.
+		"AGENT_SKILL_WILDCARD_TOOLS_001",
+		// skill-chain cross-file correlation.
+		"AGENT_FORCED_HELPER_RISK_001",
 	}
 	for _, id := range emitted {
 		_, err := rulecatalog.FindByID(rulecatalog.Options{}, id)

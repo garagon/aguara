@@ -62,6 +62,8 @@ Use Aguara when the next step would grant trust to a repository:
 
 The output is meant for a developer, maintainer, CI job, or agent workflow that needs a clear preflight signal: proceed, review first, or stop.
 
+Findings remain visible, but visibility is not the same as a reason to block execution. `aguara audit` marks ordinary local shell-script execution (`CMDEXEC_013`), ordinary `pip install` and system-package installation commands (`EXTDL_009`, `EXTDL_011`), and a configured remote MCP endpoint (`MCPCFG_004`) as supporting `context`. They describe trust boundaries or nearby behavior without forcing an agent handoff into review-only mode by themselves. Every other built-in or custom rule defaults to `review`, and an explicit `--fail-on` policy remains authoritative for both classes.
+
 ## What Aguara Checks
 
 | Surface | Examples | Command |
@@ -298,6 +300,8 @@ detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
 
 GitHub Code Scanning, GitLab SAST, and plain Docker-in-CI examples are below.
 
+JSON findings and rule metadata include `decision_impact: "context" | "review"`. The additive `audit.triage` block also reports `context_observations` and `review_findings`, so an agent or CI wrapper can apply Aguara's trust decision without hiding lower-impact evidence or inferring policy from severity alone.
+
 ```yaml
 # GitHub Action with SARIF upload (needs security-events: write)
 - uses: garagon/aguara@v0.27.0
@@ -326,10 +330,10 @@ Aguara complements tools like Semgrep, Snyk, CodeQL, and traditional SCA: use th
 
 ## Rules
 
-Aguara exposes **250 cataloged detections** through `aguara list-rules`:
+Aguara exposes **258 cataloged detections** through `aguara list-rules`:
 
-- **193 embedded YAML pattern rules** across 13 categories
-- **57 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
+- **192 embedded YAML pattern rules** across 13 categories
+- **66 analyzer-emitted detections** from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxic-flow, and rug-pull
 
 Every YAML rule ships remediation text, surfaced in every output format and via `aguara explain <RULE_ID>`. Custom rules load from `--rules <dir>` (validated at load time; unknown fields rejected). See [RULES.md](RULES.md) for the full catalog with IDs and severities.
 
@@ -341,7 +345,10 @@ aguara scan . --rules ./my-rules/ # add custom YAML rules
 
 ## Architecture
 
-Twelve scan analyzers run per file (eleven by default; rug-pull joins with `--monitor`), each catching a different class of attack:
+The scan pipeline combines fourteen per-file analyzers (thirteen by default;
+rug-pull joins with `--monitor`) with project-level correlation that connects
+evidence only dangerous when two files form one execution path. The table
+below covers both phases:
 
 | Analyzer | Engine | What it catches |
 |---|---|---|
@@ -350,12 +357,15 @@ Twelve scan analyzers run per file (eleven by default; rug-pull joins with `--mo
 | PkgMeta | `package.json` JSON | npm lifecycle + git-source / publish-surface chains, install-time local JS |
 | JSRisk | JavaScript single-pass | Obfuscation, install-time daemonization, CI secret harvest, OIDC runner pivot, DNS-TXT exfil, Bun second stage, GitHub C2, host-trust tampering |
 | PyRisk | Python install-hook scanner | `setup.py`/`__init__.py` that fetch remote JS and run it via `node -e` (flow-sensitive) |
+| Script Risk | Python + shell evidence scanner | Decoded or remotely fetched Python execution, sensitive-context transmission, world-writable permissions, systemd/cron persistence, and unencrypted pip/npm sources |
 | RSBuild | Cargo build-script scanner | `build.rs` reading wallet/keystore material and sending it to a network sink (flow-sensitive) |
 | Npm Policy | `package.json` + `.npmrc` | npm v12 install-trust decisions weakened or pinned open: the `dangerously-allow-all-scripts` escape hatch, unpinned `allowScripts` approvals, `allow-git` / `allow-remote` relaxed; plus INFO readiness findings for git and remote-tarball dependencies that will need explicit trust under npm v12 |
 | Pnpm Policy | `pnpm-workspace.yaml` YAML | pnpm supply-chain settings weakened below the v11 defaults (build approval, release age, exotic sources, trust policy) |
 | Agent Policy | `.claude/settings.json` JSON | Claude Code host config that is dangerous to inherit from a cloned repo: hooks that fetch-and-execute, code-injection env vars, `bypassPermissions`, MCP auto-approval, dangerous allow rules, repo-shipped credential helpers |
+| Skill Policy | `SKILL.md` YAML frontmatter | A whole-value `allowed-tools` wildcard that requests broad tool pre-approval instead of an explicit tool set |
 | NLP | Goldmark AST + JSON/YAML | Prompt injection, tool poisoning, proximity-weighted keyword classification. Agent instruction files (`.cursorrules`, `.windsurfrules`, `.clinerules`, `AGENTS.md`, `copilot-instructions.md`) are scanned even without a `.md` extension and weighted as high-trust prompt surfaces |
 | Toxic Flow | Capability correlation | Dangerous source/sink combinations within a file and across files in a directory |
+| Skill Chain | Instruction-to-helper correlation | A `SKILL.md` directive that requires a local helper to run, bound to strong hidden behavior in that exact helper |
 | Rug-Pull | SHA256 change tracking | Tool descriptions that change between scans (`--monitor`) |
 
 A separate `aguara check` / `aguara audit` path inspects installed package trees and lockfiles against the threat-intel snapshot. All content is NFKC-normalized before scanning to defeat Unicode evasion. Findings carry severity, a dynamic confidence score (0.50–0.95), matched text, file location with context, and remediation. The public Go API and CLI share one engine. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full package layout.
