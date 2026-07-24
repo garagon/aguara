@@ -84,7 +84,7 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 	// Pre-filter: run keyword AC to find which rules could possibly match.
 	// Rules whose required literal substrings don't appear are skipped entirely.
-	candidates := m.pf.candidateRules(lowerContent)
+	candidatePatterns := m.pf.candidatePatternMasks(lowerContent)
 
 	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
 	acHitRules := m.acPrefilter(target.RelPath, lowerContent)
@@ -95,8 +95,21 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 		}
 
 		// Skip rules whose keywords don't appear in content
-		if candidates != nil && !candidates[rule.ID] {
-			continue
+		patternMask := candidatePatterns[rule.ID]
+		if m.pf.unfiltered[rule.ID] {
+			patternMask = ^uint64(0)
+		}
+		if candidatePatterns != nil && !m.pf.unfiltered[rule.ID] {
+			switch rule.MatchMode {
+			case rules.MatchAll:
+				if patternMask != m.pf.allPatterns[rule.ID] {
+					continue
+				}
+			default:
+				if patternMask == 0 {
+					continue
+				}
+			}
 		}
 
 		// Skip rules that only have contains patterns and got no AC hits
@@ -106,7 +119,7 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAny(rule, content, lowerContent, lines, target, cbMap)...)
+			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap)...)
 		case rules.MatchAll:
 			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
 		}
@@ -211,14 +224,17 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAny(rule *rules.CompiledRule, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
 	seenLines := make(map[int]bool)
 	// Count how many distinct patterns produced at least one hit (for dynamic confidence)
 	hitPatterns := 0
-	for _, pat := range rule.Patterns {
+	for patternIndex, pat := range rule.Patterns {
+		if patternIndex < 64 && patternMask&(uint64(1)<<patternIndex) == 0 {
+			continue
+		}
 		hits := matchPattern(pat, content, lowerContent, lines)
 		if len(hits) > 0 {
 			hitPatterns++

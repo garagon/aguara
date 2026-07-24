@@ -122,6 +122,31 @@ func TestMatcherMatchAny(t *testing.T) {
 	require.Equal(t, types.SeverityHigh, findings[0].Severity)
 }
 
+func TestMatcherMatchAnyPreservesWeakAndStrongPatterns(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID:        "TEST_PATTERN_SELECT",
+		Name:      "Pattern selection",
+		Severity:  "HIGH",
+		Category:  "test",
+		MatchMode: "any",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternRegex, Value: `(?i)exfiltrate`},
+			{Type: rules.PatternRegex, Value: `\$(x|y)`},
+		},
+	})
+	matcher := pattern.NewMatcher([]*rules.CompiledRule{rule})
+
+	for _, content := range []string{"exfiltrate this data", "value=$x"} {
+		findings, err := matcher.Analyze(context.Background(), &scanner.Target{
+			RelPath: "test.md",
+			Content: []byte(content),
+		})
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "both filterable and unfilterable branches must remain detectable")
+		require.Equal(t, rule.ID, findings[0].RuleID)
+	}
+}
+
 func TestMatcherMatchAll(t *testing.T) {
 	rule := compileTestRule(t, rules.RawRule{
 		ID:        "TEST_002",
@@ -539,4 +564,3 @@ func testBuiltinFS(tb testing.TB) embed.FS {
 	tb.Helper()
 	return builtin.FS()
 }
-

@@ -29,8 +29,17 @@ const minKeywordLen = 4
 // candidate map.
 type prefilter struct {
 	ac             *ahocorasick.AhoCorasick
-	refs           [][]string      // AC pattern index -> list of rule IDs
+	refs           [][]patternRef  // AC pattern index -> rule/pattern bit references
 	noKeywordRules map[string]bool // rules without extractable keywords (always run)
+	unconditional  map[string]uint64
+	allPatterns    map[string]uint64
+	matchModes     map[string]rules.MatchMode
+	unfiltered     map[string]bool
+}
+
+type patternRef struct {
+	ruleID string
+	mask   uint64
 }
 
 // buildPrefilter creates a keyword-based pre-filter from compiled rules.
@@ -50,13 +59,31 @@ type prefilter struct {
 //     rule fall back to noKeyword.
 func buildPrefilter(compiled []*rules.CompiledRule) *prefilter {
 	// Collect keywords per rule, deduplicating across rules.
-	kwToRules := make(map[string]map[string]bool) // keyword -> set of rule IDs
+	kwToRules := make(map[string]map[string]uint64) // keyword -> rule ID -> pattern bits
 	noKeyword := make(map[string]bool)
+	unconditional := make(map[string]uint64)
+	allPatterns := make(map[string]uint64)
+	matchModes := make(map[string]rules.MatchMode)
+	unfiltered := make(map[string]bool)
 
 	for _, rule := range compiled {
+		matchModes[rule.ID] = rule.MatchMode
+		if len(rule.Patterns) > 64 {
+			// The bitset fast path is deliberately bounded. No built-in rule
+			// reaches this limit; custom rules that do remain fully scanned.
+			unfiltered[rule.ID] = true
+			allPatterns[rule.ID] = ^uint64(0)
+			noKeyword[rule.ID] = true
+			continue
+		}
+		if len(rule.Patterns) == 64 {
+			allPatterns[rule.ID] = ^uint64(0)
+		} else {
+			allPatterns[rule.ID] = (uint64(1) << len(rule.Patterns)) - 1
+		}
 		forceNoKeyword := false
 		ruleHasKeyword := false
-		for _, pat := range rule.Patterns {
+		for patternIndex, pat := range rule.Patterns {
 			var kws []string
 			switch pat.Type {
 			case rules.PatternContains:
@@ -67,6 +94,7 @@ func buildPrefilter(compiled []*rules.CompiledRule) *prefilter {
 				kws = extractKeywords(pat.Value)
 			}
 			if len(kws) == 0 {
+				unconditional[rule.ID] |= uint64(1) << patternIndex
 				// Pattern provides no usable literal evidence. Under MatchAny
 				// the rule could match via this pattern without any of the
 				// other patterns' keywords appearing, so we must give up on
@@ -74,15 +102,14 @@ func buildPrefilter(compiled []*rules.CompiledRule) *prefilter {
 				// remain reliable filters.
 				if rule.MatchMode == rules.MatchAny {
 					forceNoKeyword = true
-					break
 				}
 				continue
 			}
 			for _, kw := range kws {
 				if kwToRules[kw] == nil {
-					kwToRules[kw] = make(map[string]bool)
+					kwToRules[kw] = make(map[string]uint64)
 				}
-				kwToRules[kw][rule.ID] = true
+				kwToRules[kw][rule.ID] |= uint64(1) << patternIndex
 				ruleHasKeyword = true
 			}
 		}
@@ -91,18 +118,24 @@ func buildPrefilter(compiled []*rules.CompiledRule) *prefilter {
 		}
 	}
 
-	pf := &prefilter{noKeywordRules: noKeyword}
+	pf := &prefilter{
+		noKeywordRules: noKeyword,
+		unconditional:  unconditional,
+		allPatterns:    allPatterns,
+		matchModes:     matchModes,
+		unfiltered:     unfiltered,
+	}
 
 	if len(kwToRules) > 0 {
 		keywords := make([]string, 0, len(kwToRules))
-		refs := make([][]string, 0, len(kwToRules))
+		refs := make([][]patternRef, 0, len(kwToRules))
 		for kw, ruleSet := range kwToRules {
 			keywords = append(keywords, kw)
-			ids := make([]string, 0, len(ruleSet))
-			for id := range ruleSet {
-				ids = append(ids, id)
+			ruleRefs := make([]patternRef, 0, len(ruleSet))
+			for id, mask := range ruleSet {
+				ruleRefs = append(ruleRefs, patternRef{ruleID: id, mask: mask})
 			}
-			refs = append(refs, ids)
+			refs = append(refs, ruleRefs)
 		}
 		builder := ahocorasick.NewAhoCorasickBuilder(ahocorasick.Opts{
 			AsciiCaseInsensitive: false, // we search pre-lowercased content
@@ -121,12 +154,37 @@ func buildPrefilter(compiled []*rules.CompiledRule) *prefilter {
 // A rule is a candidate if any of its keywords appear in lowerContent, or
 // if the rule has no extractable keywords (conservative: always run those).
 func (p *prefilter) candidateRules(lowerContent string) map[string]bool {
-	if p == nil {
-		return nil // nil map: caller treats nil as "all rules are candidates"
+	masks := p.candidatePatternMasks(lowerContent)
+	candidates := make(map[string]bool, len(masks))
+	for id, mask := range masks {
+		if p.unfiltered[id] {
+			candidates[id] = true
+			continue
+		}
+		switch p.matchModes[id] {
+		case rules.MatchAll:
+			candidates[id] = mask == p.allPatterns[id]
+		default:
+			candidates[id] = mask != 0
+		}
 	}
-	candidates := make(map[string]bool, len(p.noKeywordRules)+16)
-	for id := range p.noKeywordRules {
-		candidates[id] = true
+	return candidates
+}
+
+// candidatePatternMasks returns the patterns that can still match after the
+// conservative keyword pass. A zero bit is safe to skip: extractKeywords only
+// returns literals required by that pattern. Patterns without such evidence
+// are present in unconditional and therefore always run.
+func (p *prefilter) candidatePatternMasks(lowerContent string) map[string]uint64 {
+	if p == nil {
+		return nil
+	}
+	candidates := make(map[string]uint64, len(p.unconditional)+16)
+	for id, mask := range p.unconditional {
+		candidates[id] = mask
+	}
+	for id := range p.unfiltered {
+		candidates[id] = p.allPatterns[id]
 	}
 	if p.ac != nil {
 		// IterOverlapping reports every keyword that matches at every position.
@@ -135,8 +193,8 @@ func (p *prefilter) candidateRules(lowerContent string) map[string]bool {
 		// literal, silently hiding true positives.
 		iter := p.ac.IterOverlapping(lowerContent)
 		for m := iter.Next(); m != nil; m = iter.Next() {
-			for _, id := range p.refs[m.Pattern()] {
-				candidates[id] = true
+			for _, ref := range p.refs[m.Pattern()] {
+				candidates[ref.ruleID] |= ref.mask
 			}
 		}
 	}

@@ -1,10 +1,14 @@
 package pattern
 
 import (
+	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/rules"
+	"github.com/garagon/aguara/internal/rules/builtin"
+	"github.com/garagon/aguara/internal/scanner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -308,6 +312,117 @@ func TestPrefilterMatchModeAwareness(t *testing.T) {
 	// MatchAll + every pattern unfilterable -> rule must always run.
 	require.True(t, pf.noKeywordRules["ALL_WEAK"],
 		"MatchAll rule whose every pattern is unfilterable must be noKeyword")
+}
+
+func TestPrefilterTracksCandidatesPerPattern(t *testing.T) {
+	strongPat := rules.CompiledPattern{
+		Type:  rules.PatternRegex,
+		Value: `(?i)exfiltrate`,
+		Regex: regexp.MustCompile(`(?i)exfiltrate`),
+	}
+	weakPat := rules.CompiledPattern{
+		Type:  rules.PatternRegex,
+		Value: `\$(x|y)`,
+		Regex: regexp.MustCompile(`\$(x|y)`),
+	}
+	rule := &rules.CompiledRule{
+		ID:        "ANY_PATTERN_MASK",
+		MatchMode: rules.MatchAny,
+		Patterns:  []rules.CompiledPattern{strongPat, weakPat},
+	}
+
+	pf := buildPrefilter([]*rules.CompiledRule{rule})
+
+	require.Equal(t, uint64(0b10), pf.candidatePatternMasks("ordinary text")[rule.ID],
+		"the unfilterable pattern must always run while its filterable sibling stays skipped")
+	require.Equal(t, uint64(0b11), pf.candidatePatternMasks("exfiltrate this data")[rule.ID],
+		"the strong pattern must join the unconditional pattern when its required literal appears")
+}
+
+func TestPrefilterFallsBackAbovePatternMaskLimit(t *testing.T) {
+	patterns := make([]rules.CompiledPattern, 65)
+	for i := range patterns {
+		patterns[i] = rules.CompiledPattern{
+			Type:  rules.PatternRegex,
+			Value: `distinctliteral`,
+			Regex: regexp.MustCompile(`distinctliteral`),
+		}
+	}
+	rule := &rules.CompiledRule{
+		ID:        "CUSTOM_ABOVE_MASK_LIMIT",
+		MatchMode: rules.MatchAny,
+		Patterns:  patterns,
+	}
+
+	pf := buildPrefilter([]*rules.CompiledRule{rule})
+
+	require.True(t, pf.unfiltered[rule.ID])
+	require.True(t, pf.candidateRules("ordinary text")[rule.ID],
+		"large custom rules must remain fully scanned instead of being truncated by the bitset fast path")
+}
+
+func TestPrefilterMatchesUnfilteredReference(t *testing.T) {
+	rawRules, err := rules.LoadFromFS(builtin.FS())
+	require.NoError(t, err)
+	compiled, errs := rules.CompileAll(rawRules)
+	require.Empty(t, errs)
+
+	matcher := NewMatcher(compiled)
+	byID := make(map[string]*rules.CompiledRule, len(compiled))
+	for _, rule := range compiled {
+		byID[rule.ID] = rule
+	}
+
+	for _, raw := range rawRules {
+		rule := byID[raw.ID]
+		if rule == nil {
+			continue
+		}
+		filename := prefilterTestFilename(rule)
+		examples := append(append([]string{}, raw.Examples.TruePositive...), raw.Examples.FalsePositive...)
+		for exampleIndex, content := range examples {
+			target := &scanner.Target{RelPath: filename, Content: []byte(content)}
+			got, err := matcher.Analyze(context.Background(), target)
+			require.NoError(t, err)
+			want := analyzeWithoutKeywordPrefilter(matcher, target)
+			require.Equalf(t, want, got, "rule=%s example=%d content=%q", raw.ID, exampleIndex, content)
+		}
+	}
+}
+
+func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanner.Finding {
+	content := target.StringContent()
+	lowerContent := strings.ToLower(content)
+	lines := target.Lines()
+	var cbMap []bool
+	if isMarkdown(target.RelPath) {
+		cbMap = BuildCodeBlockMap(lines)
+	}
+
+	var findings []scanner.Finding
+	for _, rule := range m.rulesForFile(target.RelPath) {
+		switch rule.MatchMode {
+		case rules.MatchAny:
+			findings = append(findings,
+				m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, cbMap)...)
+		case rules.MatchAll:
+			findings = append(findings,
+				m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
+		}
+	}
+	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)
+	return findings
+}
+
+func prefilterTestFilename(rule *rules.CompiledRule) string {
+	if len(rule.Targets) == 0 {
+		return "selftest.txt"
+	}
+	target := rule.Targets[0]
+	if strings.HasPrefix(target, "*.") {
+		return "selftest" + target[1:]
+	}
+	return target
 }
 
 // TestPrefilterMCPCFG003Equivalent is a regression test for the specific
