@@ -237,6 +237,14 @@ func TestFilterByIDsEmpty(t *testing.T) {
 	require.Len(t, result, 3)
 }
 
+func TestFilterByIDsCaseInsensitive(t *testing.T) {
+	compiled := makeTestRules("custom_Mixed_001", "KEEP_001")
+	disabled := map[string]bool{"CUSTOM_mixed_001": true}
+	result := rules.FilterByIDs(compiled, disabled)
+	require.Len(t, result, 1)
+	require.Equal(t, "KEEP_001", result[0].ID)
+}
+
 func makeTestRules(ids ...string) []*rules.CompiledRule {
 	var result []*rules.CompiledRule
 	for _, id := range ids {

@@ -111,7 +111,7 @@ func (s *Scanner) SetDisabledRules(ids []string) {
 	}
 	m := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		id = strings.TrimSpace(id)
+		id = strings.ToUpper(strings.TrimSpace(id))
 		if id != "" {
 			m[id] = true
 		}
@@ -302,7 +302,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	if len(s.disabledRules) > 0 {
 		kept := findings[:0]
 		for _, f := range findings {
-			if !s.disabledRules[f.RuleID] {
+			if !s.disabledRules[strings.ToUpper(f.RuleID)] {
 				kept = append(kept, f)
 			}
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
+	"github.com/garagon/aguara/internal/rules"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,6 +80,43 @@ func TestBuildSortsByID(t *testing.T) {
 	for i := 1; i < len(cat); i++ {
 		require.LessOrEqualf(t, cat[i-1].ID, cat[i].ID,
 			"catalog must be sorted by ID; %d=%s came before %d=%s", i-1, cat[i-1].ID, i, cat[i].ID)
+	}
+}
+
+func TestFromCompiledMergesLoadedPatternAndAnalyzerRules(t *testing.T) {
+	custom, err := rules.Compile(rules.RawRule{
+		ID:          "CUSTOM_CONTRACT_001",
+		Name:        "Custom contract rule",
+		Description: "Locks the scanner catalog construction path.",
+		Severity:    "MEDIUM",
+		Category:    "supply-chain",
+		Patterns: []rules.RawPattern{{
+			Type:  rules.PatternContains,
+			Value: "custom-contract-marker",
+		}},
+	})
+	require.NoError(t, err)
+
+	cat := rulecatalog.FromCompiled(
+		[]*rules.CompiledRule{custom},
+		rulecatalog.Options{},
+	)
+	byID := make(map[string]rulemeta.Rule, len(cat))
+	for _, r := range cat {
+		byID[r.ID] = r
+	}
+
+	require.Equal(t, rulemeta.AnalyzerPattern, byID["CUSTOM_CONTRACT_001"].Analyzer)
+	require.Equal(t, rulemeta.AnalyzerScriptRisk, byID["SC-EX-007"].Analyzer)
+	require.Equal(t, "CRITICAL", byID["SC-EX-007"].Severity)
+}
+
+func TestFromCompiledFiltersDisabledAnalyzerRules(t *testing.T) {
+	cat := rulecatalog.FromCompiled(nil, rulecatalog.Options{
+		DisableRuleIDs: []string{"sc-ex-007"},
+	})
+	for _, r := range cat {
+		require.NotEqual(t, "SC-EX-007", r.ID)
 	}
 }
 

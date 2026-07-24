@@ -159,9 +159,15 @@ func ApplyOverrides(compiled []*CompiledRule, overrides map[string]RuleOverride)
 
 // FilterByIDs removes rules whose IDs are in the disabled set.
 func FilterByIDs(compiled []*CompiledRule, disabled map[string]bool) []*CompiledRule {
+	normalized := make(map[string]bool, len(disabled))
+	for id, isDisabled := range disabled {
+		if isDisabled {
+			normalized[strings.ToUpper(strings.TrimSpace(id))] = true
+		}
+	}
 	var result []*CompiledRule
 	for _, rule := range compiled {
-		if !disabled[rule.ID] {
+		if !normalized[strings.ToUpper(rule.ID)] {
 			result = append(result, rule)
 		}
 	}

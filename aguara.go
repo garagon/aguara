@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -220,14 +219,7 @@ func ListRules(opts ...Option) []RuleInfo {
 	}
 	infos := make([]RuleInfo, len(cat))
 	for i, r := range cat {
-		infos[i] = RuleInfo{
-			ID:             r.ID,
-			Name:           r.Name,
-			Severity:       r.Severity,
-			Category:       r.Category,
-			Analyzer:       r.Analyzer,
-			DecisionImpact: r.DecisionImpact,
-		}
+		infos[i] = ruleInfoFromMetadata(r)
 	}
 	return infos
 }
@@ -246,19 +238,7 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 		return nil, fmt.Errorf("rule %q not found", id)
 	}
 
-	return &RuleDetail{
-		ID:             r.ID,
-		Name:           r.Name,
-		Severity:       r.Severity,
-		Category:       r.Category,
-		Analyzer:       r.Analyzer,
-		DecisionImpact: r.DecisionImpact,
-		Description:    r.Description,
-		Remediation:    r.Remediation,
-		Patterns:       r.Patterns,
-		TruePositives:  r.TruePositives,
-		FalsePositives: r.FalsePositives,
-	}, nil
+	return ruleDetailFromMetadata(*r), nil
 }
 
 // Scanner holds a pre-compiled scanner that can be reused across scans.
@@ -268,6 +248,7 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 // Thread-safe: multiple goroutines can call methods concurrently.
 type Scanner struct {
 	compiled   []*rules.CompiledRule
+	catalog    []rulemeta.Rule
 	toolScoped map[string]scanner.ToolScopedRule
 	matcher    *pattern.Matcher
 	cfg        *scanConfig
@@ -281,8 +262,12 @@ func NewScanner(opts ...Option) (*Scanner, error) {
 	if err != nil {
 		return nil, err
 	}
+	catalog := rulecatalog.FromCompiled(cr.compiled, rulecatalog.Options{
+		DisableRuleIDs: cfg.disabledRules,
+	})
 	return &Scanner{
 		compiled:   cr.compiled,
+		catalog:    catalog,
 		toolScoped: cr.toolScopedRules,
 		matcher:    pattern.NewMatcher(cr.compiled),
 		cfg:        cfg,
@@ -342,55 +327,53 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 	return result, nil
 }
 
-// ListRules returns all rules loaded in this scanner, sorted by ID.
+// ListRules returns every pattern and analyzer rule active in this scanner,
+// sorted by ID.
 func (sc *Scanner) ListRules() []RuleInfo {
-	compiled := make([]*rules.CompiledRule, len(sc.compiled))
-	copy(compiled, sc.compiled)
-	sort.Slice(compiled, func(i, j int) bool {
-		return compiled[i].ID < compiled[j].ID
-	})
-	infos := make([]RuleInfo, len(compiled))
-	for i, r := range compiled {
-		infos[i] = RuleInfo{
-			ID:             r.ID,
-			Name:           r.Name,
-			Severity:       r.Severity.String(),
-			Category:       r.Category,
-			DecisionImpact: rulemeta.DecisionImpactFor(r.ID),
-		}
+	infos := make([]RuleInfo, len(sc.catalog))
+	for i, r := range sc.catalog {
+		infos[i] = ruleInfoFromMetadata(r)
 	}
 	return infos
 }
 
-// ExplainRule returns detailed information about a specific rule.
+// ExplainRule returns detailed information about a pattern or analyzer rule
+// active in this scanner.
 func (sc *Scanner) ExplainRule(id string) (*RuleDetail, error) {
 	id = strings.ToUpper(strings.TrimSpace(id))
-	for _, r := range sc.compiled {
-		if r.ID == id {
-			patterns := make([]string, len(r.Patterns))
-			for i, p := range r.Patterns {
-				switch p.Type {
-				case rules.PatternRegex:
-					patterns[i] = fmt.Sprintf("[regex] %s", p.Regex.String())
-				case rules.PatternContains:
-					patterns[i] = fmt.Sprintf("[contains] %s", p.Value)
-				}
-			}
-			return &RuleDetail{
-				ID:             r.ID,
-				Name:           r.Name,
-				Severity:       r.Severity.String(),
-				Category:       r.Category,
-				DecisionImpact: rulemeta.DecisionImpactFor(r.ID),
-				Description:    r.Description,
-				Remediation:    r.Remediation,
-				Patterns:       patterns,
-				TruePositives:  r.Examples.TruePositive,
-				FalsePositives: r.Examples.FalsePositive,
-			}, nil
+	for _, r := range sc.catalog {
+		if strings.EqualFold(r.ID, id) {
+			return ruleDetailFromMetadata(r), nil
 		}
 	}
 	return nil, fmt.Errorf("rule %q not found", id)
+}
+
+func ruleInfoFromMetadata(r rulemeta.Rule) RuleInfo {
+	return RuleInfo{
+		ID:             r.ID,
+		Name:           r.Name,
+		Severity:       r.Severity,
+		Category:       r.Category,
+		Analyzer:       r.Analyzer,
+		DecisionImpact: r.DecisionImpact,
+	}
+}
+
+func ruleDetailFromMetadata(r rulemeta.Rule) *RuleDetail {
+	return &RuleDetail{
+		ID:             r.ID,
+		Name:           r.Name,
+		Severity:       r.Severity,
+		Category:       r.Category,
+		Analyzer:       r.Analyzer,
+		DecisionImpact: r.DecisionImpact,
+		Description:    r.Description,
+		Remediation:    r.Remediation,
+		Patterns:       append([]string(nil), r.Patterns...),
+		TruePositives:  append([]string(nil), r.TruePositives...),
+		FalsePositives: append([]string(nil), r.FalsePositives...),
+	}
 }
 
 // RulesLoaded returns the number of compiled rules in this scanner.
@@ -535,7 +518,7 @@ func loadAndCompile(cfg *scanConfig) (*compileResult, error) {
 	if len(cfg.disabledRules) > 0 {
 		disabled := make(map[string]bool, len(cfg.disabledRules))
 		for _, id := range cfg.disabledRules {
-			disabled[strings.TrimSpace(id)] = true
+			disabled[strings.ToUpper(strings.TrimSpace(id))] = true
 		}
 		compiled = rules.FilterByIDs(compiled, disabled)
 	}
