@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Reusable Go-library scanners now expose analyzer-owned detections through
+  `Scanner.ListRules` and `Scanner.ExplainRule`, matching the global catalog.
+  Consumers can enumerate and explain rules such as `SC-EX-007` without
+  maintaining a separate metadata path. Disabled rule IDs are normalized
+  consistently so catalog output and scan behavior cannot disagree by case.
 - `aguara scan` no longer contacts GitHub Releases in the background to
   check for a newer binary. Local scans now honor Aguara's offline-by-default
   contract without requiring `--no-update-check`; threat-intel refresh remains

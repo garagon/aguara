@@ -98,13 +98,25 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		warn("warning: %v\n", e)
 	}
 
-	// 3. Convert compiled YAML rules into the catalog shape.
+	return FromCompiled(compiled, opts), nil
+}
+
+// FromCompiled builds the merged catalog from an already-compiled pattern
+// rule set. Reusable scanners call this after loadAndCompile so their
+// ListRules and ExplainRule methods include analyzer-owned rules without
+// loading and compiling the YAML catalog a second time.
+//
+// CustomRulesDir and Warn are ignored because loading and compilation have
+// already happened. DisableRuleIDs, Overrides, and Category are still applied
+// to the supplied rules and analyzer metadata.
+func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule {
+	// 1. Convert compiled YAML rules into the catalog shape.
 	out := make([]rulemeta.Rule, 0, len(compiled)+32)
 	for _, r := range compiled {
 		out = append(out, fromCompiledRule(r))
 	}
 
-	// 4. Analyzer-emitted rules, aggregated by the engine registry
+	// 2. Analyzer-emitted rules, aggregated by the engine registry
 	// (the same single source of truth the scanner pipelines register
 	// from). Order doesn't matter; the sort at the end establishes the
 	// canonical ordering. rugpull is in the catalog unconditionally
@@ -113,14 +125,14 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 	// detector.
 	out = append(out, engine.RuleMetadata()...)
 
-	// 5. Apply the product-level decision impact after both catalog sources
+	// 3. Apply the product-level decision impact after both catalog sources
 	// are merged. Custom rules default to review unless Aguara explicitly
 	// classifies their stable ID as supporting context.
 	for i := range out {
 		out[i].DecisionImpact = rulemeta.DecisionImpactFor(out[i].ID)
 	}
 
-	// 6. --disable-rule filter. Applied AFTER merge so users can
+	// 4. --disable-rule filter. Applied AFTER merge so users can
 	// disable analyzer rules too (same UX as YAML rules).
 	if len(opts.DisableRuleIDs) > 0 {
 		disabled := make(map[string]struct{}, len(opts.DisableRuleIDs))
@@ -137,7 +149,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 7. Per-rule overrides: drop disabled rules and apply
+	// 5. Per-rule overrides: drop disabled rules and apply
 	// severity overrides. ONLY applied to YAML pattern rules
 	// (Analyzer == ""), matching the scanner contract: the
 	// scanner's rules.ApplyOverrides path operates over
@@ -177,7 +189,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 8. --category filter. Case-insensitive on the Category
+	// 6. --category filter. Case-insensitive on the Category
 	// string; same UX as the legacy YAML-only list-rules.
 	if opts.Category != "" {
 		filtered := out[:0]
@@ -189,9 +201,9 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		out = filtered
 	}
 
-	// 9. Canonical order.
+	// 7. Canonical order.
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return out
 }
 
 // ErrRuleNotFound is the sentinel FindByID returns when the
