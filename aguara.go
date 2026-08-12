@@ -116,9 +116,16 @@ type RuleDetail struct {
 	FalsePositives []string `json:"false_positives"`
 }
 
-// Scan scans a file or directory on disk for security issues.
+// Scan scans a file or directory on disk for security issues. Target-owned
+// .aguaraignore and inline suppression directives are ignored by default
+// because public API callers commonly scan repositories they do not trust.
+// Pass WithTrustedTargetPolicy only when the caller owns those controls.
 func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error) {
 	cfg := applyOpts(opts)
+	if cfg.targetPolicy == nil {
+		enabled := false
+		cfg.targetPolicy = &enabled
+	}
 	s, compiled, err := buildScanner(cfg)
 	if err != nil {
 		return nil, err
@@ -134,7 +141,10 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 	return result, nil
 }
 
-// ScanContent scans inline content without writing to disk.
+// ScanContent scans inline content without writing to disk. Inline suppression
+// directives are ignored by default because content passed through this API is
+// commonly the object of a trust decision. Pass WithTrustedTargetPolicy only
+// for content whose suppression directives are controlled by the caller.
 // filename is a hint for rule target matching (e.g. "skill.md", "config.json").
 // Content is NFKC-normalized before scanning to prevent Unicode evasion attacks.
 func ScanContent(ctx context.Context, content string, filename string, opts ...Option) (*ScanResult, error) {
@@ -157,6 +167,10 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	content = norm.NFKC.String(content)
 
 	cfg := applyOpts(opts)
+	if cfg.targetPolicy == nil {
+		enabled := false
+		cfg.targetPolicy = &enabled
+	}
 	// Explicit toolName parameter takes precedence over WithToolName option
 	if toolName != "" {
 		cfg.toolName = toolName
@@ -254,10 +268,15 @@ type Scanner struct {
 	cfg        *scanConfig
 }
 
-// NewScanner creates a pre-compiled scanner with the given options.
-// Call once at startup, reuse for all subsequent scans.
+// NewScanner creates a pre-compiled scanner with the given options. Reusable
+// scanners treat target-owned ignore policy as untrusted by default. Call once
+// at startup and reuse for all subsequent scans.
 func NewScanner(opts ...Option) (*Scanner, error) {
 	cfg := applyOpts(opts)
+	if cfg.targetPolicy == nil {
+		enabled := false
+		cfg.targetPolicy = &enabled
+	}
 	cr, err := loadAndCompile(cfg)
 	if err != nil {
 		return nil, err
@@ -387,6 +406,9 @@ func (sc *Scanner) RulesLoaded() int {
 func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, error) {
 	s := scanner.New(sc.cfg.workers)
 	s.SetMinSeverity(sc.cfg.minSeverity)
+	if sc.cfg.targetPolicy != nil {
+		s.SetProjectPolicyEnabled(*sc.cfg.targetPolicy)
+	}
 	if len(sc.cfg.ignorePatterns) > 0 {
 		s.SetIgnorePatterns(sc.cfg.ignorePatterns)
 	}
@@ -535,6 +557,9 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 
 	s := scanner.New(cfg.workers)
 	s.SetMinSeverity(cfg.minSeverity)
+	if cfg.targetPolicy != nil {
+		s.SetProjectPolicyEnabled(*cfg.targetPolicy)
+	}
 	if len(cfg.ignorePatterns) > 0 {
 		s.SetIgnorePatterns(cfg.ignorePatterns)
 	}

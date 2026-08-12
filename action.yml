@@ -53,11 +53,12 @@ inputs:
     default: 'true'
   install-script-ref:
     description: |
-      Advanced: git ref (semver tag or 40-char SHA) to fetch install.sh from.
+      Advanced self-test ref. A 40-char SHA with an empty version builds that
+      exact commit; a semver tag selects the install.sh revision.
       Normal consumers should leave this blank; the action automatically uses
       its own pinned ref (e.g. v0.14.4 when you pin `uses: garagon/aguara@v0.14.4`).
-      This input exists for self-testing scenarios where the action runs from
-      `uses: ./` and needs to exercise install.sh from a specific commit.
+      The SHA mode exists for repository self-tests where `uses: ./` must run
+      the binary from the same commit as action.yml and requires Go.
     required: false
     default: ''
 
@@ -78,6 +79,7 @@ runs:
         VERSION: ${{ inputs.version }}
         INSTALL_SCRIPT_REF: ${{ inputs.install-script-ref }}
         ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
         INSTALL_DIR: ${{ runner.temp }}/aguara-bin
         GITHUB_TOKEN: ${{ github.token }}
       run: |
@@ -95,8 +97,32 @@ runs:
           echo "::warning::install-script ref '$INSTALL_REF' is not a semver tag or 40-char SHA; falling back to $DEFAULT_REF"
           INSTALL_REF="$DEFAULT_REF"
         fi
-        curl -fsSL --max-time 30 --retry 3 --retry-connrefused \
-          "https://raw.githubusercontent.com/garagon/aguara/${INSTALL_REF}/install.sh" | bash
+        # Repository self-tests need action.yml and the scanner binary from
+        # the same commit. A release archive cannot represent an unmerged SHA,
+        # so the explicit advanced SHA input builds that exact source revision.
+        # Normal consumers leave INSTALL_SCRIPT_REF empty and keep using the
+        # signed release-install path below.
+        if [[ -n "$INSTALL_SCRIPT_REF" ]] && \
+           [[ "$INSTALL_REF" =~ ^[0-9a-f]{40}$ ]] && \
+           [[ -z "$VERSION" ]]; then
+          if ! command -v go >/dev/null 2>&1; then
+            echo "::error::Go is required when install-script-ref selects an exact source commit"
+            exit 1
+          fi
+          mkdir -p "$INSTALL_DIR"
+          SOURCE_REF=$(git -C "$ACTION_PATH" rev-parse HEAD)
+          if [ "$SOURCE_REF" != "$INSTALL_REF" ]; then
+            echo "::error::self-test checkout $SOURCE_REF does not match install-script-ref $INSTALL_REF"
+            exit 1
+          fi
+          echo "Building Aguara from exact self-test checkout $SOURCE_REF"
+          env GOTOOLCHAIN=auto go -C "$ACTION_PATH" build -trimpath \
+            -ldflags "-s -w -X github.com/garagon/aguara/cmd/aguara/commands.Version=self-test -X github.com/garagon/aguara/cmd/aguara/commands.Commit=${SOURCE_REF}" \
+            -o "$INSTALL_DIR/aguara" ./cmd/aguara
+        else
+          curl -fsSL --max-time 30 --retry 3 --retry-connrefused \
+            "https://raw.githubusercontent.com/garagon/aguara/${INSTALL_REF}/install.sh" | bash
+        fi
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 
     - name: Run Aguara scan
@@ -118,6 +144,7 @@ runs:
         args+=("--format" "$INPUT_FORMAT")
         args+=("--no-color")
         args+=("--no-update-check")
+        args+=("--project-policy" "ignore")
 
         if [ -n "$INPUT_FAIL_ON" ]; then
           args+=("--fail-on" "$INPUT_FAIL_ON")

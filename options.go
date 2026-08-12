@@ -15,6 +15,28 @@ type scanConfig struct {
 	deduplicateMode DeduplicateMode
 	stateDir        string
 	redact          bool // scrub matched text from credential-leak findings
+	targetPolicy    *bool
+}
+
+// WithTrustedTargetPolicy allows files being scanned to suppress findings via
+// .aguaraignore and inline aguara-ignore directives. Public scanning APIs
+// treat their input as untrusted by default; this option is the explicit
+// caller-controlled opt-in for trusted project policy.
+func WithTrustedTargetPolicy() Option {
+	return func(c *scanConfig) {
+		enabled := true
+		c.targetPolicy = &enabled
+	}
+}
+
+// WithUntrustedTarget prevents files being scanned from suppressing findings
+// via .aguaraignore or inline aguara-ignore directives. Use it when a cloned
+// repository or external content is the object of the trust decision.
+func WithUntrustedTarget() Option {
+	return func(c *scanConfig) {
+		enabled := false
+		c.targetPolicy = &enabled
+	}
 }
 
 // Option configures a scan operation.

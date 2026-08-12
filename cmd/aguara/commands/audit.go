@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/garagon/aguara/internal/baseline"
+	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/rulemeta"
@@ -26,6 +27,7 @@ var (
 	flagAuditWriteBaseline string
 	flagAuditInsecure      bool
 	flagAuditVerbose       bool
+	flagAuditProjectPolicy string
 )
 
 var auditCmd = &cobra.Command{
@@ -59,6 +61,7 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
 	auditCmd.Flags().BoolVar(&flagAuditVerbose, "verbose", false, "List every content finding instead of capping at 10")
+	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Target policy: auto (ignore), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -149,6 +152,9 @@ type AuditActionPlan struct {
 func runAudit(cmd *cobra.Command, args []string) error {
 	if flagAuditBaseline != "" && flagAuditWriteBaseline != "" {
 		return fmt.Errorf("--baseline and --write-baseline are mutually exclusive")
+	}
+	if _, err := resolveProjectPolicy(flagAuditProjectPolicy, false); err != nil {
+		return err
 	}
 	applyAuditCIDefaults()
 
@@ -297,7 +303,14 @@ func applyAuditCIDefaults() {
 // to be a strict gate, so we always run with SeverityInfo and let
 // the verdict / --fail-on threshold filter what matters.
 func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
-	cfg := loadScanConfig(cmd, targetPath)
+	trustProjectPolicy, err := resolveProjectPolicy(flagAuditProjectPolicy, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg := config.Config{}
+	if trustProjectPolicy {
+		cfg = loadScanConfig(cmd, targetPath)
+	}
 
 	// .aguara.yml `baseline:` feeds audit's --baseline when unset and we
 	// are not establishing a new baseline.
@@ -310,7 +323,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 		return nil, err
 	}
 
-	s, store := buildScanner(compiled, cfg, scanner.SeverityInfo)
+	s, store := buildScanner(compiled, cfg, scanner.SeverityInfo, trustProjectPolicy)
 	sp := startSpinnerIfTerminal(s, "Auditing content...")
 
 	ctx, cancel := contextWithInterrupt()

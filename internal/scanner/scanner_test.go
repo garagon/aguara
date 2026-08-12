@@ -265,6 +265,26 @@ func TestScannerInlineIgnoreAll(t *testing.T) {
 	require.Equal(t, "R3", result.Findings[0].RuleID)
 }
 
+func TestScannerUntrustedTargetRejectsInlineIgnore(t *testing.T) {
+	dir := t.TempDir()
+	content := "# aguara-ignore-next-line R1\nmatched by R1\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte(content), 0644))
+
+	s := scanner.New(1)
+	s.SetProjectPolicyEnabled(false)
+	s.RegisterAnalyzer(&mockAnalyzer{
+		name: "test",
+		findings: []types.Finding{
+			{RuleID: "R1", Severity: types.SeverityHigh, Line: 2},
+		},
+	})
+
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1, "untrusted content cannot suppress its own finding")
+	require.Equal(t, "R1", result.Findings[0].RuleID)
+}
+
 func TestScannerContextCancellation(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"), []byte("content"), 0644))

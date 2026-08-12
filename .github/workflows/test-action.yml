@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
 
       - name: Run Aguara action (default — SARIF)
         id: scan
@@ -31,11 +37,7 @@ jobs:
         with:
           path: ./internal/rules/builtin/
           severity: medium
-          # Exercise the PR's own install.sh, not the baked-in default.
-          # Without this override, the action falls back to DEFAULT_REF
-          # (latest release), which for the first PR that touches action.yml
-          # after a release may be ahead of or behind the install.sh the PR
-          # introduces.
+          # Build the binary from the same exact commit as action.yml.
           install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify outputs
@@ -64,6 +66,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
 
       - name: Run Aguara action (JSON, no SARIF upload)
         id: scan
@@ -73,7 +81,7 @@ jobs:
           format: json
           output: results.json
           upload-sarif: 'false'
-          # Exercise the PR's own install.sh, not the baked-in default.
+          # Build the binary from the same exact commit as action.yml.
           install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify JSON output
@@ -89,6 +97,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
 
       - name: Run Aguara action (fail-on critical, clean fixture, expect exit 0)
         uses: ./
@@ -96,5 +110,43 @@ jobs:
           path: ./.github/test-fixtures/clean/
           fail-on: critical
           upload-sarif: 'false'
-          # Exercise the PR's own install.sh, not the baked-in default.
+          # Build the binary from the same exact commit as action.yml.
           install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  test-action-untrusted-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Run Aguara action against a self-suppressing repository
+        id: scan
+        continue-on-error: true
+        uses: ./
+        with:
+          path: ./.github/test-fixtures/untrusted-policy/
+          fail-on: high
+          format: json
+          output: untrusted-policy-results.json
+          upload-sarif: 'false'
+          install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify target policy cannot bypass the action
+        if: always()
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::target-owned policy bypassed the Aguara action"
+            exit 1
+          fi
+          if ! jq -e '.findings | any(.rule_id == "PROMPT_INJECTION_001")' untrusted-policy-results.json >/dev/null; then
+            echo "::error::action failed without reporting the expected prompt-injection finding"
+            exit 1
+          fi

@@ -41,6 +41,7 @@ type Scanner struct {
 	deduplicateMode      DeduplicateMode
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
+	projectPolicyEnabled bool
 }
 
 // New creates a new Scanner with the given number of workers.
@@ -50,7 +51,8 @@ func New(workers int) *Scanner {
 		workers = runtime.NumCPU()
 	}
 	return &Scanner{
-		workers: workers,
+		workers:              workers,
+		projectPolicyEnabled: true,
 	}
 }
 
@@ -67,6 +69,14 @@ func (s *Scanner) SetMinSeverity(sev Severity) {
 // SetIgnorePatterns sets additional file ignore patterns from config.
 func (s *Scanner) SetIgnorePatterns(patterns []string) {
 	s.ignorePatterns = patterns
+}
+
+// SetProjectPolicyEnabled controls whether files being scanned may suppress
+// findings through .aguaraignore and inline aguara-ignore directives. It is
+// enabled by default for backwards-compatible local scans. Consumers that
+// inspect untrusted repositories or content should disable it.
+func (s *Scanner) SetProjectPolicyEnabled(enabled bool) {
+	s.projectPolicyEnabled = enabled
 }
 
 // SetMaxFileSize sets the maximum file size for scanning.
@@ -158,7 +168,11 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	}
 
 	// Directory scan: discover all files recursively.
-	discovery := &TargetDiscovery{IgnorePatterns: s.ignorePatterns, MaxFileSize: s.maxFileSize}
+	discovery := &TargetDiscovery{
+		IgnorePatterns:    s.ignorePatterns,
+		MaxFileSize:       s.maxFileSize,
+		IgnoreProjectFile: !s.projectPolicyEnabled,
+	}
 	targets, err := discovery.Discover(root)
 	if err != nil {
 		return nil, err
@@ -208,7 +222,10 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				if s.crossFileAccumulator != nil {
 					s.crossFileAccumulator.Accumulate(target.RelPath, target.StringContent())
 				}
-				ignoreIndex := buildIgnoreIndex(parseIgnoreDirectives(target.Content))
+				var ignoreIndex map[int]map[string]bool
+				if s.projectPolicyEnabled {
+					ignoreIndex = buildIgnoreIndex(parseIgnoreDirectives(target.Content))
+				}
 				for _, analyzer := range s.analyzers {
 					if ctx.Err() != nil {
 						return
