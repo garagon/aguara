@@ -38,6 +38,7 @@ var (
 	flagNoRedact      bool
 	flagBaseline      string
 	flagWriteBaseline string
+	flagProjectPolicy string
 )
 
 var scanCmd = &cobra.Command{
@@ -74,6 +75,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
 	scanCmd.Flags().StringVar(&flagBaseline, "baseline", "", "Gate only on findings NOT in this baseline file (fails closed if missing/malformed)")
 	scanCmd.Flags().StringVar(&flagWriteBaseline, "write-baseline", "", "Write current findings as a baseline to this file and exit 0 (skips sensitive findings)")
+	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Target policy: auto (trust local, ignore with --ci), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after a successful scan,
 	// network failures on --auto) should not trigger Cobra's
 	// flag-usage block: a CI log that already says
@@ -95,8 +97,15 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	targetPath := args[0]
 
-	cfg := loadScanConfig(cmd, targetPath)
 	applyCIDefaults()
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI)
+	if err != nil {
+		return err
+	}
+	cfg := config.Config{}
+	if trustProjectPolicy {
+		cfg = loadScanConfig(cmd, targetPath)
+	}
 
 	// .aguara.yml `baseline:` feeds --baseline when the flag is unset
 	// and we are not establishing a new baseline.
@@ -114,7 +123,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	s, store := buildScanner(compiled, cfg, minSev)
+	s, store := buildScanner(compiled, cfg, minSev, trustProjectPolicy)
 
 	sp := startSpinnerIfTerminal(s, "Discovering files...")
 
@@ -187,6 +196,10 @@ func validateBaselineFlags() error {
 }
 
 func runAutoScan(cmd *cobra.Command) error {
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, false)
+	if err != nil {
+		return err
+	}
 	discovered, err := discover.Scan()
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
@@ -225,7 +238,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		return err
 	}
 
-	s, store := buildScanner(compiled, cfg, minSev)
+	s, store := buildScanner(compiled, cfg, minSev, trustProjectPolicy)
 
 	sp := startSpinnerIfTerminal(s, "Scanning configs...")
 
@@ -300,6 +313,19 @@ func applyCIDefaults() {
 	}
 	if os.Getenv("NO_COLOR") != "" {
 		flagNoColor = true
+	}
+}
+
+func resolveProjectPolicy(value string, autoTrust bool) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto":
+		return autoTrust, nil
+	case "trust":
+		return true, nil
+	case "ignore":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid --project-policy %q: choose auto, trust, or ignore", value)
 	}
 }
 
@@ -393,9 +419,10 @@ func collectDisabledRules(cfg config.Config) []string {
 	return out
 }
 
-func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity) (*scanner.Scanner, *state.Store) {
+func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity, trustProjectPolicy bool) (*scanner.Scanner, *state.Store) {
 	s := scanner.New(flagWorkers)
 	s.SetMinSeverity(minSev)
+	s.SetProjectPolicyEnabled(trustProjectPolicy)
 	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
 		s.SetDisabledRules(disableList)
 	}

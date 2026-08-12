@@ -29,6 +29,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Repositories being evaluated can no longer declare themselves clean in
+  `aguara audit`, `aguara scan --ci`, the GitHub Action, WASM, or the public
+  scanning API. These trust-boundary paths ignore target-owned
+  `.aguara.yml`, `.aguaraignore`, and inline suppression directives by default.
+  Local `aguara scan` keeps its existing policy behavior, with an explicit
+  `--project-policy trust|ignore` override for either workflow; Go callers
+  must opt in with `WithTrustedTargetPolicy` before target policy is honored.
 - Reusable Go-library scanners now expose analyzer-owned detections through
   `Scanner.ListRules` and `Scanner.ExplainRule`, matching the global catalog.
   Consumers can enumerate and explain rules such as `SC-EX-007` without

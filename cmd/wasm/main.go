@@ -27,6 +27,7 @@ func scanContent(this js.Value, args []js.Value) any {
 	content := args[0].String()
 	filename := args[1].String()
 	opts := parseOptions(args, 2)
+	opts = append(opts, aguara.WithUntrustedTarget())
 
 	return newPromise(func() (any, error) {
 		return aguara.ScanContent(context.Background(), content, filename, opts...)
@@ -42,6 +43,7 @@ func scanContentAs(this js.Value, args []js.Value) any {
 	filename := args[1].String()
 	toolName := args[2].String()
 	opts := parseOptions(args, 3)
+	opts = append(opts, aguara.WithUntrustedTarget())
 
 	return newPromise(func() (any, error) {
 		return aguara.ScanContentAs(context.Background(), content, filename, toolName, opts...)

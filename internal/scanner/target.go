@@ -22,9 +22,9 @@ type Target struct {
 	Content     []byte
 	MaxFileSize int64 // 0 means use DefaultMaxFileSize
 
-	linesOnce sync.Once
-	lines     []string
-	strOnce   sync.Once
+	linesOnce  sync.Once
+	lines      []string
+	strOnce    sync.Once
 	strContent string
 }
 
@@ -73,13 +73,16 @@ func (t *Target) Lines() []string {
 
 // TargetDiscovery walks a directory and returns scannable targets.
 type TargetDiscovery struct {
-	IgnorePatterns []string
-	MaxFileSize    int64 // 0 means use DefaultMaxFileSize
+	IgnorePatterns    []string
+	MaxFileSize       int64 // 0 means use DefaultMaxFileSize
+	IgnoreProjectFile bool  // do not load target-owned .aguaraignore
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
 func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
-	td.loadIgnoreFile(root)
+	if !td.IgnoreProjectFile {
+		td.loadIgnoreFile(root)
+	}
 
 	limit := td.MaxFileSize
 	if limit <= 0 {

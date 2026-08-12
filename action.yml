@@ -118,6 +118,7 @@ runs:
         args+=("--format" "$INPUT_FORMAT")
         args+=("--no-color")
         args+=("--no-update-check")
+        args+=("--project-policy" "ignore")
 
         if [ -n "$INPUT_FAIL_ON" ]; then
           args+=("--fail-on" "$INPUT_FAIL_ON")

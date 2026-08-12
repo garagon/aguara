@@ -98,3 +98,35 @@ jobs:
           upload-sarif: 'false'
           # Exercise the PR's own install.sh, not the baked-in default.
           install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  test-action-untrusted-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run Aguara action against a self-suppressing repository
+        id: scan
+        continue-on-error: true
+        uses: ./
+        with:
+          path: ./.github/test-fixtures/untrusted-policy/
+          fail-on: high
+          format: json
+          output: untrusted-policy-results.json
+          upload-sarif: 'false'
+          install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify target policy cannot bypass the action
+        if: always()
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::target-owned policy bypassed the Aguara action"
+            exit 1
+          fi
+          if ! jq -e '.findings | any(.rule_id == "PROMPT_INJECTION_001")' untrusted-policy-results.json >/dev/null; then
+            echo "::error::action failed without reporting the expected prompt-injection finding"
+            exit 1
+          fi

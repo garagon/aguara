@@ -118,3 +118,21 @@ func TestAguaraIgnore(t *testing.T) {
 	require.True(t, paths["keep.md"])
 	require.False(t, paths["skip.log"])
 }
+
+func TestTargetDiscoveryCanIgnoreProjectPolicy(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.md"), []byte("keep"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "hidden.md"), []byte("hidden"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguaraignore"), []byte("hidden.md\n"), 0644))
+
+	td := &scanner.TargetDiscovery{IgnoreProjectFile: true}
+	targets, err := td.Discover(dir)
+	require.NoError(t, err)
+
+	paths := make(map[string]bool)
+	for _, target := range targets {
+		paths[target.RelPath] = true
+	}
+	require.True(t, paths["keep.md"])
+	require.True(t, paths["hidden.md"], "target-owned .aguaraignore must not hide files")
+}

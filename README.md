@@ -55,10 +55,10 @@ Use Aguara when the next step would grant trust to a repository:
 | Moment | Question | Command |
 |---|---|---|
 | Before installing a cloned repo | Does this project resolve to a known-malicious package, including aliases or lockfile-only evidence? | `aguara check .` |
-| Before handing a repo to an AI coding agent | Are there agent instructions, settings, MCP configs, or tool definitions that change what the agent will obey or run? | `aguara scan .` |
+| Before handing a repo to an AI coding agent | Are there agent instructions, settings, MCP configs, or tool definitions that change what the agent will obey or run? | `aguara scan . --project-policy ignore` |
 | Before CI executes project code | Do package intel and content findings together make this build unsafe to run or merge? | `aguara audit . --ci` |
 | When adopting a new gate | Can we keep old findings visible without failing every build on day one? | `aguara audit . --write-baseline .aguara-baseline.json` |
-| When reviewing package-manager posture | Has the repo weakened npm or pnpm install-time trust decisions? | `aguara scan .` |
+| When reviewing package-manager posture | Has the repo weakened npm or pnpm install-time trust decisions? | `aguara scan . --project-policy ignore` |
 
 The output is meant for a developer, maintainer, CI job, or agent workflow that needs a clear preflight signal: proceed, review first, or stop.
 
@@ -69,7 +69,7 @@ Findings remain visible, but visibility is not the same as a reason to block exe
 | Surface | Examples | Command |
 |---|---|---|
 | Packages and lockfiles | npm, pnpm, PyPI, Go, Rust, PHP, Ruby, Java, .NET | `aguara check .` |
-| Package manager policy | npm v12 install-trust decisions in `package.json` / `.npmrc`; pnpm supply-chain settings in `pnpm-workspace.yaml` | `aguara scan .`, `aguara audit .` |
+| Package manager policy | npm v12 install-trust decisions in `package.json` / `.npmrc`; pnpm supply-chain settings in `pnpm-workspace.yaml` | `aguara scan . --project-policy ignore`, `aguara audit .` |
 | Install scripts | npm lifecycle hooks, install-time JS / Python / Rust behavior | `aguara scan .`, `aguara check .` |
 | MCP configs | Claude Desktop, Cursor, VS Code, Cline, and 13 more | `aguara discover`, `aguara scan --auto` |
 | Agent skills and tools | skills, prompts, tool descriptions, persistent instruction files, agent host settings | `aguara scan <path>` |
@@ -115,7 +115,7 @@ It also matches installed package trees (`node_modules`, the pnpm `.pnpm` store,
 Before you let an agent use a third-party skill or tool, or accept a new MCP server config, scan what the agent is about to trust:
 
 ```bash
-aguara scan .claude/skills/   # skills, prompts, tool descriptions
+aguara scan .claude/skills/ --project-policy ignore   # skills, prompts, tool descriptions
 aguara discover               # find every MCP config on the machine
 aguara scan --auto            # discover and scan them
 ```
@@ -131,6 +131,15 @@ aguara audit . --ci     # --fail-on critical, no color, exit 1 on compromised pa
 ```
 
 JSON output carries both sub-results (`.check` and `.scan`) plus per-section counts, so a dashboard can drill into either side.
+
+The repository under review is not allowed to define the result of its own
+trust check. `aguara audit`, `aguara scan --ci`, the GitHub Action, and all
+public scanning APIs ignore target-owned `.aguara.yml`, `.aguaraignore`, and
+inline suppression directives by default. A normal local `aguara scan` still
+respects project policy for backwards compatibility; use
+`--project-policy trust|ignore` when you need to select the boundary
+explicitly. Go callers can opt into trusted target policy with
+`aguara.WithTrustedTargetPolicy()`.
 
 ## Threat Intel
 
@@ -293,7 +302,7 @@ A short Go example:
 ```go
 import "github.com/garagon/aguara"
 
-result, err := aguara.Scan(ctx, "./skills/")
+result, err := aguara.Scan(ctx, "./skills/") // target-owned suppressions ignored
 result, err = aguara.ScanContent(ctx, content, "skill.md") // no disk I/O, NFKC-normalized
 detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
 ```
@@ -415,7 +424,7 @@ rule_overrides:
   MCPCFG_004: { exempt_tools: ["WebFetch"] } # enforce on all except WebFetch
 ```
 
-Suppress individual findings inline with `# aguara-ignore RULE_ID` (also `-next-line`, HTML/`//` comment variants).
+Suppress individual findings inline with `# aguara-ignore RULE_ID` (also `-next-line`, HTML/`//` comment variants). These controls apply to trusted local scans. Trust-boundary scans ignore repository-owned policy unless the caller explicitly passes `--project-policy trust`.
 
 ## Aguara MCP
 
