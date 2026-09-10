@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -534,33 +535,25 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 func writeOutput(result *scanner.ScanResult) error {
 	output.ToolVersion = Version
 
-	w := os.Stdout
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return fmt.Errorf("creating output file: %w", err)
+	return writeReport(func(w io.Writer) error {
+		var formatter output.Formatter
+		switch strings.ToLower(flagFormat) {
+		case "json":
+			formatter = &output.JSONFormatter{}
+		case "sarif":
+			formatter = &output.SARIFFormatter{}
+		case "markdown", "md":
+			formatter = &output.MarkdownFormatter{}
+		default:
+			formatter = &output.TerminalFormatter{
+				NoColor: flagNoColor,
+				Verbose: flagVerbose,
+				Width:   output.DetectWidth(w),
+			}
 		}
-		defer func() { _ = f.Close() }()
-		w = f
-	}
 
-	var formatter output.Formatter
-	switch strings.ToLower(flagFormat) {
-	case "json":
-		formatter = &output.JSONFormatter{}
-	case "sarif":
-		formatter = &output.SARIFFormatter{}
-	case "markdown", "md":
-		formatter = &output.MarkdownFormatter{}
-	default:
-		formatter = &output.TerminalFormatter{
-			NoColor: flagNoColor,
-			Verbose: flagVerbose,
-			Width:   output.DetectWidth(w),
-		}
-	}
-
-	return formatter.Format(w, result)
+		return formatter.Format(w, result)
+	})
 }
 
 func isTerminalFormat() bool {
