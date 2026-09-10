@@ -2062,29 +2062,106 @@ var fsDeleteMethodCaps = map[string]deleteMethodCap{
 	"emptydirsync": {mode: delModeRecursive, fsExtra: true},
 }
 
-// recursiveOptTrueRe matches a `recursive: true` (or `!0`) option, with an
-// optionally quoted key. A literal `recursive: false`, a variable, or the bare
-// key absent leaves recursion off, so `fs.rmSync(p, { recursive: false })`
-// cannot wipe a directory.
-var recursiveOptTrueRe = regexp.MustCompile(`\brecursive["']?\s*:\s*(?:true|!0)\b`)
+var staticOptionKeyRe = regexp.MustCompile(`^(?:(get|set|async)\s+)?([A-Za-z_$][\w$]*|[0-9][A-Za-z0-9_.]*|\.[0-9]+|'[^'\\]*'|"[^"\\]*")\s*([:(]|$)`)
+var optionIdentifierRe = regexp.MustCompile(`^[A-Za-z_$][\w$]*$`)
 
 // optsHaveTopLevelRecursiveTrue reports whether the options argument sets
 // `recursive: true` at the TOP level of the options object. A nested
 // `recursive: true` (`{ recursive: false, retry: { recursive: true } }`) does
 // not enable Node's recursive removal, so it must not grant the capability.
 func optsHaveTopLevelRecursiveTrue(opts []byte) bool {
-	for _, loc := range recursiveOptTrueRe.FindAllIndex(opts, -1) {
-		depth := 0
-		for i := 0; i < loc[0]; i++ {
-			switch opts[i] {
-			case '{', '[', '(':
-				depth++
-			case '}', ']', ')':
-				depth--
+	opts = bytes.TrimSpace(opts)
+	if len(opts) < 2 || opts[0] != '{' {
+		return false
+	}
+	view := newJSLexicalView(opts)
+	code := view.Code
+	recursive := false
+	member := func(raw []byte) {
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 {
+			return
+		}
+		m := staticOptionKeyRe.FindSubmatchIndex(raw)
+		if m == nil {
+			// Spreads, computed keys, accessors and shorthand may overwrite the
+			// option. A later explicit property can establish it again.
+			recursive = false
+			return
+		}
+		key := string(raw[m[4]:m[5]])
+		if key[0] == '\'' || key[0] == '"' {
+			key = key[1 : len(key)-1]
+		}
+		if key == "recursive" {
+			value := bytes.TrimSpace(raw[m[1]:])
+			recursive = m[2] < 0 && string(raw[m[6]:m[7]]) == ":" &&
+				(bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("!0")))
+		}
+	}
+	start := 1
+	var stack []byte
+	for i := 1; i < len(code); i++ {
+		if view.InString(i) {
+			continue
+		}
+		switch code[i] {
+		case '{', '[', '(':
+			stack = append(stack, code[i])
+		case '}', ']', ')':
+			if len(stack) == 0 {
+				if code[i] != '}' {
+					return false
+				}
+				member(code[start:i])
+				return recursive && staticObjectFallback(code[i+1:])
+			}
+			open := stack[len(stack)-1]
+			if open == '{' && code[i] != '}' || open == '[' && code[i] != ']' || open == '(' && code[i] != ')' {
+				return false
+			}
+			stack = stack[:len(stack)-1]
+		case ',':
+			if len(stack) == 0 {
+				member(code[start:i])
+				start = i + 1
 			}
 		}
-		if depth == 1 { // directly inside the options object's braces
-			return true
+	}
+	return false
+}
+
+// A literal object is truthy and non-null. Only accept a single inert fallback
+// operand; a surrounding conditional could select a different options object.
+func staticObjectFallback(tail []byte) bool {
+	tail = bytes.TrimSpace(tail)
+	if len(tail) == 0 {
+		return true
+	}
+	if !bytes.HasPrefix(tail, []byte("||")) && !bytes.HasPrefix(tail, []byte("??")) {
+		return false
+	}
+	rhs := bytes.TrimSpace(tail[2:])
+	if optionIdentifierRe.Match(rhs) {
+		return true
+	}
+	if len(rhs) < 2 || rhs[0] != '{' || rhs[len(rhs)-1] != '}' {
+		return false
+	}
+	view := newJSLexicalView(rhs)
+	depth := 0
+	for i, b := range view.Code {
+		if view.InString(i) {
+			continue
+		}
+		switch b {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i == len(rhs)-1
+			}
 		}
 	}
 	return false
