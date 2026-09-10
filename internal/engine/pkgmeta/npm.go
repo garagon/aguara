@@ -159,30 +159,7 @@ func parseManifest(content []byte) (*manifest, error) {
 // credential-leak category, so supply-chain findings that emit a raw
 // version must self-sanitize.
 func sanitizeGitURL(version string) string {
-	// Trim before scheme matching: isGitDep already trims, so a value
-	// like " git+https://user:token@github.com/org/repo.git " is treated
-	// as a git dep upstream. Without trimming here, the leading space
-	// breaks the HasPrefix check and the raw credential survives into
-	// Description / MatchedText.
-	v := strings.TrimSpace(version)
-	// Only URL forms can carry credentials. Match the scheme then look
-	// for an `@` that separates `userinfo` from `host`. Drop the
-	// userinfo block.
-	for _, scheme := range []string{"git+ssh://", "git+https://", "git+http://", "git+git://", "git://", "https://", "http://", "ssh://"} {
-		if !strings.HasPrefix(strings.ToLower(v), scheme) {
-			continue
-		}
-		rest := v[len(scheme):]
-		at := strings.Index(rest, "@")
-		slash := strings.Index(rest, "/")
-		// `@` must appear before the first `/` to belong to userinfo;
-		// otherwise it is part of a path (e.g. `@scope/...`).
-		if at > 0 && (slash < 0 || at < slash) {
-			return v[:len(scheme)] + rest[at+1:]
-		}
-		break
-	}
-	return v
+	return types.StripURLUserinfo(strings.TrimSpace(version))
 }
 
 // keyTokenRegex compiles a regex that matches `"key"` followed by any

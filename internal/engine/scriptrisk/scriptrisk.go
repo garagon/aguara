@@ -57,7 +57,6 @@ var (
 	unsafeHTTPURLRe   = regexp.MustCompile(`(?i)(?:git\+)?http://[^\s'"<>]+`)
 	pipSourceOptionRe = regexp.MustCompile(`(?i)--(?:extra-)?index-url(?:=|\s+)\S*http://`)
 	npmSourceOptionRe = regexp.MustCompile(`(?i)--registry(?:=|\s+)\S*http://`)
-	urlCredentialRe   = regexp.MustCompile(`(?i)(https?://)[^/@\s]+:[^/@\s]+@`)
 	shellSystemctlRe  = regexp.MustCompile(`(?i)^(?:sudo\s+)?systemctl\s+(?:--user\s+)?(?:[^;&|]*\s)?enable\b`)
 	shellCronFeedRe   = regexp.MustCompile(`(?i)(?:@reboot|(?:\*|\d+)(?:/\d+)?\s+(?:\*|\d+))`)
 	shellUnitPathRe   = regexp.MustCompile(`(?i)(?:~|\$\{?HOME\}?|/home/[^/\s]+|/root)/\.config/systemd/user/[^\s]+\.(?:service|timer)`)
@@ -1739,5 +1738,5 @@ func isLoopbackHost(host string) bool {
 }
 
 func redactURLCredentials(s string) string {
-	return urlCredentialRe.ReplaceAllString(s, `${1}[REDACTED]@`)
+	return types.SanitizeURLUserinfo(s, types.RedactedPlaceholder+"@")
 }

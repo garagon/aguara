@@ -136,9 +136,8 @@ const RedactedPlaceholder = "[REDACTED]"
 // RedactSensitiveFindings scrubs matched text and context lines for findings
 // that are known to carry a real secret value: either the rule / analyzer set
 // Sensitive == true, or the legacy category-based contract
-// (Category == "credential-leak") still applies. Other findings are left
-// intact because their match is typically a pattern signature rather than a
-// secret.
+// (Category == "credential-leak") still applies. URL userinfo is also scrubbed
+// in every finding's matched text, description and source context.
 //
 // Context redaction differs by source. Sensitive findings treat their entire
 // Context window as secret-bearing because either (a) the analyzer's
@@ -169,6 +168,13 @@ func RedactSensitiveFindings(findings []Finding) {
 	}
 	sensitiveLines := make(map[fileLine]bool)
 	for i := range findings {
+		// URL credentials can occur in non-credential findings and neighboring
+		// source context even when the originating finding was filtered out.
+		findings[i].MatchedText = SanitizeURLUserinfo(findings[i].MatchedText, RedactedPlaceholder+"@")
+		findings[i].Description = SanitizeURLUserinfo(findings[i].Description, RedactedPlaceholder+"@")
+		for j := range findings[i].Context {
+			findings[i].Context[j].Content = SanitizeURLUserinfo(findings[i].Context[j].Content, RedactedPlaceholder+"@")
+		}
 		isSensitive := findings[i].Sensitive
 		isLegacyCred := findings[i].Category == "credential-leak"
 		if !isSensitive && !isLegacyCred {
