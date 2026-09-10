@@ -96,12 +96,8 @@ func TestImportKeepsOpenSSFSource(t *testing.T) {
 	require.Equal(t, "GHSA-aaaa-bbbb-cccc", snap.Records[0].ID)
 }
 
-func TestImportKeywordMatchOnReferenceURL(t *testing.T) {
-	// Codex P2 regression (PR 3 review): the keyword scan must
-	// consult OSV reference URLs too, because Socket / Snyk
-	// blog-post URLs sometimes carry the only "malicious package"
-	// hint a record has. Without scanning References, such
-	// records silently drop.
+func TestImportRejectsKeywordOnlyReferenceURL(t *testing.T) {
+	// A link about a malicious package does not classify this package.
 	rec := struct {
 		ID         string            `json:"id"`
 		Summary    string            `json:"summary"`
@@ -129,13 +125,11 @@ func TestImportKeywordMatchOnReferenceURL(t *testing.T) {
 		osvimport.Options{Ecosystems: []string{"npm"}, GeneratedAt: time.Unix(0, 0)},
 	)
 	require.NoError(t, err)
-	require.Len(t, snap.Records, 1, "URL keyword 'malicious package' must qualify the record")
-	require.Equal(t, "GHSA-ref-hit", snap.Records[0].ID)
+	require.Empty(t, snap.Records)
 }
 
-func TestImportKeepsKeywordMatchWithVersions(t *testing.T) {
-	// The keyword path requires (a) one of the high-confidence
-	// terms in summary/details AND (b) exact affected versions.
+func TestImportRejectsKeywordOnlyExactVersions(t *testing.T) {
+	// Exact affected versions do not establish malicious intent.
 	rec := osvRecordFixture{
 		ID:      "GHSA-keyword-hit",
 		Summary: "Compromised package: credential exfiltration via install script",
@@ -149,8 +143,7 @@ func TestImportKeepsKeywordMatchWithVersions(t *testing.T) {
 		osvimport.Options{Ecosystems: []string{"PyPI"}, GeneratedAt: time.Unix(0, 0)},
 	)
 	require.NoError(t, err)
-	require.Len(t, snap.Records, 1)
-	require.Equal(t, "GHSA-keyword-hit", snap.Records[0].ID)
+	require.Empty(t, snap.Records)
 }
 
 func TestImportDropsGenericCVERecords(t *testing.T) {
@@ -565,7 +558,7 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 		}, got2.Ranges)
 	})
 	t.Run("keyword-qualified ranges never import (signal-only channels)", func(t *testing.T) {
-		// A keyword hit qualifies exact-version records only. On the
+		// A keyword hit no longer qualifies any record. On the
 		// range channels the blast radius of a keyword false positive
 		// is every version below the bound (real leak: axios,
 		// @angular/core, playwright CVEs whose text or reference
@@ -595,8 +588,7 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 		_, status = osvimport.ClassifyForEcosystem(mustMarshal(t, bounded), "npm")
 		require.Equal(t, osvimport.StatusRangesOnly, status)
 
-		// The same keyword-qualified record WITH exact versions keeps
-		// importing: the exact channel is where keywords belong.
+		// Exact versions must also pass source-based admission.
 		exact := osvRecordFixture{
 			ID:      "GHSA-kw-exact",
 			Summary: "Malicious package found in acme-lib",
@@ -606,7 +598,7 @@ func TestClassifyForEcosystem_FunnelStatuses(t *testing.T) {
 			}},
 		}
 		_, status = osvimport.ClassifyForEcosystem(mustMarshal(t, exact), "npm")
-		require.Equal(t, osvimport.StatusKept, status)
+		require.Equal(t, osvimport.StatusNeither, status)
 	})
 	t.Run("git-typed npm ranges import as nothing", func(t *testing.T) {
 		rec := osvRecordFixture{

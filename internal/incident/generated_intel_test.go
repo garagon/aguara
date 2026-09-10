@@ -56,8 +56,11 @@ func TestEmbeddedIntelMetaMatchesBlob(t *testing.T) {
 	}
 
 	// record_count / source_count / schema / generated_at must match
-	// the decoded snapshot the runtime actually serves.
-	snap := EmbeddedIntelSnapshot()
+	// the decoded artifact, before runtime admission migration.
+	snap, err := intel.DecodeSnapshotGZIP(generatedIntelGZ)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if meta.RecordCount != len(snap.Records) {
 		t.Errorf("record_count mismatch: meta=%d snapshot=%d", meta.RecordCount, len(snap.Records))
 	}

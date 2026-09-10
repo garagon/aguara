@@ -2,10 +2,8 @@
 // values that the runtime matcher can consume.
 //
 // Scope is deliberately narrow: only high-confidence malicious or
-// compromised package records survive the filter. Records without
-// an exact affected-version list are dropped, because the runtime
-// matcher refuses to consult ranges until a tested semver / PEP 440
-// layer lands. A wrong match is worse than no match.
+// compromised package records survive the filter. Exact versions, all-version
+// advisories and supported npm ranges are retained only with admission evidence.
 //
 // This package is pure: it does no I/O of its own. ImportFromZip
 // (in zip.go) is a small helper that reads OSV's all.zip dumps and
@@ -26,8 +24,8 @@ import (
 
 // Options control which records survive the filter. All fields are
 // optional; the zero value selects the production-default filter
-// (MAL- IDs, OpenSSF malicious-packages source, or a high-confidence
-// keyword + exact versions).
+// (MAL- IDs, structured OpenSSF origins, and exact-version admissions from
+// reviewed GitHub CWE-506 classifications or the reviewed compatibility list).
 type Options struct {
 	// Ecosystems is the set of OSV ecosystem strings to keep.
 	// Empty means "no filter" -- import everything OSV emits, which
@@ -60,9 +58,7 @@ type Options struct {
 //     a name, and an optional Versions list of exact strings.
 //   - DatabaseSpecific carries source-specific metadata; OpenSSF
 //     Malicious Packages records populate it with origin info.
-//   - References lists URLs / publishings; we use them only to feed
-//     the keyword scanner because OSV's free-form text is the only
-//     place a "credential exfiltration" hint actually appears.
+//   - References lists supporting URLs; these are not admission evidence.
 type osvRecord struct {
 	ID               string          `json:"id"`
 	Aliases          []string        `json:"aliases,omitempty"`
@@ -174,24 +170,6 @@ type osvReference struct {
 	URL  string `json:"url,omitempty"`
 }
 
-// highConfidenceKeywords is the conservative keyword list the
-// filter consults for records that do NOT come from a known-good
-// source (MAL- ID or OpenSSF Malicious Packages). The list is small
-// on purpose: a longer list pulls in generic-CVE noise (e.g. "DoS",
-// "vulnerable to") that does not belong in the malicious-package
-// snapshot. New keywords should only be added when the
-// TestOSVImporterDropsGenericCVERecords baseline keeps holding.
-var highConfidenceKeywords = []string{
-	"malicious package",
-	"malicious npm package",
-	"malicious python package",
-	"compromised package",
-	"credential stealing",
-	"credential exfiltration",
-	"typosquat malware",
-	"install script malware",
-}
-
 // Import returns the intel.Snapshot for the given OSV record set.
 // Caller is responsible for feeding the full set of records they
 // want considered; Import does not perform any I/O. Records that
@@ -209,8 +187,9 @@ func Import(raw [][]byte, opts Options) (intel.Snapshot, error) {
 	}
 
 	snap := intel.Snapshot{
-		SchemaVersion: intel.CurrentSchemaVersion,
-		GeneratedAt:   opts.GeneratedAt,
+		SchemaVersion:   intel.CurrentSchemaVersion,
+		AdmissionPolicy: intel.CurrentOSVAdmissionPolicy,
+		GeneratedAt:     opts.GeneratedAt,
 	}
 	if snap.GeneratedAt.IsZero() {
 		snap.GeneratedAt = time.Now().UTC()
@@ -280,12 +259,11 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 	// intel.Record so the matcher's tombstone path retracts any
 	// earlier live copy from another source. The tombstone keys
 	// off (ecosystem, name, ID) only, so a withdrawn record does
-	// not need to satisfy the empty-versions or signal/keyword
+	// not need to satisfy the empty-versions or admission
 	// gates that live records do.
 	withdrawn := osv.Withdrawn != ""
 
 	signal := hasHighConfidenceSignal(osv)
-	keywordHit := hasKeywordMatch(osv)
 
 	var out []intel.Record
 	var entries []intel.AllVersionsEntry
@@ -301,7 +279,7 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 		}
 
 		// Withdrawn records bypass both the empty-versions skip
-		// and the signal/keyword gate. They exist purely so the
+		// and the admission gate. They exist purely so the
 		// matcher can tombstone an earlier live copy with the
 		// same advisory ID; if we filter them out here, the live
 		// copy keeps matching forever after the retraction.
@@ -318,7 +296,7 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 				// false positive on a range flags every version below
 				// the bound (measured leak: axios, @angular/core,
 				// playwright CVEs arriving as "malicious"). The
-				// keyword channel stays exact-version only.
+				// Exact-version admissions are handled separately below.
 				if signal && rangesAllVersionsShape(aff.Ranges) {
 					entries = append(entries, intel.AllVersionsEntry{
 						ID:        osv.ID,
@@ -354,11 +332,9 @@ func convertOSVRecord(raw []byte, ecoFilter map[string]struct{}) ([]intel.Record
 				}
 				continue
 			}
-			// Filter: keep when there is a high-confidence
-			// source signal, OR a keyword hit on the free-form
-			// text. The "exact versions present" check above
-			// gates both paths.
-			if !signal && !keywordHit {
+			// Exact versions define affected scope, not malicious intent.
+			aff.Versions = admittedExactVersions(osv, eco, aff, signal)
+			if len(aff.Versions) == 0 {
 				continue
 			}
 		}
@@ -400,9 +376,8 @@ const (
 	// ranges, no exact versions. The matcher consumes exact
 	// versions only, so the record is dropped from the snapshot.
 	StatusRangesOnly
-	// StatusNeither: the record has exact versions but fails both
-	// the high-confidence signal gate (MAL- prefix / OpenSSF
-	// origin) and the keyword gate. CVE-flavoured records land
+	// StatusNeither: the record has exact versions but lacks source
+	// evidence or explicitly reviewed tuples. Generic CVEs land
 	// here and do not belong in a malicious-package snapshot.
 	StatusNeither
 	// StatusKept: the record survives the filter and becomes an
@@ -459,7 +434,6 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 		return intel.Record{}, StatusWithdrawn
 	}
 	signal := hasHighConfidenceSignal(osv)
-	malicious := signal || hasKeywordMatch(osv)
 	if len(aff.Versions) == 0 {
 		// Mirrors Import: the range channels (all-versions entries and
 		// npm bounded ranges) require the firm malicious-package
@@ -502,7 +476,8 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 		}
 		return intel.Record{}, StatusRangesOnly
 	}
-	if !malicious {
+	versions := admittedExactVersions(osv, canon, *aff, signal)
+	if len(versions) == 0 {
 		return intel.Record{}, StatusNeither
 	}
 	return intel.Record{
@@ -512,7 +487,7 @@ func ClassifyForEcosystem(raw []byte, targetEcosystem string) (intel.Record, Rec
 		Name:       aff.Package.Name,
 		Kind:       intel.KindMalicious,
 		Summary:    pickSummary(osv),
-		Versions:   append([]string(nil), aff.Versions...),
+		Versions:   append([]string(nil), versions...),
 		References: extractReferenceURLs(osv.References),
 	}, StatusKept
 }
@@ -605,68 +580,50 @@ func canonicaliseEcosystem(raw string) string {
 // text:
 //
 //   - The ID starts with MAL- (OSV's malicious-package namespace).
-//   - DatabaseSpecific holds an `malicious-packages-origins` field,
-//     which OpenSSF Malicious Packages populates.
-//
-// Either signal short-circuits the keyword scan so MAL- entries
-// with sparse free-form text still survive.
+//   - DatabaseSpecific holds a top-level malicious-packages-origins
+//     array with a nonempty source, as populated by OpenSSF.
 func hasHighConfidenceSignal(osv osvRecord) bool {
 	if strings.HasPrefix(osv.ID, "MAL-") {
 		return true
 	}
-	if len(osv.DatabaseSpecific) > 0 {
-		// We do not fully unmarshal database_specific; a simple
-		// substring check on the raw bytes is enough to detect
-		// the OpenSSF source without owning their schema.
-		if strings.Contains(string(osv.DatabaseSpecific), "malicious-packages-origins") {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(osv.DatabaseSpecific, &fields) != nil {
+		return false
+	}
+	var origins []struct {
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(fields["malicious-packages-origins"], &origins) != nil {
+		return false
+	}
+	for _, origin := range origins {
+		if strings.TrimSpace(origin.Source) != "" {
 			return true
 		}
 	}
 	return false
 }
 
-// hasKeywordMatch returns true when summary, details, or any
-// reference URL contains one of the high-confidence keywords. The
-// match is case-insensitive substring; matching is intentionally
-// narrow because the broader the keyword list, the more generic
-// CVEs leak into the malicious-package snapshot.
-//
-// References are scanned because OSV advisories often point to a
-// Socket / Snyk / vendor blog post whose URL slug carries the
-// signal ("malicious-package-foo", "credential-stealing-bar") even
-// when the summary text is a generic vulnerability sentence. Without
-// scanning the URL, those records would silently drop.
-func hasKeywordMatch(osv osvRecord) bool {
-	for _, hay := range []string{osv.Summary, osv.Details} {
-		if hay == "" {
-			continue
-		}
-		lower := strings.ToLower(hay)
-		for _, kw := range highConfidenceKeywords {
-			if strings.Contains(lower, kw) {
-				return true
+// Reviewed GitHub CWE-506 explicitly identifies embedded malicious code, unlike
+// prose about exploiting otherwise legitimate software. Keep this exact-only;
+// the range channels retain their existing MAL/OpenSSF source requirement.
+func admittedExactVersions(osv osvRecord, eco string, aff osvAffected, sourceSignal bool) []string {
+	if sourceSignal {
+		return aff.Versions
+	}
+	var fields map[string]json.RawMessage
+	if strings.HasPrefix(osv.ID, "GHSA-") && json.Unmarshal(osv.DatabaseSpecific, &fields) == nil {
+		var reviewed bool
+		var cwes []string
+		if json.Unmarshal(fields["github_reviewed"], &reviewed) == nil && reviewed && json.Unmarshal(fields["cwe_ids"], &cwes) == nil {
+			for _, cwe := range cwes {
+				if cwe == "CWE-506" {
+					return aff.Versions
+				}
 			}
 		}
 	}
-	for _, ref := range osv.References {
-		if ref.URL == "" {
-			continue
-		}
-		// URL slugs use `-`, `_`, and `/` as word separators
-		// (`/blog/malicious-package-foo-bar`). Normalise to
-		// spaces so the keyword scan can match phrases like
-		// "malicious package" against the slug form.
-		normalised := strings.ToLower(ref.URL)
-		for _, sep := range []string{"-", "_", "/"} {
-			normalised = strings.ReplaceAll(normalised, sep, " ")
-		}
-		for _, kw := range highConfidenceKeywords {
-			if strings.Contains(normalised, kw) {
-				return true
-			}
-		}
-	}
-	return false
+	return intel.ReviewedOSVVersions(osv.ID, eco, aff.Package.Name, aff.Versions)
 }
 
 // pickSummary returns the most informative single-line text for a

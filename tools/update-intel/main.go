@@ -102,7 +102,8 @@ func main() {
 	}
 
 	merged := intel.Snapshot{
-		SchemaVersion: intel.CurrentSchemaVersion,
+		AdmissionPolicy: intel.CurrentOSVAdmissionPolicy,
+		SchemaVersion:   intel.CurrentSchemaVersion,
 	}
 	if !generatedAt.IsZero() {
 		merged.GeneratedAt = generatedAt

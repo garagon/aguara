@@ -1188,7 +1188,7 @@ func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
 		return nil
 	}
 	snaps := append([]intel.Snapshot{}, incident.EmbeddedSnapshots()...)
-	snaps = append(snaps, *snap)
+	snaps = append(snaps, intel.ApplyOSVAdmissionPolicy(*snap))
 	return &incident.IntelOverride{
 		Snapshots:     snaps,
 		Mode:          "offline",

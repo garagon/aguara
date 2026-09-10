@@ -54,10 +54,13 @@ const (
 // changes incompatibly; Load() rejects unknown schema versions
 // rather than guessing how to read them.
 type Snapshot struct {
-	SchemaVersion int          `json:"schema_version"`
-	GeneratedAt   time.Time    `json:"generated_at"`
-	Sources       []SourceMeta `json:"sources"`
-	Records       []Record     `json:"records"`
+	SchemaVersion int `json:"schema_version"`
+	// AdmissionPolicy identifies the OSV classification policy applied by the
+	// producer, independently of bundle authentication and serialization schema.
+	AdmissionPolicy int          `json:"admission_policy,omitempty"`
+	GeneratedAt     time.Time    `json:"generated_at"`
+	Sources         []SourceMeta `json:"sources"`
+	Records         []Record     `json:"records"`
 	// AllVersions lists packages where EVERY version is marked
 	// malicious (OSV range shape: introduced 0/absent, no fixed, no
 	// last_affected). They are stored as compact entries instead of
