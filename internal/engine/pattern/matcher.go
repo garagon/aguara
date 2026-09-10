@@ -70,7 +70,7 @@ func (m *Matcher) Name() string { return "pattern" }
 func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanner.Finding, error) {
 	var findings []scanner.Finding
 	content := target.StringContent()
-	lowerContent := strings.ToLower(content)
+	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 
 	// Build code block map for markdown files
@@ -84,10 +84,10 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 	// Pre-filter: run keyword AC to find which rules could possibly match.
 	// Rules whose required literal substrings don't appear are skipped entirely.
-	candidatePatterns := m.pf.candidatePatternMasks(lowerContent)
+	candidatePatterns := m.pf.candidatePatternMasks(lowerContent.text)
 
 	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
-	acHitRules := m.acPrefilter(target.RelPath, lowerContent)
+	acHitRules := m.acPrefilter(target.RelPath, lowerContent.text)
 
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
@@ -224,7 +224,7 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
@@ -282,7 +282,7 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content, lowerContent string, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
 	// All patterns must have at least one hit
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
@@ -356,7 +356,7 @@ func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) b
 	return false
 }
 
-func matchPattern(pat rules.CompiledPattern, content, lowerContent string, lines []string) []matchHit {
+func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lowercaseContent, lines []string) []matchHit {
 	var hits []matchHit
 	switch pat.Type {
 	case rules.PatternRegex:
@@ -374,15 +374,20 @@ func matchPattern(pat rules.CompiledPattern, content, lowerContent string, lines
 		}
 	case rules.PatternContains:
 		target := pat.Value // already lowercased during compilation
+		if target == "" {
+			return nil
+		}
 		idx := 0
 		for {
-			pos := strings.Index(lowerContent[idx:], target)
+			pos := strings.Index(lowerContent.text[idx:], target)
 			if pos == -1 {
 				break
 			}
 			absPos := idx + pos
-			line := lineNumberAtOffset(content, absPos)
-			matched := content[absPos : absPos+len(target)]
+			start := lowerContent.originalOffset(absPos)
+			end := lowerContent.originalOffset(absPos + len(target))
+			line := lineNumberAtOffset(content, start)
+			matched := content[start:end]
 			hits = append(hits, matchHit{line: line, text: matched})
 			idx = absPos + len(target)
 		}
