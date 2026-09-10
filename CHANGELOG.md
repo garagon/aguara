@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Findings no longer expose username-only URL tokens, empty-password credentials,
+  or credential tails after a second `@`. Dependency and shell evidence keeps
+  the destination visible; default redaction also covers URLs in neighboring
+  finding context and descriptions.
 - Dependency checks no longer classify a package as malicious solely because a
   vulnerability description or reference mentions malware. OSV imports require
   source evidence or reviewed exact versions. The same policy filters older
