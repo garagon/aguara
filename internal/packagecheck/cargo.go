@@ -1,113 +1,111 @@
 package packagecheck
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
-// ParseCargo reads a Cargo.lock file and returns the declared
-// crates.io dependencies. The parser is intentionally a
-// block-level reader, not a full TOML implementation: Cargo.lock
-// is a stable, machine-generated format whose only fields we need
-// (name, version, source) are flat key/value pairs inside repeated
-// `[[package]]` arrays.
-//
-// Only entries sourced from the crates.io registry are returned;
-// see isCratesIORegistrySource. Cargo lockfile entries from
-// private registries, git sources, path dependencies, or
-// workspace members are skipped: the OSV matcher resolves
-// identifiers under the crates.io ecosystem, so non-crates.io
-// crates would either never match (best case) or false-positive
-// on a name collision with a public crate (worst case). The
-// allowlist closes the false-positive door.
-//
-// No external commands. No network.
+// ParseCargo decodes Cargo.lock as TOML and returns only packages from the
+// public crates.io registries. Unknown tables and fields are not package data.
+// It does not execute Cargo, resolve dependencies, or access the network.
 func ParseCargo(target Target) ([]PackageRef, error) {
+	info, err := os.Stat(target.Path)
+	if err != nil {
+		return nil, fmt.Errorf("stat Cargo.lock: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("read Cargo.lock: input must be a regular file")
+	}
+	if info.Size() > maxManifestBytes {
+		return nil, fmt.Errorf("read Cargo.lock: input exceeds %d-byte limit", maxManifestBytes)
+	}
 	f, err := os.Open(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open Cargo.lock: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-
-	var (
-		refs    []PackageRef
-		inBlock bool
-		cur     cargoPkg
-	)
-	flush := func() {
-		// Only emit when the block declared a crates.io registry
-		// source AND we captured name + version. Private registries,
-		// git deps, path deps, and workspace members (no source)
-		// fall through silently: the OSV matcher resolves
-		// identifiers under the crates.io ecosystem only, so
-		// emitting a private-registry crate with a name that
-		// collides with a public advisory would false-positive.
-		if isCratesIORegistrySource(cur.source) && cur.name != "" && cur.version != "" {
-			refs = append(refs, PackageRef{
-				Ecosystem: intel.EcosystemCargo,
-				Name:      cur.name,
-				Version:   cur.version,
-				Path:      target.Path,
-				Source:    "Cargo.lock",
-			})
-		}
-		cur = cargoPkg{}
-	}
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		raw := scanner.Text()
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		switch {
-		case line == "[[package]]":
-			if inBlock {
-				flush()
-			}
-			inBlock = true
-			continue
-		case strings.HasPrefix(line, "[["), strings.HasPrefix(line, "["):
-			// Any other table / array-of-tables header
-			// ([metadata], [[patch]]) terminates the current
-			// package block.
-			if inBlock {
-				flush()
-			}
-			inBlock = false
-			continue
-		}
-		if !inBlock {
-			continue
-		}
-		key, value, ok := parseCargoKV(line)
-		if !ok {
-			continue
-		}
-		switch key {
-		case "name":
-			cur.name = value
-		case "version":
-			cur.version = value
-		case "source":
-			cur.source = value
-		}
-	}
-	if inBlock {
-		flush()
-	}
-	if err := scanner.Err(); err != nil {
+	data, err := readBoundedManifestBytes(f, maxManifestBytes, "Cargo.lock")
+	if err != nil {
 		return nil, fmt.Errorf("read Cargo.lock: %w", err)
 	}
+
+	return parseCargoBytes(data, target.Path)
+}
+
+// Parse syntax expression-by-expression instead of materializing arbitrary
+// metadata. The general TOML decoder's duplicate-key tracker searches all prior
+// siblings; using it on untrusted metadata can turn a bounded file into quadratic
+// work. Only Cargo's [[package]] identity fields need semantic interpretation.
+func parseCargoBytes(data []byte, path string) ([]PackageRef, error) {
+	var parser unstable.Parser
+	parser.Reset(data)
+	var refs []PackageRef
+	var fields map[string]string
+	flush := func() {
+		if isCratesIORegistrySource(fields["source"]) && fields["name"] != "" && fields["version"] != "" {
+			refs = append(refs, PackageRef{Ecosystem: intel.EcosystemCargo, Name: fields["name"], Version: fields["version"], Path: path, Source: "Cargo.lock"})
+		}
+	}
+	atRoot := true
+	for parser.NextExpression() {
+		expr := parser.Expression()
+		keys := expr.Key()
+		var first, second string
+		count := 0
+		for keys.Next() {
+			count++
+			switch count {
+			case 1:
+				first = string(keys.Node().Data)
+			case 2:
+				second = string(keys.Node().Data)
+			}
+		}
+		switch expr.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			flush()
+			fields = nil
+			atRoot = false
+			if first == "package" {
+				if count == 1 {
+					if expr.Kind != unstable.ArrayTable {
+						return nil, fmt.Errorf("parse Cargo.lock: package must be an array of tables")
+					}
+					fields = make(map[string]string, 3)
+				} else if cargoIdentityField(second) {
+					return nil, fmt.Errorf("parse Cargo.lock: package identity cannot be a table")
+				}
+			}
+		case unstable.KeyValue:
+			if atRoot && first == "package" {
+				return nil, fmt.Errorf("parse Cargo.lock: expected [[package]] tables")
+			}
+			if fields == nil || !cargoIdentityField(first) {
+				continue
+			}
+			if count != 1 || expr.Value().Kind != unstable.String {
+				return nil, fmt.Errorf("parse Cargo.lock: package %s must be a string", first)
+			}
+			if _, exists := fields[first]; exists {
+				return nil, fmt.Errorf("parse Cargo.lock: duplicate package %s", first)
+			}
+			fields[first] = string(expr.Value().Data)
+		}
+	}
+	if parser.Error() != nil {
+		// Parser diagnostics may quote credential-bearing input.
+		return nil, fmt.Errorf("parse Cargo.lock: invalid TOML syntax")
+	}
+	flush()
 	return refs, nil
 }
 
-type cargoPkg struct{ name, version, source string }
+func cargoIdentityField(key string) bool {
+	return key == "name" || key == "version" || key == "source"
+}
 
 // isCratesIORegistrySource is the allowlist of `source = "..."`
 // values that mean "this crate came from the public crates.io
@@ -140,25 +138,4 @@ func isCratesIORegistrySource(source string) bool {
 	default:
 		return false
 	}
-}
-
-// parseCargoKV splits a single `key = "value"` line into its parts
-// and strips the surrounding double quotes. Returns ok=false for
-// lines that do not match the simple flat-string shape (e.g.
-// `dependencies = [...]`), which the caller silently skips.
-func parseCargoKV(line string) (string, string, bool) {
-	eq := strings.IndexByte(line, '=')
-	if eq < 0 {
-		return "", "", false
-	}
-	key := strings.TrimSpace(line[:eq])
-	value := strings.TrimSpace(line[eq+1:])
-	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
-		// Array values (dependencies = [...]) and other shapes
-		// land here. Cargo.lock fields we consume are always
-		// quoted strings, so ignoring the rest is safe.
-		return "", "", false
-	}
-	value = value[1 : len(value)-1]
-	return key, value, true
 }
