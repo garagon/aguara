@@ -264,7 +264,9 @@ func pickMavenTargets(dir string) []Target {
 // in the same dir.
 func pickNuGetTargets(dir string) []Target {
 	var out []Target
-	if statRegular(filepath.Join(dir, "packages.lock.json")) {
+	// Keep linked and special-file candidates visible so parsing reports an
+	// input error instead of silently presenting an incomplete dependency check.
+	if info, err := os.Lstat(filepath.Join(dir, "packages.lock.json")); err == nil && !info.IsDir() {
 		out = append(out, Target{
 			Ecosystem: intel.EcosystemNuGet,
 			Path:      filepath.Join(dir, "packages.lock.json"),

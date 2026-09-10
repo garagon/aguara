@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -14,14 +13,14 @@ import (
 // dependencies. Dispatches on target.Source:
 //
 //   - "packages.lock.json" -> parseNuGetLockfile (Direct +
-//                              Transitive entries; the
-//                              resolved-version source of truth
-//                              when central package management is
-//                              enabled)
+//     Transitive entries; the
+//     resolved-version source of truth
+//     when central package management is
+//     enabled)
 //   - "csproj" / "fsproj" / "vbproj" -> parseNuGetProjectFile
-//                              (PackageReference items; the
-//                              version source when no lockfile
-//                              is in use)
+//     (PackageReference items; the
+//     version source when no lockfile
+//     is in use)
 //
 // No external commands (`dotnet restore`, `nuget`). No network.
 // obj/project.assets.json is out of scope; the build cache lives
@@ -50,7 +49,7 @@ func ParseNuGet(target Target) ([]PackageRef, error) {
 // matcher would otherwise count and report the same compromise
 // twice when only the framework differs.
 func parseNuGetLockfile(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open packages.lock.json: %w", err)
 	}
@@ -107,7 +106,7 @@ type nugetLockDep struct {
 // MSBuild built-ins (TargetFramework, Configuration) and external
 // imports are out of scope.
 func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", target.Source, err)
 	}
