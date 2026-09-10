@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Python remote-code checks retain the fetched source when a variable is decoded
+  or read back into itself, including inside a helper that returns the payload.
+  Replacing that variable with local content still clears the remote evidence.
 - Yarn classic dependency checks now resolve `npm:` aliases to the real package
   and the lockfile's resolved version. Conflicting package identities, malformed
   descriptors, non-registry sources and non-exact body versions remain excluded.
