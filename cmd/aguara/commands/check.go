@@ -1080,7 +1080,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 // The logic is:
 //
 //  1. If --fresh was passed, fetch + verify Aguara's signed advisory
-//     bundle (fetchVerifiedSnapshot); on success save it to the local
+//     bundle (fetchIntelSnapshot); on signed success save it to the local
 //     Store via SaveVerified and override with [embedded..., refreshed].
 //     IntelSummary.Mode = "online", Snapshot = "remote-fresh".
 //  2. If --fresh failed AND --allow-stale was passed, fall back ONLY to
@@ -1097,7 +1097,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 //
 // A --fresh refresh fetches Aguara's signed advisory bundle and verifies
 // it (signature + identity + manifest/blob digests) before trusting it,
-// via the shared fetchVerifiedSnapshot path. ecosystems still scopes
+// via the shared fetchIntelSnapshot path. ecosystems still scopes
 // WHICH ecosystems the check looks at, but the fetched bundle always
 // covers all of them.
 func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.IntelOverride, error) {
@@ -1127,9 +1127,9 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 		}
 
 		// Shared trust-root path: fetch + verify the signed advisory
-		// bundle (same as `aguara update`). A verification failure is
-		// fatal; we never trust an unverified fetch.
-		snap, err := fetchVerifiedSnapshot(ctx, intelBundleBaseURL, insecure)
+		// bundle (same as `aguara update`). Explicit insecure mode keeps
+		// its unverified status through output and persistence.
+		fetched, err := fetchIntelSnapshot(ctx, intelBundleBaseURL, insecure)
 		if err != nil {
 			if !flagCheckAllowStale {
 				return nil, fmt.Errorf("--fresh refresh failed: %w (pass --allow-stale to fall back to previously verified local intel)", err)
@@ -1145,18 +1145,21 @@ func resolveCheckIntel(ctx context.Context, ecosystems []string) (*incident.Inte
 			return ov, nil
 		}
 		if store != nil {
-			// SaveVerified writes a provenance marker so a later
-			// --allow-stale can prove the cache was verified.
-			if saveErr := store.SaveVerified(snap); saveErr != nil {
+			if saveErr := fetched.save(store); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: --fresh: save snapshot failed: %v\n", saveErr)
 			}
+		}
+		snap := fetched.Snapshot
+		label := "remote-fresh"
+		if !fetched.Verified {
+			label = "remote-unverified"
 		}
 		snaps := append([]intel.Snapshot{}, incident.EmbeddedSnapshots()...)
 		snaps = append(snaps, snap)
 		return &incident.IntelOverride{
 			Snapshots:     snaps,
 			Mode:          "online",
-			SnapshotLabel: "remote-fresh",
+			SnapshotLabel: label,
 			GeneratedAt:   snap.GeneratedAt,
 		}, nil
 	}

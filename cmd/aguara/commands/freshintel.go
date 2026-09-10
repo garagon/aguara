@@ -32,17 +32,29 @@ func resolveInsecureIntel(flag bool) (bool, error) {
 	return true, nil
 }
 
-// fetchVerifiedSnapshot is the single trust-root path shared by
+type fetchedIntel struct {
+	Snapshot intel.Snapshot
+	Verified bool
+}
+
+func (f fetchedIntel) save(store *intel.Store) error {
+	if f.Verified {
+		return store.SaveVerified(f.Snapshot)
+	}
+	return store.Save(f.Snapshot)
+}
+
+// fetchIntelSnapshot is the single trust-root path shared by
 // `aguara update`, `check --fresh`, and `audit --fresh`: fetch the signed
-// advisory bundle from baseURL and return the decoded snapshot. It never
-// returns a snapshot that failed verification.
+// advisory bundle from baseURL and retain its verification status. A normal
+// fetch never returns data that failed signature verification.
 //
 // With insecure=false (default) it verifies the Sigstore signature and
 // pinned publisher identity, then validates the manifest against the blob.
 // With insecure=true it skips only the signature/identity step; the
 // manifest/blob content checks (schema, name, sizes, digests, decode)
 // still run.
-func fetchVerifiedSnapshot(ctx context.Context, baseURL string, insecure bool) (intel.Snapshot, error) {
+func fetchIntelSnapshot(ctx context.Context, baseURL string, insecure bool) (fetchedIntel, error) {
 	get := func(name string) ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/"+name, nil)
 		if err != nil {
@@ -69,20 +81,28 @@ func fetchVerifiedSnapshot(ctx context.Context, baseURL string, insecure bool) (
 
 	manifest, err := get("generated_intel.meta.json")
 	if err != nil {
-		return intel.Snapshot{}, err
+		return fetchedIntel{}, err
 	}
 	blob, err := get(bundle.ExpectedBlobName)
 	if err != nil {
-		return intel.Snapshot{}, err
+		return fetchedIntel{}, err
 	}
 	if insecure {
 		// The signing bundle is not needed when signature verification
 		// is disabled.
-		return bundle.DecodeUnverified(manifest, blob)
+		snap, err := bundle.DecodeUnverified(manifest, blob)
+		if err != nil {
+			return fetchedIntel{}, err
+		}
+		return fetchedIntel{Snapshot: snap}, nil
 	}
 	bundleBytes, err := get("generated_intel.meta.json.bundle")
 	if err != nil {
-		return intel.Snapshot{}, err
+		return fetchedIntel{}, err
 	}
-	return bundle.VerifyAndDecode(manifest, bundleBytes, blob)
+	snap, err := bundle.VerifyAndDecode(manifest, bundleBytes, blob)
+	if err != nil {
+		return fetchedIntel{}, err
+	}
+	return fetchedIntel{Snapshot: snap, Verified: true}, nil
 }

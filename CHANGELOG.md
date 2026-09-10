@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Intel downloaded with `--insecure-intel` is now labeled unverified and cannot
+  become trusted input to later default checks or `--allow-stale`. Unverified
+  saves clear previous verification markers. Older markers require a new signed
+  `aguara update` because they did not distinguish skipped signature checks.
+  Normal signed refreshes and verified offline fallback remain supported.
 - Terminal reports now display control characters in filenames, finding text,
   and discovered MCP server fields as visible escapes instead of letting them
   alter the terminal. This applies with or without color; structured report

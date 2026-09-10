@@ -63,7 +63,7 @@ func TestWriteUpdateJSONShape(t *testing.T) {
 	storeDir := "/home/user/.aguara/intel"
 
 	out := captureStdoutBytes(t, func() {
-		require.NoError(t, writeUpdateOutput(snap, storeDir))
+		require.NoError(t, writeUpdateOutput(snap, storeDir, true))
 	})
 
 	var parsed updateOutput
@@ -90,7 +90,7 @@ func TestWriteUpdateJSONEmptyEcosystems(t *testing.T) {
 
 	snap := intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion, GeneratedAt: time.Unix(0, 0).UTC()}
 	out := captureStdoutBytes(t, func() {
-		require.NoError(t, writeUpdateOutput(snap, "/tmp"))
+		require.NoError(t, writeUpdateOutput(snap, "/tmp", true))
 	})
 	require.Contains(t, string(out), `"ecosystems": []`,
 		"empty ecosystems must serialise as [] not null; got: %s", string(out))
@@ -107,7 +107,7 @@ func TestWriteUpdateJSONToFile(t *testing.T) {
 
 	snap := makeSnapshot(20, time.Date(2026, time.May, 28, 0, 0, 0, 0, time.UTC))
 	stdoutBytes := captureStdoutBytes(t, func() {
-		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel"))
+		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel", true))
 	})
 	require.Empty(t, stdoutBytes, "--format json -o file must leave stdout empty")
 
@@ -125,7 +125,7 @@ func TestWriteUpdateTerminalDefault(t *testing.T) {
 
 	snap := makeSnapshot(15, time.Unix(0, 0))
 	out := captureStdoutBytes(t, func() {
-		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel"))
+		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel", true))
 	})
 	s := string(out)
 	require.Contains(t, s, "Aguara threat intel updated")
@@ -144,7 +144,7 @@ func TestWriteUpdateTerminalRespectsOutputFile(t *testing.T) {
 
 	snap := makeSnapshot(15, time.Unix(0, 0))
 	stdoutBytes := captureStdoutBytes(t, func() {
-		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel"))
+		require.NoError(t, writeUpdateOutput(snap, "/home/user/.aguara/intel", true))
 	})
 	require.Empty(t, stdoutBytes, "with -o, stdout must be empty regardless of format")
 	fileBytes, err := os.ReadFile(outFile)

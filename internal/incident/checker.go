@@ -70,7 +70,8 @@ type CheckResult struct {
 //     (an --fresh refresh ran in this invocation).
 //   - Snapshot is one of: "embedded" (binary's built-in snapshot),
 //     "local" (the on-disk cache at ~/.aguara/intel), or
-//     "remote-fresh" (downloaded this invocation).
+//     "local-verified" (verified cache), "remote-fresh" (verified this
+//     invocation), or "remote-unverified" (explicit signature bypass).
 //   - Sources lists the SourceMeta.Kind values that fed the
 //     snapshot, deduplicated.
 //   - Stale is true when the snapshot is older than a freshness
@@ -118,7 +119,7 @@ type CheckOptions struct {
 type IntelOverride struct {
 	Snapshots     []intel.Snapshot
 	Mode          string // "offline" | "online"
-	SnapshotLabel string // "embedded" | "local" | "local-verified" | "remote-fresh"
+	SnapshotLabel string // "embedded" | "local" | "local-verified" | "remote-fresh" | "remote-unverified"
 	// GeneratedAt is the timestamp of the snapshot the SnapshotLabel
 	// names (e.g. the local verified cache), not the newest snapshot in
 	// the set. When a local/fetched cache is layered over the (possibly
