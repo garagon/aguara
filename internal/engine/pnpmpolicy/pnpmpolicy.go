@@ -311,7 +311,7 @@ func flattenVisited(node *yaml.Node, depth int, visited map[*yaml.Node]bool) []e
 			merges = append(merges, v)
 			continue
 		}
-		out = append(out, entry{key: k.Value, value: v, line: k.Line})
+		out = append(out, entry{key: k.Value, value: resolveValue(v), line: k.Line})
 	}
 	for _, mn := range merges {
 		for _, tgt := range mergeTargets(mn) {
@@ -322,6 +322,20 @@ func flattenVisited(node *yaml.Node, depth int, visited map[*yaml.Node]bool) []e
 		}
 	}
 	return append(out, merged...)
+}
+
+// resolveValue follows references without expanding their contents. Keep an
+// unresolved entry present for precedence and legacy-key checks, but never
+// interpret an anchor's name (or an unresolved reference) as a policy value.
+func resolveValue(n *yaml.Node) *yaml.Node {
+	for depth := 0; n != nil && depth <= maxMergeDepth; depth++ {
+		if n.Kind != yaml.AliasNode {
+			return n
+		}
+		n = n.Alias
+	}
+	// A zero node is neither a scalar value nor an explicit null decision.
+	return &yaml.Node{}
 }
 
 // mergeTargets resolves the value of a `<<` merge key to the mapping
