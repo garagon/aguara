@@ -38,6 +38,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   registries remain excluded. Invalid TOML syntax or package identity fields
   return an error instead of a successful partial result, and reads are limited
   to 50 MiB. Unrelated metadata is parsed without decoding a whole document.
+- pnpm policy checks now read the value referenced by a YAML alias, including
+  aliased build-approval mappings. Dangerous settings are no longer missed
+  behind anchors, and a safe value does not trigger a finding merely because
+  its anchor is named `true`, `off`, or `0`. Findings retain the policy key's
+  source line; rule IDs, severities, and merge precedence are unchanged.
 - Dependency checks no longer classify a package as malicious solely because a
   vulnerability description or reference mentions malware. OSV imports require
   source evidence or reviewed exact versions. The same policy filters older
