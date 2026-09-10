@@ -155,40 +155,34 @@ func writeUpdateOutput(snap intel.Snapshot, storeDir string, verified bool) erro
 }
 
 func writeUpdateJSON(out updateOutput) error {
-	w := io.Writer(os.Stdout)
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return fmt.Errorf("aguara update: write --output: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-		w = f
+	err := writeReport(func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	})
+	if err != nil && flagOutput != "" {
+		return fmt.Errorf("aguara update: write --output: %w", err)
 	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return err
 }
 
 func writeUpdateTerminal(out updateOutput) error {
-	w := io.Writer(os.Stdout)
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return fmt.Errorf("aguara update: write --output: %w", err)
+	err := writeReport(func(w io.Writer) error {
+		if out.Verified {
+			fmt.Fprintf(w, "Aguara threat intel updated (verified signed bundle)\n")
+		} else {
+			fmt.Fprintf(w, "Aguara threat intel updated (UNVERIFIED: signature verification skipped)\n")
+			fmt.Fprintf(w, "  Not eligible for default checks or --allow-stale; run aguara update without --insecure-intel to verify.\n")
 		}
-		defer func() { _ = f.Close() }()
-		w = f
+		fmt.Fprintf(w, "  records:    %d\n", out.Records)
+		fmt.Fprintf(w, "  ecosystems: %s\n", strings.Join(out.Ecosystems, ", "))
+		fmt.Fprintf(w, "  written:    %s\n", out.SnapshotPath)
+		return nil
+	})
+	if err != nil && flagOutput != "" {
+		return fmt.Errorf("aguara update: write --output: %w", err)
 	}
-	if out.Verified {
-		fmt.Fprintf(w, "Aguara threat intel updated (verified signed bundle)\n")
-	} else {
-		fmt.Fprintf(w, "Aguara threat intel updated (UNVERIFIED: signature verification skipped)\n")
-		fmt.Fprintf(w, "  Not eligible for default checks or --allow-stale; run aguara update without --insecure-intel to verify.\n")
-	}
-	fmt.Fprintf(w, "  records:    %d\n", out.Records)
-	fmt.Fprintf(w, "  ecosystems: %s\n", strings.Join(out.Ecosystems, ", "))
-	fmt.Fprintf(w, "  written:    %s\n", out.SnapshotPath)
-	return nil
+	return err
 }
 
 // assertOutputNotShadowingStore returns an error if flagOutput would

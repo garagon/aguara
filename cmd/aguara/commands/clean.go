@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -96,18 +97,11 @@ func runClean(cmd *cobra.Command, args []string) error {
 }
 
 func writeCleanJSON(result *incident.CleanResult) error {
-	w := os.Stdout
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		w = f
-	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(result)
+	return writeReport(func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	})
 }
 
 func writeCleanTerminal(result *incident.CleanResult) error {

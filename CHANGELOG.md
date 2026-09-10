@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Saved `update` reports and `clean` JSON reports now reject symlink and special
+  file destinations. Failed rendering preserves the previous report, and
+  successful writes replace it with a private file rather than truncating links.
 - JavaScript destructive-cleanup checks read recursive deletion options from
   actual object properties. Quoted delimiters no longer hide a recursive wipe,
   and example strings, nested options or overwritten values do not enable it.
