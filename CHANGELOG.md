@@ -32,6 +32,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Pattern scans no longer recount the entire preceding text to locate every
   match. Line tracking advances with each pattern's matches, preserving finding
   locations and original excerpts without limiting the number of results.
+- Saved `update` reports and `clean` JSON reports now reject symlink and special
+  file destinations. Failed rendering preserves the previous report, and
+  successful writes replace it with a private file rather than truncating links.
 - JavaScript GitHub-channel checks no longer rescan an entire string for every
   repeated mutation name. Rejected string interiors are visited once per name,
   without changing mutation matching or finding locations.

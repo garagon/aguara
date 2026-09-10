@@ -13,9 +13,12 @@ import (
 
 func TestReportWritersRejectSymlink(t *testing.T) {
 	writers := map[string]func() error{
-		"scan":  func() error { return writeOutput(&scanner.ScanResult{}) },
-		"check": func() error { return writeCheckJSON(&incident.CheckResult{}) },
-		"audit": func() error { return writeAuditJSON(&AuditResult{}) },
+		"scan":            func() error { return writeOutput(&scanner.ScanResult{}) },
+		"check":           func() error { return writeCheckJSON(&incident.CheckResult{}) },
+		"audit":           func() error { return writeAuditJSON(&AuditResult{}) },
+		"clean":           func() error { return writeCleanJSON(&incident.CleanResult{}) },
+		"update-json":     func() error { return writeUpdateJSON(updateOutput{}) },
+		"update-terminal": func() error { return writeUpdateTerminal(updateOutput{}) },
 	}
 	for name, write := range writers {
 		t.Run(name, func(t *testing.T) {
