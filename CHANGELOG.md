@@ -39,6 +39,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   or credential tails after a second `@`. Dependency and shell evidence keeps
   the destination visible; default redaction also covers URLs in neighboring
   finding context and descriptions.
+- Cargo dependency checks now parse TOML structure, so inline comments, quoted
+  keys and escaped strings cannot hide a locked crates.io package. Private
+  registries remain excluded. Invalid TOML syntax or package identity fields
+  return an error instead of a successful partial result, and reads are limited
+  to 50 MiB. Unrelated metadata is parsed without decoding a whole document.
 - pnpm policy checks now read the value referenced by a YAML alias, including
   aliased build-approval mappings. Dangerous settings are no longer missed
   behind anchors, and a safe value does not trigger a finding merely because

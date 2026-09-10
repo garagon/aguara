@@ -8,7 +8,7 @@ import (
 
 // Match the scanner's default per-file limit. NuGet parsing must also enforce
 // the limit when called directly, without directory discovery.
-const maxNuGetManifestBytes int64 = 50 << 20
+const maxNuGetManifestBytes int64 = maxManifestBytes
 
 func readNuGetManifest(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
@@ -42,12 +42,5 @@ func readNuGetManifest(path string) ([]byte, error) {
 }
 
 func readNuGetBytes(r io.Reader, limit int64) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("NuGet input exceeds %d-byte limit", limit)
-	}
-	return data, nil
+	return readBoundedManifestBytes(r, limit, "NuGet")
 }
