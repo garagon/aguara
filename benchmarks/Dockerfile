@@ -2,7 +2,7 @@
 #
 # Build may need network to download Go modules, but the benchmark run is
 # intended to execute with --network none via `make bench-docker`.
-FROM golang:1.25-alpine@sha256:5caaf1cca9dc351e13deafbc3879fd4754801acba8653fa9540cea125d01a71f
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125
 
 RUN apk add --no-cache git ca-certificates
 
