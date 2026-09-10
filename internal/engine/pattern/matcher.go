@@ -363,6 +363,13 @@ func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) b
 
 func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lowercaseContent, lines []string) []matchHit {
 	var hits []matchHit
+	// Both matchers return ordered source offsets; count each prefix byte once.
+	previous, line := 0, 1
+	lineAt := func(start int) int {
+		line += strings.Count(content[previous:start], "\n")
+		previous = start
+		return line
+	}
 	switch pat.Type {
 	case rules.PatternRegex:
 		if pat.Regex == nil {
@@ -370,7 +377,7 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 		}
 		locs := pat.Regex.FindAllStringIndex(content, -1)
 		for _, loc := range locs {
-			line := lineNumberAtOffset(content, loc[0])
+			line := lineAt(loc[0])
 			matched := content[loc[0]:loc[1]]
 			if len(matched) > 200 {
 				matched = matched[:200] + "..."
@@ -391,7 +398,7 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 			absPos := idx + pos
 			start := lowerContent.originalOffset(absPos)
 			end := lowerContent.originalOffset(absPos + len(target))
-			line := lineNumberAtOffset(content, start)
+			line := lineAt(start)
 			matched := content[start:end]
 			hits = append(hits, matchHit{line: line, text: matched})
 			idx = absPos + len(target)
