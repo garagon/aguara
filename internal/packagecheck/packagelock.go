@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -116,7 +115,7 @@ type packageLock struct {
 // false match against an npm advisory. Better to under-report than to
 // manufacture confidence.
 func ParsePackageLock(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "package-lock.json")
 	if err != nil {
 		return nil, fmt.Errorf("open package-lock.json: %w", err)
 	}

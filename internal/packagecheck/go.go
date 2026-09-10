@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -39,7 +38,7 @@ func ParseGo(target Target) ([]PackageRef, error) {
 // stable format but stray blank lines / future suffixes should not
 // abort the parse.
 func parseGoSum(target Target) ([]PackageRef, error) {
-	f, err := os.Open(target.Path)
+	f, err := openManifest(target.Path, "go.sum")
 	if err != nil {
 		return nil, fmt.Errorf("open go.sum: %w", err)
 	}
@@ -49,7 +48,7 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 	seen := make(map[key]bool)
 	var refs []PackageRef
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "go.sum"))
 	// go.sum lines are short; the default Scanner buffer (64 KiB)
 	// is far more than enough for a single line.
 	for scanner.Scan() {
@@ -105,7 +104,7 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 // `module` and `go` directives are also skipped; they declare the
 // CURRENT module, not a dependency.
 func parseGoMod(target Target) ([]PackageRef, error) {
-	f, err := os.Open(target.Path)
+	f, err := openManifest(target.Path, "go.mod")
 	if err != nil {
 		return nil, fmt.Errorf("open go.mod: %w", err)
 	}
@@ -114,7 +113,7 @@ func parseGoMod(target Target) ([]PackageRef, error) {
 	var refs []PackageRef
 	inRequire := false
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "go.mod"))
 	for scanner.Scan() {
 		raw := scanner.Text()
 		// Strip an inline `// comment` so a require line

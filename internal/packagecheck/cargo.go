@@ -2,7 +2,6 @@ package packagecheck
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/pelletier/go-toml/v2/unstable"
@@ -12,22 +11,7 @@ import (
 // public crates.io registries. Unknown tables and fields are not package data.
 // It does not execute Cargo, resolve dependencies, or access the network.
 func ParseCargo(target Target) ([]PackageRef, error) {
-	info, err := os.Stat(target.Path)
-	if err != nil {
-		return nil, fmt.Errorf("stat Cargo.lock: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("read Cargo.lock: input must be a regular file")
-	}
-	if info.Size() > maxManifestBytes {
-		return nil, fmt.Errorf("read Cargo.lock: input exceeds %d-byte limit", maxManifestBytes)
-	}
-	f, err := os.Open(target.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open Cargo.lock: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	data, err := readBoundedManifestBytes(f, maxManifestBytes, "Cargo.lock")
+	data, err := readManifest(target.Path, "Cargo.lock")
 	if err != nil {
 		return nil, fmt.Errorf("read Cargo.lock: %w", err)
 	}
