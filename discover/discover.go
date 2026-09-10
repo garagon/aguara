@@ -3,6 +3,8 @@ package discover
 import (
 	"fmt"
 	"strings"
+
+	"github.com/garagon/aguara/internal/output"
 )
 
 // sensitiveEnvKeys matches env variable names that likely contain secrets.
@@ -163,7 +165,7 @@ func FormatTree(result *Result) string {
 	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", result.TotalClients())
 
 	for _, cr := range result.Clients {
-		fmt.Fprintf(&b, "  %s  %s\n", clientDisplayName(cr.Client), cr.Path)
+		fmt.Fprintf(&b, "  %s  %s\n", output.TerminalText(clientDisplayName(cr.Client)), output.TerminalText(cr.Path))
 		for i, srv := range cr.Servers {
 			prefix := "├──"
 			if i == len(cr.Servers)-1 {
@@ -173,7 +175,7 @@ func FormatTree(result *Result) string {
 			if len(srv.Args) > 0 {
 				cmdStr += " " + strings.Join(srv.Args, " ")
 			}
-			fmt.Fprintf(&b, "    %s %-20s %s\n", prefix, srv.Name, cmdStr)
+			fmt.Fprintf(&b, "    %s %-20s %s\n", prefix, output.TerminalText(srv.Name), output.TerminalText(cmdStr))
 		}
 		b.WriteString("\n")
 	}

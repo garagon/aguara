@@ -112,7 +112,7 @@ func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult)
 
 	parts := []string{}
 	if result.Target != "" {
-		parts = append(parts, fmt.Sprintf("Target: %s", result.Target))
+		parts = append(parts, fmt.Sprintf("Target: %s", TerminalText(result.Target)))
 	}
 	parts = append(parts, fmt.Sprintf("%d files", result.FilesScanned))
 	parts = append(parts, fmt.Sprintf("%d rules", result.RulesLoaded))
@@ -167,7 +167,7 @@ func (f *TerminalFormatter) printSeveritySection(w io.Writer, sev scanner.Severi
 
 	grouped := groupByFile(findings)
 	for _, group := range grouped {
-		fmt.Fprintf(w, "\n  %s\n", f.color(bold+underline, group.filePath))
+		fmt.Fprintf(w, "\n  %s\n", f.color(bold+underline, TerminalText(group.filePath)))
 		for _, finding := range group.findings {
 			if sev == scanner.SeverityCritical {
 				f.printFindingExpanded(w, finding)
@@ -180,10 +180,10 @@ func (f *TerminalFormatter) printSeveritySection(w io.Writer, sev scanner.Severi
 
 func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Finding) {
 	icon := f.severityIcon(finding.Severity)
-	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, finding.RuleID)
-	name := truncate(finding.RuleName, nameWidth)
+	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, TerminalText(finding.RuleID))
+	name := truncate(TerminalText(finding.RuleName), nameWidth)
 	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("%s:%d", finding.FilePath, finding.Line)
+	lineStr := fmt.Sprintf("%s:%d", TerminalText(finding.FilePath), finding.Line)
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
 	}
@@ -199,23 +199,23 @@ func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Fi
 	)
 
 	if finding.MatchedText != "" {
-		preview := truncate(finding.MatchedText, previewWidth)
+		preview := truncate(TerminalText(finding.MatchedText), previewWidth)
 		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(dim, preview))
 	}
 	if f.Verbose && finding.Description != "" {
-		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, finding.Description))
+		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, TerminalText(finding.Description)))
 	}
 	if finding.Remediation != "" {
-		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, finding.Remediation))
+		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, TerminalText(finding.Remediation)))
 	}
 }
 
 func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Finding) {
 	icon := f.severityIcon(finding.Severity)
-	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, finding.RuleID)
-	name := truncate(finding.RuleName, nameWidth)
+	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, TerminalText(finding.RuleID))
+	name := truncate(TerminalText(finding.RuleName), nameWidth)
 	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("%s:%d", finding.FilePath, finding.Line)
+	lineStr := fmt.Sprintf("%s:%d", TerminalText(finding.FilePath), finding.Line)
 	if finding.InCodeBlock {
 		lineStr += " " + f.color(dim, "[code]")
 	}
@@ -230,10 +230,10 @@ func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Fin
 		f.color(cyan, lineStr),
 	)
 	if f.Verbose && finding.Severity >= scanner.SeverityHigh && finding.Description != "" {
-		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, finding.Description))
+		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, TerminalText(finding.Description)))
 	}
 	if f.Verbose && finding.Remediation != "" {
-		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, finding.Remediation))
+		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, TerminalText(finding.Remediation)))
 	}
 }
 
@@ -267,7 +267,7 @@ func (f *TerminalFormatter) printTopFiles(w io.Writer, findings []scanner.Findin
 	fmt.Fprintf(w, "\n%s\n\n", f.color(bold, header))
 
 	for i := range limit {
-		fmt.Fprintf(w, "  %4d  %s\n", sorted[i].count, sorted[i].path)
+		fmt.Fprintf(w, "  %4d  %s\n", sorted[i].count, TerminalText(sorted[i].path))
 	}
 }
 
@@ -299,7 +299,7 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 
 	if rule := topRuleID(result.Findings); rule != "" {
-		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+rule))
+		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+TerminalText(rule)))
 	}
 }
 
@@ -369,7 +369,15 @@ func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	if maxLen <= 3 {
+		return strings.Repeat(".", max(maxLen, 0))
+	}
+	// Preserve the byte budget without splitting a UTF-8 character.
+	end := maxLen - 3
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + "..."
 }
 
 type fileGroup struct {

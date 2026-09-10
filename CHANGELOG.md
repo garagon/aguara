@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Terminal reports now display control characters in filenames, finding text,
+  and discovered MCP server fields as visible escapes instead of letting them
+  alter the terminal. This applies with or without color; structured report
+  values and detection behavior are unchanged.
 - Report, baseline, and monitor-state writes now reject linked or special-file
   destinations and use unique sibling temporary files. A failed write leaves
   the existing artifact intact instead of truncating it. On Unix, saved files
