@@ -1,0 +1,10 @@
+{
+  "name": "aguara-wasm-ui-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-concurrency=1 render.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

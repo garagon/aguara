@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The bundled WebAssembly page now renders finding fields, summaries, and
+  errors as text instead of HTML. Match previews retain their 120-character
+  limit without shortening or splitting HTML entities during rendering.
 - Scans now return an error if a selected file cannot be read, an analyzer
   reports a failure, or directory discovery cannot complete. Partial findings
   are not presented as a successful report, including in `scan --auto`.

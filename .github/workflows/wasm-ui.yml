@@ -1,0 +1,41 @@
+name: WASM UI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "cmd/wasm/**"
+      - ".github/workflows/wasm-ui.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wasm-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "768MiB"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Install browser test dependencies
+        working-directory: cmd/wasm
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install --with-deps chromium
+      - name: Build WASM
+        run: GOOS=js GOARCH=wasm go build -p 1 -trimpath -o "$RUNNER_TEMP/aguara.wasm" ./cmd/wasm
+      - name: Check rendering in Chromium
+        working-directory: cmd/wasm
+        run: AGUARA_WASM="$RUNNER_TEMP/aguara.wasm" AGUARA_WASM_EXEC="$(go env GOROOT)/lib/wasm/wasm_exec.js" npm test

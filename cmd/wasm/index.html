@@ -95,15 +95,22 @@
     <script src="wasm_exec.js"></script>
     <script>
         const go = new Go();
-        const sevOrder = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
         const sevNames = ['info', 'low', 'medium', 'high', 'critical'];
+
+        // Scan results are data, including names and errors. Never parse them as HTML.
+        function textElement(tag, className, text) {
+            const element = document.createElement(tag);
+            element.className = className;
+            element.textContent = text;
+            return element;
+        }
 
         WebAssembly.instantiateStreaming(fetch("aguara.wasm"), go.importObject).then((result) => {
             go.run(result.instance);
             document.getElementById("scan").disabled = false;
             document.getElementById("scan").textContent = "Scan";
             document.getElementById("explain-btn").disabled = false;
-            document.getElementById("results").innerHTML = '<p class="loading">Ready. Paste content and click Scan.</p>';
+            document.getElementById("results").replaceChildren(textElement('p', 'loading', 'Ready. Paste content and click Scan.'));
             loadRuleList();
         });
 
@@ -126,7 +133,7 @@
             const severity = document.getElementById("severity").value;
             const profile = document.getElementById("profile").value;
 
-            resultsDiv.innerHTML = '<p class="loading">Scanning...</p>';
+            resultsDiv.replaceChildren(textElement('p', 'loading', 'Scanning...'));
 
             const opts = {};
             if (severity) opts.minSeverity = severity;
@@ -139,24 +146,31 @@
                 const parsed = JSON.parse(json);
 
                 if (parsed.findings && parsed.findings.length > 0) {
-                    const stats = `<div class="stats">${parsed.findings.length} finding${parsed.findings.length > 1 ? 's' : ''} - ${parsed.rules_loaded} rules - ${elapsed}s</div>`;
-                    const findings = parsed.findings
+                    const stats = textElement('div', 'stats', `${parsed.findings.length} finding${parsed.findings.length > 1 ? 's' : ''} - ${parsed.rules_loaded} rules - ${elapsed}s`);
+                    const findings = document.createDocumentFragment();
+                    findings.append(stats);
+                    parsed.findings
                         .sort((a, b) => (b.severity || 0) - (a.severity || 0))
-                        .map(f => {
-                            const sev = sevNames[f.severity] || 'info';
-                            return `<div class="finding ${sev}">
-                                <div class="finding-header">${f.rule_id}: ${f.rule_name}</div>
-                                <div class="finding-meta">${sev.toUpperCase()} - Line ${f.line} - ${f.category}</div>
-                                <div class="finding-meta">Match: <code>${escapeHtml(f.matched_text || '').substring(0, 120)}</code></div>
-                                ${f.remediation ? `<div class="finding-remediation">${escapeHtml(f.remediation)}</div>` : ''}
-                            </div>`;
-                        }).join('');
-                    resultsDiv.innerHTML = stats + findings;
+                        .forEach(f => {
+                            const sev = Number.isInteger(f.severity) && f.severity >= 0 && f.severity < sevNames.length
+                                ? sevNames[f.severity] : 'info';
+                            const finding = textElement('div', `finding ${sev}`, '');
+                            const match = textElement('div', 'finding-meta', 'Match: ');
+                            match.append(textElement('code', '', String(f.matched_text || '').substring(0, 120)));
+                            finding.append(
+                                textElement('div', 'finding-header', `${f.rule_id}: ${f.rule_name}`),
+                                textElement('div', 'finding-meta', `${sev.toUpperCase()} - Line ${f.line} - ${f.category}`),
+                                match
+                            );
+                            if (f.remediation) finding.append(textElement('div', 'finding-remediation', f.remediation));
+                            findings.append(finding);
+                        });
+                    resultsDiv.replaceChildren(findings);
                 } else {
-                    resultsDiv.innerHTML = `<div class="clean">No security issues found. (${parsed.rules_loaded} rules, ${elapsed}s)</div>`;
+                    resultsDiv.replaceChildren(textElement('div', 'clean', `No security issues found. (${parsed.rules_loaded} rules, ${elapsed}s)`));
                 }
             } catch (e) {
-                resultsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(e.message)}</p>`;
+                resultsDiv.replaceChildren(textElement('p', 'error', `Error: ${e.message}`));
             }
         });
 
@@ -165,9 +179,9 @@
             try {
                 const rules = JSON.parse(aguaraListRules());
                 const listDiv = document.getElementById("rule-list");
-                listDiv.innerHTML = `<p class="stats">${rules.length} rules loaded</p>`;
+                listDiv.replaceChildren(textElement('p', 'stats', `${rules.length} rules loaded`));
             } catch (e) {
-                document.getElementById("rule-list").innerHTML = `<p class="error">${e.message}</p>`;
+                document.getElementById("rule-list").replaceChildren(textElement('p', 'error', e.message));
             }
         }
 
@@ -185,12 +199,6 @@
         document.getElementById("rule-id").addEventListener("keydown", (e) => {
             if (e.key === "Enter") document.getElementById("explain-btn").click();
         });
-
-        function escapeHtml(s) {
-            const div = document.createElement('div');
-            div.textContent = s;
-            return div.innerHTML;
-        }
     </script>
 </body>
 </html>
