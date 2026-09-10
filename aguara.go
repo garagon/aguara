@@ -148,7 +148,8 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 // commonly the object of a trust decision. Pass WithTrustedTargetPolicy only
 // for content whose suppression directives are controlled by the caller.
 // filename is a hint for rule target matching (e.g. "skill.md", "config.json").
-// Content is NFKC-normalized before scanning to prevent Unicode evasion attacks.
+// Text detection uses NFKC normalization; npm manifest parsing retains original
+// syntax so normalization cannot change JSON member identity.
 func ScanContent(ctx context.Context, content string, filename string, opts ...Option) (*ScanResult, error) {
 	return scanContentInternal(ctx, content, filename, "", opts)
 }
@@ -156,7 +157,7 @@ func ScanContent(ctx context.Context, content string, filename string, opts ...O
 // ScanContentAs scans inline content with tool context for false-positive reduction.
 // toolName identifies the tool that generated the content (e.g. "Bash", "Edit", "WebFetch").
 // When provided, built-in tool exemptions and scan profiles can reduce false positives.
-// Content is NFKC-normalized before scanning to prevent Unicode evasion attacks.
+// Text detection uses NFKC normalization; npm manifest parsing retains original syntax.
 func ScanContentAs(ctx context.Context, content string, filename string, toolName string, opts ...Option) (*ScanResult, error) {
 	return scanContentInternal(ctx, content, filename, toolName, opts)
 }
@@ -165,9 +166,6 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	if filename == "" {
 		filename = "skill.md"
 	}
-	// NFKC normalization prevents Unicode evasion (e.g. fullwidth "Ｉｇｎｏｒｅ" → "Ignore")
-	content = norm.NFKC.String(content)
-
 	cfg := applyOpts(opts)
 	if cfg.targetPolicy == nil {
 		enabled := false
@@ -181,10 +179,7 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	if err != nil {
 		return nil, err
 	}
-	targets := []*scanner.Target{{
-		RelPath: filename,
-		Content: []byte(content),
-	}}
+	targets := []*scanner.Target{inlineTarget(content, filename)}
 	result, err := s.ScanTargets(ctx, targets)
 	if err != nil {
 		return nil, err
@@ -293,7 +288,7 @@ func NewScanner(opts ...Option) (*Scanner, error) {
 }
 
 // ScanContent scans inline content using the pre-compiled scanner.
-// Content is NFKC-normalized before scanning to prevent Unicode evasion.
+// Text detection uses NFKC normalization; npm manifest parsing retains original syntax.
 func (sc *Scanner) ScanContent(ctx context.Context, content string, filename string) (*ScanResult, error) {
 	return sc.scanContent(ctx, content, filename, "")
 }
@@ -307,22 +302,28 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 	if filename == "" {
 		filename = "skill.md"
 	}
-	content = norm.NFKC.String(content)
-
 	s, err := sc.buildInternalScanner(toolName)
 	if err != nil {
 		return nil, err
 	}
-	targets := []*scanner.Target{{
-		RelPath: filename,
-		Content: []byte(content),
-	}}
+	targets := []*scanner.Target{inlineTarget(content, filename)}
 	result, err := s.ScanTargets(ctx, targets)
 	if err != nil {
 		return nil, err
 	}
 	result.RulesLoaded = len(sc.compiled)
 	return result, nil
+}
+
+func inlineTarget(content, filename string) *scanner.Target {
+	// Text detectors keep their existing NFKC view. Preserve the original only
+	// when it differs, so manifest parsing cannot merge distinct JSON keys.
+	target := &scanner.Target{RelPath: filename, Content: []byte(content)}
+	if normalized := norm.NFKC.String(content); normalized != content {
+		target.OriginalContent = target.Content
+		target.Content = []byte(normalized)
+	}
+	return target
 }
 
 // Scan scans a file or directory on disk using the pre-compiled scanner.

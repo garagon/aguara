@@ -90,17 +90,18 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	if !isManifestTarget(target) {
 		return nil, nil
 	}
-	if len(target.Content) == 0 {
+	content := target.SourceContent()
+	if len(content) == 0 {
 		return nil, nil
 	}
-	pkg, err := parseManifest(target.Content)
+	pkg, err := parseManifest(content)
 	if err != nil || pkg == nil {
 		// Malformed JSON: leave pattern rules to flag what they can; pkgmeta
 		// only reports on shapes it can confidently reason about.
 		return nil, nil
 	}
 	pkg.path = target.RelPath
-	pkg.raw = target.Content
+	pkg.raw = content
 	return detect(pkg), nil
 }
 
@@ -145,9 +146,56 @@ type manifest struct {
 // --- parsing ---
 
 func parseManifest(content []byte) (*manifest, error) {
-	var m manifest
-	if err := json.Unmarshal(content, &m); err != nil {
+	// JSON member names are case-sensitive in npm. Struct decoding alone folds
+	// case and lets an unrelated Scripts field erase the real scripts object.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(content, &fields); err != nil {
 		return nil, err
+	}
+	var m manifest
+	for _, field := range []struct {
+		key string
+		dst any
+	}{
+		{"name", &m.Name},
+		{"version", &m.Version},
+		{"publishConfig", &m.PublishConfig},
+	} {
+		if raw, ok := fields[field.key]; ok {
+			if err := json.Unmarshal(raw, field.dst); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, field := range []struct {
+		key string
+		dst *map[string]string
+	}{
+		{"dependencies", &m.Dependencies},
+		{"devDependencies", &m.DevDependencies},
+		{"optionalDependencies", &m.OptionalDependencies},
+		{"peerDependencies", &m.PeerDependencies},
+		{"scripts", &m.Scripts},
+	} {
+		if raw, ok := fields[field.key]; ok {
+			// Resolve duplicates before validating types, including duplicates
+			// whose earlier value had a different type.
+			var values map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &values); err != nil {
+				return nil, err
+			}
+			if values == nil {
+				continue
+			}
+			*field.dst = make(map[string]string, len(values))
+			for key, value := range values {
+				var s string
+				if err := json.Unmarshal(value, &s); err != nil {
+					return nil, err
+				}
+				(*field.dst)[key] = s
+			}
+		}
 	}
 	return &m, nil
 }
@@ -672,12 +720,13 @@ func manifestReferencesProvenance(pkg *manifest) bool {
 	// counts; missing or `false` falls through to the substring checks
 	// below, which look for other ways a trust surface might be wired.
 	if len(pkg.PublishConfig) > 0 {
-		var pc struct {
-			Provenance *bool `json:"provenance"`
-		}
+		var pc map[string]json.RawMessage
 		if err := json.Unmarshal(pkg.PublishConfig, &pc); err == nil {
-			if pc.Provenance != nil && *pc.Provenance {
-				return true
+			if raw, ok := pc["provenance"]; ok {
+				var enabled bool
+				if json.Unmarshal(raw, &enabled) == nil && enabled {
+					return true
+				}
 			}
 		}
 	}
