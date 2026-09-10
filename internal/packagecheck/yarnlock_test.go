@@ -63,8 +63,8 @@ func TestParseYarnLock_QuotedScopedMultiDescriptor(t *testing.T) {
 
 func TestParseYarnLock_SkipsNonRegistrySources(t *testing.T) {
 	// file: / link: / workspace: / portal: / patch: / git / and the
-	// npm: alias protocol are all non-registry and must be skipped;
-	// only the clean registry entry survives.
+	// other non-registry sources must be skipped; an npm: alias now
+	// resolves to its real registry package.
 	refs, err := ParseYarnLock(writeYarn(t, yarnHeader+`clean@^1.0.0:
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/clean/-/clean-1.0.0.tgz#abc"
@@ -89,7 +89,7 @@ func TestParseYarnLock_SkipsNonRegistrySources(t *testing.T) {
   version "1.0.0"
 `))
 	require.NoError(t, err)
-	require.Equal(t, []string{"clean@1.0.0"}, refSet(refs))
+	require.Equal(t, []string{"clean@1.0.0", "real-pkg@1.5.0"}, refSet(refs))
 }
 
 func TestParseYarnLock_DedupAndDistinctVersions(t *testing.T) {

@@ -3,6 +3,7 @@ module github.com/garagon/aguara
 go 1.25.8
 
 require (
+	github.com/blang/semver v3.5.1+incompatible
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745
 	github.com/sigstore/sigstore-go v1.2.2
@@ -17,7 +18,6 @@ require (
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
