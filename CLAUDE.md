@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.27.0 (2026-06-12; aggregates the terminal UX round #220 TTY detection + #221 shared style layer + `audit --verbose`, the native fuzz harness #223 with 22 targets + nightly workflow, and dependency bumps). Previous: v0.26.0 (2026-06-11; C3 range-matching round: #216 measurement, #217 all-versions advisory matching, #218 npm bounded ranges, snapshot 26,268 records + 202,526 all-versions entries). Current tree: 24 fuzz targets, 192 YAML rules + 66 analyzer-emitted (258 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 14 per-file scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, skillpolicy, NLP, toxicflow, rugpull) plus the skill-chain project correlation and the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.28.0 (2026-09-10): untrusted-project defaults, audit triage and agent handoff, skill/helper and script checks, parser/report hardening, and verified September 7 embedded intelligence (35,774 record rows + 203,639 all-version entries; not unique package totals). Previous release: v0.27.0 (2026-06-12). Current tree: 24 fuzz targets, 192 YAML rules + 66 analyzer-emitted (258 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 14 per-file scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, skillpolicy, NLP, toxicflow, rugpull) plus the skill-chain project correlation and the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -168,7 +168,7 @@ When any of these values change, update ALL references across the vault:
 - Coverage (currently 82% on the Codecov badge; badge scope excludes tools/ and benchmarks/)
 - Star/fork count (currently 48/6)
 - Watch skill count (currently 28,000+)
-- Version number (currently v0.27.0)
+- Version number (currently v0.28.0)
 
 Use `Grep` to find all occurrences before updating.
 

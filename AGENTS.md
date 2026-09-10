@@ -31,14 +31,14 @@ version-matching limits.
 
 ## Trust Boundary
 
-On `main`, `audit` and CI scans ignore target-owned policy by default. A local
+From v0.28.0, `audit` and CI scans ignore target-owned policy by default. A local
 `scan` can still trust it. Use `--project-policy ignore` when inspecting unfamiliar
 content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 
-These controls are development features until released. Older binaries may honor
-repository-owned exclusions. Check the version before relying on this boundary.
+Older binaries may honor repository-owned exclusions. Check the version before
+relying on this boundary.
 Caller-supplied exclusions, overrides and custom rules also affect coverage.
 
 A clean result means no matching finding in the analyzed input, not proof of
@@ -112,7 +112,7 @@ exported through public aliases, rather than copying a partial struct.
   state store, but rug-pull analysis needs one.
 
 `audit` has its own aggregate output, including triage and agent-handoff guidance
-on `main`. Do not assume it has the same schema as `ScanResult`. Severity,
+from v0.28.0. Do not assume it has the same schema as `ScanResult`. Severity,
 confidence, score and decision impact are distinct. Keep downstream identity,
 session policy and enforcement decisions outside Aguara's core.
 

@@ -5,187 +5,106 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-10
+
+A project should not decide what its security review is allowed to see.
+Aguara now ignores repository-owned exclusions in audit, CI and embedded
+scanning by default, reports incomplete checks as errors, and gives reviewers
+clearer guidance on what to investigate before installing dependencies or
+handing the project to an agent.
+
+This release also improves package identity and policy parsing, refreshes
+offline intelligence from a verified September snapshot, and protects more
+sensitive material in reports. Analysis stays local and does not execute the
+code being inspected.
+
 ### Added
 
-- Skill posture now flags a whole-value `allowed-tools: '*'` declaration in
-  `SKILL.md`. The structural frontmatter check identifies a request to
-  pre-approve every tool while leaving explicit tool lists, scoped command
-  wildcards, body examples, and malformed metadata quiet.
-- Agent-skill scans now correlate mandatory execution instructions in
-  `SKILL.md` with the local helper they reference. A required or hidden helper
-  becomes a review finding only when that exact file contains a strong,
-  unexplained behavior such as an instruction-override payload, a network
-  command execution, or a direct VCS dependency install. Ordinary setup
-  commands, optional diagnostics, comments, and safe helpers remain quiet.
-- Local Python and shell scripts now contribute concrete behavior evidence:
-  decoded or character-constructed Python values reaching `exec`/`eval`,
-  remote Python response bodies flowing into execution, structured systemd
-  or cron persistence, and real pip/npm commands using unencrypted dependency
-  sources. Python files that read high-trust local context and then perform a
-  bound HTTP write, or that apply literal world-writable permissions through a
-  bound Python API or command, are also surfaced for review.
-  The existing `SC-EX-007` persistence rule keeps its ID while moving from a
-  flat pattern to the script analyzer, so saved policies remain compatible.
-
-### Fixed
-
-- Installed npm identities, package-lock entries and agent settings now use
-  exact JSON property names. Case variants cannot erase or invent package
-  versions, hook commands or permissions. Repeated properties use their final
-  value, and inline agent settings retain original JSON keys. Legacy nested
-  package-lock decoding fails with an error when its bounded work budget ends.
-- `init` now creates configuration, workflows and hooks without following leaf
-  symlinks or escaping the selected directory through a linked parent. Existing
-  regular files retain their content and permissions. The one-time PATH hint
-  uses the same non-overwriting creation boundary for its marker.
-- Embedded malicious-package intelligence now uses the signed September 7
-  snapshot, filtered through the current source-evidence policy. Offline checks
-  no longer depend on the June snapshot. The source date and eight ecosystems
-  are preserved; manually curated incident records are unchanged.
-- Lockfile and dependency-manifest checks now reject leaf symlinks and special
-  files, and limit each input to 50 MiB. Invalid linked candidates remain visible
-  to discovery and return an error instead of disappearing or selecting a
-  fallback. Go, Ruby and Gradle retain streaming reads with a total-byte budget.
-- Pattern scans no longer recount the entire preceding text to locate every
-  match. Line tracking advances with each pattern's matches, preserving finding
-  locations and original excerpts without limiting the number of results.
-- Saved `update` reports and `clean` JSON reports now reject symlink and special
-  file destinations. Failed rendering preserves the previous report, and
-  successful writes replace it with a private file rather than truncating links.
-- JavaScript GitHub-channel checks no longer rescan an entire string for every
-  repeated mutation name. Rejected string interiors are visited once per name,
-  without changing mutation matching or finding locations.
-- JavaScript destructive-cleanup checks read recursive deletion options from
-  actual object properties. Quoted delimiters no longer hide a recursive wipe,
-  and example strings, nested options or overwritten values do not enable it.
-- Python remote-code checks retain the fetched source when a variable is decoded
-  or read back into itself, including inside a helper that returns the payload.
-  Replacing that variable with local content still clears the remote evidence.
-- Yarn classic dependency checks now resolve `npm:` aliases to the real package
-  and the lockfile's resolved version. Conflicting package identities, malformed
-  descriptors, non-registry sources and non-exact body versions remain excluded.
-- npm manifest checks now distinguish exact JSON field names. Unrelated keys
-  such as `Scripts` or `DEPENDENCIES` can no longer erase or introduce lifecycle
-  and dependency evidence; the same correction applies to publish provenance.
-  Repeated exact keys use the final value instead of merging earlier objects.
-  Inline scans preserve original manifest bytes for this check while retaining
-  Unicode normalization for text detection.
-- Findings no longer expose username-only URL tokens, empty-password credentials,
-  or credential tails after a second `@`. Dependency and shell evidence keeps
-  the destination visible; default redaction also covers URLs in neighboring
-  finding context and descriptions.
-- Cargo dependency checks now parse TOML structure, so inline comments, quoted
-  keys and escaped strings cannot hide a locked crates.io package. Private
-  registries remain excluded. Invalid TOML syntax or package identity fields
-  return an error instead of a successful partial result, and reads are limited
-  to 50 MiB. Unrelated metadata is parsed without decoding a whole document.
-- pnpm policy checks now read the value referenced by a YAML alias, including
-  aliased build-approval mappings. Dangerous settings are no longer missed
-  behind anchors, and a safe value does not trigger a finding merely because
-  its anchor is named `true`, `off`, or `0`. Findings retain the policy key's
-  source line; rule IDs, severities, and merge precedence are unchanged.
-- Dependency checks no longer classify a package as malicious solely because a
-  vulnerability description or reference mentions malware. OSV imports require
-  source evidence or reviewed exact versions. The same policy filters older
-  embedded and cached intelligence, while retaining manual incident records,
-  MAL advisories and reviewed historical compromises. Generic vulnerability
-  reports are not treated as evidence that an installed package contains malware.
-- Intel downloaded with `--insecure-intel` is now labeled unverified and cannot
-  become trusted input to later default checks or `--allow-stale`. Unverified
-  saves clear previous verification markers. Older markers require a new signed
-  `aguara update` because they did not distinguish skipped signature checks.
-  Normal signed refreshes and verified offline fallback remain supported.
-- Terminal reports now display control characters in filenames, finding text,
-  and discovered MCP server fields as visible escapes instead of letting them
-  alter the terminal. This applies with or without color; structured report
-  values and detection behavior are unchanged.
-- Report, baseline, and monitor-state writes now reject linked or special-file
-  destinations and use unique sibling temporary files. A failed write leaves
-  the existing artifact intact instead of truncating it. On Unix, saved files
-  are private to the owner (mode 0600, subject to umask); stdout is unchanged.
-- Directory scans now report an incomplete scan when an eligible file exceeds
-  the size limit instead of silently omitting it. The error identifies the file
-  and limit; configured exclusions and binary-file exclusions remain unchanged.
-  Disk reads also enforce the limit if a file grows after inspection, without
-  analyzing a truncated prefix. In-memory scanning keeps its existing behavior.
-- NuGet dependency checks now reject linked and special-file manifests and
-  enforce a 50 MiB input limit for project files and `packages.lock.json`.
-  Rejected inputs return an error rather than a successful dependency report.
-  Reads remain bounded if a manifest grows after inspection.
-- WASM scans now release their per-call Promise executor callbacks. Completed
-  scans no longer remain referenced by those callback registrations in a
-  long-lived browser session; asynchronous results and errors are unchanged.
-- The bundled WebAssembly page now renders finding fields, summaries, and
-  errors as text instead of HTML. Match previews retain their 120-character
-  limit without shortening or splitting HTML entities during rendering.
-- Scans now return an error if a selected file cannot be read, an analyzer
-  reports a failure, or directory discovery cannot complete. Partial findings
-  are not presented as a successful report, including in `scan --auto`.
-  Error messages identify the affected file or analyzer without quoting parser
-  input. Configured exclusions and intentionally skipped files are unchanged.
-- Scanning an explicitly selected directory symlink now scans its destination
-  instead of returning an empty success. Symlinks inside that directory remain
-  excluded.
-- Scan reports now redact complete PEM private-key blocks from finding
-  evidence, including truncated blocks. Credential locations remain protected
-  when a severity filter removes the original credential finding, so nearby
-  findings cannot expose it through their context. Explicit unredacted output
-  remains available for local investigation.
-- Repositories being evaluated can no longer declare themselves clean in
-  `aguara audit`, `aguara scan --ci`, the GitHub Action, WASM, or the public
-  scanning API. These trust-boundary paths ignore target-owned
-  `.aguara.yml`, `.aguaraignore`, and inline suppression directives by default.
-  Local `aguara scan` keeps its existing policy behavior, with an explicit
-  `--project-policy trust|ignore` override for either workflow; Go callers
-  must opt in with `WithTrustedTargetPolicy` before target policy is honored.
-- Reusable Go-library scanners now expose analyzer-owned detections through
-  `Scanner.ListRules` and `Scanner.ExplainRule`, matching the global catalog.
-  Consumers can enumerate and explain rules such as `SC-EX-007` without
-  maintaining a separate metadata path. Disabled rule IDs are normalized
-  consistently so catalog output and scan behavior cannot disagree by case.
-- `aguara scan` no longer contacts GitHub Releases in the background to
-  check for a newer binary. Local scans now honor Aguara's offline-by-default
-  contract without requiring `--no-update-check`; threat-intel refresh remains
-  an explicit `aguara update` or `--fresh` operation.
+- Audit reports include `triage`, `agent_handoff` and `action_plan`: review
+  priorities, next steps and machine-readable guidance for install, execution,
+  CI and agent configuration. These fields guide consumers; they do not enforce
+  permissions or replace existing exit-code thresholds.
+- Skill checks flag blanket tool approval in `SKILL.md` and connect required
+  local helpers to suspicious behavior in the referenced file. Explicit tool
+  lists, optional diagnostics, comments and safe helpers remain quiet.
+- Python and shell checks cover decoded values reaching execution, remote
+  response bodies flowing into code execution, systemd/cron persistence,
+  unencrypted dependency sources and additional credential-access or permission
+  risks. The persistence detection `SC-EX-007` keeps its ID after moving into
+  the script analyzer.
 
 ### Changed
 
-- Remote MCP endpoint findings now distinguish dedicated MCP URL shapes from
-  ordinary JSON `url` fields. Package metadata, feeds, schemas, and other
-  unrelated URLs stay quiet; a real remote MCP endpoint remains visible as
-  trust context without forcing the default handoff into review by itself.
-- Approval/execution gap detection now requires explicit reuse of a previous
-  or cached approval. Instructions that ask the user to confirm the exact
-  action before it runs are treated as the expected safety control, not as a
-  TOCTOU finding.
-- Findings and rule metadata now expose a `decision_impact` of `review`
-  or `context`. Ordinary local shell-script execution, `pip install`, and
-  system package installation commands remain visible as supporting context,
-  but no longer force the default audit triage or agent handoff into
-  review-only mode by themselves. All other built-in and custom rules default
-  to review, and explicit `--fail-on` gates remain authoritative.
-- An accepted scan baseline now produces `triage.decision: proceed` when
-  no new or non-baselineable finding remains. Existing findings stay
-  visible in the report and baseline summary.
-- `aguara audit` JSON now includes an additive `triage` block with a
-  deterministic `proceed` / `review` / `stop` decision, reasons, and
-  next steps for humans, CI dashboards, and agent workflows. The
-  existing `verdict.status`, `threshold_exceeded`, and exit-code
-  behavior are unchanged.
-- `aguara audit` now also emits agent handoff guidance derived from
-  triage, with explicit `allowed`, `review_only`, or `blocked` status
-  plus allowed and blocked actions for agent workflows. This gives AI
-  coding tools a safer pre-execution contract without changing scan
-  findings, gates, or exit codes.
-- `aguara audit` JSON now includes an additive `action_plan` block with
-  machine-readable permissions for install, execution, CI, repo agent
-  config, editing, and finding explanation. It is derived from triage
-  and agent handoff so wrappers and MCP clients can apply the same
-  trust decision without parsing prose.
-- README positioning now leads with when to run Aguara - before
-  install, before CI, or before handing a repo to an AI coding agent -
-  and adds a short "When to Use Aguara" section mapping real trust
-  decisions to the corresponding commands.
+- Audit, CI scans, the GitHub Action, WASM and public scanning APIs ignore
+  target-owned exclusions and suppressions by default. Local `scan` retains
+  project-policy behavior; use `--project-policy ignore` for unfamiliar code.
+  Go consumers can explicitly opt in with `WithTrustedTargetPolicy()`.
+- Findings distinguish supporting `context` from `review` signals through
+  `decision_impact`. Ordinary installation or local shell commands no longer
+  force review by themselves. Explicit failure thresholds remain authoritative.
+  Accepted baselines can produce a `proceed` triage decision while keeping
+  existing findings visible.
+- Remote MCP checks distinguish actual endpoint shapes from unrelated JSON URLs.
+  Approval-reuse checks require explicit reuse of previous or cached approval;
+  requesting confirmation of the current action remains a valid control.
+- Embedded intelligence now uses the verified September 7 snapshot, filtered
+  through the current malicious-package admission policy: 35,774 record rows
+  and 203,639 all-version entries across eight ecosystems. These are separate
+  data structures, not a count of unique packages. Manual incident data remains.
+- The catalog exposes 258 detections: 192 pattern rules and 66 analyzer-owned
+  detections. Reusable scanners now enumerate and explain analyzer rules too;
+  `RulesLoaded` still counts compiled pattern rules, not the combined catalog.
+
+### Fixed
+
+- A failed discovery, unreadable selected file, analyzer failure or oversized
+  eligible file no longer becomes a successful clean scan. Lockfile and
+  dependency-manifest readers reject leaf symlinks and special files, enforce
+  a 50 MiB limit, and do not analyze truncated input. Go, Ruby and Gradle retain
+  streaming reads. An explicitly selected directory symlink is scanned rather
+  than silently returning an empty result.
+- Package identities and policy values are read more precisely. npm manifests,
+  installed-package metadata, package-lock entries and agent settings use exact
+  JSON keys and final duplicate values. Yarn classic aliases retain the real
+  package and resolved version. Cargo checks parse TOML structure; pnpm policy
+  checks resolve YAML aliases without confusing anchor names with values.
+  Legacy package-lock trees have a 128-level nesting limit and a 50 MiB
+  cumulative subtree-decoding budget; exceeding either returns an error.
+- Malware classification requires source evidence or reviewed exact versions,
+  not a word in an advisory description or URL. The same admission policy
+  filters old embedded, cached and refreshed data. Unverified intel cannot be
+  reused as verified input in later default checks or stale fallback.
+- Default report redaction covers full or truncated PEM private-key blocks and
+  additional credential-bearing URL forms, including neighboring context when
+  severity filters remove the original credential finding. Terminal reports
+  escape control characters. The bundled WASM page renders result fields as
+  text, not HTML, and releases completed Promise executor callbacks.
+- Report, baseline and monitor-state writes reject linked or special-file
+  destinations and preserve existing files when rendering fails. Saved reports
+  use private files on Unix. Initialization creates files without overwriting
+  existing ones or escaping the selected project through linked parents.
+- Python remote-code checks preserve fetched provenance through same-variable
+  decoding. JavaScript destructive-cleanup checks distinguish actual recursive
+  options from quoted, nested or overwritten values.
+- Pattern line attribution advances through matches instead of repeatedly
+  counting the entire preceding text. GitHub-channel checks avoid rescanning
+  string interiors for every repeated mutation name. Finding locations and
+  detection scope are preserved; these changes do not establish hard deadlines.
+- `scan` no longer checks GitHub Releases in the background. Intel refresh is
+  still an explicit `aguara update` or `--fresh` operation.
+
+### Upgrade Notes
+
+- Review CI expectations when upgrading: target-owned exclusions no longer hide
+  findings in the default untrusted-project paths. Caller-supplied policy remains
+  authoritative. Guidance fields do not change explicit failure thresholds.
+- Older intel cache verification markers are rejected. Run a normal signed
+  `aguara update` to restore verified cache reuse; offline checks can use the
+  new embedded snapshot. Do not use `--insecure-intel` to bypass this migration.
+- Input limits apply to disk-backed scan and dependency paths, not arbitrary
+  inline API content. Consumers must bound inline inputs and execution resources.
+  No aggregate memory budget, immediate parser cancellation or full shell
+  interpretation is promised.
 
 ## [0.27.0] - 2026-06-12
 

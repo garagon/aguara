@@ -26,8 +26,8 @@ Use it when evaluating a repository or skill, reviewing a change, or adding a se
 Install the published release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/garagon/aguara/v0.27.0/install.sh \
-  | VERSION=v0.27.0 sh
+curl -fsSL https://raw.githubusercontent.com/garagon/aguara/v0.28.0/install.sh \
+  | VERSION=v0.28.0 sh
 ```
 
 The default location is `~/.local/bin`; add it to your `PATH` if needed. The installer verifies the archive checksum. See [signature verification](#verifying-signed-releases) for verifying its signing identity, or [other installation options](#installation).
@@ -40,11 +40,11 @@ aguara audit .
 
 This combines a malicious-package check with a content scan. It does not install dependencies or run the project's commands. Read the findings before taking the next step; a passing result is not a guarantee that the project is safe.
 
-**Release boundary:** these installation examples use **v0.27.0**. The [development section](#development-version) describes features on `main` that are not in that release. In particular, v0.27.0 can honor repository-owned exclusions and suppressions: review them when inspecting an unfamiliar project. The explicit untrusted-project policy controls are a development feature.
+**Trust boundary:** in v0.28.0, `audit`, CI scans and the public scanning API ignore target-owned exclusions and suppressions by default. Local `scan` can still honor them; use `--project-policy ignore` for unfamiliar projects. Older releases may trust repository-owned policy. See the [upgrade notes](CHANGELOG.md#0280---2026-09-10) before changing an existing integration.
 
 ### Reading a finding
 
-For example, a `.claude/settings.json` containing `"allow": ["Bash(*)"]` grants broad shell approval. Aguara reports that configuration for review. A shortened JSON finding from v0.27.0:
+For example, a `.claude/settings.json` containing `"allow": ["Bash(*)"]` grants broad shell approval. Aguara reports that configuration for review. A shortened JSON finding from v0.28.0:
 
 ```json
 {
@@ -142,7 +142,7 @@ and cannot be reused by default checks or `--allow-stale`. Older cache markers
 do not reliably establish that a signature was verified; run `aguara update`
 without `--insecure-intel` to restore verified offline use after upgrading.
 
-Release notices are separate from analysis: `aguara version` can check for a newer release, and v0.27.0 also does this during `scan`. Set `AGUARA_NO_UPDATE_CHECK=1` to disable those checks. For network-isolated use, set that variable and avoid `update` and `--fresh`; no online lookup is needed to analyze the content.
+Release notices are separate from analysis: `aguara version` can check for a newer release; `scan` does not. Set `AGUARA_NO_UPDATE_CHECK=1` to disable release notices. For network-isolated use, set that variable and avoid `update` and `--fresh`; no online lookup is needed to analyze the content.
 
 ## Adopting Aguara in CI
 
@@ -165,17 +165,17 @@ Baseline-matched content findings remain visible but do not fail the gate. New f
 
 ## Installation
 
-The following alternatives install the published version, not the development features below.
+The following alternatives install the published release:
 
 ```bash
 # Homebrew
 brew install garagon/tap/aguara
 
 # Docker: read-only project mount, non-root container
-docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.27.0 audit /repo
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/garagon/aguara:0.28.0 audit /repo
 
-# Go: pinned release; requires Go 1.25.5 or later
-go install github.com/garagon/aguara/cmd/aguara@v0.27.0
+# Go: pinned release; requires Go 1.25.8 or later
+go install github.com/garagon/aguara/cmd/aguara@v0.28.0
 ```
 
 Release binaries are available for Linux, macOS, and Windows on the [Releases page](https://github.com/garagon/aguara/releases). The container supports Linux amd64 and arm64. Go installs do not inject release version metadata; use release artifacts when that metadata or signature verification is required.
@@ -185,11 +185,11 @@ Release binaries are available for Linux, macOS, and Windows on the [Releases pa
 The Action runs a content scan, not the combined package audit. Pin both the Action and its binary:
 
 ```yaml
-- uses: garagon/aguara@v0.27.0
+- uses: garagon/aguara@v0.28.0
   with:
     path: .
     fail-on: high
-    version: v0.27.0
+    version: v0.28.0
 ```
 
 The default SARIF upload needs `security-events: write`. See [`action.yml`](action.yml) for inputs; use the CLI audit in a separate CI step when you also need package-intelligence checks.
@@ -237,7 +237,7 @@ func main() {
 
 ## Development Version
 
-**The following capabilities are on `main`, not in v0.27.0.** See [Unreleased changes](CHANGELOG.md#unreleased). Building from source is not equivalent to installing a signed release.
+**v0.28.0 includes the capabilities below.** Later changes on `main` are listed under [Unreleased](CHANGELOG.md#unreleased). Building from source is not equivalent to installing a signed release.
 
 | Capability | What changes for the caller |
 |---|---|
@@ -254,11 +254,11 @@ For a development build, clone the repository, review and check out the commit y
 ./aguara audit . --format json
 ```
 
-The development catalog contains **258 detections: 192 YAML pattern rules and 66 analyzer-emitted detections**. The installed binary's `aguara list-rules` is the reference for its own catalog. This count is not the number of malicious-package records in the intelligence snapshot.
+The v0.28.0 catalog contains **258 detections: 192 YAML pattern rules and 66 analyzer-emitted detections**. The installed binary's `aguara list-rules` is the reference for its own catalog. This count is not the number of malicious-package records in the intelligence snapshot.
 
 ## Rules and Architecture
 
-Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. On `main`, thirteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. Skill-chain correlation runs separately across files.
+Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. Thirteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. Skill-chain correlation runs separately across files.
 
 Package-intelligence checking is a separate path used by `check` and combined with content analysis by `audit`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the package layout and [RULES.md](RULES.md) for detection details.
 
@@ -278,14 +278,14 @@ aguara explain CRED_002
 aguara scan . --rules ./my-rules/
 ```
 
-Custom rules and local configuration can change coverage. Review `.aguara.yml`, `.aguaraignore`, custom rules, and inline suppressions before trusting a project's scan policy. Use `aguara init` to scaffold a local configuration. The `--project-policy` boundary described above applies only to development builds until it is released.
+Custom rules and local configuration can change coverage. Review `.aguara.yml`, `.aguaraignore`, custom rules, and inline suppressions before trusting a project's scan policy. Use `aguara init` to scaffold a local configuration. The `--project-policy` boundary described above is available from v0.28.0.
 
 ## Verifying Signed Releases
 
 Release archives have checksums signed with Cosign keyless and include SPDX SBOMs. Container images are signed at their digest with SBOM and SLSA provenance attestations. Verify the signing identity as well as the checksum:
 
 ```bash
-VERSION=v0.27.0
+VERSION=v0.28.0
 ARCHIVE=aguara_${VERSION#v}_linux_amd64.tar.gz
 
 curl -fsSLO https://github.com/garagon/aguara/releases/download/${VERSION}/${ARCHIVE}
