@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Installed npm identities, package-lock entries and agent settings now use
+  exact JSON property names. Case variants cannot erase or invent package
+  versions, hook commands or permissions. Repeated properties use their final
+  value, and inline agent settings retain original JSON keys. Legacy nested
+  package-lock decoding fails with an error when its bounded work budget ends.
 - `init` now creates configuration, workflows and hooks without following leaf
   symlinks or escaping the selected directory through a linked parent. Existing
   regular files retain their content and permissions. The one-time PATH hint

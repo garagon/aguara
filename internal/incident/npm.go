@@ -1,7 +1,6 @@
 package incident
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/jsonfields"
 	"github.com/garagon/aguara/internal/packagecheck"
 )
 
@@ -267,7 +267,9 @@ func parseNPMPackage(path string) NPMPackage {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := jsonfields.Decode(data,
+		jsonfields.Field{Name: "name", To: &manifest.Name},
+		jsonfields.Field{Name: "version", To: &manifest.Version}); err != nil {
 		return pkg
 	}
 	pkg.Name = manifest.Name
