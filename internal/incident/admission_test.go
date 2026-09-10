@@ -37,8 +37,10 @@ func TestEmbeddedAdmissionPreservesManualAndMALCoverage(t *testing.T) {
 	raw, err := intel.DecodeSnapshotGZIP(generatedIntelGZ)
 	require.NoError(t, err)
 	filtered := EmbeddedIntelSnapshot()
-	require.Less(t, len(filtered.Records), len(raw.Records))
-	require.Equal(t, raw.AllVersions, filtered.AllVersions)
+	// New embedded data is admitted before it ships. Legacy cache migration
+	// remains covered separately in internal/intel/admission_test.go.
+	require.Equal(t, intel.CurrentOSVAdmissionPolicy, raw.AdmissionPolicy)
+	require.Equal(t, raw, filtered, "a current embedded snapshot must not need runtime filtering")
 	require.Equal(t, KnownCompromisedSnapshot(), EmbeddedSnapshots()[0])
 	t.Logf("embedded records: %d -> %d; all-versions: %d unchanged", len(raw.Records), len(filtered.Records), len(filtered.AllVersions))
 }

@@ -25,6 +25,11 @@
 // counts, ecosystems, and content hashes so a regeneration is
 // reviewable even though the blob is binary.
 //
+// Alternatively, --from-verified-bundle DIR consumes the three downloaded
+// intel-latest assets. It verifies their signature and digests, applies the
+// current admission policy and keeps the source timestamp. Do not attach the
+// input bundle's signature to the regenerated output. See tools/update-intel/README.md.
+//
 // A regeneration that forgets one of the 8 pairs is caught by
 // TestEmbeddedSnapshotCoversAllEightEcosystems in
 // internal/incident: the test asserts every SupportedEcosystems()
@@ -46,6 +51,7 @@ import (
 	"time"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/intel/bundle"
 	"github.com/garagon/aguara/internal/intel/osvimport"
 )
 
@@ -67,10 +73,12 @@ func main() {
 		genTime     string
 		toolVersion string
 		allowEmpty  bool
+		bundleDir   string
 	)
 
 	fs := flag.NewFlagSet("update-intel", flag.ContinueOnError)
 	fs.Var(&zips, "from-zip", "Path to an OSV ecosystem all.zip (repeatable; pair with --ecosystem)")
+	fs.StringVar(&bundleDir, "from-verified-bundle", "", "Directory containing a signed Aguara intel bundle; verify, apply admission policy and preserve its original timestamp")
 	fs.Var(&ecosystems, "ecosystem", "OSV ecosystem for the matching --from-zip (repeatable; e.g. npm, PyPI)")
 	fs.StringVar(&outPath, "out", "internal/incident/generated_intel.json.gz", "Path to the gzipped-JSON snapshot blob to write (a .meta.json sidecar is written alongside)")
 	fs.StringVar(&genTime, "generated-at", "", "Override the snapshot timestamp (RFC3339; defaults to now). Use this for reproducible builds.")
@@ -81,8 +89,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	if len(zips) == 0 {
-		fmt.Fprintln(os.Stderr, "update-intel: at least one --from-zip required (HTTP download is not yet supported; download the OSV dump manually first)")
+	if bundleDir != "" && (len(zips) != 0 || len(ecosystems) != 0 || genTime != "") {
+		fmt.Fprintln(os.Stderr, "update-intel: --from-verified-bundle cannot be combined with zip inputs, ecosystem filters or --generated-at")
+		os.Exit(2)
+	}
+	if len(zips) == 0 && bundleDir == "" {
+		fmt.Fprintln(os.Stderr, "update-intel: provide --from-zip inputs or --from-verified-bundle; download input artifacts separately")
 		os.Exit(2)
 	}
 	if len(zips) != len(ecosystems) {
@@ -107,6 +119,18 @@ func main() {
 	}
 	if !generatedAt.IsZero() {
 		merged.GeneratedAt = generatedAt
+	}
+	if bundleDir != "" {
+		verified, err := importVerifiedBundle(bundleDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "update-intel: verified bundle: %v\n", err)
+			os.Exit(1)
+		}
+		if len(verified.Records) == 0 && len(verified.AllVersions) == 0 && !allowEmpty {
+			fmt.Fprintln(os.Stderr, "update-intel: verified bundle has no admitted records; refusing empty output")
+			os.Exit(1)
+		}
+		merged = verified
 	}
 
 	for i, zipPath := range zips {
@@ -180,6 +204,29 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "update-intel: wrote %d records (%d gz bytes) to %s and metadata to %s\n",
 		len(merged.Records), len(gz), absOut, metaOut)
+}
+
+// Inputs come from a maintainer-controlled download directory. Verification
+// authenticates the original bytes; the filtered output needs its own release
+// provenance and must not be distributed with the original signature.
+func importVerifiedBundle(dir string) (intel.Snapshot, error) {
+	meta, err := os.ReadFile(filepath.Join(dir, "generated_intel.meta.json"))
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
+	signature, err := os.ReadFile(filepath.Join(dir, "generated_intel.meta.json.bundle"))
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, bundle.ExpectedBlobName))
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
+	snapshot, err := bundle.VerifyAndDecode(meta, signature, blob)
+	if err != nil {
+		return intel.Snapshot{}, err
+	}
+	return intel.ApplyOSVAdmissionPolicy(snapshot), nil
 }
 
 // metaPathFor returns the sidecar metadata path for a blob path: it
