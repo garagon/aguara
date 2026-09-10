@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -69,7 +68,7 @@ var yarnRegistrySelectorRe = regexp.MustCompile(`^[A-Za-z0-9._*^~<>=|+\s -]+$`)
 // identifier, or a body without an exact resolved version is skipped.
 // Results dedupe on (name, version) and come out in deterministic order.
 func ParseYarnLock(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "yarn.lock")
 	if err != nil {
 		return nil, fmt.Errorf("open yarn.lock: %w", err)
 	}

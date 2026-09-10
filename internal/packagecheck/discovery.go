@@ -126,14 +126,14 @@ func Discover(root string, ecosystems []string) ([]Target, error) {
 // `require` lines but no checked-in go.sum (libraries that delegate
 // locking to the downstream consumer).
 func pickGoTarget(dir string) []Target {
-	if statRegular(filepath.Join(dir, "go.sum")) {
+	if manifestCandidate(filepath.Join(dir, "go.sum")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemGo,
 			Path:      filepath.Join(dir, "go.sum"),
 			Source:    "go.sum",
 		}}
 	}
-	if statRegular(filepath.Join(dir, "go.mod")) {
+	if manifestCandidate(filepath.Join(dir, "go.mod")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemGo,
 			Path:      filepath.Join(dir, "go.mod"),
@@ -149,7 +149,7 @@ func pickGoTarget(dir string) []Target {
 // resolved version set is whatever `cargo update` would produce
 // today, which the offline parser cannot determine.
 func pickCargoTarget(dir string) []Target {
-	if statRegular(filepath.Join(dir, "Cargo.lock")) {
+	if manifestCandidate(filepath.Join(dir, "Cargo.lock")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemCargo,
 			Path:      filepath.Join(dir, "Cargo.lock"),
@@ -164,7 +164,7 @@ func pickCargoTarget(dir string) []Target {
 // alone (no lockfile) is skipped for the same reason as Cargo.toml
 // without Cargo.lock.
 func pickComposerTarget(dir string) []Target {
-	if statRegular(filepath.Join(dir, "composer.lock")) {
+	if manifestCandidate(filepath.Join(dir, "composer.lock")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemPackagist,
 			Path:      filepath.Join(dir, "composer.lock"),
@@ -177,7 +177,7 @@ func pickComposerTarget(dir string) []Target {
 // pickRubyTarget returns a Target for a Ruby/Bundler project
 // rooted at dir, or nil when no Gemfile.lock is present.
 func pickRubyTarget(dir string) []Target {
-	if statRegular(filepath.Join(dir, "Gemfile.lock")) {
+	if manifestCandidate(filepath.Join(dir, "Gemfile.lock")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemRubyGems,
 			Path:      filepath.Join(dir, "Gemfile.lock"),
@@ -200,14 +200,14 @@ func pickRubyTarget(dir string) []Target {
 // "gradle.lockfile" for both Gradle modes (they share the parser).
 func pickMavenTargets(dir string) []Target {
 	var out []Target
-	if statRegular(filepath.Join(dir, "pom.xml")) {
+	if manifestCandidate(filepath.Join(dir, "pom.xml")) {
 		out = append(out, Target{
 			Ecosystem: intel.EcosystemMaven,
 			Path:      filepath.Join(dir, "pom.xml"),
 			Source:    "pom.xml",
 		})
 	}
-	if statRegular(filepath.Join(dir, "gradle.lockfile")) {
+	if manifestCandidate(filepath.Join(dir, "gradle.lockfile")) {
 		out = append(out, Target{
 			Ecosystem: intel.EcosystemMaven,
 			Path:      filepath.Join(dir, "gradle.lockfile"),
@@ -317,7 +317,7 @@ func pickPnpmTarget(dir string) []Target {
 	if hasNodeModulesAncestor(dir) {
 		return nil
 	}
-	if statRegular(filepath.Join(dir, "pnpm-lock.yaml")) {
+	if manifestCandidate(filepath.Join(dir, "pnpm-lock.yaml")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "pnpm-lock.yaml"),
@@ -343,7 +343,7 @@ func pickPackageLockTarget(dir string) []Target {
 	if hasNodeModulesAncestor(dir) {
 		return nil
 	}
-	if statRegular(filepath.Join(dir, "package-lock.json")) {
+	if manifestCandidate(filepath.Join(dir, "package-lock.json")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "package-lock.json"),
@@ -364,7 +364,7 @@ func pickYarnLockTarget(dir string) []Target {
 	if hasNodeModulesAncestor(dir) {
 		return nil
 	}
-	if statRegular(filepath.Join(dir, "yarn.lock")) {
+	if manifestCandidate(filepath.Join(dir, "yarn.lock")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "yarn.lock"),
@@ -385,14 +385,14 @@ func pickBunLockTarget(dir string) []Target {
 	if hasNodeModulesAncestor(dir) {
 		return nil
 	}
-	if statRegular(filepath.Join(dir, "bun.lock")) {
+	if manifestCandidate(filepath.Join(dir, "bun.lock")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "bun.lock"),
 			Source:    "bun.lock",
 		}}
 	}
-	if statRegular(filepath.Join(dir, "bun.lockb")) {
+	if manifestCandidate(filepath.Join(dir, "bun.lockb")) {
 		return []Target{{
 			Ecosystem: intel.EcosystemNPM,
 			Path:      filepath.Join(dir, "bun.lockb"),
@@ -419,7 +419,9 @@ func hasNodeModulesAncestor(dir string) bool {
 	}
 }
 
-func statRegular(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+// Retain unsafe leaf candidates so parsing reports an error instead of silently
+// skipping a manifest or choosing a lower-priority fallback.
+func manifestCandidate(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && !info.IsDir()
 }
