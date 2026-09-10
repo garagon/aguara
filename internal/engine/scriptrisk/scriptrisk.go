@@ -222,6 +222,17 @@ type pythonFetchBindings struct {
 }
 
 func findRemoteFetchExec(stmts []statement) (int, string, bool) {
+	// The caller supplies masked code: semicolons in strings/comments are gone.
+	// Preserve execution order when several simple statements share a line.
+	var ordered []statement
+	for _, st := range stmts {
+		for _, text := range strings.Split(st.text, ";") {
+			if text = strings.TrimSpace(text); text != "" {
+				ordered = append(ordered, statement{line: st.line, indent: st.indent, text: text})
+			}
+		}
+	}
+	stmts = ordered
 	bindings := collectPythonFetchBindings(stmts)
 	if len(bindings.calls) == 0 {
 		return 0, "", false
@@ -258,36 +269,18 @@ func findRemoteFetchExec(stmts []statement) (int, string, bool) {
 		}
 
 		text := strings.TrimSpace(st.text)
-		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
-			lhs, rhs := m[1], m[2]
-			delete(taint, lhs)
-			delete(responses, lhs)
-			switch {
-			case callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs):
-				taint[lhs] = 0
-			case callsAny(rhs, bindings.calls):
-				responses[lhs] = true
-			case callsAny(rhs, fetchHelpers):
-				taint[lhs] = 0
-			case referencesPythonResponseBody(rhs, responses):
-				taint[lhs] = 0
-			default:
-				if depth, ok := derivedDepth(rhs, taint); ok {
-					taint[lhs] = depth
-				}
+		// Calls on the RHS execute before an assignment replaces its destination.
+		if m := pyExecRe.FindStringSubmatch(text); m != nil {
+			arg := m[1]
+			if callsAny(arg, bindings.calls) && hasPythonResponseBody(arg) ||
+				callsAny(arg, fetchHelpers) ||
+				referencesPythonResponseBody(arg, responses) ||
+				referencesTaint(arg, taint) {
+				return st.line, text, true
 			}
 		}
-
-		m := pyExecRe.FindStringSubmatch(text)
-		if m == nil {
-			continue
-		}
-		arg := m[1]
-		if callsAny(arg, bindings.calls) && hasPythonResponseBody(arg) ||
-			callsAny(arg, fetchHelpers) ||
-			referencesPythonResponseBody(arg, responses) ||
-			referencesTaint(arg, taint) {
-			return st.line, text, true
+		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
+			assignRemotePayload(m[1], m[2], bindings, fetchHelpers, taint, responses)
 		}
 	}
 	return 0, "", false
@@ -299,21 +292,7 @@ func functionReturnsRemotePayload(body []statement, bindings pythonFetchBindings
 	for _, st := range body {
 		text := strings.TrimSpace(st.text)
 		if m := pyAssignRe.FindStringSubmatch(text); m != nil {
-			lhs, rhs := m[1], m[2]
-			delete(taint, lhs)
-			delete(responses, lhs)
-			switch {
-			case callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs):
-				taint[lhs] = 0
-			case callsAny(rhs, bindings.calls):
-				responses[lhs] = true
-			case referencesPythonResponseBody(rhs, responses):
-				taint[lhs] = 0
-			default:
-				if depth, ok := derivedDepth(rhs, taint); ok {
-					taint[lhs] = depth
-				}
-			}
+			assignRemotePayload(m[1], m[2], bindings, nil, taint, responses)
 		}
 		if !strings.HasPrefix(text, "return ") {
 			continue
@@ -326,6 +305,30 @@ func functionReturnsRemotePayload(body []statement, bindings pythonFetchBindings
 		}
 	}
 	return false
+}
+
+func assignRemotePayload(lhs, rhs string, bindings pythonFetchBindings, helpers map[string]bool, taint map[string]int, responses map[string]bool) {
+	// Derive from the old state before clearing either kind of provenance.
+	depth, payload, response := 0, false, false
+	switch {
+	case callsAny(rhs, bindings.calls) && hasPythonResponseBody(rhs):
+		payload = true
+	case callsAny(rhs, bindings.calls):
+		response = true
+	case callsAny(rhs, helpers), referencesPythonResponseBody(rhs, responses):
+		payload = true
+	case strings.TrimSpace(rhs) == lhs && responses[lhs]:
+		response = true
+	default:
+		depth, payload = derivedDepth(rhs, taint)
+	}
+	delete(taint, lhs)
+	delete(responses, lhs)
+	if payload {
+		taint[lhs] = depth
+	} else if response {
+		responses[lhs] = true
+	}
 }
 
 func collectPythonFetchBindings(stmts []statement) pythonFetchBindings {

