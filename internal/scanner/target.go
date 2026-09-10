@@ -3,6 +3,8 @@ package scanner
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +13,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// DefaultMaxFileSize is the default maximum file size (50 MB) that will be scanned.
-// Files larger than this are silently skipped during discovery.
+// DefaultMaxFileSize is the default maximum file size (50 MiB) read from disk.
+// Eligible files exceeding it cause an incomplete-scan error.
 const DefaultMaxFileSize = 50 << 20
 
 // Target represents a file to be scanned.
@@ -39,19 +41,47 @@ func (t *Target) LoadContent() error {
 	if limit <= 0 {
 		limit = DefaultMaxFileSize
 	}
-	info, err := os.Stat(t.Path)
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
 	if info.Size() > limit {
-		return fmt.Errorf("file too large: %s (%d bytes, max %d)", t.Path, info.Size(), limit)
+		return &fileSizeError{limit: limit}
 	}
-	data, err := os.ReadFile(t.Path)
+	data, err := readTargetBytes(f, limit)
 	if err != nil {
 		return err
 	}
 	t.Content = data
 	return nil
+}
+
+type fileSizeError struct{ limit int64 }
+
+func (e *fileSizeError) Error() string {
+	return fmt.Sprintf("file too large: exceeds %d-byte limit", e.limit)
+}
+
+// Read one extra byte to distinguish a complete input from a truncated prefix.
+// API callers may set any positive int64 limit, including MaxInt64.
+func readTargetBytes(r io.Reader, limit int64) ([]byte, error) {
+	readLimit := limit
+	if readLimit < math.MaxInt64 {
+		readLimit++
+	}
+	data, err := io.ReadAll(io.LimitReader(r, readLimit))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, &fileSizeError{limit: limit}
+	}
+	return data, nil
 }
 
 // StringContent returns the content as a NFKC-normalized string. The result is cached.
@@ -113,16 +143,15 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
-		// skip binary/large files by extension
+		// Explicit exclusions take precedence over the file-size boundary.
 		if isBinaryExt(path) {
-			return nil
-		}
-		// skip oversized files
-		if info.Size() > limit {
 			return nil
 		}
 		if td.isIgnored(relPath) {
 			return nil
+		}
+		if info.Size() > limit {
+			return IncompleteScanError("discover target", relPath, "", &fileSizeError{limit: limit})
 		}
 		targets = append(targets, &Target{
 			Path:        path,
@@ -168,6 +197,7 @@ func (td *TargetDiscovery) isIgnored(relPath string) bool {
 // Only skip an unreadable subtree when every descendant is excluded. A file
 // glob matching the directory's name alone says nothing about its contents.
 func (td *TargetDiscovery) isIgnoredSubtree(relPath string) bool {
+	relPath = filepath.ToSlash(relPath)
 	if relPath == "." {
 		return false
 	}
@@ -197,6 +227,9 @@ func matchGlob(pattern, relPath string) bool {
 		}
 		return false
 	}
+	// Recursive patterns use slash-delimited segments on every platform.
+	// ToSlash preserves literal backslashes in Unix filenames.
+	relPath = filepath.ToSlash(relPath)
 
 	// "prefix/**" → match anything under prefix/
 	if strings.HasSuffix(pattern, "/**") {

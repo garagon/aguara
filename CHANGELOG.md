@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Directory scans now report an incomplete scan when an eligible file exceeds
+  the size limit instead of silently omitting it. The error identifies the file
+  and limit; configured exclusions and binary-file exclusions remain unchanged.
+  Disk reads also enforce the limit if a file grows after inspection, without
+  analyzing a truncated prefix. In-memory scanning keeps its existing behavior.
 - NuGet dependency checks now reject linked and special-file manifests and
   enforce a 50 MiB input limit for project files and `packages.lock.json`.
   Rejected inputs return an error rather than a successful dependency report.

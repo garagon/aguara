@@ -35,6 +35,35 @@ func TestIncompleteScanDoesNotWriteReportOrBaseline(t *testing.T) {
 	}
 }
 
+func TestOversizeDirectoryDoesNotWriteReportOrBaseline(t *testing.T) {
+	for _, command := range []string{"scan", "audit"} {
+		t.Run(command, func(t *testing.T) {
+			resetFlags()
+			t.Cleanup(resetFlags)
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"safe","version":"1.0.0"}`), 0o600))
+			f, err := os.Create(filepath.Join(dir, "large.md"))
+			require.NoError(t, err)
+			sizeErr := f.Truncate(scanner.DefaultMaxFileSize + 1)
+			closeErr := f.Close()
+			require.NoError(t, sizeErr)
+			require.NoError(t, closeErr)
+			out, base := filepath.Join(t.TempDir(), "report.json"), filepath.Join(t.TempDir(), "baseline.json")
+			rootCmd.SetOut(new(bytes.Buffer))
+			rootCmd.SetErr(new(bytes.Buffer))
+			rootCmd.SetArgs([]string{command, dir, "--workers", "1", "--format", "json", "-o", out, "--write-baseline", base})
+			t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+			err = rootCmd.Execute()
+			require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+			require.Contains(t, err.Error(), "52428800-byte limit")
+			for _, path := range []string{out, base} {
+				_, err := os.Stat(path)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+}
+
 func TestIncompleteChangedScanRejectsMetadataFailure(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")

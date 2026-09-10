@@ -23,6 +23,12 @@ func (e *scanFailure) Is(target error) bool { return target == ErrIncompleteScan
 // display. An empty analyzer name identifies a discovery or read failure.
 func IncompleteScanError(stage, path, analyzer string, cause error) error {
 	message := fmt.Sprintf("%s: %s for %q", ErrIncompleteScan, stage, boundedErrorLabel(path))
+	var sizeErr *fileSizeError
+	if errors.As(cause, &sizeErr) {
+		// Only this internally constructed numeric diagnostic is safe to
+		// display. Arbitrary parser or filesystem causes remain hidden.
+		message += fmt.Sprintf(" (file exceeds %d-byte limit)", sizeErr.limit)
+	}
 	if analyzer != "" {
 		message += fmt.Sprintf(" (analyzer %q)", boundedErrorLabel(analyzer))
 	}
