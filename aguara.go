@@ -25,6 +25,11 @@ import (
 	"github.com/garagon/aguara/internal/types"
 )
 
+// ErrIncompleteScan indicates that a target could not be read or analyzed,
+// or that file discovery failed. Scans return no result in this case.
+// Use errors.Is to distinguish it from findings or caller cancellation.
+var ErrIncompleteScan = scanner.ErrIncompleteScan
+
 // Re-export core types from internal/types so consumers don't need to
 // import internal packages.
 type (

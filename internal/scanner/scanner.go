@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -163,7 +164,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	// Check if root is a single file (not a directory).
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, err
+		return nil, IncompleteScanError("inspect target", root, "", err)
 	}
 	if !info.IsDir() {
 		// Single-file scan: use the filename as RelPath so target-filtered
@@ -177,14 +178,24 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	}
 
 	// Directory scan: discover all files recursively.
+	// The explicit root may be a symlink; child symlinks remain excluded.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, IncompleteScanError("resolve root", root, "", err)
+	}
 	discovery := &TargetDiscovery{
 		IgnorePatterns:    s.ignorePatterns,
 		MaxFileSize:       s.maxFileSize,
 		IgnoreProjectFile: !s.projectPolicyEnabled,
 	}
-	targets, err := discovery.Discover(root)
+	targets, err := discovery.Discover(resolvedRoot)
 	if err != nil {
 		return nil, err
+	}
+	// Analyzers also use the caller's logical path (e.g. .github/workflows).
+	// Resolving traversal must not erase that identity through a symlink.
+	for _, target := range targets {
+		target.Path = filepath.Join(root, target.RelPath)
 	}
 
 	return s.ScanTargets(ctx, targets)
@@ -216,7 +227,19 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		wg        sync.WaitGroup
 		processed atomic.Int32
 		redaction types.RedactionPlan
+		scanErr   error
+		failures  int
 	)
+	recordFailure := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		failures++
+		// Keep one deterministic diagnostic instead of retaining an unbounded
+		// collection of errors from an attacker-controlled directory.
+		if scanErr == nil || err.Error() < scanErr.Error() {
+			scanErr = err
+		}
+	}
 
 	total := len(targets)
 	for range s.workers {
@@ -226,6 +249,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 					return
 				}
 				if err := target.LoadContent(); err != nil {
+					recordFailure(IncompleteScanError("read target", target.RelPath, "", err))
 					continue
 				}
 				if s.redact {
@@ -247,6 +271,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 					}
 					results, err := analyzer.Analyze(ctx, target)
 					if err != nil {
+						recordFailure(IncompleteScanError("analyze target", target.RelPath, analyzer.Name(), err))
 						continue
 					}
 					if len(results) > 0 {
@@ -283,6 +308,9 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if scanErr != nil {
+		return nil, fmt.Errorf("%w; %d failed operation(s)", scanErr, failures)
 	}
 
 	// Cross-file analysis: finalize after all workers complete

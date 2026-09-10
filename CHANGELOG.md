@@ -29,6 +29,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Scans now return an error if a selected file cannot be read, an analyzer
+  reports a failure, or directory discovery cannot complete. Partial findings
+  are not presented as a successful report, including in `scan --auto`.
+  Error messages identify the affected file or analyzer without quoting parser
+  input. Configured exclusions and intentionally skipped files are unchanged.
+- Scanning an explicitly selected directory symlink now scans its destination
+  instead of returning an empty success. Symlinks inside that directory remain
+  excluded.
 - Scan reports now redact complete PEM private-key blocks from finding
   evidence, including truncated blocks. Credential locations remain protected
   when a severity filter removes the original credential finding, so nearby
