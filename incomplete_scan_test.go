@@ -28,11 +28,10 @@ func TestIncompleteScanPublicAPI(t *testing.T) {
 		r, err = scan(context.Background(), path)
 		require.ErrorIs(t, err, aguara.ErrIncompleteScan)
 		require.Nil(t, r)
-		// Size exclusions during directory discovery remain intentional.
+		// Directory discovery must report the same incomplete coverage.
 		r, err = scan(context.Background(), dir)
-		require.NoError(t, err)
-		require.Zero(t, r.FilesScanned)
-		require.Empty(t, r.Findings)
+		require.ErrorIs(t, err, aguara.ErrIncompleteScan)
+		require.Nil(t, r)
 	}
 	// The reusable API can recover after an operational failure.
 	r, err := s.ScanContent(context.Background(), "A normal sentence.", "input.txt")

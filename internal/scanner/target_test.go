@@ -76,17 +76,12 @@ func TestDiscoveryCustomMaxSize(t *testing.T) {
 	bigData := make([]byte, 3000)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.md"), bigData, 0644))
 
-	// With a 2 KB limit, only small.md should be discovered
+	// An eligible oversized file must not disappear from the scan report.
 	td := &scanner.TargetDiscovery{MaxFileSize: 2048}
 	targets, err := td.Discover(dir)
-	require.NoError(t, err)
-
-	paths := make(map[string]bool)
-	for _, target := range targets {
-		paths[target.RelPath] = true
-	}
-	require.True(t, paths["small.md"])
-	require.False(t, paths["big.md"])
+	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	require.Nil(t, targets)
+	require.Contains(t, err.Error(), "2048-byte limit")
 
 	// With default (0), both should be discovered
 	td2 := &scanner.TargetDiscovery{}

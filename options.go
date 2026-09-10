@@ -84,8 +84,10 @@ func WithIgnorePatterns(patterns []string) Option {
 	}
 }
 
-// WithMaxFileSize sets the maximum file size (in bytes) for scanned files.
-// Zero means use the default (50 MB).
+// WithMaxFileSize sets the maximum accepted size of a file read from disk.
+// Zero means use the default (50 MiB). An eligible file exceeding the limit
+// causes ErrIncompleteScan; explicit ignore patterns still exclude files.
+// This disk-read limit does not apply to ScanContent or ScanContentAs.
 func WithMaxFileSize(bytes int64) Option {
 	return func(c *scanConfig) {
 		c.maxFileSize = bytes
