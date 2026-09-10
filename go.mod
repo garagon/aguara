@@ -3,6 +3,7 @@ module github.com/garagon/aguara
 go 1.25.8
 
 require (
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745
 	github.com/sigstore/sigstore-go v1.2.2
 	github.com/spf13/cobra v1.10.2

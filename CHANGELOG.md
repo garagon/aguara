@@ -33,6 +33,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   or credential tails after a second `@`. Dependency and shell evidence keeps
   the destination visible; default redaction also covers URLs in neighboring
   finding context and descriptions.
+- Cargo dependency checks now parse TOML structure, so inline comments, quoted
+  keys and escaped strings cannot hide a locked crates.io package. Private
+  registries remain excluded. Invalid TOML syntax or package identity fields
+  return an error instead of a successful partial result, and reads are limited
+  to 50 MiB. Unrelated metadata is parsed without decoding a whole document.
 - Dependency checks no longer classify a package as malicious solely because a
   vulnerability description or reference mentions malware. OSV imports require
   source evidence or reviewed exact versions. The same policy filters older
