@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Yarn classic dependency checks now resolve `npm:` aliases to the real package
+  and the lockfile's resolved version. Conflicting package identities, malformed
+  descriptors, non-registry sources and non-exact body versions remain excluded.
 - npm manifest checks now distinguish exact JSON field names. Unrelated keys
   such as `Scripts` or `DEPENDENCIES` can no longer erase or introduce lifecycle
   and dependency evidence; the same correction applies to publish provenance.

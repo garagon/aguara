@@ -1,12 +1,15 @@
 package packagecheck
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/blang/semver"
 	"github.com/garagon/aguara/internal/intel"
 )
 
@@ -17,9 +20,10 @@ import (
 // spaces, so a dependency literally named `version` with an exact range
 // cannot be mistaken for the block's own resolved version even when the
 // block has no top-level version line. yarn v1 always quotes the value;
-// yarn Berry uses `version: x.y.z` (no quotes) and is rejected before
-// this runs.
-var yarnVersionRe = regexp.MustCompile(`^  version\s+"([^"]+)"`)
+// yarn Berry is routed separately before this runs. Capture a complete JSON
+// string so escapes are decoded and trailing non-comment text cannot be ignored.
+var yarnVersionRe = regexp.MustCompile(`^  version[\t ]+("(?:[^"\\]|\\.)*")[\t ]*(?:#.*)?$`)
+var yarnResolvedRe = regexp.MustCompile(`^  resolved[\t ]+("(?:[^"\\]|\\.)*")[\t ]*(?:#.*)?$`)
 
 // yarnNonRegistryProtocols are descriptor range protocols that mark a
 // dependency as resolved from somewhere other than the public npm
@@ -28,18 +32,14 @@ var yarnVersionRe = regexp.MustCompile(`^  version\s+"([^"]+)"`)
 // cannot be mapped with confidence to a registry (npm, name, version)
 // tuple.
 //
-// npm: is included deliberately: in yarn v1 the `npm:` protocol only
-// appears on aliased installs (`alias@npm:real@range`), where the
-// directory key is the alias and the real package is embedded in the
-// range. Unlike package-lock.json (which records the real package in a
-// dedicated `name` field), yarn v1 offers no clean field for it, so
-// the conservative choice is to skip aliases rather than sub-parse the
-// range. Mapping yarn aliases to their real package is a possible
-// follow-up; under-reporting beats inventing a mapping.
+// npm: aliases are resolved separately before checking the target selector.
 var yarnNonRegistryProtocols = []string{
 	"npm:", "file:", "link:", "workspace:", "portal:", "patch:",
 	"git+", "git:", "ssh:", "http:", "https:", "github:", "exec:",
 }
+
+var yarnRegistryNameRe = regexp.MustCompile(`^(?:@[A-Za-z0-9.!~*'()_-]+/)?[A-Za-z0-9.!~*'()_-]+$`)
+var yarnRegistrySelectorRe = regexp.MustCompile(`^[A-Za-z0-9._*^~<>=|+\s -]+$`)
 
 // ParseYarnLock reads a yarn classic (v1) yarn.lock and returns the
 // declared npm packages. It is the yarn counterpart to ParsePackageLock
@@ -65,7 +65,7 @@ var yarnNonRegistryProtocols = []string{
 // Conservative by design, mirroring ParsePackageLock: an entry is
 // emitted only when it maps with confidence to a registry tuple. Any
 // descriptor with a non-registry protocol (see yarnNonRegistryProtocols,
-// which includes npm: aliases), a name that is not a usable npm
+// after resolving an npm: alias), a name that is not a usable npm
 // identifier, or a body without an exact resolved version is skipped.
 // Results dedupe on (name, version) and come out in deterministic order.
 func ParseYarnLock(target Target) ([]PackageRef, error) {
@@ -132,6 +132,7 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 		// dependency range (even one for a dependency literally named
 		// "version").
 		version := ""
+		resolvedRegistry := true
 		j := i + 1
 		for j < len(lines) {
 			b := lines[j]
@@ -140,13 +141,19 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 			}
 			if version == "" {
 				if m := yarnVersionRe.FindStringSubmatch(b); m != nil {
-					version = m[1]
+					_ = json.Unmarshal([]byte(m[1]), &version)
+				}
+			}
+			if m := yarnResolvedRe.FindStringSubmatch(b); m != nil {
+				var resolved string
+				if json.Unmarshal([]byte(m[1]), &resolved) != nil || !yarnRegistryResolution(resolved) {
+					resolvedRegistry = false
 				}
 			}
 			j++
 		}
 
-		if registry && name != "" && isExactYarnVersion(version) {
+		if registry && resolvedRegistry && name != "" && isExactYarnVersion(version) {
 			add(name, version)
 		}
 		i = j
@@ -162,26 +169,38 @@ func ParseYarnLock(target Target) ([]PackageRef, error) {
 // descriptor list, with the trailing ':' already removed) into the
 // package name and whether the block resolves to a registry package.
 //
-// The name comes from the first descriptor. registry is false when any
-// descriptor carries a non-registry protocol or fails to parse, or when
-// the first descriptor's name is not a usable npm identifier — the
-// conservative posture so a mixed or malformed block never emits.
+// All descriptors must agree on the real identity. Requested selectors never
+// supply a version; only the block's resolved version is used for matching.
 func yarnHeaderNameAndRegistry(header string) (name string, registry bool) {
 	descriptors := strings.Split(header, ",")
 	for idx, d := range descriptors {
 		n, rng, ok := yarnDescriptorParse(d)
-		if !ok {
+		if !ok || !yarnRegistryName(n) {
 			return "", false
 		}
-		if !yarnRegistryRange(rng) {
+		if spec, alias := strings.CutPrefix(rng, "npm:"); alias {
+			// Classic's registry resolver defaults an omitted/empty selector to
+			// latest. This differs from pnpm's exact resolved alias locator.
+			at := strings.IndexByte(strings.TrimPrefix(spec, "@"), '@')
+			if at < 0 {
+				n, rng = spec, "latest"
+			} else {
+				if strings.HasPrefix(spec, "@") {
+					at++
+				}
+				n, rng = spec[:at], spec[at+1:]
+				if rng == "" {
+					rng = "latest"
+				}
+			}
+		}
+		if !yarnRegistryName(n) || !yarnRegistryRange(rng) {
 			return "", false
 		}
 		if idx == 0 {
-			canonical, valid := validNPMName(n)
-			if !valid {
-				return "", false
-			}
-			name = canonical
+			name = n
+		} else if n != name {
+			return "", false
 		}
 	}
 	return name, name != ""
@@ -195,7 +214,15 @@ func yarnHeaderNameAndRegistry(header string) (name string, registry bool) {
 // must skip rather than treat as a registry package.
 func yarnDescriptorParse(desc string) (name, rng string, ok bool) {
 	desc = strings.TrimSpace(desc)
-	desc = strings.Trim(desc, `"`)
+	if strings.HasPrefix(desc, `"`) {
+		var decoded string
+		if json.Unmarshal([]byte(desc), &decoded) != nil {
+			return "", "", false
+		}
+		desc = decoded
+	} else if strings.Contains(desc, `"`) {
+		return "", "", false
+	}
 	if desc == "" {
 		return "", "", false
 	}
@@ -222,6 +249,9 @@ func yarnDescriptorParse(desc string) (name, rng string, ok bool) {
 // yarnRegistryRange reports whether a descriptor range resolves from the
 // public npm registry (a bare semver range with no protocol prefix).
 func yarnRegistryRange(rng string) bool {
+	if !yarnRegistrySelectorRe.MatchString(rng) || strings.TrimSpace(rng) == "" {
+		return false
+	}
 	for _, p := range yarnNonRegistryProtocols {
 		if strings.HasPrefix(rng, p) {
 			return false
@@ -235,10 +265,22 @@ func yarnRegistryRange(rng string) bool {
 // Guards against an accidental capture of a range from a misparsed
 // body line.
 func isExactYarnVersion(v string) bool {
-	if v == "" {
-		return false
+	_, err := semver.Parse(v)
+	return err == nil
+}
+
+func yarnRegistryName(name string) bool {
+	return !strings.HasPrefix(name, ".") && yarnRegistryNameRe.MatchString(name)
+}
+
+// A registry request cannot override explicit git/local resolution evidence.
+// HTTP tarballs may use configured registries; this does not authenticate hosts.
+func yarnRegistryResolution(resolved string) bool {
+	if resolved == "" {
+		return true
 	}
-	return !strings.ContainsAny(v, " \t^~*<>=|:/")
+	u, err := url.Parse(resolved)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // hasYarnBerryMetadata reports whether content has a top-level
