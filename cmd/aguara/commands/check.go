@@ -982,7 +982,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	default:
 		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
 	}
-	fmt.Printf("  Target: %s  ·  %s  ·  %s\n", result.Environment, envLabel, meta)
+	fmt.Printf("  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
 	fmt.Printf("%s\n\n", sep)
 
 	// Provenance line: which intel answered this scan, and how old it is.
@@ -996,13 +996,13 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	}
 
 	for _, f := range result.Findings {
-		label := string(f.Severity)
-		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), f.Title)
+		label := output.TerminalText(string(f.Severity))
+		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 		if f.Path != "" {
-			fmt.Printf("             %s\n", st.Dim("Path: "+f.Path))
+			fmt.Printf("             %s\n", st.Dim("Path: "+output.TerminalText(f.Path)))
 		}
 		if f.Detail != "" {
-			fmt.Printf("             %s\n", st.Dim(f.Detail))
+			fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Detail)))
 		}
 		fmt.Println()
 	}
@@ -1018,7 +1018,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		fmt.Printf("%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %-30s %s  %s\n", c.Path, st.Red("EXISTS"), st.Dim(c.Guidance))
+				fmt.Printf("  %-30s %s  %s\n", output.TerminalText(c.Path), st.Red("EXISTS"), st.Dim(output.TerminalText(c.Guidance)))
 			}
 		}
 		fmt.Println()

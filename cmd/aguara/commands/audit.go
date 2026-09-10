@@ -676,7 +676,7 @@ func writeAuditTerminal(result *AuditResult) error {
 
 	fmt.Printf("\n%s\n", sep)
 	fmt.Printf("  %s\n", st.Bold("AGUARA AUDIT"))
-	fmt.Printf("  Target: %s\n", result.Target)
+	fmt.Printf("  Target: %s\n", output.TerminalText(result.Target))
 	fmt.Printf("%s\n", sep)
 
 	fmt.Printf("\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
@@ -684,10 +684,10 @@ func writeAuditTerminal(result *AuditResult) error {
 		fmt.Printf("\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
 	} else {
 		for _, f := range result.Check.Findings {
-			label := string(f.Severity)
-			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), f.Title)
+			label := output.TerminalText(string(f.Severity))
+			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 			if f.Path != "" {
-				fmt.Printf("             %s\n", st.Dim(f.Path))
+				fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Path)))
 			}
 		}
 	}
@@ -709,9 +709,9 @@ func writeAuditTerminal(result *AuditResult) error {
 			label := f.Severity.String()
 			fmt.Printf("  %s %s %s %s\n",
 				st.SeverityIcon(label),
-				st.Bold(st.Cell(f.RuleID, 24)),
-				st.Cell(f.RuleName, 36),
-				st.Cyan(fmt.Sprintf("%s:%d", f.FilePath, f.Line)))
+				st.Bold(st.Cell(output.TerminalText(f.RuleID), 24)),
+				st.Cell(output.TerminalText(f.RuleName), 36),
+				st.Cyan(fmt.Sprintf("%s:%d", output.TerminalText(f.FilePath), f.Line)))
 			shown++
 		}
 		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
@@ -731,7 +731,7 @@ func writeAuditTerminal(result *AuditResult) error {
 	// Green is reserved for a clean pass: FINDINGS exits 0 but still
 	// means unresolved findings exist, so it renders yellow with the
 	// medium-tier icon; FAIL is red with the critical icon.
-	verdict := fmt.Sprintf("Verdict: %s", strings.ToUpper(result.Verdict.Status))
+	verdict := fmt.Sprintf("Verdict: %s", output.TerminalText(strings.ToUpper(result.Verdict.Status)))
 	counts := fmt.Sprintf("(check: %d critical / %d warning, scan: %d critical / %d high)",
 		result.Verdict.CheckCriticals, result.Verdict.CheckWarnings,
 		result.Verdict.ScanCriticals, result.Verdict.ScanHighs)
@@ -759,10 +759,10 @@ func writeAuditTerminal(result *AuditResult) error {
 		}
 		fmt.Printf("  %s\n", triageLine)
 		if result.Triage.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(result.Triage.Summary))
+			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Triage.Summary)))
 		}
 		if len(result.Triage.RecommendedNextSteps) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Next: "+result.Triage.RecommendedNextSteps[0]))
+			fmt.Printf("  %s\n", st.Dim("Next: "+output.TerminalText(result.Triage.RecommendedNextSteps[0])))
 		}
 	}
 
@@ -778,13 +778,13 @@ func writeAuditTerminal(result *AuditResult) error {
 		}
 		fmt.Printf("  %s\n", handoffLine)
 		if result.Handoff.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(result.Handoff.Summary))
+			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Handoff.Summary)))
 		}
 		if len(result.Handoff.AllowedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Allowed: "+result.Handoff.AllowedActions[0]))
+			fmt.Printf("  %s\n", st.Dim("Allowed: "+output.TerminalText(result.Handoff.AllowedActions[0])))
 		}
 		if len(result.Handoff.BlockedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Blocked: "+result.Handoff.BlockedActions[0]))
+			fmt.Printf("  %s\n", st.Dim("Blocked: "+output.TerminalText(result.Handoff.BlockedActions[0])))
 		}
 	}
 
@@ -798,11 +798,11 @@ func writeAuditTerminal(result *AuditResult) error {
 			installStatus = "no"
 		}
 		fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
-			installStatus, execStatus, result.Plan.TrustState)))
+			installStatus, execStatus, output.TerminalText(result.Plan.TrustState))))
 	}
 
 	if rule := topScanRule(result.Scan.Findings); rule != "" {
-		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+rule))
+		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+output.TerminalText(rule)))
 	}
 	return nil
 }
