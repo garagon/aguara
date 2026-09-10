@@ -1089,20 +1089,6 @@ func isJSIdentByte(b byte) bool {
 // with word boundaries, so `mutationName` / `commentMutation` do not match.
 var graphqlMutationKeywordRe = regexp.MustCompile(`(?i)\bmutation\b`)
 
-// graphqlMutationInSameString reports whether the word-bounded GraphQL
-// `mutation` keyword lives in the SAME string literal as the GitHub
-// mutation-name occurrence at idx, binding the name to an actual GraphQL
-// mutation body. This rejects free-text neighbours such as
-// `const mutationName = 'createGist'`, where the name sits in one string and
-// the substring `mutation` is an unrelated identifier outside it.
-func graphqlMutationInSameString(view jsLexicalView, lowerCode []byte, idx int) bool {
-	s, e, ok := stringRangeContaining(view, idx)
-	if !ok {
-		return false
-	}
-	return graphqlMutationKeywordRe.Match(lowerCode[s:e])
-}
-
 // graphqlMutationIndex returns the offset of the first occurrence of the
 // lowercase GitHub mutation needle that lies inside a string interior AND
 // has the GraphQL `mutation` keyword nearby (a real mutation body), or -1.
@@ -1116,8 +1102,14 @@ func graphqlMutationIndex(view jsLexicalView, lowerCode []byte, needle string) i
 			return -1
 		}
 		abs := from + i
-		if view.InString(abs) && graphqlMutationInSameString(view, lowerCode, abs) {
-			return abs
+		if s, e, ok := stringRangeContaining(view, abs); ok {
+			if graphqlMutationKeywordRe.Match(lowerCode[s:e]) {
+				return abs
+			}
+			// Every remaining name in this interior has the same rejected
+			// keyword predicate. Scan each interior at most once per needle.
+			from = e
+			continue
 		}
 		from = abs + 1
 	}

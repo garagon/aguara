@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- JavaScript GitHub-channel checks no longer rescan an entire string for every
+  repeated mutation name. Rejected string interiors are visited once per name,
+  without changing mutation matching or finding locations.
 - Python remote-code checks retain the fetched source when a variable is decoded
   or read back into itself, including inside a helper that returns the payload.
   Replacing that variable with local content still clears the remote evidence.
