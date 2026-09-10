@@ -2,11 +2,11 @@
   "manifest_schema": 1,
   "bundle_schema_version": 1,
   "blob": "generated_intel.json.gz",
-  "gzip_sha256": "2a3118cd02d76fdfcfde367918b4c030d8fc1126772250b464b6a0cb374becc5",
-  "json_sha256": "2a4bcc8803e909eed575cb176c910aa436b646793ac30fe8f41a5d340ee382e2",
-  "gzip_bytes": 3052819,
-  "json_bytes": 23217163,
-  "record_count": 26268,
+  "gzip_sha256": "7bf11cda616e24caf0d325caf2d252599e671a368fbf18e98487c6e47b9f33f8",
+  "json_sha256": "c1b2a567afe169fc6da81f562989f4831f9b1fafe02e3a7f81acd0821ed3bc0f",
+  "gzip_bytes": 3488635,
+  "json_bytes": 26768187,
+  "record_count": 35774,
   "source_count": 8,
   "ecosystems": [
     "npm",
@@ -18,5 +18,5 @@
     "Maven",
     "NuGet"
   ],
-  "generated_at": "2026-06-11T00:00:00Z"
+  "generated_at": "2026-09-07T11:43:33.053930698Z"
 }

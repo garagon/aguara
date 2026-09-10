@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Embedded malicious-package intelligence now uses the signed September 7
+  snapshot, filtered through the current source-evidence policy. Offline checks
+  no longer depend on the June snapshot. The source date and eight ecosystems
+  are preserved; manually curated incident records are unchanged.
 - Pattern scans no longer recount the entire preceding text to locate every
   match. Line tracking advances with each pattern's matches, preserving finding
   locations and original excerpts without limiting the number of results.
