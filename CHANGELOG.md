@@ -29,6 +29,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Dependency checks no longer classify a package as malicious solely because a
+  vulnerability description or reference mentions malware. OSV imports require
+  source evidence or reviewed exact versions. The same policy filters older
+  embedded and cached intelligence, while retaining manual incident records,
+  MAL advisories and reviewed historical compromises. Generic vulnerability
+  reports are not treated as evidence that an installed package contains malware.
 - Intel downloaded with `--insecure-intel` is now labeled unverified and cannot
   become trusted input to later default checks or `--allow-stale`. Unverified
   saves clear previous verification markers. Older markers require a new signed

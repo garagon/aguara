@@ -1,0 +1,806 @@
+[
+  {
+    "id": "GHSA-27f5-xjrr-q9ff",
+    "ecosystem": "npm",
+    "name": "@opensearch-project/opensearch",
+    "versions": [
+      "3.5.3",
+      "3.6.2",
+      "3.7.0",
+      "3.8.0"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-27f5-xjrr-q9ff",
+    "source_sha256": "872d5431fd0634f664b5df74e9bb1bc5d5878d47ffdf1699c221e7189bbb60c0"
+  },
+  {
+    "id": "GHSA-28f8-hqmc-7ph8",
+    "ecosystem": "npm",
+    "name": "ember-power-timepicker",
+    "versions": [
+      "1.0.8"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-28f8-hqmc-7ph8",
+    "source_sha256": "e7a4183e1b901737d964f5ba83f91afd65cf025cf3a82595a0969902c2bab10d"
+  },
+  {
+    "id": "GHSA-28xx-8j99-m32j",
+    "ecosystem": "npm",
+    "name": "nginxbeautifier",
+    "versions": [
+      "1.0.14"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-28xx-8j99-m32j",
+    "source_sha256": "e15b4581889c8cb71ae8bbea4f2a842706e3243513e9667490cf131f13a8ee02"
+  },
+  {
+    "id": "GHSA-2p62-c4rm-mr72",
+    "ecosystem": "npm",
+    "name": "another-date-picker",
+    "versions": [
+      "2.0.43"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-2p62-c4rm-mr72",
+    "source_sha256": "fec0cf47bd1f84e14177e83ae56d5f9616415421efd9e5cf50b9ebfe4707bb81"
+  },
+  {
+    "id": "GHSA-2q6w-rxf3-4wc9",
+    "ecosystem": "npm",
+    "name": "codify",
+    "versions": [
+      "0.3.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-2q6w-rxf3-4wc9",
+    "source_sha256": "14168ff3a21ad125b402188acdcf69e044dcc7eda0270197b340b4ce4f96449b"
+  },
+  {
+    "id": "GHSA-2vqq-jgxx-fxjc",
+    "ecosystem": "npm",
+    "name": "motiv.scss",
+    "versions": [
+      "0.4.20"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-2vqq-jgxx-fxjc",
+    "source_sha256": "49c9d360c2e10093051dad8dac893aa07f5dc3029644a97db8ef3bca04a9bb03"
+  },
+  {
+    "id": "GHSA-2xw5-3767-qxvm",
+    "ecosystem": "npm",
+    "name": "ng-ui-library",
+    "versions": [
+      "1.0.987"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-2xw5-3767-qxvm",
+    "source_sha256": "c7f144c956be0ce409059c22c1f770d91b3b3f3c49ba8ec294cde7bac73110fa"
+  },
+  {
+    "id": "GHSA-377f-vvrc-9wgg",
+    "ecosystem": "npm",
+    "name": "zemen",
+    "versions": [
+      "0.0.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-377f-vvrc-9wgg",
+    "source_sha256": "375dd90d67e08da7bc74558fd631882689d9c0f0cacbab13d12c909cb61235f9"
+  },
+  {
+    "id": "GHSA-3fv6-q5xv-fhpw",
+    "ecosystem": "npm",
+    "name": "coffee-project",
+    "versions": [
+      "1.7.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-3fv6-q5xv-fhpw",
+    "source_sha256": "959c288936cc1d1bab20456c35bd474dc4aa20e58fb1a79b711301fc736f0d79"
+  },
+  {
+    "id": "GHSA-3wh2-2pp3-2823",
+    "ecosystem": "npm",
+    "name": "simple-alipay",
+    "versions": [
+      "1.0.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-3wh2-2pp3-2823",
+    "source_sha256": "7da265dd2966ceb67fd332d943b2a1572af2de49c65eeb8fd3f0a6d8f926081f"
+  },
+  {
+    "id": "GHSA-3wjm-33mw-h388",
+    "ecosystem": "npm",
+    "name": "s3asy",
+    "versions": [
+      "0.4.8"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-3wjm-33mw-h388",
+    "source_sha256": "45de02e669ca9cfb2f672a2f0c13b7bdadd9020ed518f9ccbf4b156253768155"
+  },
+  {
+    "id": "GHSA-45cp-hpc9-8347",
+    "ecosystem": "npm",
+    "name": "css_transform_support",
+    "versions": [
+      "1.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-45cp-hpc9-8347",
+    "source_sha256": "15938d456775ed1972c53b1cc94e617b6cc73d4d61836e23f25a7b2ca3f7a1e8"
+  },
+  {
+    "id": "GHSA-4627-w373-375v",
+    "ecosystem": "npm",
+    "name": "grunt-radical",
+    "versions": [
+      "0.0.14"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-4627-w373-375v",
+    "source_sha256": "c45f353c7038ac0b1285380ca4789f0fec7dc4cda23273ccc6c5ca40785f3f0d"
+  },
+  {
+    "id": "GHSA-48hw-37g6-3gw4",
+    "ecosystem": "npm",
+    "name": "mx-nested-menu",
+    "versions": [
+      "0.1.30"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-48hw-37g6-3gw4",
+    "source_sha256": "811df326a23144d3426f3a5d64f9f9fc042ce1ea2c9c48381c81faaf727f9fc8"
+  },
+  {
+    "id": "GHSA-4c87-gg2q-fc6m",
+    "ecosystem": "npm",
+    "name": "rc-calendar-jhorst",
+    "versions": [
+      "8.4.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-4c87-gg2q-fc6m",
+    "source_sha256": "c6d809894b780660e4ea4c84d6416f81b707d9f02e7085b3ce04187f30800767"
+  },
+  {
+    "id": "GHSA-4j54-mmmv-hjpm",
+    "ecosystem": "npm",
+    "name": "slush-fullstack-framework",
+    "versions": [
+      "0.9.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-4j54-mmmv-hjpm",
+    "source_sha256": "73bafcc4852f158b87b9eb4c4ff5467441c982bd219e92a317d0d963023d16a1"
+  },
+  {
+    "id": "GHSA-4rx9-58m7-gr8w",
+    "ecosystem": "npm",
+    "name": "css_transform_step",
+    "versions": [
+      "1.0.6"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-4rx9-58m7-gr8w",
+    "source_sha256": "ab87ad3fe97836e523313d6972f1a4a16ff69d92771056f6f710270fb97c6a36"
+  },
+  {
+    "id": "GHSA-53jx-4wwh-gcqj",
+    "ecosystem": "npm",
+    "name": "angular-location-update",
+    "versions": [
+      "0.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-53jx-4wwh-gcqj",
+    "source_sha256": "6c2eb23a006ba4ce5754a157e5931e79e0cf8ea2870c1e1ef120d231f3854683"
+  },
+  {
+    "id": "GHSA-54cr-gv8w-8324",
+    "ecosystem": "npm",
+    "name": "xoc",
+    "versions": [
+      "1.0.7"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-54cr-gv8w-8324",
+    "source_sha256": "3d55802091425ef9be3597ce1de085f22c26b013e09d8382b8b742bbbbc4f64b"
+  },
+  {
+    "id": "GHSA-5635-9mvj-r6hp",
+    "ecosystem": "npm",
+    "name": "vue-backbone",
+    "versions": [
+      "0.1.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-5635-9mvj-r6hp",
+    "source_sha256": "fccbd8428eb0f74a9c9dbf58ad1afd9dfa8b19bc802aa09b911c547f96ae4329"
+  },
+  {
+    "id": "GHSA-563h-697m-j7x5",
+    "ecosystem": "npm",
+    "name": "device-mqtt",
+    "versions": [
+      "1.0.11"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-563h-697m-j7x5",
+    "source_sha256": "2ebfd6db79fe614b8e62a82ce7619f70a5f00b1f9cb5c760fcc62c88d286f78f"
+  },
+  {
+    "id": "GHSA-5645-gc7h-98h8",
+    "ecosystem": "npm",
+    "name": "react-dates-sc",
+    "versions": [
+      "0.3.0"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-5645-gc7h-98h8",
+    "source_sha256": "6a7ba4b6a29ffedc6ac28cb37255460bbecc058efc06614ac91e69bce21c2815"
+  },
+  {
+    "id": "GHSA-56r9-v65c-34jm",
+    "ecosystem": "npm",
+    "name": "radicjs",
+    "versions": [
+      "0.2.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-56r9-v65c-34jm",
+    "source_sha256": "0686874603020a27b215ec7b98d3f1c37a6fff6b8cfea6b76b1e99351e97effc"
+  },
+  {
+    "id": "GHSA-5w4r-wwc3-6qcp",
+    "ecosystem": "npm",
+    "name": "precode.js",
+    "versions": [
+      "1.1.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-5w4r-wwc3-6qcp",
+    "source_sha256": "9717712b28923a03292ea39d3833afb9b8d3d8dddf34eeb4bd3da0f69acae8aa"
+  },
+  {
+    "id": "GHSA-76wf-2xcf-6wmx",
+    "ecosystem": "npm",
+    "name": "ngx-pica",
+    "versions": [
+      "1.1.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-76wf-2xcf-6wmx",
+    "source_sha256": "89785137777f10983dd651d1cb3038689b12985f4721313b71d49809ea84e5ad"
+  },
+  {
+    "id": "GHSA-78p3-96hc-3j47",
+    "ecosystem": "npm",
+    "name": "jquery-airload",
+    "versions": [
+      "0.2.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-78p3-96hc-3j47",
+    "source_sha256": "146ef2db4ad06540c7317164482c185cce98cf57709c8e89d16b615fe1756da1"
+  },
+  {
+    "id": "GHSA-7xfq-xh6v-4mrm",
+    "ecosystem": "npm",
+    "name": "json-serializer",
+    "versions": [
+      "2.0.10"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-7xfq-xh6v-4mrm",
+    "source_sha256": "f57f77ddc992ab3a5b965dd9e68b46c30783ddde31d55d236a0d5a4f803094f5"
+  },
+  {
+    "id": "GHSA-84qj-9qf2-q92r",
+    "ecosystem": "npm",
+    "name": "pm-controls",
+    "versions": [
+      "1.1.8"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-84qj-9qf2-q92r",
+    "source_sha256": "5e21e1e7fda83b74f1cc8a6d8564922cb139329f1925b47e0f47fa5ab2c6182c"
+  },
+  {
+    "id": "GHSA-8qh7-xw58-3ww7",
+    "ecosystem": "npm",
+    "name": "radic-util",
+    "versions": [
+      "1.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-8qh7-xw58-3ww7",
+    "source_sha256": "2a384dfef7f9f22ccfa3ea713fd8f52fe03a955bd38da0d6ef92200fcdc0c5c3"
+  },
+  {
+    "id": "GHSA-8qm2-24qc-c4qg",
+    "ecosystem": "npm",
+    "name": "freshdom",
+    "versions": [
+      "0.0.6"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-8qm2-24qc-c4qg",
+    "source_sha256": "a6605f250282726a37ccd19dce836529d3546562842bef200a5a6212a6127160"
+  },
+  {
+    "id": "GHSA-8rxg-9g6f-vq9p",
+    "ecosystem": "npm",
+    "name": "another-date-range-picker",
+    "versions": [
+      "4.1.48"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-8rxg-9g6f-vq9p",
+    "source_sha256": "40ad85d54631e1e4e748282bab6b803937d47a9846c37ff8a43a33f6206b0b53"
+  },
+  {
+    "id": "GHSA-92px-q4w8-hrr5",
+    "ecosystem": "npm",
+    "name": "impala",
+    "versions": [
+      "1.1.7"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-92px-q4w8-hrr5",
+    "source_sha256": "c65ef9d821c8efad63153722e24fd87f00e510ab7c5ae47f2d888a5aad769f2b"
+  },
+  {
+    "id": "GHSA-94m7-w873-6wwf",
+    "ecosystem": "npm",
+    "name": "modlibrary",
+    "versions": [
+      "0.1.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-94m7-w873-6wwf",
+    "source_sha256": "b3aa84346220b6d0b662b21120b88f274946c7cc102d56eb2928224c15b065c7"
+  },
+  {
+    "id": "GHSA-9cq4-mhmr-84gm",
+    "ecosystem": "npm",
+    "name": "jasmin",
+    "versions": [
+      "0.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-9cq4-mhmr-84gm",
+    "source_sha256": "2590782f46f7dca69101df0221815ff3d1019fd97be3ba89b7c13857678331dd"
+  },
+  {
+    "id": "GHSA-9p49-cwh3-4qhf",
+    "ecosystem": "npm",
+    "name": "grunt-radic",
+    "versions": [
+      "0.1.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-9p49-cwh3-4qhf",
+    "source_sha256": "b3feb59eba29744bbb57ff0ed5dc96fe8386d6266a1832fbca08c063c7859421"
+  },
+  {
+    "id": "GHSA-9x64-5r7x-2q53",
+    "ecosystem": "npm",
+    "name": "flatmap-stream",
+    "versions": [
+      "0.1.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-9x64-5r7x-2q53",
+    "source_sha256": "73a0c8bbce213f81c465e58cf2629c97924e338982d8a2d762f147dbb86b7414"
+  },
+  {
+    "id": "GHSA-c722-pv5w-cfg2",
+    "ecosystem": "npm",
+    "name": "github-jquery-widgets",
+    "versions": [
+      "0.1.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-c722-pv5w-cfg2",
+    "source_sha256": "5e7f35a51d5391e02db9cb05bfe93a20161386a5f2b71c1e445b94e67cd3842e"
+  },
+  {
+    "id": "GHSA-c82c-8pjw-6829",
+    "ecosystem": "npm",
+    "name": "@impala/bmap",
+    "versions": [
+      "1.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-c82c-8pjw-6829",
+    "source_sha256": "c41d4e103e36b4c2ea5cf8b37b62883f1acebac613171d25ebebea37b704d9d2"
+  },
+  {
+    "id": "GHSA-c8h6-89q2-mgv8",
+    "ecosystem": "npm",
+    "name": "dossier",
+    "versions": [
+      "0.0.4"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-c8h6-89q2-mgv8",
+    "source_sha256": "1bee77ce926bb2c27506cf385b88b85d586de2bba507986c6512f07da1a2386c"
+  },
+  {
+    "id": "GHSA-chh2-rvhg-wqwr",
+    "ecosystem": "npm",
+    "name": "json-serializer",
+    "versions": [
+      "2.0.10"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-chh2-rvhg-wqwr",
+    "source_sha256": "71f679c92292e001f63e5a8979f5f268a23ea4dde2bc54a22a8edf86067d51cf"
+  },
+  {
+    "id": "GHSA-cxcf-78mr-wpg7",
+    "ecosystem": "npm",
+    "name": "oauth-validator",
+    "versions": [
+      "1.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-cxcf-78mr-wpg7",
+    "source_sha256": "d6aef457d7d7cde552a5040f3f0ff298198580b846d7b936d522a3f347751a9a"
+  },
+  {
+    "id": "GHSA-fgfj-rj24-mj7q",
+    "ecosystem": "npm",
+    "name": "kraken-api",
+    "versions": [
+      "0.1.8"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-fgfj-rj24-mj7q",
+    "source_sha256": "0af35a76e5d7e6b5c95b7058c777f927c3fad5dbdc48831c8af92b5a72613733"
+  },
+  {
+    "id": "GHSA-fwvp-x5gj-773j",
+    "ecosystem": "npm",
+    "name": "react-server-native",
+    "versions": [
+      "0.0.7"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-fwvp-x5gj-773j",
+    "source_sha256": "288c8ade61ebc4d7bde1429d665975f6c29c935d9ba9960e5c6a6c6047b2c8cb"
+  },
+  {
+    "id": "GHSA-fx6f-fpfv-5hmc",
+    "ecosystem": "npm",
+    "name": "uploader-plugin",
+    "versions": [
+      "1.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-fx6f-fpfv-5hmc",
+    "source_sha256": "a699ee7d897975e4406471c458e4baec4d08605562f9168f0a4da65ba4c6b501"
+  },
+  {
+    "id": "GHSA-gjc9-932x-c59p",
+    "ecosystem": "npm",
+    "name": "leaflet-gpx",
+    "versions": [
+      "1.0.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-gjc9-932x-c59p",
+    "source_sha256": "ace1d956c2f3f12c569b1c6d75a4270989cac5826cd002433508f39b47ac919d"
+  },
+  {
+    "id": "GHSA-hfc6-79wv-5hpw",
+    "ecosystem": "npm",
+    "name": "blingjs",
+    "versions": [
+      "0.0.4"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-hfc6-79wv-5hpw",
+    "source_sha256": "c3f6b3f8956e54c7f46c6576a5ec7e17554ea5c37b49dc905ba53c430aee8fc7"
+  },
+  {
+    "id": "GHSA-hxxf-q3w9-4xgw",
+    "ecosystem": "npm",
+    "name": "eslint-config-eslint",
+    "versions": [
+      "5.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-hxxf-q3w9-4xgw",
+    "source_sha256": "62a7a2dbbb7b49105884594406ae168b39a98197bbc38ba873dd35073815b8bc"
+  },
+  {
+    "id": "GHSA-hxxf-q3w9-4xgw",
+    "ecosystem": "npm",
+    "name": "eslint-scope",
+    "versions": [
+      "3.7.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-hxxf-q3w9-4xgw",
+    "source_sha256": "62a7a2dbbb7b49105884594406ae168b39a98197bbc38ba873dd35073815b8bc"
+  },
+  {
+    "id": "GHSA-j4ch-mw66-xmqv",
+    "ecosystem": "npm",
+    "name": "pensi-scheduler",
+    "versions": [
+      "1.1.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-j4ch-mw66-xmqv",
+    "source_sha256": "6c4b3a4f9c80d91d8b86caf3e6f118404146af8ab91ce0c2b750405f457ea57e"
+  },
+  {
+    "id": "GHSA-j5jc-jf8f-86q7",
+    "ecosystem": "npm",
+    "name": "dictum.js",
+    "versions": [
+      "1.0.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-j5jc-jf8f-86q7",
+    "source_sha256": "da38fd9fd8201604c09ab78f786d38f6e2384d6cbf130e5ed7a7ad994580721b"
+  },
+  {
+    "id": "GHSA-j5qg-46p9-w2rp",
+    "ecosystem": "npm",
+    "name": "jekyll-for-github-projects",
+    "versions": [
+      "0.2.12"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-j5qg-46p9-w2rp",
+    "source_sha256": "f4fd1fd866eefef63e7e1706e96d00ea8218c2884cdd67784ac470e7e76a3d80"
+  },
+  {
+    "id": "GHSA-jf55-rgpx-p6rx",
+    "ecosystem": "npm",
+    "name": "iie-viz",
+    "versions": [
+      "1.0.4"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-jf55-rgpx-p6rx",
+    "source_sha256": "4bd693947a3122442ce6f418cb8a94bbfdd4d32ddffda68b24de8644ad80f22e"
+  },
+  {
+    "id": "GHSA-jpvj-wpmj-h7rv",
+    "ecosystem": "npm",
+    "name": "@cap-js/openapi",
+    "versions": [
+      "1.4.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-jpvj-wpmj-h7rv",
+    "source_sha256": "1235c055233ac65ada9c1fb878d629a9718cdf34e650c7b511ae6283c9cd34be"
+  },
+  {
+    "id": "GHSA-jxf5-7x3j-8j9m",
+    "ecosystem": "npm",
+    "name": "load-from-cwd-or-npm",
+    "versions": [
+      "3.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-jxf5-7x3j-8j9m",
+    "source_sha256": "273c13180ae30564b8be1778a73d5797be895f290392ff9110b39136b983468b"
+  },
+  {
+    "id": "GHSA-jxr6-qrxx-2ph2",
+    "ecosystem": "PyPI",
+    "name": "num2words",
+    "versions": [
+      "0.5.15",
+      "0.5.16"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-jxr6-qrxx-2ph2",
+    "source_sha256": "8910c3f1c20779557be73390e616d2fea8e9d2c8502e8d977c3135d5555866ef"
+  },
+  {
+    "id": "GHSA-m25q-fwg4-9v2p",
+    "ecosystem": "npm",
+    "name": "awesome_react_utility",
+    "versions": [
+      "1.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-m25q-fwg4-9v2p",
+    "source_sha256": "886227abffefdb04a5628e96661c00f26fdce25c5a632037a6c5580ed5c0b117"
+  },
+  {
+    "id": "GHSA-m5pf-5894-jmx7",
+    "ecosystem": "npm",
+    "name": "sailclothjs",
+    "versions": [
+      "1.2.6"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-m5pf-5894-jmx7",
+    "source_sha256": "b664072dc1bf5eca2f1b7f31f9e9d4ceb127f8f7750e674af3d16d00dc2d4fab"
+  },
+  {
+    "id": "GHSA-m7xv-7p93-g6q8",
+    "ecosystem": "npm",
+    "name": "libubx",
+    "versions": [
+      "1.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-m7xv-7p93-g6q8",
+    "source_sha256": "259046876564caa1fd0623d945a6552ce247f353f24ec8bc6f9848c24095e4c1"
+  },
+  {
+    "id": "GHSA-m852-866j-69j8",
+    "ecosystem": "npm",
+    "name": "eslint-config-airbnb-standard",
+    "versions": [
+      "2.0.0"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-m852-866j-69j8",
+    "source_sha256": "be32028d11643efcd3d4202371fce527faff381a19aee6fbd5e8e7bdc0d6dbd2"
+  },
+  {
+    "id": "GHSA-p32g-242c-76h3",
+    "ecosystem": "npm",
+    "name": "geoheat",
+    "versions": [
+      "1.3.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-p32g-242c-76h3",
+    "source_sha256": "a2eb46d819c6807c7d0a675bbc217a04b813e7a513550e6779cc5270768a51e9"
+  },
+  {
+    "id": "GHSA-p59g-6cqr-m73w",
+    "ecosystem": "npm",
+    "name": "bmap",
+    "versions": [
+      "1.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-p59g-6cqr-m73w",
+    "source_sha256": "9177c9a62b2dfc4c2c354d105db190aa3d77a9928ac21d0c8da84cc3cbda1124"
+  },
+  {
+    "id": "GHSA-p7w2-mc6m-mfx2",
+    "ecosystem": "npm",
+    "name": "scroool",
+    "versions": [
+      "0.1.7"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-p7w2-mc6m-mfx2",
+    "source_sha256": "041bc130605414c77547da164edeb44a8e277f530f69aed33f2740deb4dfc03b"
+  },
+  {
+    "id": "GHSA-pjxp-f379-6284",
+    "ecosystem": "npm",
+    "name": "@fangrong/xoc",
+    "versions": [
+      "1.0.6"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-pjxp-f379-6284",
+    "source_sha256": "0ec18a3124db4de7f185fb008928634f3a44d0f06d6a980d5e1e9a2ac1cea8b3"
+  },
+  {
+    "id": "GHSA-pv55-r6j3-wp94",
+    "ecosystem": "npm",
+    "name": "eslint-config-eslint",
+    "versions": [
+      "5.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-pv55-r6j3-wp94",
+    "source_sha256": "e9d37fa6491285a81a4c0422379a2ffee35242e03a614b36fb8f346ceec5d920"
+  },
+  {
+    "id": "GHSA-pvw4-cvr4-97p8",
+    "ecosystem": "npm",
+    "name": "@cap-js/db-service",
+    "versions": [
+      "2.10.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-pvw4-cvr4-97p8",
+    "source_sha256": "8e59d01b5f2e56109e73d00d887c0210f0817a291cd4e3a9b92c7b310d7ac822"
+  },
+  {
+    "id": "GHSA-pvw4-cvr4-97p8",
+    "ecosystem": "npm",
+    "name": "@cap-js/postgres",
+    "versions": [
+      "2.2.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-pvw4-cvr4-97p8",
+    "source_sha256": "8e59d01b5f2e56109e73d00d887c0210f0817a291cd4e3a9b92c7b310d7ac822"
+  },
+  {
+    "id": "GHSA-pvw4-cvr4-97p8",
+    "ecosystem": "npm",
+    "name": "@cap-js/sqlite",
+    "versions": [
+      "2.2.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-pvw4-cvr4-97p8",
+    "source_sha256": "8e59d01b5f2e56109e73d00d887c0210f0817a291cd4e3a9b92c7b310d7ac822"
+  },
+  {
+    "id": "GHSA-qmxf-fxq7-w59f",
+    "ecosystem": "npm",
+    "name": "angular-material-sidenav-rnd",
+    "versions": [
+      "0.1.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-qmxf-fxq7-w59f",
+    "source_sha256": "a7d3064860073288355f14d60337e09da8c954fbd8a08e4152c03fbc4db25d32"
+  },
+  {
+    "id": "GHSA-v6vv-hhqc-6hh2",
+    "ecosystem": "npm",
+    "name": "pyramid-proportion",
+    "versions": [
+      "1.0.5"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-v6vv-hhqc-6hh2",
+    "source_sha256": "893613dc0675118302e90c309e6d9aa0148f7e10cf6427aa08533fcc7f0b6d14"
+  },
+  {
+    "id": "GHSA-vp8g-53fw-r9f2",
+    "ecosystem": "npm",
+    "name": "dynamo-schema",
+    "versions": [
+      "0.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-vp8g-53fw-r9f2",
+    "source_sha256": "e74c4ba6989a8e48304029755ca5a2536d6cfb9aa59b6cfd078ad059a6ca46fa"
+  },
+  {
+    "id": "GHSA-w62p-hx95-gf2c",
+    "ecosystem": "npm",
+    "name": "@duckdb/duckdb-wasm",
+    "versions": [
+      "1.29.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w62p-hx95-gf2c",
+    "source_sha256": "941095d7a787b126835484d7b700bd53083b751ee29ee7738a426f1c57644ae6"
+  },
+  {
+    "id": "GHSA-w62p-hx95-gf2c",
+    "ecosystem": "npm",
+    "name": "@duckdb/node-api",
+    "versions": [
+      "1.3.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w62p-hx95-gf2c",
+    "source_sha256": "941095d7a787b126835484d7b700bd53083b751ee29ee7738a426f1c57644ae6"
+  },
+  {
+    "id": "GHSA-w62p-hx95-gf2c",
+    "ecosystem": "npm",
+    "name": "@duckdb/node-bindings",
+    "versions": [
+      "1.3.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w62p-hx95-gf2c",
+    "source_sha256": "941095d7a787b126835484d7b700bd53083b751ee29ee7738a426f1c57644ae6"
+  },
+  {
+    "id": "GHSA-w62p-hx95-gf2c",
+    "ecosystem": "npm",
+    "name": "duckdb",
+    "versions": [
+      "1.3.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w62p-hx95-gf2c",
+    "source_sha256": "941095d7a787b126835484d7b700bd53083b751ee29ee7738a426f1c57644ae6"
+  },
+  {
+    "id": "GHSA-w6xj-45gv-fw35",
+    "ecosystem": "npm",
+    "name": "stream-combine",
+    "versions": [
+      "2.0.2"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w6xj-45gv-fw35",
+    "source_sha256": "edf1fcf14969e242636bd32d69ab5a22c7d42261e95b768c937eb60c5fc8228c"
+  },
+  {
+    "id": "GHSA-w8hg-mxvh-9h57",
+    "ecosystem": "npm",
+    "name": "angular-bmap",
+    "versions": [
+      "0.0.9"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-w8hg-mxvh-9h57",
+    "source_sha256": "49f92a2e8c2fe1ac3044e9f609785a0c2af0b157d17b7f42e46e98782d544761"
+  },
+  {
+    "id": "GHSA-x48m-gp6r-gp4v",
+    "ecosystem": "npm",
+    "name": "rate-map",
+    "versions": [
+      "1.0.3"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-x48m-gp6r-gp4v",
+    "source_sha256": "8a7e32ac231c3e633dd14b9defc8d9ee85c5890f4f0aa89970d09c07cc70d4a8"
+  },
+  {
+    "id": "GHSA-x9gm-qxhh-rf75",
+    "ecosystem": "npm",
+    "name": "cordova-plugin-china-picker",
+    "versions": [
+      "1.0.910"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-x9gm-qxhh-rf75",
+    "source_sha256": "fb4c53afa1cab1181d5cccdfccb012a43193a7693552de2034b599a49337ad9c"
+  },
+  {
+    "id": "GHSA-xmpw-2vmm-p4p6",
+    "ecosystem": "PyPI",
+    "name": "guardrails-ai",
+    "versions": [
+      "0.10.1"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-xmpw-2vmm-p4p6",
+    "source_sha256": "4e15f63747bbb420728cdad186966ea1c84419bebc441c31287d55a2666aa9a2"
+  },
+  {
+    "id": "GHSA-xwg3-gjxh-c8pm",
+    "ecosystem": "npm",
+    "name": "ngx-context-menu",
+    "versions": [
+      "0.0.26"
+    ],
+    "source": "https://api.osv.dev/v1/vulns/GHSA-xwg3-gjxh-c8pm",
+    "source_sha256": "710d51c082e17412de8037a7a71d93ef4ed8ce93752550b2a27e664630c39e42"
+  }
+]

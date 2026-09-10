@@ -94,7 +94,7 @@ func fetchIntelSnapshot(ctx context.Context, baseURL string, insecure bool) (fet
 		if err != nil {
 			return fetchedIntel{}, err
 		}
-		return fetchedIntel{Snapshot: snap}, nil
+		return fetchedIntel{Snapshot: intel.ApplyOSVAdmissionPolicy(snap)}, nil
 	}
 	bundleBytes, err := get("generated_intel.meta.json.bundle")
 	if err != nil {
@@ -104,5 +104,5 @@ func fetchIntelSnapshot(ctx context.Context, baseURL string, insecure bool) (fet
 	if err != nil {
 		return fetchedIntel{}, err
 	}
-	return fetchedIntel{Snapshot: snap, Verified: true}, nil
+	return fetchedIntel{Snapshot: intel.ApplyOSVAdmissionPolicy(snap), Verified: true}, nil
 }

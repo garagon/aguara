@@ -38,7 +38,7 @@ func EmbeddedIntelSnapshot() intel.Snapshot {
 		if err != nil {
 			panic("incident: decode embedded intel snapshot: " + err.Error())
 		}
-		embeddedIntel = snap
+		embeddedIntel = intel.ApplyOSVAdmissionPolicy(snap)
 	})
 	return embeddedIntel
 }

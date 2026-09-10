@@ -110,6 +110,14 @@ The npm checks read `package.json` and project `.npmrc`; pnpm checks read `pnpm-
 
 The binary includes an advisory snapshot sourced from [OSV](https://osv.dev), including [OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages), alongside manually curated incident records. OSV is an open-source vulnerability database developed by Google; Aguara imports a malicious-package-focused subset, not its entire CVE database.
 
+Descriptions mentioning malware are not enough to classify a package as malicious.
+Imports require source evidence or explicitly reviewed affected versions. Older
+OSV snapshots are filtered before use, including the embedded data and verified
+cache, so past keyword-based classifications cannot reappear after a refresh.
+See the [admission policy](internal/intel/ADMISSION.md) for accepted evidence and
+the bounded historical compatibility list. This filtering requires an updated
+binary; an intel refresh alone does not change older binaries.
+
 A package finding identifies the advisory behind the match. Check that record and its affected versions when investigating; the snapshot is not a complete inventory of every malicious package.
 
 Checks use embedded intelligence and any configured local cache without fetching the files being scanned. Refreshing intelligence is an explicit network operation:
