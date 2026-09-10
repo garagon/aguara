@@ -306,7 +306,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	if inCB {
 		sev = types.DowngradeSeverity(sev)
 	}
-	return []scanner.Finding{{
+	finding := scanner.Finding{
 		RuleID:      rule.ID,
 		RuleName:    rule.Name,
 		Severity:    sev,
@@ -321,7 +321,12 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 		InCodeBlock: inCB,
 		Sensitive:   rule.Sensitive,
 		Confidence:  0.95,
-	}}
+	}
+	for _, hits := range allHits {
+		hit := hits[0]
+		finding.AddEvidenceRange(hit.line, hit.line+strings.Count(hit.text, "\n"))
+	}
+	return []scanner.Finding{finding}
 }
 
 type matchHit struct {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/garagon/aguara/internal/meta"
 	"github.com/garagon/aguara/internal/rulemeta"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // CrossFileAccumulator can accumulate per-file data and finalize cross-file findings.
@@ -42,6 +43,7 @@ type Scanner struct {
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
 	projectPolicyEnabled bool
+	redact               bool
 }
 
 // New creates a new Scanner with the given number of workers.
@@ -64,6 +66,13 @@ func (s *Scanner) RegisterAnalyzer(a Analyzer) {
 // SetMinSeverity sets the minimum severity for reported findings.
 func (s *Scanner) SetMinSeverity(sev Severity) {
 	s.minSeverity = sev
+}
+
+// SetRedaction enables result sanitization while retaining redaction evidence
+// from findings removed by presentation filters. Internal callers opt in;
+// public library and CLI builders enable it unless explicitly disabled.
+func (s *Scanner) SetRedaction(enabled bool) {
+	s.redact = enabled
 }
 
 // SetIgnorePatterns sets additional file ignore patterns from config.
@@ -206,6 +215,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		findings  []Finding
 		wg        sync.WaitGroup
 		processed atomic.Int32
+		redaction types.RedactionPlan
 	)
 
 	total := len(targets)
@@ -217,6 +227,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				}
 				if err := target.LoadContent(); err != nil {
 					continue
+				}
+				if s.redact {
+					mu.Lock()
+					redaction.AddContent(target.RelPath, target.StringContent())
+					mu.Unlock()
 				}
 				// Accumulate content for cross-file analysis
 				if s.crossFileAccumulator != nil {
@@ -235,6 +250,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 						continue
 					}
 					if len(results) > 0 {
+						if s.redact {
+							mu.Lock()
+							redaction.AddFindings(results)
+							mu.Unlock()
+						}
 						if ignoreIndex != nil {
 							var kept []Finding
 							for _, f := range results {
@@ -267,7 +287,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	// Cross-file analysis: finalize after all workers complete
 	if s.crossFileAccumulator != nil {
-		findings = append(findings, s.crossFileAccumulator.Finalize()...)
+		crossFileFindings := s.crossFileAccumulator.Finalize()
+		if s.redact {
+			redaction.AddFindings(crossFileFindings)
+		}
+		findings = append(findings, crossFileFindings...)
 	}
 
 	for i := range findings {
@@ -286,6 +310,9 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	}
 
 	riskScore := meta.ComputeRiskScore(findings)
+	if s.redact {
+		redaction.Apply(findings)
+	}
 
 	// Normalize the empty-result shape so the JSON output reads
 	// `"findings": []` instead of `"findings": null` on a clean scan.

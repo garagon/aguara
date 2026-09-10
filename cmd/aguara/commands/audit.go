@@ -343,9 +343,6 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 		}
 	}
 
-	if !flagNoRedact {
-		types.RedactSensitiveFindings(result.Findings)
-	}
 	return result, nil
 }
 

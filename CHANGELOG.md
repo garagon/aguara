@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Scan reports now redact complete PEM private-key blocks from finding
+  evidence, including truncated blocks. Credential locations remain protected
+  when a severity filter removes the original credential finding, so nearby
+  findings cannot expose it through their context. Explicit unredacted output
+  remains available for local investigation.
 - Repositories being evaluated can no longer declare themselves clean in
   `aguara audit`, `aguara scan --ci`, the GitHub Action, WASM, or the public
   scanning API. These trust-boundary paths ignore target-owned

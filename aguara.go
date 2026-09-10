@@ -135,9 +135,6 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 		return nil, err
 	}
 	result.RulesLoaded = len(compiled)
-	if cfg.redact {
-		redactSensitiveFindings(result.Findings)
-	}
 	return result, nil
 }
 
@@ -188,9 +185,6 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 		return nil, err
 	}
 	result.RulesLoaded = len(compiled)
-	if cfg.redact {
-		redactSensitiveFindings(result.Findings)
-	}
 	return result, nil
 }
 
@@ -323,9 +317,6 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 		return nil, err
 	}
 	result.RulesLoaded = len(sc.compiled)
-	if sc.cfg.redact {
-		redactSensitiveFindings(result.Findings)
-	}
 	return result, nil
 }
 
@@ -340,9 +331,6 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 		return nil, err
 	}
 	result.RulesLoaded = len(sc.compiled)
-	if sc.cfg.redact {
-		redactSensitiveFindings(result.Findings)
-	}
 	return result, nil
 }
 
@@ -406,6 +394,7 @@ func (sc *Scanner) RulesLoaded() int {
 func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, error) {
 	s := scanner.New(sc.cfg.workers)
 	s.SetMinSeverity(sc.cfg.minSeverity)
+	s.SetRedaction(sc.cfg.redact)
 	if sc.cfg.targetPolicy != nil {
 		s.SetProjectPolicyEnabled(*sc.cfg.targetPolicy)
 	}
@@ -468,23 +457,6 @@ func applyOpts(opts []Option) *scanConfig {
 		o(cfg)
 	}
 	return cfg
-}
-
-// redactSensitiveFindings scrubs matched text and the matching context line
-// for findings the rule or analyzer marked Sensitive (cred+exfil combos,
-// toxic-flow cred reads, the NLP credential-transmission combo), plus the
-// legacy credential-leak category for backward compatibility with custom
-// rules predating the Sensitive flag.
-//
-// Detecting a secret and then writing it verbatim to terminal, JSON, SARIF,
-// or -o output defeats the purpose of detection: the finding artifact becomes
-// a second copy of the secret, often with weaker access controls than the
-// original file (CI logs, GitHub Code Scanning, Slack notifications, etc.).
-//
-// Delegates to types.RedactSensitiveFindings so the CLI and library share a
-// single implementation.
-func redactSensitiveFindings(findings []Finding) {
-	types.RedactSensitiveFindings(findings)
 }
 
 type compileResult struct {
@@ -557,6 +529,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 
 	s := scanner.New(cfg.workers)
 	s.SetMinSeverity(cfg.minSeverity)
+	s.SetRedaction(cfg.redact)
 	if cfg.targetPolicy != nil {
 		s.SetProjectPolicyEnabled(*cfg.targetPolicy)
 	}
