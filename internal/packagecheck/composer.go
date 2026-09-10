@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -26,7 +25,7 @@ import (
 // vendor/composer/ is intentionally NOT parsed in this first cut;
 // composer.lock is authoritative for what the project resolved.
 func ParseComposer(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "composer.lock")
 	if err != nil {
 		return nil, fmt.Errorf("open composer.lock: %w", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -16,9 +15,9 @@ import (
 //
 //   - "pom.xml"          -> parsePomXML  (Maven proper)
 //   - "gradle.lockfile"  -> parseGradleLockfile (both
-//                            single-lockfile mode at project root
-//                            and per-configuration mode under
-//                            gradle/dependency-locks/)
+//     single-lockfile mode at project root
+//     and per-configuration mode under
+//     gradle/dependency-locks/)
 //
 // No external commands (`mvn`, `gradle`). No network. Parent POMs,
 // BOMs, dependencyManagement-only declarations, profiles, and the
@@ -49,7 +48,7 @@ func ParseMaven(target Target) ([]PackageRef, error) {
 // dependency rather than emit a half-formed PackageRef the
 // matcher could mis-attribute.
 func parsePomXML(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "pom.xml")
 	if err != nil {
 		return nil, fmt.Errorf("open pom.xml: %w", err)
 	}
@@ -182,7 +181,7 @@ func resolveMavenProperty(version string, props map[string]string) (string, bool
 // (`group:name:version:classifier`) for a zero-FP guarantee on the
 // common case.
 func parseGradleLockfile(target Target) ([]PackageRef, error) {
-	f, err := os.Open(target.Path)
+	f, err := openManifest(target.Path, "gradle.lockfile")
 	if err != nil {
 		return nil, fmt.Errorf("open gradle.lockfile: %w", err)
 	}
@@ -190,7 +189,7 @@ func parseGradleLockfile(target Target) ([]PackageRef, error) {
 
 	var refs []PackageRef
 	seen := make(map[string]bool)
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "gradle.lockfile"))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

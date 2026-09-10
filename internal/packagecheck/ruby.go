@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -32,7 +31,7 @@ var gemSpecLine = regexp.MustCompile(`^(\S+)\s+\(([^)]+)\)$`)
 //
 // No external commands. No network.
 func ParseRuby(target Target) ([]PackageRef, error) {
-	f, err := os.Open(target.Path)
+	f, err := openManifest(target.Path, "Gemfile.lock")
 	if err != nil {
 		return nil, fmt.Errorf("open Gemfile.lock: %w", err)
 	}
@@ -42,7 +41,7 @@ func ParseRuby(target Target) ([]PackageRef, error) {
 	inGEM := false
 	inSpecs := false
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "Gemfile.lock"))
 	for scanner.Scan() {
 		raw := scanner.Text()
 		if raw == "" {
