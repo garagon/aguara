@@ -32,3 +32,21 @@ AGUARA_WASM=/tmp/aguara-ui-test.wasm \
 Without `AGUARA_WASM`, the integration test is explicitly skipped. The WASM UI
 workflow builds the binary and runs both test paths. Tests use one Chromium
 instance and run sequentially; they are not fuzzing, load tests, or benchmarks.
+
+## Promise lifecycle tests
+
+The Go tests in this directory run as WASM under Node, not as native Go tests.
+From the repository root:
+
+```sh
+GOMAXPROCS=1 GOMEMLIMIT=768MiB GOOS=js GOARCH=wasm \
+  go test -p 1 -parallel 1 -run '^Test' -count=1 -timeout=30s \
+  -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/wasm
+```
+
+They check Promise success, rejection, delayed completion, constructor failure,
+and both scan entry points. A small captured object with a finalizer checks
+that completed work is no longer held by the executor callback. Collection
+checks are bounded; they do not measure heap growth or scan throughput. The
+WASM UI workflow also runs these tests. `GOMAXPROCS=1` is required for Go's
+single-threaded JS/WASM runtime; the race detector does not support this target.

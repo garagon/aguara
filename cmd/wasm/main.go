@@ -138,6 +138,9 @@ func newPromise(fn func() (any, error)) js.Value {
 
 		return nil
 	})
+	// Promise invokes its executor synchronously. The goroutine keeps the work
+	// alive until it settles; the executor registration is no longer needed.
+	defer handler.Release()
 
 	return js.Global().Get("Promise").New(handler)
 }

@@ -29,6 +29,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- WASM scans now release their per-call Promise executor callbacks. Completed
+  scans no longer remain referenced by those callback registrations in a
+  long-lived browser session; asynchronous results and errors are unchanged.
 - The bundled WebAssembly page now renders finding fields, summaries, and
   errors as text instead of HTML. Match previews retain their 120-character
   limit without shortening or splitting HTML entities during rendering.
