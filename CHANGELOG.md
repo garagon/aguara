@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- NuGet dependency checks now reject linked and special-file manifests and
+  enforce a 50 MiB input limit for project files and `packages.lock.json`.
+  Rejected inputs return an error rather than a successful dependency report.
+  Reads remain bounded if a manifest grows after inspection.
 - WASM scans now release their per-call Promise executor callbacks. Completed
   scans no longer remain referenced by those callback registrations in a
   long-lived browser session; asynchronous results and errors are unchanged.
