@@ -114,6 +114,18 @@ type Finding struct {
 	// "credential-leak" category (MCP_007, NLP_CRED_EXFIL_COMBO, TOXIC_*
 	// cred-bound) can still opt into redaction.
 	Sensitive bool `json:"sensitive,omitempty"`
+
+	// Source ranges are scan-local redaction metadata, never serialized. A
+	// joined match can contain evidence from more than its displayed Line.
+	evidenceRanges []redactionRange
+}
+
+// AddEvidenceRange records source lines contributing to MatchedText. Analyzers
+// that combine discontiguous matches must record each contributing range.
+func (f *Finding) AddEvidenceRange(first, last int) {
+	if first > 0 && last >= first {
+		f.evidenceRanges = append(f.evidenceRanges, redactionRange{first, last})
+	}
 }
 
 // RedactedPlaceholder is the value that replaces matched text and matching

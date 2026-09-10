@@ -144,10 +144,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if !flagNoRedact {
-		types.RedactSensitiveFindings(result.Findings)
-	}
-
 	// Baseline runs after redaction. Only non-baselineable findings are
 	// redacted (Baselineable mirrors the redaction predicate), so every
 	// fingerprint is computed from intact, non-secret matched text.
@@ -269,10 +265,6 @@ func runAutoScan(cmd *cobra.Command) error {
 		if err := store.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
 		}
-	}
-
-	if !flagNoRedact {
-		types.RedactSensitiveFindings(aggregate.Findings)
 	}
 
 	if err := writeOutput(aggregate); err != nil {
@@ -422,6 +414,7 @@ func collectDisabledRules(cfg config.Config) []string {
 func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity, trustProjectPolicy bool) (*scanner.Scanner, *state.Store) {
 	s := scanner.New(flagWorkers)
 	s.SetMinSeverity(minSev)
+	s.SetRedaction(!flagNoRedact)
 	s.SetProjectPolicyEnabled(trustProjectPolicy)
 	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
 		s.SetDisabledRules(disableList)

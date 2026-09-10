@@ -316,8 +316,7 @@ func checkHeadingMismatch(sections []MarkdownSection, i int, lines []string, tar
 	}
 	return []scanner.Finding{makeFinding(
 		"NLP_HEADING_MISMATCH",
-		fmt.Sprintf("Benign heading %q followed by dangerous content (category: %s)",
-			truncate(section.Text, 40), bodyClass.Category),
+		fmt.Sprintf("Benign heading followed by dangerous content (category: %s)", bodyClass.Category),
 		scanner.SeverityMedium,
 		"prompt-injection",
 		next, lines, target,
