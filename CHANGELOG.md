@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `init` now creates configuration, workflows and hooks without following leaf
+  symlinks or escaping the selected directory through a linked parent. Existing
+  regular files retain their content and permissions. The one-time PATH hint
+  uses the same non-overwriting creation boundary for its marker.
 - Lockfile and dependency-manifest checks now reject leaf symlinks and special
   files, and limit each input to 50 MiB. Invalid linked candidates remain visible
   to discovery and return an error instead of disappearing or selecting a

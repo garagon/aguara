@@ -34,18 +34,24 @@ func checkPathHint() {
 	if marker == "" {
 		return
 	}
-	if _, err := os.Stat(marker); err == nil {
-		return // already shown
+	if !claimPathHint(filepath.Dir(filepath.Dir(marker))) {
+		return
 	}
 
 	rcFile := shellConfigFile()
 	fmt.Fprintf(os.Stderr, "\nTip: Add Go's bin directory to your PATH to run aguara from anywhere:\n\n")
 	fmt.Fprintf(os.Stderr, "  echo 'export PATH=\"$HOME/go/bin:$PATH\"' >> %s\n", rcFile)
 	fmt.Fprintf(os.Stderr, "  source %s\n\n", rcFile)
+}
 
-	// Write marker so we never show again.
-	_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-	_ = os.WriteFile(marker, nil, 0o644)
+func claimPathHint(home string) bool {
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	created, err := createScaffoldFile(root, filepath.Join(".aguara", ".path-hint-shown"), "", 0o644)
+	return err == nil && created
 }
 
 // isGoBinDir reports whether dir ends with a "go/bin" segment.
