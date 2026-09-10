@@ -81,7 +81,9 @@ type TargetDiscovery struct {
 // Discover walks root and returns all targets, respecting .aguaraignore.
 func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 	if !td.IgnoreProjectFile {
-		td.loadIgnoreFile(root)
+		if err := td.loadIgnoreFile(root); err != nil {
+			return nil, IncompleteScanError("read ignore policy", filepath.Join(root, ".aguaraignore"), "", err)
+		}
 	}
 
 	limit := td.MaxFileSize
@@ -91,14 +93,20 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 
 	var targets []*Target
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip inaccessible files
-		}
-		if info.IsDir() {
+		if info != nil && info.IsDir() {
 			base := info.Name()
 			if base == ".git" || base == "node_modules" || base == ".aguara" {
 				return filepath.SkipDir
 			}
+		}
+		relPath, _ := filepath.Rel(root, path)
+		if err != nil {
+			if td.isIgnoredSubtree(relPath) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
+				return nil
+			}
+			return IncompleteScanError("discover target", relPath, "", err)
+		}
+		if info.IsDir() {
 			return nil
 		}
 		// skip symlinks to prevent path traversal
@@ -113,7 +121,6 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		if info.Size() > limit {
 			return nil
 		}
-		relPath, _ := filepath.Rel(root, path)
 		if td.isIgnored(relPath) {
 			return nil
 		}
@@ -124,13 +131,19 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		})
 		return nil
 	})
-	return targets, err
+	if err != nil {
+		return nil, err
+	}
+	return targets, nil
 }
 
-func (td *TargetDiscovery) loadIgnoreFile(root string) {
+func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 	f, err := os.Open(filepath.Join(root, ".aguaraignore"))
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
@@ -140,11 +153,30 @@ func (td *TargetDiscovery) loadIgnoreFile(root string) {
 			td.IgnorePatterns = append(td.IgnorePatterns, line)
 		}
 	}
+	return scanner.Err()
 }
 
 func (td *TargetDiscovery) isIgnored(relPath string) bool {
 	for _, pattern := range td.IgnorePatterns {
 		if matchGlob(pattern, relPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// Only skip an unreadable subtree when every descendant is excluded. A file
+// glob matching the directory's name alone says nothing about its contents.
+func (td *TargetDiscovery) isIgnoredSubtree(relPath string) bool {
+	if relPath == "." {
+		return false
+	}
+	for _, pattern := range td.IgnorePatterns {
+		if pattern == "*" || pattern == "**" {
+			return true
+		}
+		prefix, recursive := strings.CutSuffix(pattern, "/**")
+		if recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
 			return true
 		}
 	}

@@ -253,8 +253,8 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 		result, scanErr := s.Scan(ctx, path)
 		if scanErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: scanning %s: %v\n", path, scanErr)
-			continue
+			stopSpinner(sp)
+			return scanErr
 		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
@@ -511,7 +511,10 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 		// aguara read files outside the tree and surface their contents in findings.
 		info, err := os.Lstat(absPath)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue // Tracked deletions have no content to scan.
+			}
+			return nil, scanner.IncompleteScanError("inspect changed target", relPath, "", err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			continue
