@@ -19,15 +19,27 @@ const DefaultMaxFileSize = 50 << 20
 
 // Target represents a file to be scanned.
 type Target struct {
-	Path        string
-	RelPath     string
-	Content     []byte
-	MaxFileSize int64 // 0 means use DefaultMaxFileSize
+	Path    string
+	RelPath string
+	Content []byte
+	// OriginalContent is set by inline callers when text normalization changed
+	// the bytes. Structured parsers use SourceContent to preserve key identity.
+	OriginalContent []byte
+	MaxFileSize     int64 // 0 means use DefaultMaxFileSize
 
 	linesOnce  sync.Once
 	lines      []string
 	strOnce    sync.Once
 	strContent string
+}
+
+// SourceContent returns original syntax bytes, falling back to Content for
+// disk targets and inline content that did not need normalization.
+func (t *Target) SourceContent() []byte {
+	if t.OriginalContent != nil {
+		return t.OriginalContent
+	}
+	return t.Content
 }
 
 // LoadContent reads the file content into memory.

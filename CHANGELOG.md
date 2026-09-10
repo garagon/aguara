@@ -29,6 +29,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- npm manifest checks now distinguish exact JSON field names. Unrelated keys
+  such as `Scripts` or `DEPENDENCIES` can no longer erase or introduce lifecycle
+  and dependency evidence; the same correction applies to publish provenance.
+  Repeated exact keys use the final value instead of merging earlier objects.
+  Inline scans preserve original manifest bytes for this check while retaining
+  Unicode normalization for text detection.
 - Findings no longer expose username-only URL tokens, empty-password credentials,
   or credential tails after a second `@`. Dependency and shell evidence keeps
   the destination visible; default redaction also covers URLs in neighboring
