@@ -21,11 +21,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/garagon/aguara/internal/safefile"
 	"github.com/garagon/aguara/internal/types"
 )
 
@@ -161,7 +163,10 @@ func Write(path string, findings []types.Finding, toolVersion string) (written, 
 		return 0, 0, fmt.Errorf("baseline: marshal: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := safefile.Write(path, func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	}); err != nil {
 		return 0, 0, fmt.Errorf("baseline: write %s: %w", path, err)
 	}
 	return len(fps), skipped, nil

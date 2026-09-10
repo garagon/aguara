@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Report, baseline, and monitor-state writes now reject linked or special-file
+  destinations and use unique sibling temporary files. A failed write leaves
+  the existing artifact intact instead of truncating it. On Unix, saved files
+  are private to the owner (mode 0600, subject to umask); stdout is unchanged.
 - Directory scans now report an incomplete scan when an eligible file exceeds
   the size limit instead of silently omitting it. The error identifies the file
   and limit; configured exclusions and binary-file exclusions remain unchanged.

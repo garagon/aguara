@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -661,18 +662,11 @@ func auditActionNextCommands(result *AuditResult) []string {
 }
 
 func writeAuditJSON(result *AuditResult) error {
-	w := os.Stdout
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		w = f
-	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(result)
+	return writeReport(func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	})
 }
 
 func writeAuditTerminal(result *AuditResult) error {

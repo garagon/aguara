@@ -6,10 +6,13 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
 
 // Entry represents a stored hash for a single file or description.
@@ -77,13 +80,6 @@ func (s *Store) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Reject symlinks before writing
-	if info, err := os.Lstat(s.path); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("state file is a symlink (rejected for security): %s", s.path)
-		}
-	}
-
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
@@ -93,15 +89,10 @@ func (s *Store) Save() error {
 		return err
 	}
 
-	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+	return safefile.Write(s.path, func(w io.Writer) error {
+		_, err := w.Write(data)
 		return err
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		_ = os.Remove(tmpPath) // best-effort cleanup on rename failure
-		return err
-	}
-	return nil
+	})
 }
 
 // Get returns the entry for the given key and whether it exists.

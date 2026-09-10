@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -949,18 +950,11 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 }
 
 func writeCheckJSON(result *incident.CheckResult) error {
-	w := os.Stdout
-	if flagOutput != "" {
-		f, err := os.Create(flagOutput)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		w = f
-	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(result)
+	return writeReport(func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	})
 }
 
 func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
