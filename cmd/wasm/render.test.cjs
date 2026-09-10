@@ -186,6 +186,10 @@ test('real WASM scans and explains results without interpreting document HTML', 
         await page.locator('#scan').click();
         await page.waitForFunction(() => document.querySelector('.clean') !== null);
         assert.equal(await page.locator('.finding').count(), 0);
+        const namedScan = await page.evaluate(async () => JSON.parse(await aguaraScanContentAs(
+            'Ordinary documentation.', 'sample.txt', 'example-tool'
+        )));
+        assert.equal(namedScan.findings.length, 0);
         await page.locator('[data-tab="rules"]').click();
         await page.locator('#rule-id').fill('PROMPT_INJECTION_001');
         await page.locator('#explain-btn').click();
