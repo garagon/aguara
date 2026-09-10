@@ -2,7 +2,6 @@ package packagecheck
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,7 +46,7 @@ var exactNpmVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-
 // the npm registry and matching them against npm advisories would
 // false-positive on name collisions.
 func ParsePNPMLock(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "pnpm-lock.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("open pnpm-lock.yaml: %w", err)
 	}

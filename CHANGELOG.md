@@ -33,6 +33,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   snapshot, filtered through the current source-evidence policy. Offline checks
   no longer depend on the June snapshot. The source date and eight ecosystems
   are preserved; manually curated incident records are unchanged.
+- Lockfile and dependency-manifest checks now reject leaf symlinks and special
+  files, and limit each input to 50 MiB. Invalid linked candidates remain visible
+  to discovery and return an error instead of disappearing or selecting a
+  fallback. Go, Ruby and Gradle retain streaming reads with a total-byte budget.
 - Pattern scans no longer recount the entire preceding text to locate every
   match. Line tracking advances with each pattern's matches, preserving finding
   locations and original excerpts without limiting the number of results.

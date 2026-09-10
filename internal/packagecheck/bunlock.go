@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,7 +55,7 @@ var bunTrailingCommaRe = regexp.MustCompile(`,(\s*[}\]])`)
 // no findings (never a panic), and results dedupe on (name, version) in
 // deterministic order.
 func ParseBunLock(target Target) ([]PackageRef, error) {
-	data, err := os.ReadFile(target.Path)
+	data, err := readManifest(target.Path, "bun.lock")
 	if err != nil {
 		return nil, fmt.Errorf("open bun.lock: %w", err)
 	}
