@@ -1,302 +1,162 @@
-# AGENTS.md - Aguara Reference for AI Agents
+# Aguara: Reference for Contributors and AI Agents
 
-Aguara is a static security scanner for AI agent skills and MCP server configurations. Single Go binary, fully offline, deterministic, no LLM. Think "Semgrep for AI agents."
+Aguara is an open-source security engine for AI agent and supply-chain trust.
+It inspects skills, agent configuration, code, automation and dependencies before
+they are trusted or executed. Scans are static and deterministic: they do not
+execute inspected packages, call an LLM, or send telemetry.
 
-## Quick Start
+This file describes the source checkout, not necessarily the published release.
+Check `aguara version`, [development coverage](README.md#development-version)
+and [unreleased changes](CHANGELOG.md#unreleased) before claiming a feature ships.
+The installed binary's catalog is authoritative for that binary.
 
-```bash
-# Install
-go install github.com/garagon/aguara@latest
+## Choose the Entry Point
 
-# Scan a directory
-aguara scan ./skills/
-
-# Scan with CI defaults (fail on high+, no color)
-aguara scan --ci ./skills/
-
-# JSON output
-aguara scan --format json ./skills/
-
-# List all rules
-aguara list-rules
-```
-
-## Go Library API
-
-```go
-import "github.com/garagon/aguara"
-
-// Scan a file or directory
-result, err := aguara.Scan(ctx, "./skills/")
-
-// Scan inline content (no disk I/O)
-result, err := aguara.ScanContent(ctx, content, "skill.md")
-
-// List rules
-rules := aguara.ListRules()
-
-// Explain a rule
-detail, err := aguara.ExplainRule("PROMPT_INJECTION_001")
-```
-
-### Options
-
-```go
-aguara.Scan(ctx, path,
-    aguara.WithMinSeverity(aguara.SeverityMedium),
-    aguara.WithDisabledRules("EXFIL_005", "CRED_001"),
-    aguara.WithCustomRules("./custom-rules/"),
-    aguara.WithWorkers(4),
-    aguara.WithRuleOverrides(map[string]aguara.RuleOverride{
-        "PROMPT_INJECTION_001": {Severity: "medium"},
-        "EXFIL_005":           {Disabled: true},
-    }),
-)
-```
-
-### Types
-
-```go
-type ScanResult struct {
-    Findings     []Finding
-    FilesScanned int
-    RulesLoaded  int
-    DurationMs   int64    // in JSON output
-}
-
-type Finding struct {
-    RuleID      string        // "PROMPT_INJECTION_001"
-    RuleName    string        // "Instruction override attempt"
-    Severity    Severity      // 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL
-    Category    string        // "prompt-injection"
-    Description string        // rule description
-    FilePath    string        // "skills/evil.md"
-    Line        int           // 1-indexed
-    Column      int
-    MatchedText string        // text that triggered the rule
-    Context     []ContextLine // surrounding lines
-    Score       float64       // 0-100 risk score
-    Analyzer    string        // "pattern", "nlp-injection", "toxicflow", "rugpull"
-    InCodeBlock bool          // true if match is inside a fenced code block
-}
-
-type Severity int // SeverityInfo=0, SeverityLow=1, SeverityMedium=2, SeverityHigh=3, SeverityCritical=4
-```
-
-## CLI Commands
-
-### `aguara scan <path>`
-
-Scan a file or directory.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--severity` | `info` | Minimum severity: critical, high, medium, low, info |
-| `--format` | `terminal` | Output: terminal, json, sarif, markdown |
-| `-o, --output` | stdout | Output file path |
-| `--fail-on` | (none) | Exit 1 if findings at or above this severity |
-| `--ci` | false | CI mode: `--fail-on high --no-color` |
-| `-v, --verbose` | false | Show rule descriptions for critical/high findings |
-| `--changed` | false | Only scan git-changed files |
-| `--monitor` | false | Enable rug-pull detection (track file changes) |
-| `--state-path` | `~/.aguara/state.json` | State file for `--monitor` |
-| `--workers` | NumCPU | Concurrent worker goroutines |
-| `--rules` | (none) | Additional rules directory |
-| `--disable-rule` | (none) | Rule IDs to skip (repeatable) |
-| `--no-color` | false | Disable ANSI colors |
-
-### `aguara list-rules`
-
-List all detection rules. Supports `--category`, `--format json`, `--rules`.
-
-### `aguara explain <RULE_ID>`
-
-Show full rule details: ID, name, severity, category, description, patterns, examples.
-
-### `aguara init [path]`
-
-Scaffold `.aguara.yml`, `.aguaraignore`, and optionally `--hook` (git pre-commit) or `--ci` (GitHub Actions workflow).
-
-### `aguara version`
-
-Print version and commit hash.
-
-## Exit Codes
-
-| Code | Meaning |
+| Task | Command |
 |---|---|
-| 0 | No findings above `--fail-on` threshold (or no `--fail-on` set) |
-| 1 | Findings at or above `--fail-on` severity, or any error |
+| Inspect skills, code or agent configuration | `aguara scan ./skills/ --project-policy ignore` |
+| Check dependencies against malicious-package intelligence | `aguara check .` |
+| Combine content and dependency checks | `aguara audit .` |
+| Produce machine-readable audit results | `aguara audit . --format json` |
+| Gate a change in CI | `aguara audit . --ci` |
+| Inspect the installed catalog | `aguara list-rules --format json` |
+| Understand a detection | `aguara explain SC-EX-007` |
+| Refresh signed advisory data | `aguara update` |
 
-## Output Formats
+Default scans use embedded or available local intelligence offline. `update`
+and explicit freshness options fetch data; those operations are not offline.
+`check` detects known malicious packages, not comprehensive CVE/SCA coverage.
+See [package coverage](README.md#packages-and-lockfiles) for evidence and
+version-matching limits.
 
-| Format | Flag | Use Case |
-|---|---|---|
-| `terminal` | `--format terminal` | Human-readable, ANSI colors, severity histogram |
-| `json` | `--format json` | Machine parsing, CI integration |
-| `sarif` | `--format sarif` | GitHub Code Scanning (SARIF 2.1.0) |
-| `markdown` | `--format markdown` | GitHub Actions job summaries, PR comments |
+## Trust Boundary
 
-### JSON Schema
+On `main`, `audit` and CI scans ignore target-owned policy by default. A local
+`scan` can still trust it. Use `--project-policy ignore` when inspecting unfamiliar
+content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
+when the caller owns that policy.
 
-```json
-{
-  "findings": [
-    {
-      "rule_id": "PROMPT_INJECTION_001",
-      "rule_name": "Instruction override attempt",
-      "severity": 4,
-      "category": "prompt-injection",
-      "description": "Detects attempts to override or ignore previous instructions",
-      "file_path": "skills/evil.md",
-      "line": 3,
-      "column": 0,
-      "matched_text": "Ignore all previous instructions",
-      "context": [
-        {"line": 2, "content": "", "is_match": false},
-        {"line": 3, "content": "Ignore all previous instructions", "is_match": true}
-      ],
-      "score": 60.0,
-      "analyzer": "pattern",
-      "in_code_block": false
+These controls are development features until released. Older binaries may honor
+repository-owned exclusions. Check the version before relying on this boundary.
+Caller-supplied exclusions, overrides and custom rules also affect coverage.
+
+A clean result means no matching finding in the analyzed input, not proof of
+safety. Never turn an error or incomplete scan into a successful clean result.
+Review reports before sharing: redaction does not guarantee that every field is
+safe to publish.
+
+## Go API
+
+Public constructors and aliases live in [aguara.go](aguara.go); options live in
+[options.go](options.go). Use the module API rather than importing `internal/`.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/garagon/aguara"
+)
+
+func main() {
+    scanner, err := aguara.NewScanner(aguara.WithWorkers(2))
+    if err != nil {
+        log.Fatal(err)
     }
-  ],
-  "files_scanned": 5,
-  "rules_loaded": 148,
-  "duration_ms": 42
+    result, err := scanner.ScanContent(context.Background(), "Content to inspect", "skill.md")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("%d findings\n", len(result.Findings))
 }
 ```
 
-Severity is an integer: 0=INFO, 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL.
+Build a reusable `Scanner` once for repeated requests. Package-level `Scan`,
+`ScanContent` and `ScanContentAs` also exist. The filename selects relevant
+analyzers; do not relabel every input as text. `ScanContentAs` supplies tool
+context. A single inline scan does not inspect neighboring files.
 
-## Detection Rules
+Important options:
 
-148+ built-in rules across 14 categories.
+- `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog controls.
+- `WithMinSeverity(...)`: reported-finding threshold.
+- `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
+- `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
+- `WithCustomRules(dir)`: additional YAML rules.
+- `WithStateDir(dir)`: enables stateful rug-pull tracking.
+- `WithRedaction(false)`: exposes raw sensitive evidence; do not use by default.
 
-| Category | Rules | What It Detects |
-|---|---|---|
-| `prompt-injection` | 22 | Instruction overrides, role switching, delimiter injection, jailbreaks |
-| `credential-leak` | 19 | API keys (OpenAI, AWS, GCP, Stripe, Anthropic, GitHub), private keys, DB strings |
-| `exfiltration` | 17 | Webhook exfil, DNS tunneling, sensitive file reads, env var leaks |
-| `external-download` | 17 | Binary downloads, curl-pipe-shell, auto-installs |
-| `supply-chain` | 15 | Download-and-execute, reverse shells, obfuscated commands |
-| `command-execution` | 16 | shell=True, eval, subprocess, child_process, PowerShell |
-| `mcp-attack` | 12 | Tool injection, name shadowing, manifest tampering, capability escalation |
-| `ssrf-cloud` | 10 | Cloud metadata (IMDS), Docker socket, internal IPs |
-| `mcp-config` | 8 | Unpinned npx, hardcoded secrets, shell metacharacters in args |
-| `unicode-attack` | 7 | RTL override, bidi, homoglyphs, tag characters |
-| `indirect-injection` | 6 | Fetch-and-follow, remote config, email-as-instructions |
-| `third-party-content` | 5 | Mutable raw content, unvalidated API responses |
-| `toxic-flow` | 3 | Source/sink co-occurrence: sensitive sources alongside dangerous sinks |
-| `rug-pull` | 1 | Tool description changed with dangerous content (requires `--monitor`) |
+Consumers must bound inline inputs and execution resources themselves. A context
+does not guarantee immediate interruption of every parser or regular expression.
+Do not advertise a hard real-time deadline from this API.
 
-Use `aguara list-rules` to see all rules. Use `aguara explain <id>` for patterns and examples.
+## Result Contracts
 
-### Rule YAML Schema
+Use the actual types in [internal/types/types.go](internal/types/types.go),
+exported through public aliases, rather than copying a partial struct.
 
-```yaml
-id: RULE_ID_001
-name: "Human-readable name"
-severity: CRITICAL          # CRITICAL | HIGH | MEDIUM | LOW | INFO
-category: prompt-injection
-description: "What it detects"
-targets:                    # file globs; empty = all files
-  - "*.md"
-  - "*.json"
-match_mode: any             # "any" (OR, default) | "all" (AND)
-patterns:
-  - type: regex             # "regex" (RE2) | "contains"
-    value: "(?i)pattern"
-exclude_patterns:            # optional: cancel match when context matches
-  - type: contains
-    value: "## installation"
-  - type: regex
-    value: "(?i)pip3?\\s+install\\s+--upgrade\\s+(pip|setuptools)"
-examples:
-  true_positive:
-    - "Text that should trigger"
-  false_positive:
-    - "Text that should not trigger"
-```
+- Severity is numeric in JSON: INFO=0, LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4.
+- `decision_impact` distinguishes `context` and `review`; it is not a downstream
+  application's allow/block policy.
+- `matched_text`, description and context may be redacted. Do not parse them as
+  stable identifiers or expect raw secrets.
+- Go results have `Duration time.Duration`; JSON exposes `duration_ms`.
+- Empty scan findings serialize as `[]`, not `null`.
+- `ListRules` and `ExplainRule` include pattern and analyzer metadata.
+  `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
+- Availability does not imply activation: `RUGPULL_001` is explainable without a
+  state store, but rug-pull analysis needs one.
 
-Exclude patterns suppress a match when the matched line (or up to 3 lines before it) matches any exclude pattern. Use this to reduce false positives in documentation contexts like installation guides.
+`audit` has its own aggregate output, including triage and agent-handoff guidance
+on `main`. Do not assume it has the same schema as `ScanResult`. Severity,
+confidence, score and decision impact are distinct. Keep downstream identity,
+session policy and enforcement decisions outside Aguara's core.
 
-## Analyzers
+## Architecture and Change Ownership
 
-Aguara runs four analysis engines in sequence on each file:
+| Source | Responsibility |
+|---|---|
+| `aguara.go`, `options.go` | Public API and reusable scanner |
+| `cmd/aguara/commands` | CLI, audit composition and report workflows |
+| `internal/scanner` | Discovery, input loading and analyzer execution |
+| `internal/engine/engine.go` | Shared analyzer registration and metadata |
+| `internal/rules`, `internal/rulecatalog` | Pattern compilation and unified catalog |
+| `internal/packagecheck` | Lockfile and dependency-manifest parsing |
+| `internal/incident`, `internal/intel` | Intelligence, provenance and package matching |
+| `internal/output`, `internal/types` | Reports, result contracts and redaction |
 
-| Analyzer | ID | Targets | What It Does |
-|---|---|---|---|
-| Pattern Matcher | `pattern` | All files | Regex/contains matching against YAML rules. Includes base64/hex decoder. |
-| NLP Injection | `nlp-injection` | `.md`, `.txt` only | Goldmark AST walker. Detects hidden instructions in comments, code/heading mismatches, authority claims, credential+network combos. |
-| Toxic Flow | `toxicflow` | All files | Capability correlation: surfaces risky source/sink combinations (private-data read alongside exec, env-var read alongside shell, external response alongside eval). |
-| Rug-Pull | `rugpull` | All files | Compares file hashes against previous scan state. Only active with `--monitor`. |
+Content checks combine patterns, decoding, configuration parsing, language-specific
+analysis and heuristic correlation. They are not a whole-program semantic proof.
+The pattern matcher is caller-registered; the shared registry adds stateless
+analyzers. Rug-pull is optional. Toxic-flow and skill-chain correlation also have
+cross-file paths. See [RULES.md](RULES.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
-### Scoring
+Before adding a rule, check existing ownership. Preserve rule IDs when moving
+detection into an analyzer, and verify library/CLI catalog consistency. Add
+realistic positive and benign fixtures, including comments, examples, aliases
+and nearby unrelated evidence where relevant. Do not weaken negatives just to
+make a rule pass.
 
-Each finding gets a risk score (0-100):
-- Base: CRITICAL=40, HIGH=25, MEDIUM=15, LOW=8, INFO=3
-- Multiplied by category weight (1.1x to 1.5x)
-- Correlated findings within 5 lines get +5 bonus each
-- Capped at 100
+Use structured parsers for structured inputs. Go regex uses RE2 without
+lookaround. Do not claim dataflow or full shell parsing from file-level
+co-occurrence. Keep parser errors distinct from empty valid input. Preserve
+source locations and redact evidence before output.
 
-### Code Block Downgrade
+## Validation and Delivery
 
-In markdown files, findings inside fenced code blocks (` ``` `) are automatically downgraded one severity level (CRITICAL to HIGH, HIGH to MEDIUM, etc.). The finding's `in_code_block` field is set to `true`.
+Inspect `git status` before editing. Preserve unrelated changes. Work on a branch
+and submit focused PRs describing behavior, compatibility, tests and known limits.
 
-## Config File (.aguara.yml)
+Use the Go version in [go.mod](go.mod). Run focused tests first; CI runs broader
+checks. Respect the operator's resource budget. Do not start fuzzing, benchmarks
+or sustained stress work without explicit authorization. Static fixtures must
+not execute malicious examples, install package scripts or alter host trust.
 
-Loaded from the scan target directory (or parent of target file).
-
-```yaml
-ignore:
-  - "vendor/"
-  - "node_modules/"
-  - "*.log"
-
-severity: info              # minimum severity filter
-fail_on: high               # exit 1 threshold
-format: terminal            # output format
-rules: custom-rules/        # additional rules directory
-
-rule_overrides:
-  PROMPT_INJECTION_001:
-    severity: medium        # override severity
-  EXFIL_005:
-    disabled: true          # disable rule
-```
-
-CLI flags override config values.
-
-### .aguaraignore
-
-Gitignore-style file at scan root. One pattern per line, `#` for comments. Supports `*`, `?`, `[...]`, and `**` for recursive matching.
-
-Always skipped: `.git/`, `node_modules/`, `.aguara/`, binary files (.exe, .dll, .so, .png, .jpg, .zip, .pdf, etc.).
-
-## Incremental Scanning
-
-### Git-changed files (`--changed`)
-
-Scans only files modified in git (staged, unstaged, untracked). No state persistence.
-
-```bash
-aguara scan --changed .
-```
-
-### Rug-pull detection (`--monitor`)
-
-Tracks file hashes across scans. If a file's content changes and the new content matches dangerous patterns (instruction overrides, reverse shells, credential exfil, etc.), emits a CRITICAL `RUGPULL_001` finding.
-
-```bash
-aguara scan --monitor ./skills/
-```
-
-State stored in `~/.aguara/state.json` (override with `--state-path`).
-
-## Constraints
-
-- Go `regexp` (RE2): no lookaheads `(?!...)` or lookbehinds `(?<=...)`
-- Fully offline: no network calls, no URL fetching, no stdin
-- No code AST analysis (only markdown AST via goldmark)
-- Pattern matching only, not semantic understanding
+For releases, use the checked-in workflows and verification scripts. Update pins
+through the existing guardrail. Distinguish development builds from signed
+releases and validate artifacts before announcing them. Do not publish a tag,
+deploy content or bypass branch protection merely because local tests passed.
