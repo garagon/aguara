@@ -33,6 +33,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   or credential tails after a second `@`. Dependency and shell evidence keeps
   the destination visible; default redaction also covers URLs in neighboring
   finding context and descriptions.
+- pnpm policy checks now read the value referenced by a YAML alias, including
+  aliased build-approval mappings. Dangerous settings are no longer missed
+  behind anchors, and a safe value does not trigger a finding merely because
+  its anchor is named `true`, `off`, or `0`. Findings retain the policy key's
+  source line; rule IDs, severities, and merge precedence are unchanged.
 - Dependency checks no longer classify a package as malicious solely because a
   vulnerability description or reference mentions malware. OSV imports require
   source evidence or reviewed exact versions. The same policy filters older
