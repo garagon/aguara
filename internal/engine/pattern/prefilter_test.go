@@ -392,7 +392,7 @@ func TestPrefilterMatchesUnfilteredReference(t *testing.T) {
 
 func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanner.Finding {
 	content := target.StringContent()
-	lowerContent := strings.ToLower(content)
+	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 	var cbMap []bool
 	if isMarkdown(target.RelPath) {

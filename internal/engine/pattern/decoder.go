@@ -356,7 +356,7 @@ func decodeHTMLEntities(s string) ([]byte, error) {
 func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Target, compiled []*rules.CompiledRule, encoding string, cbMap []bool) []scanner.Finding {
 	var findings []scanner.Finding
 	decodedStr := string(decoded)
-	lowerDecoded := strings.ToLower(decodedStr)
+	lowerDecoded := newLowercaseContent(decodedStr)
 	decodedLines := strings.Split(decodedStr, "\n")
 
 	// Decoded blob inherits code block status from the line where the blob was found
