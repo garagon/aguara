@@ -29,6 +29,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `init` now creates configuration, workflows and hooks without following leaf
+  symlinks or escaping the selected directory through a linked parent. Existing
+  regular files retain their content and permissions. The one-time PATH hint
+  uses the same non-overwriting creation boundary for its marker.
 - Embedded malicious-package intelligence now uses the signed September 7
   snapshot, filtered through the current source-evidence policy. Offline checks
   no longer depend on the June snapshot. The source date and eight ecosystems

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/garagon/aguara/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +18,7 @@ var initCmd = &cobra.Command{
 	Use:     "init [path]",
 	GroupID: groupSetup,
 	Short:   "Initialize Aguara configuration files",
-	Long:    `Scaffolds .aguara.yml, .aguaraignore, and a GitHub Actions workflow for Aguara scanning.`,
+	Long:    "Scaffolds .aguara.yml, .aguaraignore, and a GitHub Actions workflow for Aguara scanning.",
 	Args:    cobra.MaximumNArgs(1),
 	RunE:    runInit,
 }
@@ -28,95 +29,106 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
+type scaffoldFile struct {
+	path    string
+	content string
+	mode    os.FileMode
+}
+
 func runInit(cmd *cobra.Command, args []string) error {
 	dir := "."
 	if len(args) > 0 {
 		dir = args[0]
 	}
-
 	if flagHook {
 		return initHook(dir)
 	}
-
 	if flagCIOnly {
 		return initCIOnly(dir)
 	}
-
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating directory %s: %w", dir, err)
-	}
-
-	files := []struct {
-		path    string
-		content string
-	}{
-		{
-			path:    filepath.Join(dir, ".aguara.yml"),
-			content: configTemplate,
-		},
-		{
-			path:    filepath.Join(dir, ".aguaraignore"),
-			content: ignoreTemplate,
-		},
-		{
-			path:    filepath.Join(dir, ".github", "workflows", "aguara.yml"),
-			content: workflowTemplateV2,
-		},
-	}
-
-	for _, f := range files {
-		if _, err := os.Stat(f.path); err == nil {
-			fmt.Printf("  skip %s (already exists)\n", f.path)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(f.path), 0755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", f.path, err)
-		}
-		if err := os.WriteFile(f.path, []byte(f.content), 0644); err != nil {
-			return fmt.Errorf("writing %s: %w", f.path, err)
-		}
-		fmt.Printf("  create %s\n", f.path)
-	}
-
-	return nil
+	return initFiles(dir, false, []scaffoldFile{
+		{".aguara.yml", configTemplate, 0o644},
+		{".aguaraignore", ignoreTemplate, 0o644},
+		{filepath.Join(".github", "workflows", "aguara.yml"), workflowTemplateV2, 0o644},
+	})
 }
 
 func initHook(dir string) error {
-	gitDir := filepath.Join(dir, ".git")
-	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		return fmt.Errorf("no .git directory found in %s (is this a git repository?)", dir)
-	}
-
-	hookPath := filepath.Join(gitDir, "hooks", "pre-commit")
-	if _, err := os.Stat(hookPath); err == nil {
-		fmt.Printf("  skip %s (already exists)\n", hookPath)
-		return nil
-	}
-
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0755); err != nil {
-		return fmt.Errorf("creating hooks directory: %w", err)
-	}
-	if err := os.WriteFile(hookPath, []byte(preCommitTemplate), 0755); err != nil {
-		return fmt.Errorf("writing pre-commit hook: %w", err)
-	}
-	fmt.Printf("  create %s\n", hookPath)
-	return nil
+	return initFiles(dir, true, []scaffoldFile{
+		{filepath.Join(".git", "hooks", "pre-commit"), preCommitTemplate, 0o755},
+	})
 }
 
 func initCIOnly(dir string) error {
-	wfPath := filepath.Join(dir, ".github", "workflows", "aguara.yml")
-	if _, err := os.Stat(wfPath); err == nil {
-		fmt.Printf("  skip %s (already exists)\n", wfPath)
-		return nil
+	return initFiles(dir, false, []scaffoldFile{
+		{filepath.Join(".github", "workflows", "aguara.yml"), workflowTemplateV2, 0o644},
+	})
+}
+
+func initFiles(dir string, requireGit bool, files []scaffoldFile) error {
+	if !requireGit {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(wfPath), 0755); err != nil {
-		return fmt.Errorf("creating directory for %s: %w", wfPath, err)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(wfPath, []byte(workflowTemplateV2), 0644); err != nil {
-		return fmt.Errorf("writing %s: %w", wfPath, err)
+	defer func() { _ = root.Close() }()
+	if requireGit {
+		info, err := root.Stat(".git")
+		if err != nil {
+			return fmt.Errorf("no .git directory found in %s: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf(".git is not a directory in %s", dir)
+		}
 	}
-	fmt.Printf("  create %s\n", wfPath)
+	for _, file := range files {
+		created, err := createScaffoldFile(root, file.path, file.content, file.mode)
+		if err != nil {
+			return fmt.Errorf("writing %s: %w", file.path, err)
+		}
+		path := output.TerminalText(filepath.Join(dir, file.path))
+		if created {
+			fmt.Printf("  create %s\n", path)
+		} else {
+			fmt.Printf("  skip %s (already exists)\n", path)
+		}
+	}
 	return nil
+}
+
+// The selected root is caller-owned. Rooted operations confine descendant paths
+// on native CLI platforms; exclusive creation never truncates an existing leaf.
+func createScaffoldFile(root *os.Root, name, content string, perm os.FileMode) (bool, error) {
+	info, err := root.Lstat(name)
+	if err == nil {
+		if !info.Mode().IsRegular() && !info.IsDir() {
+			return false, fmt.Errorf("output %s is not a regular file or directory", name)
+		}
+		return false, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		return false, err
+	}
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if os.IsExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, writeErr := f.WriteString(content)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return false, writeErr
+	}
+	return closeErr == nil, closeErr
 }
 
 const configTemplate = `# Aguara security scanner configuration
