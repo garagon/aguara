@@ -35,9 +35,14 @@ const snapshotFileName = "snapshot.json"
 // a local snapshot as "previously verified by a signed bundle".
 const verifiedMarkerFileName = "verified.json"
 
+// Legacy markers could also be written by signature-bypassed refreshes.
+// Their matching digest cannot establish publisher authentication.
+const verifiedMarkerVersion = 2
+
 // verifiedMarker binds a local snapshot to a successful signature
 // verification by recording the SHA-256 of the exact snapshot bytes.
 type verifiedMarker struct {
+	SchemaVersion  int       `json:"schema_version"`
 	SnapshotSHA256 string    `json:"snapshot_sha256"`
 	VerifiedAt     time.Time `json:"verified_at"`
 }
@@ -142,6 +147,7 @@ func (s *Store) Load() (*Snapshot, error) {
 // Save validates snap by re-marshalling the JSON before writing so
 // a struct that cannot serialise (e.g. an exotic time) errors out
 // before the on-disk file is touched.
+// Plain saves invalidate any verified marker, even for identical snapshot bytes.
 func (s *Store) Save(snap Snapshot) error {
 	data, err := s.marshalForSave(snap)
 	if err != nil {
@@ -150,7 +156,12 @@ func (s *Store) Save(snap Snapshot) error {
 	if err := s.ensureDir(); err != nil {
 		return fmt.Errorf("intel store: mkdir: %w", err)
 	}
-	return s.atomicWrite(s.snapshotPath(), data)
+	return s.atomicWriteBeforeRename(s.snapshotPath(), data, func() error {
+		if err := os.Remove(s.verifiedMarkerPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("intel store: invalidate verified marker: %w", err)
+		}
+		return nil
+	})
 }
 
 // SaveVerified persists snap AND a provenance marker (verified.json)
@@ -177,6 +188,7 @@ func (s *Store) SaveVerified(snap Snapshot) error {
 	}
 	sum := sha256.Sum256(data)
 	marker := verifiedMarker{
+		SchemaVersion:  verifiedMarkerVersion,
 		SnapshotSHA256: hex.EncodeToString(sum[:]),
 		VerifiedAt:     time.Now().UTC(),
 	}
@@ -212,6 +224,13 @@ func (s *Store) marshalForSave(snap Snapshot) ([]byte, error) {
 // fsynced and chmod 0600, then renamed over dst. A concurrent reader sees
 // only the old or the new file, never a half-written one.
 func (s *Store) atomicWrite(dst string, data []byte) error {
+	return s.atomicWriteBeforeRename(dst, data, nil)
+}
+
+// Prepare the complete replacement before changing provenance. If the final
+// rename fails after invalidation, leave the cache unverified: restoring a
+// marker could bless a concurrent replacement. This is not a two-file transaction.
+func (s *Store) atomicWriteBeforeRename(dst string, data []byte, beforeRename func() error) error {
 	tmp, err := os.CreateTemp(s.Dir, ".intel-*.tmp")
 	if err != nil {
 		return fmt.Errorf("intel store: tempfile: %w", err)
@@ -234,6 +253,12 @@ func (s *Store) atomicWrite(dst string, data []byte) error {
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("intel store: chmod %s: %w", tmpName, err)
+	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			_ = os.Remove(tmpName)
+			return err
+		}
 	}
 	if err := os.Rename(tmpName, dst); err != nil {
 		_ = os.Remove(tmpName)
@@ -267,6 +292,9 @@ func (s *Store) LoadVerified() (*Snapshot, error) {
 	var marker verifiedMarker
 	if err := json.Unmarshal(markerData, &marker); err != nil {
 		return nil, fmt.Errorf("intel store: decode verified marker: %w", err)
+	}
+	if marker.SchemaVersion != verifiedMarkerVersion {
+		return nil, fmt.Errorf("intel store: cached verification marker is unsupported; run aguara update without --insecure-intel to verify again")
 	}
 	sum := sha256.Sum256(data)
 	if marker.SnapshotSHA256 != hex.EncodeToString(sum[:]) {

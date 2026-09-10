@@ -60,6 +60,8 @@ func intelSourceLabel(snapshot string) string {
 		return "local verified"
 	case "remote-fresh":
 		return "remote (fresh)"
+	case "remote-unverified":
+		return "remote (UNVERIFIED: signature verification skipped)"
 	case "":
 		return "embedded"
 	default:

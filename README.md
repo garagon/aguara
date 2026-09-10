@@ -122,6 +122,12 @@ aguara check . --fresh
 
 `update` and `--fresh` fetch and verify Aguara's signed advisory bundle. Later checks can use the verified local cache offline. Snapshot age is context, not evidence that a dependency is safe or malicious.
 
+The explicit `--insecure-intel` escape hatch skips signature verification only
+when `AGUARA_INSECURE_INTEL=1` is also set. Such downloads are labeled unverified
+and cannot be reused by default checks or `--allow-stale`. Older cache markers
+do not reliably establish that a signature was verified; run `aguara update`
+without `--insecure-intel` to restore verified offline use after upgrading.
+
 Release notices are separate from analysis: `aguara version` can check for a newer release, and v0.27.0 also does this during `scan`. Set `AGUARA_NO_UPDATE_CHECK=1` to disable those checks. For network-isolated use, set that variable and avoid `update` and `--fresh`; no online lookup is needed to analyze the content.
 
 ## Adopting Aguara in CI

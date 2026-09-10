@@ -97,24 +97,24 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// name, gzip/json digests + sizes, and bundle_schema_version against
 	// the decoded snapshot. A failure leaves the cache untouched (no
 	// partial writes).
-	snap, err := fetchVerifiedSnapshot(ctx, intelBundleBaseURL, insecure)
+	fetched, err := fetchIntelSnapshot(ctx, intelBundleBaseURL, insecure)
 	if err != nil {
 		return fmt.Errorf("aguara update: %w", err)
 	}
 
-	// A verified-but-empty bundle is almost certainly a publishing
+	snap := fetched.Snapshot
+	// An empty bundle is almost certainly a publishing
 	// fault; preserve cached intel unless the operator opts in.
 	if len(snap.Records) == 0 && !flagUpdateAllowEmpty {
-		return fmt.Errorf("aguara update: verified bundle has 0 records; refusing to overwrite cached intel (pass --allow-empty to save anyway)")
+		return fmt.Errorf("aguara update: bundle has 0 records; refusing to overwrite cached intel (pass --allow-empty to save anyway)")
 	}
 
-	// SaveVerified writes a provenance marker so a later --allow-stale
-	// fallback can prove this cache came from a verified signed bundle.
-	if err := store.SaveVerified(snap); err != nil {
+	// Only signature-verified downloads establish reusable cache trust.
+	if err := fetched.save(store); err != nil {
 		return fmt.Errorf("aguara update: save snapshot: %w", err)
 	}
 
-	return writeUpdateOutput(snap, store.Dir)
+	return writeUpdateOutput(snap, store.Dir, fetched.Verified)
 }
 
 // updateOutput is the JSON-stable shape `aguara update --format json`
@@ -128,7 +128,7 @@ type updateOutput struct {
 	Verified     bool      `json:"verified"`
 }
 
-func buildUpdateOutput(snap intel.Snapshot, storeDir string) updateOutput {
+func buildUpdateOutput(snap intel.Snapshot, storeDir string, verified bool) updateOutput {
 	ecos := intel.EcosystemsFromSources(snap.Sources)
 	if ecos == nil {
 		ecos = []string{}
@@ -139,15 +139,15 @@ func buildUpdateOutput(snap intel.Snapshot, storeDir string) updateOutput {
 		GeneratedAt:  snap.GeneratedAt,
 		Ecosystems:   ecos,
 		Source:       "intel-latest",
-		Verified:     true,
+		Verified:     verified,
 	}
 }
 
 // writeUpdateOutput dispatches between the JSON and terminal writers
 // based on the global --format flag. The -o flag redirects either format
 // to a file; otherwise both go to stdout.
-func writeUpdateOutput(snap intel.Snapshot, storeDir string) error {
-	out := buildUpdateOutput(snap, storeDir)
+func writeUpdateOutput(snap intel.Snapshot, storeDir string, verified bool) error {
+	out := buildUpdateOutput(snap, storeDir, verified)
 	if strings.ToLower(flagFormat) == "json" {
 		return writeUpdateJSON(out)
 	}
@@ -179,7 +179,12 @@ func writeUpdateTerminal(out updateOutput) error {
 		defer func() { _ = f.Close() }()
 		w = f
 	}
-	fmt.Fprintf(w, "Aguara threat intel updated (verified signed bundle)\n")
+	if out.Verified {
+		fmt.Fprintf(w, "Aguara threat intel updated (verified signed bundle)\n")
+	} else {
+		fmt.Fprintf(w, "Aguara threat intel updated (UNVERIFIED: signature verification skipped)\n")
+		fmt.Fprintf(w, "  Not eligible for default checks or --allow-stale; run aguara update without --insecure-intel to verify.\n")
+	}
 	fmt.Fprintf(w, "  records:    %d\n", out.Records)
 	fmt.Fprintf(w, "  ecosystems: %s\n", strings.Join(out.Ecosystems, ", "))
 	fmt.Fprintf(w, "  written:    %s\n", out.SnapshotPath)
