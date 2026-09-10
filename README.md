@@ -102,6 +102,10 @@ Unambiguous `npm:` aliases resolve to the real package in package-lock, pnpm, Ya
 
 Lockfile and dependency-manifest inputs must be regular files no larger than 50 MiB. Leaf symlinks, including dangling links, return an error rather than being followed or silently skipped. This read boundary does not confine parent directories or guarantee that file contents remain unchanged during a check. Installed-package scanning is a separate path.
 
+Legacy `package-lock.json` dependency trees have a 128-level nesting limit and a
+50 MiB cumulative subtree-decoding budget, in addition to the file-size limit.
+Exceeding either returns an error, not a partial successful package check.
+
 ### Behavior and policy
 
 Aguara also inspects code for behaviors that do not depend on a package already being listed in an advisory: suspicious second-stage execution, credential transmission, host-file tampering, and destructive cleanup. It combines signatures, parsed configuration, bounded code analysis, and heuristic correlations. Binding checks to actual calls reduces noise, but it does not eliminate false positives or provide whole-program dataflow analysis.

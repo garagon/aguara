@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Installed npm identities, package-lock entries and agent settings now use
+  exact JSON property names. Case variants cannot erase or invent package
+  versions, hook commands or permissions. Repeated properties use their final
+  value, and inline agent settings retain original JSON keys. Legacy nested
+  package-lock decoding fails with an error when its bounded work budget ends.
 - Lockfile and dependency-manifest checks now reject leaf symlinks and special
   files, and limit each input to 50 MiB. Invalid linked candidates remain visible
   to discovery and return an error instead of disappearing or selecting a

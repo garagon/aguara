@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/jsonfields"
 )
 
 // nodeModulesSeg is the path segment npm uses to nest installed
@@ -72,8 +73,8 @@ type plDepEntry struct {
 // is the lockfileVersion 1 recursive tree, used only when `packages`
 // is absent.
 type packageLock struct {
-	Packages     map[string]plPackagesEntry `json:"packages"`
-	Dependencies map[string]plDepEntry      `json:"dependencies"`
+	Packages     jsonfields.Map[plPackagesEntry] `json:"packages"`
+	Dependencies map[string]plDepEntry           `json:"dependencies"`
 }
 
 // ParsePackageLock reads a package-lock.json file and returns the

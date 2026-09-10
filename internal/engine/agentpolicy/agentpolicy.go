@@ -53,6 +53,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/garagon/aguara/internal/jsonfields"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
@@ -175,12 +176,13 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	}
 
 	var top rawSettings
-	if err := json.Unmarshal(target.Content, &top); err != nil {
+	content := target.SourceContent()
+	if err := json.Unmarshal(content, &top); err != nil {
 		// Malformed or non-object root: stay silent rather than guess.
 		return nil, nil
 	}
 
-	lines := strings.Split(string(target.Content), "\n")
+	lines := strings.Split(string(content), "\n")
 	rel := target.RelPath
 	if rel == "" {
 		rel = target.Path
@@ -214,7 +216,7 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	a.checkEnv(top.Env, emit)
 	a.checkPermissions(top.Permissions, emit)
 	a.checkMCPAutoApprove(top.EnableAllProjectMcpServers, emit)
-	a.checkCredentialHelpers(target.Content, emit)
+	a.checkCredentialHelpers(content, emit)
 
 	return findings, nil
 }
@@ -227,7 +229,7 @@ func (a *Analyzer) checkHooks(raw json.RawMessage, emit emitFunc) {
 	if len(raw) == 0 {
 		return
 	}
-	var events map[string][]hookMatcher
+	var events jsonfields.Map[[]hookMatcher]
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return
 	}
@@ -254,7 +256,7 @@ func (a *Analyzer) checkEnv(raw json.RawMessage, emit emitFunc) {
 	if len(raw) == 0 {
 		return
 	}
-	var env map[string]string
+	var env jsonfields.Map[string]
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return
 	}
