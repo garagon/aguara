@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP_009 no longer considers a capability drop (`capabilities: {drop: [ALL]}`)
+  as a request for all capabilities. A grant under `add`, `allow` or `grant` is
+  still reported.
+
 ## [0.28.0] - 2026-09-10
 
 A project should not decide what its security review is allowed to see.

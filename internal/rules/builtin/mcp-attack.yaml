@@ -185,7 +185,9 @@ match_mode: any
 remediation: "Request only the minimum capabilities needed. Replace broad grants like 'all' with explicit, scoped permissions."
 patterns:
   - type: regex
-    value: "(?i)[\"']?(capabilities|permissions)[\"']?\\s*[:=]\\s*[^\\n]{0,20}\\b(all|admin|unrestricted|root|superuser|full_access|god_mode)\\b"
+    value: "(?i)[\"']?(capabilities|permissions)[\"']?\\s*[:=]\\s*[^\\n:=]{0,20}\\b(all|admin|unrestricted|root|superuser|full_access|god_mode)\\b"
+  - type: regex
+    value: "(?i)[\"']?(capabilities|permissions)[\"']?\\s*[:=]\\s*(?:[^\\n]*\\n\\s*)?[^\\n]{0,20}\\b(add|allow|grant)[\"']?\\s*[:=]\\s*[^\\n:=]{0,20}\\b(all|admin|unrestricted|root|superuser|full_access|god_mode)\\b"
   - type: regex
     value: "(?i)request\\w*\\s+(unrestricted|admin|root|superuser)\\s+(capabilities|permissions|access)"
 examples:
@@ -193,11 +195,16 @@ examples:
     - "\"capabilities\": [\"all\"]"
     - "\"permissions\": \"admin\""
     - "request unrestricted capabilities"
+    - "capabilities: {drop: [\"ALL\"], add: [\"ALL\"]}"
+    - "capabilities:\n  drop: [ALL]\n  add: [ALL]"
   false_positive:
     - "\"capabilities\": [\"read_files\", \"search\"]"
     - "The tool has limited access permissions"
     - "\"accessType\": \"OPEN\", \"entryPointAccess\": \"ALL\""
     - "Scope: Available in all projects"
+    - "securityContext: {capabilities: {drop: [ALL]}}"
+    - "capabilities:\n  drop: [ALL]\n  add: [NET_BIND_SERVICE]"
+    - "capabilities: {add: [NET_RAW], drop: [ALL]}"
 ---
 id: MCP_010
 name: "Prompt cache poisoning"
