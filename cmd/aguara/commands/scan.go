@@ -457,7 +457,11 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
-	engine.RegisterDefaults(s)
+	// Preserve MCP_009's existing override behavior after its parser migration.
+	capabilityOverride := cfg.RuleOverrides["MCP_009"]
+	engine.RegisterDefaults(s, map[string]rules.RuleOverride{
+		"MCP_009": {Severity: capabilityOverride.Severity, Disabled: capabilityOverride.Disabled},
+	})
 
 	var store *state.Store
 	if flagMonitor {

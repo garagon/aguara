@@ -175,30 +175,6 @@ examples:
     - "\"postinstall\": \"npm run build\""
     - "\"preload\": \"./setup.sh\""
 ---
-id: MCP_009
-name: "Capability escalation"
-description: "Detects excessive or dangerous capability requests in MCP configurations"
-severity: HIGH
-category: mcp-attack
-targets: ["*.json", "*.yaml", "*.yml", "*.md", "*.txt"]
-match_mode: any
-remediation: "Request only the minimum capabilities needed. Replace broad grants like 'all' with explicit, scoped permissions."
-patterns:
-  - type: regex
-    value: "(?i)[\"']?(capabilities|permissions)[\"']?\\s*[:=]\\s*[^\\n]{0,20}\\b(all|admin|unrestricted|root|superuser|full_access|god_mode)\\b"
-  - type: regex
-    value: "(?i)request\\w*\\s+(unrestricted|admin|root|superuser)\\s+(capabilities|permissions|access)"
-examples:
-  true_positive:
-    - "\"capabilities\": [\"all\"]"
-    - "\"permissions\": \"admin\""
-    - "request unrestricted capabilities"
-  false_positive:
-    - "\"capabilities\": [\"read_files\", \"search\"]"
-    - "The tool has limited access permissions"
-    - "\"accessType\": \"OPEN\", \"entryPointAccess\": \"ALL\""
-    - "Scope: Available in all projects"
----
 id: MCP_010
 name: "Prompt cache poisoning"
 description: "Detects instruction override text in tool response content fields"

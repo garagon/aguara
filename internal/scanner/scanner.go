@@ -117,6 +117,12 @@ func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
 	s.toolScopedRules = rules
 }
 
+// IsRuleDisabled reports the scanner-wide rule-ID filter to analyzers that
+// would otherwise perform work (or report a budget error) for a disabled rule.
+func (s *Scanner) IsRuleDisabled(id string) bool {
+	return s.disabledRules[strings.ToUpper(strings.TrimSpace(id))]
+}
+
 // SetDisabledRules suppresses findings whose RuleID is present in ids. This
 // covers both pattern rules (which already get filtered out of the compiled
 // rule list upstream) and analyzer-emitted IDs that the compiled-list filter

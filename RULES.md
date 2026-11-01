@@ -1,6 +1,16 @@
 # Aguara Rule Catalog
 
-Aguara ships with **192 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**258 cataloged in total**). Run `aguara list-rules` for the live count and `aguara explain <RULE_ID>` for details.
+The current tree contains **191 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, mcp-capability, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**258 cataloged in total**). Run `aguara list-rules` for the installed binary's count and `aguara explain <RULE_ID>` for details.
+
+MCP_009 uses the `mcp-capability` parser to distinguish broad grants from
+capability drops and denies. It reads literal scalar/list values and
+`add`/`allow`/`grant` mappings in JSON/YAML, standalone text snippets and
+Markdown fenced examples. Explicit privilege requests in prose remain covered.
+It does not resolve YAML aliases or merge keys, ambiguous duplicate fields, or
+arbitrary configuration fragments embedded in prose. Inputs requiring this
+analysis are bounded to 2 MiB and a 100,000-node traversal budget; exceeding a
+budget reports an analyzer error, not a clean result. MCP_009 retains its
+severity/disable override support despite moving out of the pattern catalog.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 

@@ -28,6 +28,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/agentpolicy"
 	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/jsrisk"
+	"github.com/garagon/aguara/internal/engine/mcpcapability"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/npmpolicy"
 	"github.com/garagon/aguara/internal/engine/pkgmeta"
@@ -40,6 +41,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/skillpolicy"
 	"github.com/garagon/aguara/internal/engine/toxicflow"
 	"github.com/garagon/aguara/internal/rulemeta"
+	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
 )
@@ -53,6 +55,7 @@ import (
 func DefaultAnalyzers() []scanner.Analyzer {
 	return []scanner.Analyzer{
 		ci.New(),
+		mcpcapability.New(),
 		pkgmeta.New(),
 		jsrisk.New(),
 		pyrisk.New(),
@@ -70,8 +73,16 @@ func DefaultAnalyzers() []scanner.Analyzer {
 // RegisterDefaults registers the default analyzer set plus the
 // cross-file correlation accumulator on s. Callers register the pattern
 // matcher before this and the optional rug-pull analyzer after it.
-func RegisterDefaults(s *scanner.Scanner) {
+func RegisterDefaults(s *scanner.Scanner, overrides ...map[string]rules.RuleOverride) {
 	for _, a := range DefaultAnalyzers() {
+		if a.Name() == rulemeta.AnalyzerMCPCapability && s.IsRuleDisabled(mcpcapability.RuleCapabilityEscalation) {
+			continue
+		}
+		// MCP_009 migrated from a pattern rule without dropping its existing
+		// per-rule override contract. Do not change other analyzers' policy.
+		if a.Name() == rulemeta.AnalyzerMCPCapability && len(overrides) > 0 && overrides[0] != nil {
+			a = mcpcapability.NewWithOverride(overrides[0][mcpcapability.RuleCapabilityEscalation])
+		}
 		s.RegisterAnalyzer(a)
 	}
 	s.SetCrossFileAccumulator(crossFileGroup{
@@ -87,6 +98,7 @@ func RegisterDefaults(s *scanner.Scanner) {
 func RuleMetadata() []rulemeta.Rule {
 	var out []rulemeta.Rule
 	out = append(out, ci.RuleMetadata()...)
+	out = append(out, mcpcapability.RuleMetadata()...)
 	out = append(out, pkgmeta.RuleMetadata()...)
 	out = append(out, jsrisk.RuleMetadata()...)
 	out = append(out, pyrisk.RuleMetadata()...)

@@ -22,6 +22,7 @@ import (
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // Options controls Build. All fields are optional; the zero value
@@ -159,7 +160,9 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 	// analyzer rules, list-rules would claim a policy is in
 	// effect that Scan would not honour for those IDs.
 	//
-	// Users who want to suppress an analyzer rule should use
+	// MCP_009 is the compatibility exception: mcp-capability retains the
+	// severity/disable overrides it supported before its parser migration.
+	// Users who want to suppress any other analyzer rule should use
 	// WithDisabledRules / --disable-rule (the scanner DOES honour
 	// that via Scanner.SetDisabledRules).
 	if len(opts.Overrides) > 0 {
@@ -174,7 +177,7 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 			// behaviour is governed by DisableRuleIDs, not by
 			// Overrides, so the catalog must not pretend
 			// otherwise.
-			if !ok || r.Analyzer != "" {
+			if !ok || (r.Analyzer != "" && r.Analyzer != rulemeta.AnalyzerMCPCapability) {
 				filtered = append(filtered, r)
 				continue
 			}
@@ -182,7 +185,13 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 				continue
 			}
 			if ovr.Severity != "" {
-				r.Severity = strings.ToUpper(ovr.Severity)
+				if r.Analyzer == rulemeta.AnalyzerMCPCapability {
+					if severity, err := types.ParseSeverity(ovr.Severity); err == nil {
+						r.Severity = severity.String()
+					}
+				} else {
+					r.Severity = strings.ToUpper(ovr.Severity)
+				}
 			}
 			filtered = append(filtered, r)
 		}

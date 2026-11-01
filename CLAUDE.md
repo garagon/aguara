@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Aguara v0.28.0 (2026-09-10): untrusted-project defaults, audit triage and agent handoff, skill/helper and script checks, parser/report hardening, and verified September 7 embedded intelligence (35,774 record rows + 203,639 all-version entries; not unique package totals). Previous release: v0.27.0 (2026-06-12). Current tree: 24 fuzz targets, 192 YAML rules + 66 analyzer-emitted (258 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 14 per-file scan analyzers (pattern, ci-trust, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, skillpolicy, NLP, toxicflow, rugpull) plus the skill-chain project correlation and the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
+Aguara v0.28.0 (2026-09-10): untrusted-project defaults, audit triage and agent handoff, skill/helper and script checks, parser/report hardening, and verified September 7 embedded intelligence (35,774 record rows + 203,639 all-version entries; not unique package totals). Previous release: v0.27.0 (2026-06-12). Current tree: 24 fuzz targets, 191 YAML rules + 67 analyzer-emitted (258 cataloged), 13 YAML categories (+ analyzer categories incl. agent-trust), 15 per-file scan analyzers (pattern, ci-trust, mcpcapability, pkgmeta, jsrisk, pyrisk, scriptrisk, rsbuild, npmpolicy, pnpmpolicy, agentpolicy, skillpolicy, NLP, toxicflow, rugpull) plus the skill-chain project correlation and the `aguara check` incident command (npm/PyPI installed trees + pre-install npm lockfiles pnpm-lock.yaml / package-lock.json / yarn.lock classic v1 / yarn.lock Berry v2+ / bun.lock text - all with `npm:` alias resolution to the real package - and Go/Rust/PHP/Ruby/Java/.NET lockfiles), 0 lint issues.
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
@@ -58,7 +58,7 @@ Root package re-exports types from `internal/types` and exposes: `Scan()`, `Scan
 
 Analyzer wiring is centralized: add an analyzer in `internal/engine/engine.go` (`DefaultAnalyzers` + `RuleMetadata`) - one place, not the old four call sites. Emit-site RuleName/Severity/Category derive from each analyzer's `RuleMetadata()` via `rulemeta.Index` (no string drift).
 
-### Analysis Pipeline (13 default analyzers + rug-pull when --monitor is set, run sequentially per file)
+### Analysis Pipeline (14 default analyzers + rug-pull when --monitor is set, run sequentially per file)
 
 1. **Pattern Matcher** (`internal/engine/pattern/`) - Regex/contains matching against compiled rules. 8 decoders (base64, hex, URL encoding, Unicode escapes, HTML entities, hex escapes, base32, C-style octal escapes) for encoded evasion detection. Markdown code-block severity downgrade. Dynamic confidence based on pattern hit ratio.
 2. **CI Trust** (`internal/engine/ci/`) - YAML parser for `.github/workflows/*.yml`. Detects `pull_request_target` pwn-request chains, cache poisoning, OIDC token surface, and persisted-credentials checkouts. Emits `GHA_PWN_REQUEST_001` / `GHA_CACHE_001` / `GHA_OIDC_001` / `GHA_CHECKOUT_001`.
@@ -75,7 +75,13 @@ Analyzer wiring is centralized: add an analyzer in `internal/engine/engine.go` (
 13. **ToxicFlow** (`internal/engine/toxicflow/`) - Single-file source/sink co-occurrence + cross-file capability correlation (`crossfile.go`). Detects dangerous capability combinations within and across files in the same directory. Flat-dir filter (>50 files) prevents FPs on registries.
 14. **Rug-Pull** (`internal/engine/rugpull/`) - SHA256-based tool description change detection. CLI via `--monitor`, library via `WithStateDir()`.
 
-All fourteen implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first thirteen run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
+**MCP Capability** (`internal/engine/mcpcapability/`) runs after CI Trust.
+It owns MCP_009 (HIGH, mcp-attack), parsing literal capability/permission
+grants in JSON/YAML rather than matching nearby words. Drops, denies, comments,
+opaque strings and sibling fields are not grant evidence. The rule retains
+legacy severity/disable overrides; other analyzer override behavior is unchanged.
+
+All fifteen implement the `Analyzer` interface (`internal/scanner/analyzer.go`): `Name() string` + `Analyze(ctx, *Target) ([]Finding, error)`. The first fourteen run on every scan; rug-pull only joins when the caller passes `--monitor` (CLI) or `WithStateDir` (library). `aguara check` (`internal/incident/`, `internal/packagecheck/`) is a separate command-line entry point, not part of the scan pipeline.
 
 After per-file analysis, **SkillChain** (`internal/engine/skillchain/`) runs as a
 `CrossFileAccumulator`. It binds mandatory execution instructions in
@@ -102,7 +108,7 @@ the per-file `Analyzer` interface.
 
 ## Rules System
 
-193 rules in `internal/rules/builtin/*.yaml` across 13 files. Each rule requires:
+191 rules in `internal/rules/builtin/*.yaml` across 13 files. Each rule requires:
 
 - `id`, `name`, `severity`, `category`, `patterns` (type: `regex` or `contains`)
 - `match_mode`: `any` (OR, default) or `all` (AND)
@@ -163,7 +169,7 @@ When completing a product task (fixing a bug, adding a feature, releasing a vers
 ### Data consistency rule
 
 When any of these values change, update ALL references across the vault:
-- Rule count (currently 192 YAML / 258 cataloged)
+- Rule count (currently 191 YAML / 258 cataloged)
 - Test count (currently ~750)
 - Coverage (currently 82% on the Codecov badge; badge scope excludes tools/ and benchmarks/)
 - Star/fork count (currently 48/6)
