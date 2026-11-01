@@ -3,6 +3,7 @@ package intel_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,34 +67,30 @@ func TestStoreLoadMissingFile(t *testing.T) {
 }
 
 func TestStoreRejectsOversizedSnapshot(t *testing.T) {
-	// A file larger than MaxSnapshotBytes must be rejected with
-	// the explicit cap message so an attacker cannot OOM the
-	// process by replacing the local snapshot with a giant blob.
-	dir := t.TempDir()
-	s := &intel.Store{Dir: dir}
-
-	// Write a file that is exactly one byte over the cap.
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	path := filepath.Join(dir, "snapshot.json")
-	f, err := os.Create(path)
-	require.NoError(t, err)
-	defer func() { _ = f.Close() }()
-
-	// Fill with `{"schema_version":1,"records":[]}` prefix then
-	// pad to MaxSnapshotBytes+1. The JSON shape does not matter
-	// because the size cap fires before unmarshal.
-	prefix := []byte(`{"schema_version":1,"records":[]}` + "\n")
-	_, err = f.Write(prefix)
-	require.NoError(t, err)
-
-	pad := make([]byte, intel.MaxSnapshotBytes+1-int64(len(prefix)))
-	_, err = f.Write(pad)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = s.Load()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "cap", "oversized snapshot must surface the cap error")
+	// Same file-reader path as Load; the public 64 MiB wiring is tested separately.
+	const limit = 1024
+	for _, delta := range []int{-1, 0, 1} {
+		t.Run(fmt.Sprintf("delta=%d", delta), func(t *testing.T) {
+			s := &intel.Store{Dir: t.TempDir()}
+			prefix := `{"schema_version":1,"records":[]}`
+			data := prefix + strings.Repeat(" ", limit+delta-len(prefix))
+			require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "snapshot.json"), []byte(data), 0o600))
+			got, err := intel.LoadWithLimitForTest(s, limit)
+			if delta > 0 {
+				require.EqualError(t, err, "intel store: snapshot exceeds 1024 bytes (cap)")
+				require.Nil(t, got)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, intel.CurrentSchemaVersion, got.SchemaVersion)
+			}
+		})
+	}
+	// Oversized malformed input must fail at the bound, not at JSON decoding.
+	s := &intel.Store{Dir: t.TempDir()}
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "snapshot.json"), []byte(strings.Repeat("!", limit+1)), 0o600))
+	got, err := intel.LoadWithLimitForTest(s, limit)
+	require.EqualError(t, err, "intel store: snapshot exceeds 1024 bytes (cap)")
+	require.Nil(t, got)
 }
 
 func TestStoreRejectsUnknownSchemaVersion(t *testing.T) {

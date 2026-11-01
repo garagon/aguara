@@ -126,40 +126,47 @@ func TestUpdatePropagatesHTTPError(t *testing.T) {
 }
 
 func TestUpdateEnforcesSizeCap(t *testing.T) {
-	// A response larger than MaxHTTPBodyBytes must be rejected
-	// before it can fill memory. We do not actually send 256 MiB
-	// in the test; we instead serve a body declared with a
-	// Content-Length that the LimitReader path can see, then
-	// pad past the cap. The trip-wire fires when the read
-	// produces more than MaxHTTPBodyBytes bytes.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Write MaxHTTPBodyBytes + 1 zero bytes. We do this
-		// in chunks so the test does not allocate the whole
-		// payload at once.
-		const chunk = 1 << 20 // 1 MiB
-		buf := make([]byte, chunk)
-		remaining := intel.MaxHTTPBodyBytes + 1
-		for remaining > 0 {
-			n := int64(chunk)
-			if n > remaining {
-				n = remaining
-			}
-			if _, err := w.Write(buf[:n]); err != nil {
-				return
-			}
-			remaining -= n
+	// Use the same HTTP/import pipeline with a small per-call bound. Production
+	// retains its fixed 256 MiB cap; no mutable global or exported option is added.
+	const limit = 1024
+	for _, chunked := range []bool{false, true} {
+		for _, delta := range []int{-1, 0, 1} {
+			t.Run(fmt.Sprintf("chunked=%t/delta=%d", chunked, delta), func(t *testing.T) {
+				body := bytes.Repeat([]byte("a"), limit+delta)
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if chunked {
+						w.(http.Flusher).Flush()
+					} else {
+						w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+					}
+					_, _ = w.Write(body)
+				}))
+				defer srv.Close()
+				imported := false
+				result, err := intel.UpdateWithLimitForTest(context.Background(), intel.UpdateOptions{
+					Ecosystems: []string{intel.EcosystemNPM}, URLTemplate: srv.URL + "/%s/all.zip", HTTPClient: srv.Client(),
+					Importer: func(r io.ReaderAt, size int64, ecosystems []string, at time.Time) (intel.Snapshot, error) {
+						imported = true
+						require.Equal(t, int64(len(body)), size)
+						got := make([]byte, size)
+						_, err := r.ReadAt(got, 0)
+						require.NoError(t, err)
+						require.Equal(t, body, got)
+						return intel.Snapshot{SchemaVersion: intel.CurrentSchemaVersion}, nil
+					},
+				}, limit)
+				if delta > 0 {
+					require.EqualError(t, err, "intel update: npm: response 1025 bytes exceeds cap 1024")
+					require.Nil(t, result)
+					require.False(t, imported, "oversized data must never reach the importer")
+				} else {
+					require.NoError(t, err)
+					require.True(t, imported)
+					require.Equal(t, int64(len(body)), result.PerEcosystem[0].BytesRead)
+				}
+			})
 		}
-	}))
-	defer srv.Close()
-
-	_, err := intel.Update(context.Background(), intel.UpdateOptions{
-		Ecosystems:  []string{intel.EcosystemNPM},
-		URLTemplate: srv.URL + "/%s/all.zip",
-		HTTPClient:  srv.Client(),
-		Importer:    importerStub(t, map[string]intel.Snapshot{}),
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "exceeds cap")
+	}
 }
 
 func TestUpdateUsesDefaultEcosystems(t *testing.T) {

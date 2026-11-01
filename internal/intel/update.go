@@ -119,6 +119,10 @@ type EcosystemResult struct {
 // be removed in a future major version; it must not be wired back into a
 // trusted runtime path.
 func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
+	return update(ctx, opts, MaxHTTPBodyBytes)
+}
+
+func update(ctx context.Context, opts UpdateOptions, maxBodyBytes int64) (*UpdateResult, error) {
 	if opts.Importer == nil {
 		return nil, fmt.Errorf("intel update: Importer is required (CLI must wire osvimport.ImportFromZip)")
 	}
@@ -167,7 +171,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	var per []EcosystemResult
 
 	for _, eco := range ecosystems {
-		snap, body, err := fetchAndImport(ctx, client, urlTmpl, eco, now(), opts.Importer)
+		snap, body, err := fetchAndImport(ctx, client, urlTmpl, eco, now(), opts.Importer, maxBodyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("intel update: %s: %w", eco, err)
 		}
@@ -196,7 +200,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 // importer over it. Returns the snapshot plus the number of bytes
 // read so the per-ecosystem progress line is honest about what
 // crossed the network.
-func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem string, generatedAt time.Time, importer ImportFunc) (Snapshot, int64, error) {
+func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem string, generatedAt time.Time, importer ImportFunc, maxBodyBytes int64) (Snapshot, int64, error) {
 	url := fmt.Sprintf(urlTmpl, ecosystem)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -214,13 +218,13 @@ func fetchAndImport(ctx context.Context, client *http.Client, urlTmpl, ecosystem
 		return Snapshot{}, 0, fmt.Errorf("http %d %s", resp.StatusCode, resp.Status)
 	}
 
-	limited := io.LimitReader(resp.Body, MaxHTTPBodyBytes+1)
+	limited := io.LimitReader(resp.Body, maxBodyBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return Snapshot{}, 0, fmt.Errorf("read body: %w", err)
 	}
-	if int64(len(data)) > MaxHTTPBodyBytes {
-		return Snapshot{}, 0, fmt.Errorf("response %d bytes exceeds cap %d", len(data), MaxHTTPBodyBytes)
+	if int64(len(data)) > maxBodyBytes {
+		return Snapshot{}, 0, fmt.Errorf("response %d bytes exceeds cap %d", len(data), maxBodyBytes)
 	}
 
 	r := bytes.NewReader(data)

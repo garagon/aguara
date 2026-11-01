@@ -99,17 +99,23 @@ func DecodeSnapshotJSON(raw []byte) (Snapshot, error) {
 // "exceeded the cap". Exposed so a fresh-bundle verifier can hash the
 // decompressed bytes against the manifest's json_sha256.
 func DecompressGZIP(data []byte) ([]byte, error) {
+	return decompressGZIP(data, MaxSnapshotBytes)
+}
+
+// Keep the bound per-call so boundary tests exercise this reader without
+// allocating a production-sized snapshot under race instrumentation.
+func decompressGZIP(data []byte, maxBytes int64) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("intel: gzip reader: %w", err)
 	}
 	defer func() { _ = zr.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(zr, MaxSnapshotBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(zr, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("intel: gzip read: %w", err)
 	}
-	if int64(len(raw)) > MaxSnapshotBytes {
-		return nil, fmt.Errorf("intel: decompressed snapshot exceeds %d bytes (cap)", MaxSnapshotBytes)
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("intel: decompressed snapshot exceeds %d bytes (cap)", maxBytes)
 	}
 	return raw, nil
 }

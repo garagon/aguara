@@ -3,8 +3,11 @@ package intel
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func sampleSnapshot() Snapshot {
@@ -97,19 +100,54 @@ func TestDecodeSnapshotGZIPRejectsNewerSchema(t *testing.T) {
 }
 
 func TestDecodeSnapshotGZIPEnforcesSizeCap(t *testing.T) {
-	// Highly compressible payload that inflates past MaxSnapshotBytes:
-	// the gz stays tiny, the decompressed size must trip the cap.
+	// Exercise the actual reader at small bounds, including buffer growth. The
+	// production wrapper's 64 MiB bound is locked in TestProductionReadLimitWiring.
+	for _, limit := range []int64{1, 1024, 8192} {
+		for _, delta := range []int64{-1, 0, 1} {
+			t.Run(fmt.Sprintf("limit=%d/delta=%d", limit, delta), func(t *testing.T) {
+				payload := bytes.Repeat([]byte("a"), int(limit+delta))
+				got, err := decompressGZIP(gzipFixture(t, payload), limit)
+				if delta > 0 {
+					require.EqualError(t, err, fmt.Sprintf("intel: decompressed snapshot exceeds %d bytes (cap)", limit))
+					require.Nil(t, got)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, payload, got)
+				}
+			})
+		}
+	}
+}
+
+func gzipFixture(t *testing.T, payload []byte) []byte {
+	t.Helper()
 	var buf bytes.Buffer
-	huge := bytes.Repeat([]byte("a"), int(MaxSnapshotBytes)+1024)
 	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(huge); err != nil {
-		t.Fatalf("gzip write: %v", err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("gzip close: %v", err)
-	}
-	if _, err := DecompressGZIP(buf.Bytes()); err == nil {
-		t.Fatal("expected size-cap error on oversized decompressed payload")
+	_, err := zw.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+func TestDecompressGZIPCombinedMembersAndErrors(t *testing.T) {
+	const limit = 1024
+	member := gzipFixture(t, bytes.Repeat([]byte("a"), limit/2))
+	combined := append(append([]byte(nil), member...), member...)
+	got, err := decompressGZIP(combined, limit)
+	require.NoError(t, err)
+	require.Len(t, got, limit)
+	combined = append(combined, gzipFixture(t, []byte("a"))...)
+	got, err = decompressGZIP(combined, limit)
+	require.EqualError(t, err, "intel: decompressed snapshot exceeds 1024 bytes (cap)")
+	require.Nil(t, got)
+
+	valid := gzipFixture(t, []byte("small payload"))
+	corrupt := append([]byte(nil), valid...)
+	corrupt[len(corrupt)-8] ^= 1 // Bad CRC, not an oversized body.
+	for _, data := range [][]byte{valid[:len(valid)-1], corrupt} {
+		got, err := decompressGZIP(data, limit)
+		require.ErrorContains(t, err, "intel: gzip read:")
+		require.Nil(t, got)
 	}
 }
 
