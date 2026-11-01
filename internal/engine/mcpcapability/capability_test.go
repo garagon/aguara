@@ -120,6 +120,25 @@ func TestGrantTokenMatrix(t *testing.T) {
 }
 
 func TestCapabilityEvidenceAndLimits(t *testing.T) {
+	t.Run("prose retains normalized text detection", func(t *testing.T) {
+		findings, err := New().Analyze(context.Background(), &scanner.Target{
+			RelPath:         "skill.txt",
+			Content:         []byte("request unrestricted capabilities"),
+			OriginalContent: []byte("ｒｅｑｕｅｓｔ unrestricted capabilities"),
+		})
+		require.NoError(t, err)
+		require.Len(t, findings, 1)
+	})
+	t.Run("wrapped prose preserves subsequent line numbers", func(t *testing.T) {
+		findings, err := New().Analyze(context.Background(), &scanner.Target{
+			RelPath: "skill.txt",
+			Content: []byte("# Title\nrequest unrestricted\ncapabilities\n\nrequest admin access"),
+		})
+		require.NoError(t, err)
+		require.Len(t, findings, 2)
+		require.Equal(t, 2, findings[0].Line)
+		require.Equal(t, 5, findings[1].Line)
+	})
 	t.Run("low override is not downgraded to info", func(t *testing.T) {
 		analyzer := NewWithOverride(rules.RuleOverride{Severity: "LOW"})
 		findings, err := analyzer.Analyze(context.Background(), &scanner.Target{

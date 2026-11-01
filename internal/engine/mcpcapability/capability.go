@@ -168,17 +168,19 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 	if text {
 		// Prose requests remain supported. Configuration data in JSON/YAML
 		// strings and comments is not scanned as natural-language instructions.
+		// Keep the normalized text view for prose, but never for config parsing.
+		prose := target.Content
 		line, lineStart, previous := 1, 0, 0
-		for _, match := range request.FindAllIndex(source, -1) {
+		for _, match := range request.FindAllIndex(prose, -1) {
 			if err := ctx.Err(); err != nil {
 				return findings, err
 			}
-			between := source[previous:match[0]]
+			between := prose[previous:match[0]]
 			line += bytes.Count(between, []byte("\n"))
 			if newline := bytes.LastIndexByte(between, '\n'); newline >= 0 {
 				lineStart = previous + newline + 1
 			}
-			emit(line, match[0]-lineStart+1, string(source[match[0]:match[1]]))
+			emit(line, match[0]-lineStart+1, string(prose[match[0]:match[1]]))
 			previous = match[0]
 		}
 	}
