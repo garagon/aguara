@@ -1,0 +1,83 @@
+name: Docker validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "benchmarks/Dockerfile*"
+      - "go.mod"
+      - "go.sum"
+      - ".github/test-fixtures/**"
+      - ".github/workflows/docker-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile, benchmarks/Dockerfile, benchmarks/Dockerfile.race]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build without publishing
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          docker build --file "$DOCKERFILE" --tag aguara:pr \
+            --build-arg VERSION=pr-test --build-arg COMMIT="$GITHUB_SHA" .
+
+      - name: Check non-root user
+        run: |
+          uid=$(docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --entrypoint id aguara:pr -u)
+          test "$uid" = 10001
+
+      - name: Check runtime scans offline
+        if: matrix.dockerfile == 'Dockerfile'
+        shell: bash
+        run: |
+          run=(docker run --rm --network none --read-only --cap-drop ALL
+            --security-opt no-new-privileges --memory 512m --cpus 2
+            --env GOMAXPROCS=2 --env GOMEMLIMIT=384MiB
+            --mount "type=bind,src=$GITHUB_WORKSPACE/.github/test-fixtures,dst=/fixtures,readonly")
+
+          version=$("${run[@]}" aguara:pr --no-update-check version)
+          test "$version" = "aguara pr-test (commit: $GITHUB_SHA)"
+
+          "${run[@]}" aguara:pr scan --no-update-check --workers 1 \
+            --format json --ci /fixtures/clean > "$RUNNER_TEMP/clean.json"
+          jq -e '(.findings // []) | length == 0' "$RUNNER_TEMP/clean.json"
+
+          # CI mode must ignore the fixture's attempt to suppress its own injection.
+          status=0
+          "${run[@]}" aguara:pr scan --no-update-check --workers 1 \
+            --format json --ci /fixtures/untrusted-policy \
+            > "$RUNNER_TEMP/untrusted.json" || status=$?
+          test "$status" = 1
+          jq -e '.findings | any(.rule_id == "PROMPT_INJECTION_001")' \
+            "$RUNNER_TEMP/untrusted.json"
+
+      - name: Check validation-image toolchains without running benchmarks
+        if: matrix.dockerfile != 'Dockerfile'
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --entrypoint go aguara:pr version
+
+      - name: Check race-image C compiler
+        if: matrix.dockerfile == 'benchmarks/Dockerfile.race'
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --entrypoint gcc aguara:pr --version
