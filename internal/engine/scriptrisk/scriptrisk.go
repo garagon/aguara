@@ -110,6 +110,8 @@ func analyzePython(target *scanner.Target) []types.Finding {
 	}
 	if line, text, ok := findPersistence(codeStatements, sourceStatements); ok {
 		findings = append(findings, finding(RuleSystemPersistence, target, line, text))
+	} else if line, text, ok := findDirectCronWrite(codeStatements, pythonStatementsFromViews(codeView, source)); ok {
+		findings = append(findings, finding(RuleSystemPersistence, target, line, text))
 	}
 	return findings
 }

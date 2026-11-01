@@ -18,6 +18,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Python scripts that directly write a literal cron task through
+  `open(...).write(...)` to `/etc/cron.d/<name>` or `/etc/crontab` are again
+  detected by `SC-EX-007`. Read-only opens, comments, examples and unrelated
+  paths do not supply the write evidence. The rule keeps its ID and severity;
+  dynamic paths, handle aliases and arbitrary cron syntax are not resolved.
 - JSON/YAML capability drops, explicit `setuid: false` / `setgid: false`,
   plain descriptions and full-line comments no longer trigger SUPPLY_007
   from capability words alone. Capability additions and executable privilege
