@@ -50,7 +50,7 @@ CI requires: `make build && make test && make vet && make lint` all passing.
 
 ## Architecture
 
-Aguara is a deterministic static security scanner for AI agent skills and MCP servers. No LLM, no network calls. Go 1.25, module `github.com/garagon/aguara`.
+Aguara is a deterministic static security scanner for AI agent skills and MCP servers. No LLM, no network calls. The minimum Go version is declared in `go.mod`; module `github.com/garagon/aguara`.
 
 ### Public Library API (`aguara.go`, `options.go`)
 

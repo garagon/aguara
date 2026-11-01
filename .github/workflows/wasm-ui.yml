@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "cmd/wasm/**"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/wasm-ui.yml"
 
 permissions:
