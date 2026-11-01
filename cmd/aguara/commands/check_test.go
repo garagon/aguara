@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -289,15 +287,7 @@ func TestCheckCIExitsNonZero(t *testing.T) {
 	require.NoError(t, os.MkdirAll(nm, 0o755))
 	writeFakeNPMPackage(t, nm, "event-stream", "3.3.6")
 
-	cmd := exec.Command("go", "test", "-race", "-count=1",
-		"-run", "TestCheckCIExitsNonZeroHelper",
-		"./cmd/aguara/commands/",
-	)
-	cmd.Dir = filepath.Join("..", "..", "..")
-	cmd.Env = append(os.Environ(), "AGUARA_TEST_CHECK_CI_DIR="+dir)
-
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected non-zero exit: %s", string(out))
+	requireThresholdSubprocess(t, "TestCheckCIExitsNonZeroHelper", "AGUARA_TEST_CHECK_CI_DIR="+dir)
 }
 
 // TestCheckCIExitsNonZeroHelper is invoked by TestCheckCIExitsNonZero
@@ -325,9 +315,7 @@ func TestCheckCIExitsNonZeroHelper(t *testing.T) {
 		resetFlags()
 	})
 
-	if err := rootCmd.Execute(); errors.Is(err, ErrThresholdExceeded) {
-		os.Exit(1)
-	}
+	exitAtThreshold(t, rootCmd.Execute())
 }
 
 func TestResolveCheckTargetExplicitFlags(t *testing.T) {

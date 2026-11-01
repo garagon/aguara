@@ -106,6 +106,10 @@ func (s *Store) ensureDir() error {
 // produce an error so a newer Aguara binary writing a v2 snapshot
 // does not get silently misread by an older binary.
 func (s *Store) Load() (*Snapshot, error) {
+	return s.load(MaxSnapshotBytes)
+}
+
+func (s *Store) load(maxBytes int64) (*Snapshot, error) {
 	f, err := os.Open(s.snapshotPath())
 	if err != nil {
 		return nil, err
@@ -114,13 +118,13 @@ func (s *Store) Load() (*Snapshot, error) {
 
 	// LimitReader caps how much we will accept. +1 byte so we can
 	// distinguish "exactly the cap" from "exceeded the cap".
-	limited := io.LimitReader(f, MaxSnapshotBytes+1)
+	limited := io.LimitReader(f, maxBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("intel store: read %s: %w", s.snapshotPath(), err)
 	}
-	if int64(len(data)) > MaxSnapshotBytes {
-		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", MaxSnapshotBytes)
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", maxBytes)
 	}
 
 	var snap Snapshot

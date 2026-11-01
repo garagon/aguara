@@ -5,6 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Explicit Kubernetes `SETUID`/`SETGID` capability requests now appear as LOW
+  configuration observations (`K8S_IDENTITY_CAPABILITIES_001`, `context`) rather
+  than HIGH SUPPLY_007 escalation findings. The requests remain visible; they
+  do not by themselves establish exploitation. Privilege commands in the same
+  manifest retain their existing detection. Only recognized JSON/YAML workload
+  structures are reclassified; ambiguous syntax keeps the existing checks.
+  Explicit `--fail-on low` still applies. The development catalog contains
+  259 detections: 191 pattern rules and 68 analyzer-emitted detections.
+
 ### Fixed
 
 - JSON/YAML capability drops, explicit `setuid: false` / `setgid: false`,

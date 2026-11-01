@@ -72,9 +72,10 @@ const (
 func DecisionImpactFor(ruleID string) string {
 	switch strings.ToUpper(strings.TrimSpace(ruleID)) {
 	case "CMDEXEC_013", // ordinary local shell-script execution
-		"EXTDL_009",  // ordinary pip package installation
-		"EXTDL_011",  // ordinary system package installation
-		"MCPCFG_004": // remote MCP endpoint is a trust boundary, not evidence of an attack
+		"EXTDL_009",                     // ordinary pip package installation
+		"EXTDL_011",                     // ordinary system package installation
+		"MCPCFG_004",                    // remote MCP endpoint is a trust boundary, not evidence of an attack
+		"K8S_IDENTITY_CAPABILITIES_001": // an explicit permission request, not demonstrated escalation
 		return DecisionImpactContext
 	default:
 		return DecisionImpactReview
@@ -101,6 +102,7 @@ const (
 	AnalyzerSkillChain    = "skill-chain"
 	AnalyzerSkillPolicy   = "skill-policy"
 	AnalyzerMCPCapability = "mcp-capability"
+	AnalyzerKubePolicy    = "kube-policy"
 	AnalyzerPattern       = "" // YAML-driven rules; empty so JSON omits the field
 )
 

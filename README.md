@@ -258,12 +258,14 @@ The v0.28.0 catalog contains **258 detections: 192 YAML pattern rules and 66 ana
 
 ## Rules and Architecture
 
-Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. On the development branch, fourteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. Skill-chain correlation runs separately across files.
+Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. On the development branch, fifteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. Skill-chain correlation runs separately across files.
 
 The development branch moves MCP_009 to a configuration parser without adding a
 new detection: broad capability grants are distinguished from `drop`/`deny`
-values and unrelated fields. Its catalog remains 258 detections, now split into
-191 pattern rules and 67 analyzer-emitted detections.
+values and unrelated fields. It also separates explicit Kubernetes `SETUID`/`SETGID`
+requests into LOW configuration observations, while privilege commands retain
+SUPPLY_007. This is not a full Kubernetes compliance check. The development
+catalog contains 259 detections: 191 pattern rules and 68 analyzer-emitted detections.
 
 Package-intelligence checking is a separate path used by `check` and combined with content analysis by `audit`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the package layout and [RULES.md](RULES.md) for detection details.
 

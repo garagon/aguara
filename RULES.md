@@ -1,6 +1,15 @@
 # Aguara Rule Catalog
 
-The current tree contains **191 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, mcp-capability, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**258 cataloged in total**). Run `aguara list-rules` for the installed binary's count and `aguara explain <RULE_ID>` for details.
+The current tree contains **191 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, mcp-capability, kube-policy, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**259 cataloged in total**). Run `aguara list-rules` for the installed binary's count and `aguara explain <RULE_ID>` for details.
+
+`K8S_IDENTITY_CAPABILITIES_001` is a LOW `container-security` observation with
+`context` impact. It identifies explicit `SETUID`/`SETGID` additions at recognized
+Kubernetes container paths, not proven escalation or host access. Privilege
+commands remain under SUPPLY_007; MCP_009 broad grants are unchanged. Aliases,
+templates and ambiguous structures keep legacy matching rather than receiving
+this classification. Disabling the new ID hides the observation without bringing
+back a SUPPLY_007 finding for the same declaration. Like other new analyzer rules,
+it supports `--disable-rule`, not the legacy YAML severity-override mechanism.
 
 MCP_009 uses the `mcp-capability` parser to distinguish broad grants from
 capability drops and denies. It reads literal scalar/list values and

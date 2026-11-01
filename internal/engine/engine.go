@@ -28,6 +28,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/agentpolicy"
 	"github.com/garagon/aguara/internal/engine/ci"
 	"github.com/garagon/aguara/internal/engine/jsrisk"
+	"github.com/garagon/aguara/internal/engine/kubepolicy"
 	"github.com/garagon/aguara/internal/engine/mcpcapability"
 	"github.com/garagon/aguara/internal/engine/nlp"
 	"github.com/garagon/aguara/internal/engine/npmpolicy"
@@ -56,6 +57,7 @@ func DefaultAnalyzers() []scanner.Analyzer {
 	return []scanner.Analyzer{
 		ci.New(),
 		mcpcapability.New(),
+		kubepolicy.New(),
 		pkgmeta.New(),
 		jsrisk.New(),
 		pyrisk.New(),
@@ -99,6 +101,7 @@ func RuleMetadata() []rulemeta.Rule {
 	var out []rulemeta.Rule
 	out = append(out, ci.RuleMetadata()...)
 	out = append(out, mcpcapability.RuleMetadata()...)
+	out = append(out, kubepolicy.RuleMetadata()...)
 	out = append(out, pkgmeta.RuleMetadata()...)
 	out = append(out, jsrisk.RuleMetadata()...)
 	out = append(out, pyrisk.RuleMetadata()...)
