@@ -235,7 +235,11 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 		if patternIndex < 64 && patternMask&(uint64(1)<<patternIndex) == 0 {
 			continue
 		}
-		hits := matchPattern(pat, content, lowerContent, lines)
+		patternContent := content
+		if rule.ID == "SUPPLY_007" && pat.Type == rules.PatternRegex && pat.Value == privilegeWordPattern {
+			patternContent = privilegeWordContent(target, content)
+		}
+		hits := matchPattern(pat, patternContent, lowerContent, lines)
 		if len(hits) > 0 {
 			hitPatterns++
 		}
