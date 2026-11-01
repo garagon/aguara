@@ -7,6 +7,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- JSON/YAML capability drops, explicit `setuid: false` / `setgid: false`,
+  plain descriptions and full-line comments no longer trigger SUPPLY_007
+  from capability words alone. Capability additions and executable privilege
+  changes remain detectable. Ambiguous syntax retains the existing checks;
+  rule identity, severity and catalog counts are unchanged.
 - Capability removal such as Kubernetes `capabilities: {drop: [ALL]}` no
   longer triggers MCP_009. Broad grants under `add`, `allow`, or `grant`
   remain detectable, including YAML block mappings. The check now reads
