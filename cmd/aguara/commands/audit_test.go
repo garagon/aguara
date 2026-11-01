@@ -3,9 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -175,15 +173,7 @@ func TestAuditCIFailsOnCritical(t *testing.T) {
 		0o644,
 	))
 
-	cmd := exec.Command("go", "test", "-race", "-count=1",
-		"-run", "TestAuditCIFailsOnCriticalHelper",
-		"./cmd/aguara/commands/",
-	)
-	cmd.Dir = filepath.Join("..", "..", "..")
-	cmd.Env = append(os.Environ(), "AGUARA_TEST_AUDIT_CI_DIR="+dir)
-
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, "expected non-zero exit: %s", string(out))
+	requireThresholdSubprocess(t, "TestAuditCIFailsOnCriticalHelper", "AGUARA_TEST_AUDIT_CI_DIR="+dir)
 }
 
 // TestAuditCIFailsOnCriticalHelper is invoked by TestAuditCIFailsOnCritical
@@ -210,9 +200,7 @@ func TestAuditCIFailsOnCriticalHelper(t *testing.T) {
 		resetFlags()
 	})
 
-	if err := rootCmd.Execute(); errors.Is(err, ErrThresholdExceeded) {
-		os.Exit(1)
-	}
+	exitAtThreshold(t, rootCmd.Execute())
 }
 
 // TestAuditVerdictTriStateTable locks the 3x3 truth table for the
