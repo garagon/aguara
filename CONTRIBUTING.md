@@ -44,6 +44,7 @@ internal/
     scriptrisk/        Script Risk: decoded execution, persistence, unsafe package sources
     skillpolicy/       Skill Policy: SKILL.md frontmatter trust posture
     mcpcapability/     Literal capability grants in JSON/YAML and text snippets
+    kubepolicy/        Kubernetes identity-capability posture observations
     skillchain/        Skill Chain: instruction-to-helper project correlation
     rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
     npmpolicy/         Npm Policy: package.json / .npmrc install trust

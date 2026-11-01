@@ -25,6 +25,7 @@ var categoryMultiplier = map[string]float64{
 	"rug-pull":            1.5,
 	"toxic-flow":          1.4,
 	"agent-trust":         1.5,
+	"container-security":  1.0,
 }
 
 // severityBase maps severity to base score points.

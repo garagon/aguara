@@ -31,6 +31,7 @@ type Target struct {
 	lines      []string
 	strOnce    sync.Once
 	strContent string
+	privilege  privilegeMemo
 }
 
 // SourceContent returns original syntax bytes, falling back to Content for

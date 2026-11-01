@@ -39,6 +39,7 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 		"AGENTCFG_HOOK_FETCH_EXEC_001":   rulemeta.AnalyzerAgentPolicy,
 		"AGENT_SKILL_WILDCARD_TOOLS_001": rulemeta.AnalyzerSkillPolicy,
 		"MCP_009":                        rulemeta.AnalyzerMCPCapability,
+		"K8S_IDENTITY_CAPABILITIES_001":  rulemeta.AnalyzerKubePolicy,
 		"PY_DECODE_EXEC_001":             rulemeta.AnalyzerScriptRisk,
 		"AGENT_FORCED_HELPER_RISK_001":   rulemeta.AnalyzerSkillChain,
 		// And one pattern rule from the YAML catalog (analyzer
@@ -64,7 +65,7 @@ func TestBuildAssignsDecisionImpact(t *testing.T) {
 			"%s must expose the same decision impact as scanner findings", r.ID)
 	}
 
-	for _, id := range []string{"CMDEXEC_013", "EXTDL_009", "EXTDL_011", "MCPCFG_004"} {
+	for _, id := range []string{"CMDEXEC_013", "EXTDL_009", "EXTDL_011", "MCPCFG_004", "K8S_IDENTITY_CAPABILITIES_001"} {
 		contextRule, err := rulecatalog.FindByID(rulecatalog.Options{}, id)
 		require.NoError(t, err)
 		require.Equal(t, rulemeta.DecisionImpactContext, contextRule.DecisionImpact)

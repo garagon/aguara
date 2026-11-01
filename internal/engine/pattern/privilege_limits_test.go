@@ -6,7 +6,6 @@ import (
 
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func TestPrivilegeContextConservativeLimits(t *testing.T) {
@@ -23,26 +22,6 @@ func TestPrivilegeContextConservativeLimits(t *testing.T) {
 		OriginalContent: []byte("\uff43apabilities: {drop: [SETUID]}"),
 	}
 	require.Equal(t, content, privilegeWordContent(target, content))
-}
-
-func TestPrivilegePositionCursor(t *testing.T) {
-	content := "\u03b1\u03b2: x\nnext: SETUID"
-	lines := []int{0, 8}
-	var cursor privilegePosition
-	for _, tc := range []struct{ line, column, offset int }{
-		{1, 1, 0}, {1, 3, 4}, {1, 5, 6}, {2, 1, 8}, {2, 7, 14},
-	} {
-		offset, ok := cursor.locate(&yaml.Node{Line: tc.line, Column: tc.column}, content, lines)
-		require.True(t, ok)
-		require.Equal(t, tc.offset, offset)
-	}
-	for _, node := range []yaml.Node{
-		{Line: 1, Column: 1}, {Line: 2, Column: 1}, {Line: 0, Column: 1},
-		{Line: 3, Column: 1}, {Line: 2, Column: 0}, {Line: 2, Column: 100},
-	} {
-		_, ok := cursor.locate(&node, content, lines)
-		require.False(t, ok)
-	}
 }
 
 func TestPrivilegeCompactJSONPositions(t *testing.T) {

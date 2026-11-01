@@ -112,10 +112,15 @@ func TestPrivilegeCustomPatternsUnchanged(t *testing.T) {
 			ID: tc.id, Name: "Custom privilege pattern", Severity: "HIGH", Category: "supply-chain",
 			MatchMode: "any", Patterns: []rules.RawPattern{{Type: rules.PatternRegex, Value: tc.pattern}},
 		})
-		findings, err := pattern.NewMatcher([]*rules.CompiledRule{rule}).Analyze(context.Background(), &scanner.Target{
-			RelPath: "config.yaml", Content: []byte("capabilities: {drop: [SETUID]}"),
-		})
-		require.NoError(t, err)
-		require.Len(t, findings, 1)
+		for _, content := range []string{
+			"capabilities: {drop: [SETUID]}",
+			`{"apiVersion":"v1","kind":"Pod","spec":{"containers":[{"securityContext":{"capabilities":{"add":["SETUID"]}}}]}}`,
+		} {
+			findings, err := pattern.NewMatcher([]*rules.CompiledRule{rule}).Analyze(context.Background(), &scanner.Target{
+				RelPath: "config.yaml", Content: []byte(content),
+			})
+			require.NoError(t, err)
+			require.Len(t, findings, 1)
+		}
 	}
 }
