@@ -38,6 +38,7 @@ func TestBuildIncludesYAMLAndAnalyzerRules(t *testing.T) {
 		"PNPM_DANGEROUS_BUILDS_001":      rulemeta.AnalyzerPnpmPolicy,
 		"AGENTCFG_HOOK_FETCH_EXEC_001":   rulemeta.AnalyzerAgentPolicy,
 		"AGENT_SKILL_WILDCARD_TOOLS_001": rulemeta.AnalyzerSkillPolicy,
+		"MCP_009":                        rulemeta.AnalyzerMCPCapability,
 		"PY_DECODE_EXEC_001":             rulemeta.AnalyzerScriptRisk,
 		"AGENT_FORCED_HELPER_RISK_001":   rulemeta.AnalyzerSkillChain,
 		// And one pattern rule from the YAML catalog (analyzer
@@ -365,6 +366,8 @@ func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {
 		"SHELL_UNSAFE_PIP_SOURCE_001", "SHELL_UNSAFE_NPM_SOURCE_001",
 		// skill-policy frontmatter posture.
 		"AGENT_SKILL_WILDCARD_TOOLS_001",
+		// mcp-capability (migrated from YAML without a new rule ID).
+		"MCP_009",
 		// skill-chain cross-file correlation.
 		"AGENT_FORCED_HELPER_RISK_001",
 	}

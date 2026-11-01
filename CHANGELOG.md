@@ -5,6 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Capability removal such as Kubernetes `capabilities: {drop: [ALL]}` no
+  longer triggers MCP_009. Broad grants under `add`, `allow`, or `grant`
+  remain detectable, including YAML block mappings. The check now reads
+  configuration structure, so comments, descriptions, and unrelated sibling
+  fields cannot supply its grant value.
+- MCP_009 keeps its ID, HIGH severity, category, and severity/disable overrides.
+  Its analyzer is now `mcp-capability` instead of `pattern`; the catalog total
+  is unchanged (191 pattern rules and 67 analyzer-emitted detections).
+
 ## [0.28.0] - 2026-09-10
 
 A project should not decide what its security review is allowed to see.

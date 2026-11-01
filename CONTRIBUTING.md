@@ -43,6 +43,7 @@ internal/
     pyrisk/            PyRisk: Python install-hook remote-JS execution
     scriptrisk/        Script Risk: decoded execution, persistence, unsafe package sources
     skillpolicy/       Skill Policy: SKILL.md frontmatter trust posture
+    mcpcapability/     Literal capability grants in JSON/YAML and text snippets
     skillchain/        Skill Chain: instruction-to-helper project correlation
     rsbuild/           RSBuild: Cargo build.rs wallet exfil binding
     npmpolicy/         Npm Policy: package.json / .npmrc install trust
@@ -52,7 +53,7 @@ internal/
     rugpull/           Rug-pull detection analyzer
     toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation
   rules/               Rule engine: YAML loader, compiler, self-tester
-    builtin/           192 embedded rules across 13 YAML files (go:embed)
+    builtin/           191 embedded rules across 13 YAML files (go:embed)
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown

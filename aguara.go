@@ -262,6 +262,20 @@ type Scanner struct {
 	cfg        *scanConfig
 }
 
+func compileOverrides(in map[string]RuleOverride) map[string]rules.RuleOverride {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]rules.RuleOverride, len(in))
+	for id, ovr := range in {
+		out[id] = rules.RuleOverride{
+			Severity: ovr.Severity, Disabled: ovr.Disabled,
+			ApplyToTools: ovr.ApplyToTools, ExemptTools: ovr.ExemptTools,
+		}
+	}
+	return out
+}
+
 // NewScanner creates a pre-compiled scanner with the given options. Reusable
 // scanners treat target-owned ignore policy as untrusted by default. Call once
 // at startup and reuse for all subsequent scans.
@@ -275,8 +289,17 @@ func NewScanner(opts ...Option) (*Scanner, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Pattern overrides are already reflected in cr.compiled. Only carry
+	// the migrated rule's override into its analyzer catalog entry.
+	var migratedOverrides map[string]rulecatalog.Override
+	if override, ok := cfg.ruleOverrides["MCP_009"]; ok {
+		migratedOverrides = map[string]rulecatalog.Override{
+			"MCP_009": {Severity: override.Severity, Disabled: override.Disabled},
+		}
+	}
 	catalog := rulecatalog.FromCompiled(cr.compiled, rulecatalog.Options{
 		DisableRuleIDs: cfg.disabledRules,
+		Overrides:      migratedOverrides,
 	})
 	return &Scanner{
 		compiled:   cr.compiled,
@@ -436,7 +459,7 @@ func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, erro
 	// rsbuild, pnpm-policy, NLP, toxicflow + the cross-file accumulator)
 	// is owned by internal/engine so the CLI and both library paths
 	// always register the same pipeline.
-	engine.RegisterDefaults(s)
+	engine.RegisterDefaults(s, compileOverrides(sc.cfg.ruleOverrides))
 
 	// Rug-pull: fresh state store per scan for thread safety
 	if sc.cfg.stateDir != "" {
@@ -491,15 +514,7 @@ func loadAndCompile(cfg *scanConfig) (*compileResult, error) {
 
 	var toolScoped map[string]scanner.ToolScopedRule
 	if len(cfg.ruleOverrides) > 0 {
-		overrides := make(map[string]rules.RuleOverride, len(cfg.ruleOverrides))
-		for id, ovr := range cfg.ruleOverrides {
-			overrides[id] = rules.RuleOverride{
-				Severity:     ovr.Severity,
-				Disabled:     ovr.Disabled,
-				ApplyToTools: ovr.ApplyToTools,
-				ExemptTools:  ovr.ExemptTools,
-			}
-		}
+		overrides := compileOverrides(cfg.ruleOverrides)
 		compiled, _ = rules.ApplyOverrides(compiled, overrides)
 		// Collect tool-scoped overrides for runtime filtering
 		for id, ovr := range overrides {
@@ -562,7 +577,7 @@ func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, err
 	}
 
 	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
-	engine.RegisterDefaults(s)
+	engine.RegisterDefaults(s, compileOverrides(cfg.ruleOverrides))
 
 	// Enable rug-pull detection when stateDir is provided
 	if cfg.stateDir != "" {
