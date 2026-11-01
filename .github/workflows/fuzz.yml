@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Fuzz all targets
         run: make fuzz FUZZTIME=60s FUZZPARALLEL=4
