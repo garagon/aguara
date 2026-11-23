@@ -44,10 +44,10 @@ jobs:
         with:
           # cosign-installer v4 defaults to cosign v3, whose new bundle
           # format and GoReleaser interop are not yet validated against
-          # our signing flow. Pin the last v2.x (v2.6.3) so the installer
+          # our signing flow. Pin the last v2.x (v2.6.5) so the installer
           # action update carries no signing-behavior change; a cosign v3
           # migration is a separate, deliberate PR.
-          cosign-release: "v2.6.3"
+          cosign-release: "v2.6.5"
 
       - uses: docker/metadata-action@v5
         id: meta
