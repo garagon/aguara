@@ -1341,8 +1341,8 @@ func collectFSWriteCalls(stripped []byte, stringRanges [][2]int) []fsWriteCall {
 		if insideStringInterior(stringRanges, mt[2]) {
 			continue
 		}
-		recv := string(stripped[mt[2]:mt[3]])
-		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+		recv := stripped[mt[2]:mt[3]]
+		if !fsBindings.aliases[string(recv)] && fsBindings.sourceByLocal[string(recv)] != "promises" {
 			continue
 		}
 		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
@@ -1363,8 +1363,8 @@ func collectFSWriteCalls(stripped []byte, stringRanges [][2]int) []fsWriteCall {
 		if insideStringInterior(stringRanges, mt[2]) {
 			continue
 		}
-		recv := string(stripped[mt[2]:mt[3]])
-		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+		recv := stripped[mt[2]:mt[3]]
+		if !fsBindings.aliases[string(recv)] && fsBindings.sourceByLocal[string(recv)] != "promises" {
 			continue
 		}
 		if !fsWriteMethodNames[string(stripped[mt[4]:mt[5]])] {
@@ -2347,18 +2347,18 @@ func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall
 		if insideStringInterior(stringRanges, mt[2]) {
 			continue
 		}
-		local := string(stripped[mt[2]:mt[3]])
-		method := fsBindings.sourceByLocal[local]
+		local := stripped[mt[2]:mt[3]]
+		method := fsBindings.sourceByLocal[string(local)]
 		methodLower := strings.ToLower(method)
 		// A *Sync local destructured from fs/promises does not exist.
-		if fsPromisesLocals[local] && strings.HasSuffix(methodLower, "sync") {
+		if fsPromisesLocals[string(local)] && strings.HasSuffix(methodLower, "sync") {
 			continue
 		}
 		cap, ok := fsDeleteMethodCaps[methodLower]
 		if !ok {
 			continue
 		}
-		if cap.fsExtra && fsExtraBindings.sourceByLocal[local] != method {
+		if cap.fsExtra && fsExtraBindings.sourceByLocal[string(local)] != method {
 			continue
 		}
 		add(mt[1], cap.mode)
@@ -2367,8 +2367,8 @@ func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall
 		if insideStringInterior(stringRanges, mt[2]) {
 			continue
 		}
-		recv := string(stripped[mt[2]:mt[3]])
-		if !fsBindings.aliases[recv] && fsBindings.sourceByLocal[recv] != "promises" {
+		recv := stripped[mt[2]:mt[3]]
+		if !fsBindings.aliases[string(recv)] && fsBindings.sourceByLocal[string(recv)] != "promises" {
 			continue
 		}
 		method := strings.ToLower(string(stripped[mt[4]:mt[5]]))
@@ -2378,7 +2378,7 @@ func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall
 			continue
 		}
 		cap := fsDeleteMethodCaps[method]
-		if cap.fsExtra && !fsExtraBindings.aliases[recv] {
+		if cap.fsExtra && !fsExtraBindings.aliases[string(recv)] {
 			continue
 		}
 		add(mt[1], cap.mode)
