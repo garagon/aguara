@@ -91,7 +91,7 @@ jobs:
         with:
           # Pin the last cosign v2.x to match release.yml / docker.yml;
           # a v3 migration is a separate deliberate change.
-          cosign-release: "v2.6.3"
+          cosign-release: "v2.6.5"
 
       - name: Sign manifest (Cosign keyless)
         run: |
