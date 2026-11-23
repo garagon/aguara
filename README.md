@@ -289,7 +289,11 @@ Custom rules and local configuration can change coverage. Review `.aguara.yml`, 
 
 ## Verifying Signed Releases
 
-Release archives have checksums signed with Cosign keyless and include SPDX SBOMs. Container images are signed at their digest with SBOM and SLSA provenance attestations. Verify the signing identity as well as the checksum:
+Release archives have checksums signed with Cosign keyless and include SPDX SBOMs. Container images are signed at their digest with SBOM and SLSA provenance attestations.
+
+Use Cosign v2.6.5 or newer on the 2.x line, or v3.1.3 or newer on 3.x. Older versions can skip the identity check for this bundle format ([GHSA-fx35-mq7g-6g98](https://github.com/sigstore/cosign/security/advisories/GHSA-fx35-mq7g-6g98)).
+
+Verify the signing identity as well as the checksum:
 
 ```bash
 VERSION=v0.28.0
