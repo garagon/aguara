@@ -17,7 +17,7 @@ make test
 ```
 
 **Requirements:** The minimum Go version is declared in `go.mod`. CI uses
-Go 1.26 and golangci-lint v2.10.1; use those versions to reproduce its checks.
+Go 1.27 and golangci-lint v2.15.0; use those versions to reproduce its checks.
 
 ### Makefile targets
 
