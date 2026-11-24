@@ -211,6 +211,19 @@ func TestCustomRuleFileProblemsAreReported(t *testing.T) {
 		writeFile(t, file, "name: No ID\nseverity: HIGH\ncategory: custom\npatterns:\n  - type: contains\n    value: x\n")
 		_, err := aguara.NewScanner(aguara.WithCustomRules(dir))
 		requireProblem(t, err, aguara.ConfigProblemInvalidRule, "", file)
+		if !strings.Contains(err.Error(), `document 1 (name "No ID")`) {
+			t.Fatalf("problem must say which rule lacks an id: %v", err)
+		}
+	})
+	t.Run("missing id without a name", func(t *testing.T) {
+		dir := t.TempDir()
+		file := filepath.Join(dir, "multi.yaml")
+		writeFile(t, file, "id: GOOD_001\nname: Good\nseverity: LOW\ncategory: custom\npatterns:\n  - type: contains\n    value: good\n---\nseverity: HIGH\ncategory: custom\npatterns:\n  - type: contains\n    value: x\n")
+		_, err := aguara.NewScanner(aguara.WithCustomRules(dir))
+		requireProblem(t, err, aguara.ConfigProblemInvalidRule, "", file)
+		if !strings.Contains(err.Error(), "document 2: rule missing ID") {
+			t.Fatalf("problem must say which document lacks an id: %v", err)
+		}
 	})
 	t.Run("oversized file", func(t *testing.T) {
 		dir := t.TempDir()

@@ -129,7 +129,7 @@ func Resolve(in Input) (*Resolution, error) {
 		for _, raw := range custom {
 			cr, err := rules.Compile(raw)
 			if err != nil {
-				addProblem(types.ConfigProblemInvalidRule, raw.ID, raw.Source, "%v", err)
+				addProblem(types.ConfigProblemInvalidRule, raw.ID, raw.Source, "%s%v", ruleLocation(raw), err)
 				continue
 			}
 			id := CanonicalID(cr.ID)
@@ -247,6 +247,19 @@ func Resolve(in Input) (*Resolution, error) {
 		res.Compiled = append(res.Compiled, cr)
 	}
 	return res, nil
+}
+
+// ruleLocation points at a rule that has no ID to name it by: its document
+// within the file and, when present, its name. Compile errors for rules with
+// an ID already name the rule.
+func ruleLocation(raw rules.RawRule) string {
+	if raw.ID != "" {
+		return ""
+	}
+	if raw.Name != "" {
+		return fmt.Sprintf("document %d (name %q): ", raw.Document, raw.Name)
+	}
+	return fmt.Sprintf("document %d: ", raw.Document)
 }
 
 // SeverityOverrides returns the accepted severity overrides keyed by

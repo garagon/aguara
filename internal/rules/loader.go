@@ -108,7 +108,7 @@ func parseMultiDocYAML(data []byte, source string) ([]RawRule, error) {
 	var rules []RawRule
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	for {
+	for document := 1; ; document++ {
 		var raw RawRule
 		err := decoder.Decode(&raw)
 		if err != nil {
@@ -121,6 +121,7 @@ func parseMultiDocYAML(data []byte, source string) ([]RawRule, error) {
 			continue
 		}
 		raw.Source = source
+		raw.Document = document
 		rules = append(rules, raw)
 	}
 	return rules, nil

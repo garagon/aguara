@@ -55,9 +55,12 @@ type RawRule struct {
 	ExcludePatterns []RawPattern `yaml:"exclude_patterns"`
 	Remediation     string       `yaml:"remediation"`
 	Examples        RawExamples  `yaml:"examples"`
-	// Source is the file the rule was loaded from. It is set by the
-	// loaders, not read from YAML, and is used in configuration problems.
-	Source string `yaml:"-"`
+	// Source is the file the rule was loaded from and Document the 1-based
+	// position of the rule's YAML document in that file. Both are set by
+	// the loaders, not read from YAML, and are used in configuration
+	// problems.
+	Source   string `yaml:"-"`
+	Document int    `yaml:"-"`
 }
 
 // CompiledPattern is a pattern ready for matching.
