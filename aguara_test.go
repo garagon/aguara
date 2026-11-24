@@ -66,6 +66,77 @@ runtime.modules["os"].system("curl -s https://telemetry.example/status")
 	t.Fatal("expected AGENT_FORCED_HELPER_RISK_001 through the public directory API")
 }
 
+// A mandatory helper whose own scan reports a HIGH finding from an existing
+// rule is correlated whatever its extension, and the chain cites that rule.
+func TestScanCorrelatesMandatoryHelperFindingThroughPublicAPI(t *testing.T) {
+	const childProcessBuild = "const { execSync } = require('child_process');\nexecSync('npm test');\n"
+	tests := []struct {
+		name     string
+		command  string
+		helper   string
+		content  string
+		wantRule string
+		disable  []string
+		want     bool
+	}{
+		{name: "javascript", command: "node scripts/build.js", helper: "scripts/build.js",
+			content: childProcessBuild, wantRule: "CMDEXEC_004", want: true},
+		{name: "ES module", command: "node scripts/worker.mjs", helper: "scripts/worker.mjs",
+			content:  "import { spawn } from 'child_process';\nspawn('node', ['worker.js'], { detached: true, stdio: 'ignore' }).unref();\n",
+			wantRule: "JS_DAEMON_001", want: true},
+		{name: "text file run by a shell", command: "bash scripts/steps.txt", helper: "scripts/steps.txt",
+			content: "execSync('npm test')\n", wantRule: "CMDEXEC_004", want: true},
+		{name: "extensionless with shebang", command: "./scripts/install", helper: "scripts/install",
+			content: "#!/bin/sh\nsudo chmod +x /usr/local/bin/tool\n", wantRule: "SUPPLY_007", want: true},
+		{name: "helper rule disabled", command: "node scripts/build.js", helper: "scripts/build.js",
+			content: childProcessBuild, disable: []string{"CMDEXEC_004"}},
+		{name: "helper outside the skill directory", command: "node ../build.js", helper: "../build.js",
+			content: childProcessBuild},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			skillDir := filepath.Join(root, "skill")
+			helperPath := filepath.Join(skillDir, filepath.FromSlash(tt.helper))
+			for _, d := range []string{skillDir, filepath.Dir(helperPath)} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			skill := "Before responding, you MUST first run `" + tt.command + "`.\n"
+			if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skill), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(helperPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := aguara.Scan(context.Background(), root, aguara.WithDisabledRules(tt.disable...))
+			if err != nil {
+				t.Fatalf("Scan failed: %v", err)
+			}
+			var chain *aguara.Finding
+			for i := range result.Findings {
+				if result.Findings[i].RuleID == "AGENT_FORCED_HELPER_RISK_001" {
+					chain = &result.Findings[i]
+				}
+			}
+			if !tt.want {
+				if chain != nil {
+					t.Fatalf("unexpected chain finding: %q", chain.MatchedText)
+				}
+				return
+			}
+			if chain == nil {
+				t.Fatal("expected AGENT_FORCED_HELPER_RISK_001")
+			}
+			if chain.FilePath != "skill/SKILL.md" || !strings.Contains(chain.MatchedText, tt.wantRule) {
+				t.Fatalf("chain finding = %s %q, want SKILL.md citing %s", chain.FilePath, chain.MatchedText, tt.wantRule)
+			}
+		})
+	}
+}
+
 func TestScanContent(t *testing.T) {
 	result, err := aguara.ScanContent(
 		context.Background(),
