@@ -43,3 +43,29 @@ func TestScanRecordsAppliedTargetPolicy(t *testing.T) {
 	require.Empty(t, result.TargetPolicy.InlineSuppressed)
 	require.Len(t, result.Findings, 4, "every file is reported when target policy is ignored")
 }
+
+// An ignore source that excluded nothing did not change the result, and
+// exclusions are attributed to the caller's patterns or the file's.
+func TestScanAttributesExclusionsToTheirSource(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+	write(".aguaraignore", "*.log\nnothing-matches.md\n")
+	write("notes.md", "match\n")
+	write("build.tmp", "match\n")
+
+	s := scanner.New(1)
+	s.SetProjectPolicyEnabled(true)
+	s.SetIgnorePatterns([]string{"*.tmp"})
+	result, err := s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Empty(t, result.TargetPolicy.IgnoreFile, "the .aguaraignore matched no file")
+	require.Equal(t, 1, result.TargetPolicy.IgnorePatternExclusions)
+
+	write("debug.log", "match\n")
+	result, err = s.Scan(context.Background(), dir)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, ".aguaraignore"), result.TargetPolicy.IgnoreFile)
+	require.Equal(t, 1, result.TargetPolicy.IgnorePatternExclusions)
+}

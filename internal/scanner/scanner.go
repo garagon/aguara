@@ -208,9 +208,10 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if discovery.LoadedIgnoreFile != "" {
+	if discovery.ExcludedByIgnoreFile > 0 {
 		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 	}
+	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
 	return result, nil
 }
 

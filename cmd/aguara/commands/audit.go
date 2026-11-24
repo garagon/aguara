@@ -351,7 +351,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {
-		noteProjectPolicy(cfg, result)
+		noteProjectPolicy(cmd, cfg, result)
 	}
 
 	if store != nil {

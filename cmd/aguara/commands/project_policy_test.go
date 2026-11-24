@@ -116,21 +116,51 @@ func TestScanCIFlagPolicyResolution(t *testing.T) {
 func TestProjectPolicyNoticeNamesAppliedFiles(t *testing.T) {
 	clearCIEnv(t)
 	dir := projectWith(t, map[string]string{
-		".aguara.yml":   "disable_rules:\n  - CRED_001\n",
-		".aguaraignore": "vendor-docs/\n",
-		"payload.md":    "# aguara-ignore-next-line PROMPT_INJECTION_001\n" + injectionPayload,
-		"other.md":      injectionPayload,
-		"clean.md":      "# notes\n",
+		".aguara.yml":        "severity: info\nformat: terminal\nignore:\n  - \"generated/**\"\ndisable_rules:\n  - CRED_001\n",
+		".aguaraignore":      "skipped.md\n",
+		"skipped.md":         injectionPayload,
+		"generated/notes.md": injectionPayload,
+		"payload.md":         "# aguara-ignore-next-line PROMPT_INJECTION_001\n" + injectionPayload,
+		"other.md":           injectionPayload,
+		"clean.md":           "# notes\n",
 	})
 	stderr := captureStderrBytes(t, func() {
 		_, _ = runScanJSONWithError(t, dir)
 	})
 	notice := string(stderr)
-	require.Contains(t, notice, filepath.Join(dir, ".aguara.yml"))
+	// Default severity and format are not settings that changed the run.
+	require.Contains(t, notice, filepath.Join(dir, ".aguara.yml")+" (ignore, disable_rules)")
 	require.Contains(t, notice, filepath.Join(dir, ".aguaraignore"))
 	require.Contains(t, notice, "inline aguara-ignore directives in payload.md")
 	require.NotContains(t, notice, "other.md", "a file whose findings were reported is not a suppression source")
 	require.NotContains(t, notice, "clean.md")
+}
+
+// The files `aguara init` scaffolds change nothing in a project without
+// the paths they exclude, so a scan stays quiet instead of printing the
+// notice on every run.
+func TestProjectPolicyNoticeSkipsPolicyThatChangedNothing(t *testing.T) {
+	clearCIEnv(t)
+	dir := projectWith(t, map[string]string{"notes.md": "# notes\n"})
+	captureStdoutBytes(t, func() { require.NoError(t, runCLI(t, "init", dir)) })
+	_, err := os.Stat(filepath.Join(dir, ".aguara.yml"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(dir, ".aguaraignore"))
+	require.NoError(t, err)
+
+	stderr := captureStderrBytes(t, func() {
+		_, err := runScanJSONWithError(t, dir)
+		require.NoError(t, err)
+	})
+	require.NotContains(t, string(stderr), "notice:")
+
+	// The scaffolded files are named once their "*.log" patterns exclude
+	// something: both the .aguaraignore and the config's ignore list.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "debug.log"), []byte(injectionPayload), 0o600))
+	stderr = captureStderrBytes(t, func() { _, _ = runScanJSONWithError(t, dir) })
+	require.Contains(t, string(stderr), filepath.Join(dir, ".aguara.yml")+" (ignore)")
+	require.NotContains(t, string(stderr), filepath.Join(dir, ".aguaraignore"),
+		"the config's identical pattern matched first, so the .aguaraignore changed nothing")
 }
 
 // Trusted runs with nothing to apply stay quiet.

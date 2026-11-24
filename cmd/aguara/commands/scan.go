@@ -58,8 +58,8 @@ configuration, CI workflow trust issues and supply-chain behavior.
 
 Policy owned by the scanned project (.aguara.yml, .aguaraignore and inline
 aguara-ignore directives) can exclude files and suppress findings. With the
-default --project-policy auto, a local scan applies it and prints a notice on
-stderr naming the files it applied. With --ci, or when a CI environment is
+default --project-policy auto, a local scan applies it and, when it changed
+the result, prints a notice on stderr naming what was applied. With --ci, or when a CI environment is
 detected (CI, GITHUB_ACTIONS, GITLAB_CI, CIRCLECI, BUILDKITE, JENKINS_URL,
 TEAMCITY_VERSION or TRAVIS is set), auto ignores it. Pass --project-policy
 trust to apply it in CI, or --project-policy ignore for unfamiliar content.`,
@@ -169,7 +169,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {
-		noteProjectPolicy(cfg, result)
+		noteProjectPolicy(cmd, cfg, result)
 	}
 
 	if store != nil {
@@ -309,7 +309,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	stopSpinner(sp)
 	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
 	if trustProjectPolicy {
-		noteProjectPolicy(cfg, aggregate)
+		noteProjectPolicy(cmd, cfg, aggregate)
 	}
 
 	if store != nil {
@@ -372,33 +372,6 @@ func applyCIDefaults() {
 	if os.Getenv("NO_COLOR") != "" {
 		flagNoColor = true
 	}
-}
-
-// noteProjectPolicy prints one stderr line when policy owned by the
-// scanned project shaped the result, naming the files that were applied.
-// A repository can hide its own findings through these files, so a run
-// that honored them says so; nothing is printed when none applied.
-func noteProjectPolicy(cfg config.Config, result *scanner.ScanResult) {
-	var applied []string
-	if cfg.Source != "" {
-		applied = append(applied, cfg.Source)
-	}
-	if result.TargetPolicy.IgnoreFile != "" {
-		applied = append(applied, result.TargetPolicy.IgnoreFile)
-	}
-	if files := result.TargetPolicy.InlineSuppressed; len(files) > 0 {
-		const maxListed = 3
-		listed, more := files, ""
-		if len(files) > maxListed {
-			listed, more = files[:maxListed], fmt.Sprintf(" and %d more", len(files)-maxListed)
-		}
-		applied = append(applied, "inline aguara-ignore directives in "+strings.Join(listed, ", ")+more)
-	}
-	if len(applied) == 0 {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "notice: applied policy owned by the scanned project: %s (pass --project-policy ignore to scan without it)\n",
-		output.TerminalText(strings.Join(applied, "; ")))
 }
 
 func resolveProjectPolicy(value string, autoTrust bool) (bool, error) {

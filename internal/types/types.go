@@ -344,12 +344,16 @@ type ScanResult struct {
 	TargetPolicy TargetPolicyUse `json:"-"`
 }
 
-// TargetPolicyUse records which policy owned by the scanned target was
-// applied, so a caller can tell the user that the project's own files
-// changed what was reported.
+// TargetPolicyUse records which exclusion and suppression policy changed
+// this result, so a caller can tell the user that a project's own files
+// changed what was reported. A source that changed nothing is not listed.
 type TargetPolicyUse struct {
-	// IgnoreFile is the target's .aguaraignore when it was read.
+	// IgnoreFile is the target's .aguaraignore when it excluded at least
+	// one entry.
 	IgnoreFile string
+	// IgnorePatternExclusions counts entries excluded by the caller's
+	// ignore patterns (the CLI passes a trusted .aguara.yml's `ignore`).
+	IgnorePatternExclusions int
 	// InlineSuppressed lists files whose aguara-ignore directives
 	// removed at least one finding, sorted.
 	InlineSuppressed []string

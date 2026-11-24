@@ -119,12 +119,19 @@ type TargetDiscovery struct {
 	IgnorePatterns    []string
 	MaxFileSize       int64 // 0 means use DefaultMaxFileSize
 	IgnoreProjectFile bool  // do not load target-owned .aguaraignore
-	// LoadedIgnoreFile is set by Discover to the .aguaraignore it read.
-	LoadedIgnoreFile string
+
+	// Discover counts the entries each pattern source excluded: the
+	// caller's IgnorePatterns and the patterns read from .aguaraignore.
+	// A source that excluded nothing did not change the result.
+	ExcludedByCallerPatterns int
+	ExcludedByIgnoreFile     int
+
+	callerPatterns int // IgnorePatterns[:callerPatterns] are the caller's
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
 func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
+	td.callerPatterns = len(td.IgnorePatterns)
 	if !td.IgnoreProjectFile {
 		if err := td.loadIgnoreFile(root); err != nil {
 			return nil, IncompleteScanError("read ignore policy", filepath.Join(root, ".aguaraignore"), "", err)
@@ -197,20 +204,26 @@ func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 			td.IgnorePatterns = append(td.IgnorePatterns, line)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	td.LoadedIgnoreFile = f.Name()
-	return nil
+	return scanner.Err()
 }
 
 func (td *TargetDiscovery) isIgnored(relPath string) bool {
-	for _, pattern := range td.IgnorePatterns {
+	for i, pattern := range td.IgnorePatterns {
 		if matchGlob(pattern, relPath) {
+			td.recordExclusion(i)
 			return true
 		}
 	}
 	return false
+}
+
+// recordExclusion attributes an exclusion to the source of pattern i.
+func (td *TargetDiscovery) recordExclusion(i int) {
+	if i < td.callerPatterns {
+		td.ExcludedByCallerPatterns++
+	} else {
+		td.ExcludedByIgnoreFile++
+	}
 }
 
 // Only skip an unreadable subtree when every descendant is excluded. A file
@@ -220,12 +233,14 @@ func (td *TargetDiscovery) isIgnoredSubtree(relPath string) bool {
 	if relPath == "." {
 		return false
 	}
-	for _, pattern := range td.IgnorePatterns {
+	for i, pattern := range td.IgnorePatterns {
 		if pattern == "*" || pattern == "**" {
+			td.recordExclusion(i)
 			return true
 		}
 		prefix, recursive := strings.CutSuffix(pattern, "/**")
 		if recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
+			td.recordExclusion(i)
 			return true
 		}
 	}
