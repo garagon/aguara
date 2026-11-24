@@ -19,7 +19,7 @@ func TestFormattersSayNothingWasScanned(t *testing.T) {
 		{"no coverage", nil, "Nothing was scanned: no scannable files under the target"},
 		{"path", &types.ScanCoverage{Scope: types.ScanScopePath}, "Nothing was scanned: no scannable files under the target"},
 		{"changed", &types.ScanCoverage{Scope: types.ScanScopeChanged}, "Nothing was scanned: no changed files under the target"},
-		{"auto", &types.ScanCoverage{Scope: types.ScanScopeAuto}, "Nothing was scanned: the discovered MCP configs"},
+		{"auto", &types.ScanCoverage{Scope: types.ScanScopeAuto}, "Nothing was scanned: no MCP client configuration files were found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

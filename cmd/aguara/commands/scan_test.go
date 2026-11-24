@@ -48,6 +48,7 @@ func resetFlags() {
 	flagBaseline = ""
 	flagWriteBaseline = ""
 	flagProjectPolicy = "auto"
+	flagFailOnEmpty = false
 	flagCheckPath = ""
 	flagCheckEcosystems = nil
 	flagCheckFailOn = ""

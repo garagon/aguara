@@ -156,6 +156,8 @@ aguara audit . --ci
 
 `audit --ci` fails on critical findings by default. `scan --ci` uses a high-or-above threshold instead. Review the threshold for the command you integrate; they are not interchangeable.
 
+A scan that matches no files reports that nothing was scanned and exits 0. Add `--fail-on-empty` to a `scan` gate so a mistyped path or an empty change set fails the step with exit code 2 instead.
+
 To introduce a gate in an existing project, record and review a baseline:
 
 ```bash

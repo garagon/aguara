@@ -41,7 +41,13 @@ var (
 	flagBaseline      string
 	flagWriteBaseline string
 	flagProjectPolicy string
+	flagFailOnEmpty   bool
 )
+
+// errNothingScanned fails a --fail-on-empty scan that evaluated no files.
+// It is not ErrThresholdExceeded: nothing was found because nothing was
+// read, so it exits 2 like other scans that could not do their job.
+var errNothingScanned = errors.New("no files were scanned and --fail-on-empty is set; check that the path points at the files you meant to scan")
 
 var scanCmd = &cobra.Command{
 	Use:     "scan [path]",
@@ -71,6 +77,7 @@ func init() {
 	addRulesFlag(scanCmd)
 	addDisableRuleFlag(scanCmd)
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
+	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
@@ -155,6 +162,15 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// An empty scan under --fail-on-empty still writes its report (which
+	// says nothing was scanned) but never establishes a baseline.
+	if flagFailOnEmpty && result.FilesScanned == 0 {
+		if err := writeOutput(result); err != nil {
+			return err
+		}
+		return errNothingScanned
+	}
+
 	// Baseline runs after redaction. Only non-baselineable findings are
 	// redacted (Baselineable mirrors the redaction predicate), so every
 	// fingerprint is computed from intact, non-secret matched text.
@@ -212,11 +228,6 @@ func runAutoScan(cmd *cobra.Command) error {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
 
-	if discovered.TotalClients() == 0 {
-		fmt.Println("No MCP configurations found — nothing to scan.")
-		return nil
-	}
-
 	// Collect unique config file paths
 	var paths []string
 	seen := map[string]bool{}
@@ -227,8 +238,13 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
-		len(paths), discovered.TotalClients())
+	// With no configs the run still produces its report in the selected
+	// format (stating that nothing was scanned), so --format, -o and
+	// --fail-on-empty behave the same as for any other empty scan.
+	if len(paths) > 0 {
+		fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
+			len(paths), discovered.TotalClients())
+	}
 
 	applyCIDefaults()
 
@@ -281,6 +297,9 @@ func runAutoScan(cmd *cobra.Command) error {
 
 	if err := writeOutput(aggregate); err != nil {
 		return err
+	}
+	if flagFailOnEmpty && aggregate.FilesScanned == 0 {
+		return errNothingScanned
 	}
 
 	return checkFailOnThreshold(aggregate)

@@ -317,7 +317,7 @@ func NothingScannedMessage(result *scanner.ScanResult) string {
 		case types.ScanScopeChanged:
 			return "Nothing was scanned: no changed files under the target."
 		case types.ScanScopeAuto:
-			return "Nothing was scanned: the discovered MCP configs had no scannable files."
+			return "Nothing was scanned: no MCP client configuration files were found."
 		}
 	}
 	return "Nothing was scanned: no scannable files under the target. This is not a clean result."
