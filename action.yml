@@ -1,5 +1,5 @@
 name: 'Aguara Security Scanner'
-description: 'Scan AI agent skills and MCP servers for security threats — prompt injection, data exfiltration, tool shadowing, and more.'
+description: 'Scan agent instructions, tool configurations, CI workflows and dependency manifests for security risks.'
 author: 'garagon'
 
 branding:
@@ -44,7 +44,7 @@ inputs:
     required: false
     default: ''
   version:
-    description: 'Aguara version to install (empty = latest). Must be a semver release tag like v0.14.4.'
+    description: 'Aguara version to install (empty = latest). Must be a semver release tag like vX.Y.Z.'
     required: false
     default: ''
   upload-sarif:
@@ -56,7 +56,7 @@ inputs:
       Advanced self-test ref. A 40-char SHA with an empty version builds that
       exact commit; a semver tag selects the install.sh revision.
       Normal consumers should leave this blank; the action automatically uses
-      its own pinned ref (e.g. v0.14.4 when you pin `uses: garagon/aguara@v0.14.4`).
+      its own pinned ref (e.g. vX.Y.Z when you pin `uses: garagon/aguara@vX.Y.Z`).
       The SHA mode exists for repository self-tests where `uses: ./` must run
       the binary from the same commit as action.yml and requires Go.
     required: false

@@ -28,14 +28,22 @@ Go 1.27 and golangci-lint v2.15.0; use those versions to reproduce its checks.
 | `make lint` | golangci-lint |
 | `make fmt` | gofmt |
 | `make vet` | go vet |
-| `make clean` | Remove binary |
+| `make run ARGS="scan ./path"` | Run the CLI from source |
+| `make bench` | Library, NLP and scanner benchmarks |
+| `make fuzz` | Run every fuzz target for `FUZZTIME` (default 10s) |
+| `make wasm` | Build the browser example in `cmd/wasm/` |
+| `make verify-docker` | Benchmarks, race tests and smoke tests in Docker |
+| `make clean` | Remove the binary and WASM build outputs |
 
 ## Project Structure
 
 ```
+aguara.go, options.go  Public Go library API
 cmd/aguara/            CLI entry point (Cobra)
+cmd/wasm/              Browser (WASM) example and its tests
+discover/              MCP client configuration discovery (public package)
 internal/
-  engine/
+  engine/              Analyzer registry (engine.go) and the analyzers below
     pattern/           Regex/contains matcher + encoded-payload decoders
     ci/                CI Trust: GitHub Actions workflow trust chains
     pkgmeta/           PkgMeta: package.json lifecycle / git-source chains
@@ -55,11 +63,19 @@ internal/
     toxicflow/         Toxic Flow: source/sink co-occurrence + capability correlation
   rules/               Rule engine: YAML loader, compiler, self-tester
     builtin/           191 embedded rules across 13 YAML files (go:embed)
+  rulemeta/            Analyzer rule metadata and decision impact
+  rulecatalog/         Unified catalog for list-rules and explain
+  kubeconfig/          Bounded Kubernetes configuration recognition
   scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader
-  state/               Persistence for incremental scanning
+  baseline/            Baseline files for scan and audit gates
+  packagecheck/        Lockfile and dependency-manifest parsers
+  incident/            Compromised-package and persistence checks, clean, embedded intel
+  intel/               Threat-intel snapshot, OSV import, signed bundle verification
+  state/               Hash store for rug-pull detection (--monitor)
+  update/              Release check used by `aguara version`
   types/               Shared types (Finding, Severity, ScanResult)
 ```
 
@@ -115,24 +131,30 @@ go test -race -count=1 -v ./internal/engine/pattern/...
 
 ## Running Aguara on this repo
 
-Aguara is a scanner whose own source intentionally contains attack patterns: rule YAML `examples.true_positive` blocks (used by the rule self-test suite), payload fixtures under `testdata/` and `sandbox/`, benchmark inputs in `scripts/`, and documentation that cites example attacks when explaining detections. A naive `aguara scan .` against a checkout produces thousands of findings dominated by that by-design content.
+Aguara is a scanner whose own source intentionally contains attack patterns: rule YAML `examples.true_positive` blocks (used by the rule self-test suite), attack payloads used as fixtures in Go tests, parser fixtures under `internal/*/testdata/`, and documentation that cites example attacks when explaining detections. Without exclusions, `aguara scan .` on a checkout is dominated by that by-design content, mostly the rule YAMLs and, after `make build`, the `aguara` binary, which embeds every rule.
 
-The repo ships a `.aguara.yml` at the root that excludes those paths so `aguara scan .` returns a manageable list of findings contributors can actually investigate. Do not copy this file into consumer projects; it is specific to scanner development.
+The repo ships a `.aguara.yml` at the root that excludes the rule definitions, an optional root `testdata/` directory and gitignored local working directories, `CHANGELOG.md`, `RULES.md`, `README.md` and compiled binaries. Do not copy this file into consumer projects; it is specific to scanner development.
 
-Expected behavior after a clean `make build`:
+After `make build`, a self-scan of a clean checkout still reports findings:
 
 ```bash
 ./aguara scan . --no-update-check
-# Roughly ~60 findings, all in test files that embed attack payloads as
-# unit-test fixtures. These are expected; investigate only if the file path
-# is not a `*_test.go` or similarly marked test/doc file.
 ```
 
-To scan the excluded paths deliberately (e.g. when validating that rule YAMLs still self-test after a pattern change), point the scanner at the specific path and Aguara will ignore the repo-root config for that target:
+These are expected. They come from:
+
+- `*_test.go` files that embed attack payloads as test fixtures (most of the findings).
+- Analyzer and rule-support code under `internal/` (for example `internal/engine/`, `internal/kubeconfig/` and `internal/incident/`), which contains the commands, paths and indicators it looks for.
+- Committed parser fixtures under `internal/packagecheck/testdata/`.
+- A few lines in contributor docs, `action.yml` and `.github/workflows/` that quote a rule example, mention a privilege capability, show an install command or request an OIDC token for signing.
+
+Investigate findings in files outside those groups, and findings that a change adds without introducing matching content. Saving a JSON report (`--format json -o <file>`) before and after a change makes new findings easy to spot.
+
+To scan the excluded paths deliberately (e.g. when validating that rule YAMLs still self-test after a pattern change), point the scanner at the specific path. The config is read only from the scan root, so the repo-root exclusions do not apply to that target:
 
 ```bash
-./aguara scan testdata/malicious --no-update-check      # verify malicious fixtures still detected
 ./aguara scan internal/rules/builtin --no-update-check  # rule examples re-scanned
+./aguara scan testdata/malicious --no-update-check      # local integration fixtures, if present
 ```
 
 CI currently does not gate on self-scan output; rule coverage is asserted by the Go test suite (rule self-tests against `examples.true_positive` / `false_positive`).
@@ -144,7 +166,7 @@ CI currently does not gate on self-scan output; rule coverage is asserted by the
 3. **Write tests** for new functionality.
 4. **Ensure all checks pass:**
    ```bash
-   make build && make test && make vet
+   make build && make test && make vet && make lint
    ```
 5. **Update CHANGELOG.md** under the `[Unreleased]` section.
 6. **Submit a PR** with a clear description of what changed and why.
@@ -158,16 +180,17 @@ CI currently does not gate on self-scan output; rule coverage is asserted by the
 
 ## Release Process
 
-**Before** tagging, run the pin-check script against the new version. Several files hardcode the current release tag (the scaffolded `aguara init` workflow, the action's `DEFAULT_REF`, the install.sh acceptance target, and the README install snippets). Bumping ONLY the git tag while leaving any of these on the old version ships a release whose first-touch UX still points at the prior version — PR #92 was that exact regression.
+**Before** tagging, run the pin-check script against the new version. Several files hardcode the current release tag (the scaffolded `aguara init` workflow, the action's `DEFAULT_REF`, the install.sh acceptance target, and the README install snippets). Bumping ONLY the git tag while leaving any of these on the old version ships a release whose first-touch UX still points at the prior version; PR #92 was that exact regression.
 
 ```bash
 VERSION=vX.Y.Z .github/scripts/check-version-pins.sh
 ```
 
-The script exits non-zero with a per-location `DRIFT:` report listing every file that still references the prior version. Fix each one in the release commit, re-run until it exits 0, then tag:
+The script exits non-zero with a per-location `DRIFT:` report listing every file that still references the prior version. Fix each one on the release branch (`release/vX.Y.Z`, together with the CHANGELOG entry), re-run until it exits 0, and merge the release PR. Then create an annotated tag on the merge commit and push it:
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
+git tag -a vX.Y.Z -m "Aguara vX.Y.Z" <merge-commit>
+git push origin vX.Y.Z
 ```
 
 GoReleaser and the Docker workflow run automatically. **Do not announce the release until the acceptance script passes**:

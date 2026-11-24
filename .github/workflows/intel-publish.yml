@@ -1,17 +1,17 @@
 name: Intel Publish
 
 # Publishes a signed advisory-intel bundle (the same artifact aguara
-# embeds at build time) to the rolling `intel-latest` release, so a
-# future `aguara update` / `--fresh` can fetch and verify it. This
-# workflow is the trust root for fresh intel: the manifest is signed
-# with Cosign keyless under this workflow's OIDC identity on main
-# (.github/workflows/intel-publish.yml@refs/heads/main).
+# embeds at build time) to the rolling `intel-latest` release. `aguara
+# update` and the `--fresh` option of `aguara check` and `aguara audit`
+# download that bundle and verify it before use. This workflow is the
+# trust root for fresh intel: the manifest is signed with Cosign keyless
+# under this workflow's OIDC identity on main
+# (.github/workflows/intel-publish.yml@refs/heads/main), which is the
+# identity the client checks.
 #
-# PR 0 scope: generator + publish + signing only. No runtime consumer
-# yet; aguara update / --fresh continue to fetch raw OSV until the
-# verifier lands (v0.21.0 PRs 1-3). End-to-end is validated post-merge
-# via a manual dispatch on main (a branch dispatch signs under a
-# different ref and will fail the in-workflow verify gate by design).
+# Run it from main (schedule or manual dispatch). A dispatch from any
+# other branch signs under a different ref and fails the in-workflow
+# verify gate by design.
 
 on:
   schedule:
@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           # --new-bundle-format writes the self-contained Sigstore
           # protobuf bundle (cert + signature + Rekor inclusion proof),
-          # which the in-process verifier (sigstore-go, v0.21.0 PR 1)
+          # which the in-process sigstore-go verifier in `aguara update`
           # consumes. The legacy {base64Signature,cert,rekorBundle}
           # format is not parseable by sigstore-go.
           cosign sign-blob --yes --new-bundle-format \

@@ -19,6 +19,7 @@ Thumbs.db
 
 # Claude Code
 .claude/
+/CLAUDE.local.md
 
 # Test fixtures and tooling (anchored to repo root so committed
 # .github/scripts/ stays tracked).

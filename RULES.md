@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-The current tree contains **191 built-in pattern rules** across 13 categories, plus analyzer-emitted detections from ci-trust, mcp-capability, kube-policy, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and a rug-pull detector (**259 cataloged in total**). Run `aguara list-rules` for the installed binary's count and `aguara explain <RULE_ID>` for details.
+The v0.29.0 catalog contains **259 detections**: **191 built-in pattern rules** defined in 13 YAML files named after the pattern categories, and **68 analyzer-emitted detections** from ci-trust, mcp-capability, kube-policy, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and the rug-pull detector. Run `aguara list-rules` for the installed binary's catalog and `aguara explain <RULE_ID>` for a rule's description, scope and remediation.
 
 `K8S_IDENTITY_CAPABILITIES_001` is a LOW `container-security` observation with
 `context` impact. It identifies explicit `SETUID`/`SETGID` additions at recognized
@@ -23,245 +23,397 @@ severity/disable override support despite moving out of the pattern catalog.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
-Each catalog entry also exposes a `decision_impact`. Most findings are `review`: they independently require a trust decision before execution. `CMDEXEC_013` (ordinary local shell-script execution), `EXTDL_009` (ordinary `pip install`), `EXTDL_011` (ordinary system-package installation), and `MCPCFG_004` (a configured remote MCP endpoint) are `context`: they stay visible and can strengthen a nearby chain, but do not restrict the default `aguara audit` agent handoff on their own. Custom rules default to `review`; explicit `--fail-on` gates still apply to both classes.
+Each catalog entry also exposes a `decision_impact`. Most findings are `review`: they independently require a trust decision before execution. `CMDEXEC_013` (ordinary local shell-script execution), `EXTDL_009` (ordinary `pip install`), `EXTDL_011` (ordinary system-package installation), `MCPCFG_004` (a configured remote MCP endpoint), and `K8S_IDENTITY_CAPABILITIES_001` (an explicit capability request) are `context`: they stay visible and can strengthen a nearby chain, but do not restrict the default `aguara audit` agent handoff on their own. Custom rules default to `review`; explicit `--fail-on` gates still apply to both classes.
 
 For writing custom rules, see the [Custom Rules](#custom-rules) section below or the [Contributing Guide](CONTRIBUTING.md).
 
+## Reading the tables
+
+Each table lists every rule in one category of the v0.29.0 catalog (`aguara list-rules --format json`). `Source` is `pattern` for YAML pattern rules and otherwise names the analyzer that emits the rule. Pattern rules come first, then analyzer rules in pipeline order. `Name` is the catalog name; `aguara explain <RULE_ID>` prints the full description.
+
+`Severity` is the catalog severity. Some analyzer rules, for example in ci-trust, pkgmeta and jsrisk, report a higher severity when additional evidence is present, and pattern findings inside Markdown code blocks are reported one level lower.
+
+Release history for the supply-chain series: SUPPLY_020 and SUPPLY_021 shipped in v0.8.0; SUPPLY_022 to SUPPLY_025 shipped in v0.15.0 together with the ci-trust, pkgmeta and jsrisk analyzers; SUPPLY_026, emitted by pkgmeta rather than a YAML rule, shipped in v0.23.0.
+
 ---
 
-## Prompt Injection (18 rules + NLP)
+## Prompt Injection (23)
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| PROMPT_INJECTION_001 | CRITICAL | Instruction override attempt |
-| PROMPT_INJECTION_002 | HIGH | Role switching attempt |
-| PROMPT_INJECTION_003 | HIGH | Hidden HTML comment with instructions |
-| PROMPT_INJECTION_004 | HIGH | Zero-width character obfuscation |
-| PROMPT_INJECTION_005 | MEDIUM | Urgency and authority manipulation |
-| PROMPT_INJECTION_006 | CRITICAL | Delimiter injection |
-| PROMPT_INJECTION_007 | HIGH | Conversation history poisoning |
-| PROMPT_INJECTION_008 | HIGH | Secrecy instruction |
-| PROMPT_INJECTION_009 | HIGH | Base64-encoded instructions |
-| PROMPT_INJECTION_010 | CRITICAL | Fake system prompt |
-| PROMPT_INJECTION_011 | CRITICAL | Jailbreak template |
-| PROMPT_INJECTION_012 | MEDIUM | Markdown link with deceptive action text |
-| PROMPT_INJECTION_013 | MEDIUM | Instruction in image alt text |
-| PROMPT_INJECTION_014 | MEDIUM | Multi-language injection |
-| PROMPT_INJECTION_015 | MEDIUM | Prompt leaking attempt |
-| PROMPT_INJECTION_016 | HIGH | Self-modifying agent instructions |
-| PROMPT_INJECTION_017 | HIGH | Autonomous agent spawning |
-| NLP_HEADING_MISMATCH | MEDIUM | Benign heading followed by dangerous content |
-| NLP_AUTHORITY_CLAIM | MEDIUM | Section claims authority with dangerous instructions |
-| NLP_HIDDEN_INSTRUCTION | HIGH | Hidden HTML comment contains action verbs |
-| NLP_CODE_MISMATCH | HIGH | Code block labeled as safe language contains executable content |
-| NLP_OVERRIDE_DANGEROUS | CRITICAL | Instruction override combined with dangerous operations |
+Category `prompt-injection`: 18 pattern rules, 5 analyzer-emitted (`nlp`).
 
-## Data Exfiltration (16 rules + NLP)
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| PROMPT_INJECTION_001 | CRITICAL | pattern | Instruction override attempt |
+| PROMPT_INJECTION_002 | HIGH | pattern | Role switching attempt |
+| PROMPT_INJECTION_003 | HIGH | pattern | Hidden HTML comment with instructions |
+| PROMPT_INJECTION_004 | HIGH | pattern | Zero-width character obfuscation |
+| PROMPT_INJECTION_005 | MEDIUM | pattern | Urgency and authority manipulation |
+| PROMPT_INJECTION_006 | CRITICAL | pattern | Delimiter injection |
+| PROMPT_INJECTION_007 | HIGH | pattern | Conversation history poisoning |
+| PROMPT_INJECTION_008 | HIGH | pattern | Secrecy instruction |
+| PROMPT_INJECTION_009 | HIGH | pattern | Base64-encoded instructions |
+| PROMPT_INJECTION_010 | CRITICAL | pattern | Fake system prompt |
+| PROMPT_INJECTION_011 | CRITICAL | pattern | Jailbreak template |
+| PROMPT_INJECTION_012 | MEDIUM | pattern | Markdown link with deceptive action text |
+| PROMPT_INJECTION_013 | MEDIUM | pattern | Instruction in image alt text |
+| PROMPT_INJECTION_014 | MEDIUM | pattern | Multi-language injection |
+| PROMPT_INJECTION_015 | MEDIUM | pattern | Prompt leaking attempt |
+| PROMPT_INJECTION_016 | HIGH | pattern | Self-modifying agent instructions |
+| PROMPT_INJECTION_017 | HIGH | pattern | Autonomous agent spawning |
+| PROMPT_INJECTION_018 | HIGH | pattern | Runtime events as user-role prompt |
+| NLP_AUTHORITY_CLAIM | MEDIUM | nlp | Authority-claim language in untrusted content |
+| NLP_CODE_MISMATCH | MEDIUM | nlp | Code block contents diverge from surrounding instructions |
+| NLP_HEADING_MISMATCH | MEDIUM | nlp | Section heading does not match the section's instruction content |
+| NLP_HIDDEN_INSTRUCTION | HIGH | nlp | Hidden instruction inside non-instructional structure |
+| NLP_OVERRIDE_DANGEROUS | CRITICAL | nlp | Instruction override paired with dangerous capability |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| EXFIL_001 | HIGH | Webhook URL for data exfiltration |
-| EXFIL_002 | HIGH | Sensitive file read pattern |
-| EXFIL_003 | HIGH | Data transmission pattern |
-| EXFIL_004 | HIGH | DNS exfiltration pattern |
-| EXFIL_005 | HIGH | curl/wget POST with sensitive data |
-| EXFIL_006 | MEDIUM | Clipboard access with network |
-| EXFIL_007 | HIGH | Environment variable exfiltration |
-| EXFIL_008 | HIGH | File read piped to HTTP transmission |
-| EXFIL_009 | MEDIUM | Base64 encode and send |
-| EXFIL_010 | MEDIUM | Non-standard port communication |
-| EXFIL_011 | HIGH | External context or knowledge sync |
-| EXFIL_012 | MEDIUM | Unrestricted email or messaging access |
-| EXFIL_013 | HIGH | Read sensitive files and transmit externally |
-| EXFIL_014 | HIGH | Environment variable credential in POST data |
-| EXFIL_015 | MEDIUM | Screenshot or screen capture with transmission |
-| EXFIL_016 | MEDIUM | Git history or diff access with transmission |
-| NLP_CRED_EXFIL_COMBO | CRITICAL | Credential access combined with network transmission |
+## Data Exfiltration (17)
 
-## Credential Leak (22 rules)
+Category `exfiltration`: 16 pattern rules, 1 analyzer-emitted (`nlp`).
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| CRED_001 | CRITICAL | OpenAI API key |
-| CRED_002 | CRITICAL | AWS access key |
-| CRED_003 | CRITICAL | GitHub personal access token |
-| CRED_004 | MEDIUM | Generic API key pattern |
-| CRED_005 | CRITICAL | Private key block |
-| CRED_006 | HIGH | Database connection string |
-| CRED_007 | HIGH | Hardcoded password |
-| CRED_008 | HIGH | Slack or Discord webhook |
-| CRED_009 | CRITICAL | GCP service account key |
-| CRED_010 | MEDIUM | JWT token |
-| CRED_011 | HIGH | Credential in shell export |
-| CRED_012 | CRITICAL | Stripe API key |
-| CRED_013 | CRITICAL | Anthropic API key |
-| CRED_014 | HIGH | SendGrid or Twilio API key |
-| CRED_015 | MEDIUM | CLI credential flags |
-| CRED_016 | MEDIUM | SSH private key in command |
-| CRED_017 | LOW | Docker environment credentials |
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| EXFIL_001 | HIGH | pattern | Webhook URL for data exfiltration |
+| EXFIL_002 | HIGH | pattern | Sensitive file read pattern |
+| EXFIL_003 | HIGH | pattern | Data transmission pattern |
+| EXFIL_004 | HIGH | pattern | DNS exfiltration pattern |
+| EXFIL_005 | HIGH | pattern | curl/wget POST with sensitive data |
+| EXFIL_006 | MEDIUM | pattern | Clipboard access with network |
+| EXFIL_007 | HIGH | pattern | Environment variable exfiltration |
+| EXFIL_008 | HIGH | pattern | File read piped to HTTP transmission |
+| EXFIL_009 | MEDIUM | pattern | Base64 encode and send |
+| EXFIL_010 | MEDIUM | pattern | Non-standard port communication |
+| EXFIL_011 | HIGH | pattern | External context or knowledge sync |
+| EXFIL_012 | MEDIUM | pattern | Unrestricted email or messaging access |
+| EXFIL_013 | HIGH | pattern | Read sensitive files and transmit externally |
+| EXFIL_014 | HIGH | pattern | Environment variable credential in POST data |
+| EXFIL_015 | MEDIUM | pattern | Screenshot or screen capture with transmission |
+| EXFIL_016 | MEDIUM | pattern | Git history or diff access with transmission |
+| NLP_CRED_EXFIL_COMBO | CRITICAL | nlp | Text combines credential access with network transmission |
 
-## MCP Attack (16 rules)
+## Credential Leak (22)
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| MCP_001 | CRITICAL | Tool description injection |
-| MCP_002 | HIGH | Tool name shadowing |
-| MCP_003 | HIGH | Resource URI manipulation |
-| MCP_004 | HIGH | Parameter schema injection |
-| MCP_005 | CRITICAL | Hidden tool registration |
-| MCP_006 | HIGH | Tool output interception |
-| MCP_007 | MEDIUM | Cross-tool data leakage |
-| MCP_008 | CRITICAL | Server manifest tampering |
-| MCP_009 | HIGH | Capability escalation |
-| MCP_010 | HIGH | Prompt cache poisoning |
-| MCP_011 | HIGH | Arbitrary MCP server execution |
+Category `credential-leak`: 22 pattern rules.
 
-## MCP Config (13 rules)
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| CRED_001 | CRITICAL | pattern | OpenAI API key |
+| CRED_002 | CRITICAL | pattern | AWS access key |
+| CRED_003 | CRITICAL | pattern | GitHub personal access token |
+| CRED_004 | MEDIUM | pattern | Generic API key pattern |
+| CRED_005 | CRITICAL | pattern | Private key block |
+| CRED_006 | HIGH | pattern | Database connection string |
+| CRED_007 | HIGH | pattern | Hardcoded password |
+| CRED_008 | HIGH | pattern | Slack or Discord webhook |
+| CRED_009 | CRITICAL | pattern | GCP service account key |
+| CRED_010 | MEDIUM | pattern | JWT token |
+| CRED_011 | HIGH | pattern | Credential in shell export |
+| CRED_012 | CRITICAL | pattern | Stripe API key |
+| CRED_013 | CRITICAL | pattern | Anthropic API key |
+| CRED_014 | HIGH | pattern | SendGrid or Twilio API key |
+| CRED_015 | MEDIUM | pattern | CLI credential flags |
+| CRED_016 | MEDIUM | pattern | SSH private key in command |
+| CRED_017 | LOW | pattern | Docker environment credentials |
+| CRED_018 | HIGH | pattern | Credential logging without redaction |
+| CRED_019 | HIGH | pattern | Secrets exported to external telemetry |
+| CRED_020 | HIGH | pattern | OAuth PKCE verifier exposure |
+| CRED_021 | HIGH | pattern | Dotenv file exposure |
+| CRED_022 | HIGH | pattern | Hardcoded secret in dotenv format |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| MCPCFG_001 | LOW | npx MCP server without version pin |
-| MCPCFG_002 | HIGH | Shell metacharacters in MCP config args |
-| MCPCFG_003 | LOW | Hardcoded secrets in MCP env block |
-| MCPCFG_004 | LOW | Non-localhost remote MCP server URL |
-| MCPCFG_005 | HIGH | sudo in MCP server command |
-| MCPCFG_006 | HIGH | Inline code execution in MCP command |
-| MCPCFG_007 | HIGH | Docker privileged or host mount in MCP config |
-| MCPCFG_008 | MEDIUM | Auto-confirm flag bypassing user verification |
+## MCP Attack (16)
 
-## Supply Chain
+Category `mcp-attack`: 15 pattern rules, 1 analyzer-emitted (`mcp-capability`).
 
-Highlighted SUPPLY_* rules. The catalog below covers SUPPLY_001-014 (shipped before v0.15.0) plus SUPPLY_020-025 (the workflow / pwn-request / OIDC / runner-pivot / agent-persistence series that landed with the supply-chain trust round). SUPPLY_015-019 are tracked via `aguara list-rules --category supply-chain` and `aguara explain <RULE_ID>`; they cover narrower IOC and lockfile checks that are kept current via the live catalog rather than this static table.
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| MCP_001 | CRITICAL | pattern | Tool description injection |
+| MCP_002 | HIGH | pattern | Tool name shadowing |
+| MCP_003 | HIGH | pattern | Resource URI manipulation |
+| MCP_004 | HIGH | pattern | Parameter schema injection |
+| MCP_005 | CRITICAL | pattern | Hidden tool registration |
+| MCP_006 | HIGH | pattern | Tool output interception |
+| MCP_007 | MEDIUM | pattern | Cross-tool data leakage |
+| MCP_008 | CRITICAL | pattern | Server manifest tampering |
+| MCP_010 | HIGH | pattern | Prompt cache poisoning |
+| MCP_011 | HIGH | pattern | Arbitrary MCP server execution |
+| MCP_012 | HIGH | pattern | Prototype pollution vector |
+| MCP_013 | HIGH | pattern | Approval-execution binding gap |
+| MCP_014 | MEDIUM | pattern | Unscoped resource identifier |
+| MCP_015 | MEDIUM | pattern | Auth-before-body parsing |
+| MCP_016 | HIGH | pattern | Canonicalization bypass |
+| MCP_009 | HIGH | mcp-capability | Capability escalation |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| SUPPLY_001 | HIGH | Suspicious npm install script |
-| SUPPLY_002 | HIGH | Python setup.py execution |
-| SUPPLY_003 | CRITICAL | Download-and-execute |
-| SUPPLY_004 | HIGH | Makefile hidden commands |
-| SUPPLY_005 | HIGH | Conditional CI execution |
-| SUPPLY_006 | HIGH | Obfuscated shell command |
-| SUPPLY_007 | HIGH | Privilege escalation |
-| SUPPLY_008 | CRITICAL | Reverse shell pattern |
-| SUPPLY_009 | HIGH | Path traversal attempt |
-| SUPPLY_010 | MEDIUM | Symlink attack |
-| SUPPLY_011 | HIGH | Unattended auto-update |
-| SUPPLY_012 | MEDIUM | Git clone and execute chain |
-| SUPPLY_013 | MEDIUM | Unpinned GitHub Actions |
-| SUPPLY_014 | MEDIUM | Package install from arbitrary URL |
-| SUPPLY_020 | HIGH | GitHub Actions untrusted input injection |
-| SUPPLY_021 | MEDIUM | GitHub Actions overly broad permissions |
-| SUPPLY_022 | HIGH | GitHub Actions OIDC token request variables in executable code |
-| SUPPLY_023 | CRITICAL | GitHub Actions runner process memory access |
-| SUPPLY_025 | HIGH | Claude Code workspace persistence path |
+## MCP Config (13)
 
-## Supply Chain Exfil
+Category `mcp-config`: 13 pattern rules.
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| SUPPLY_024 | HIGH | Session-Network exfil endpoint (Mini Shai-Hulud IOC set) |
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| MCPCFG_001 | LOW | pattern | npx MCP server without version pin |
+| MCPCFG_002 | HIGH | pattern | Shell metacharacters in MCP config args |
+| MCPCFG_003 | LOW | pattern | Hardcoded secrets in MCP env block |
+| MCPCFG_004 | LOW | pattern | Non-localhost remote MCP server URL |
+| MCPCFG_005 | HIGH | pattern | sudo in MCP server command |
+| MCPCFG_006 | HIGH | pattern | Inline code execution in MCP command |
+| MCPCFG_007 | HIGH | pattern | Docker privileged or host mount in MCP config |
+| MCPCFG_008 | MEDIUM | pattern | Auto-confirm flag bypassing user verification |
+| MCPCFG_009 | MEDIUM | pattern | Writable workspace mount |
+| MCPCFG_010 | HIGH | pattern | Docker capabilities escalation |
+| MCPCFG_011 | MEDIUM | pattern | Unrestricted container network access |
+| MCPCFG_012 | HIGH | pattern | uvx MCP server without version pin |
+| MCPCFG_013 | MEDIUM | pattern | pip install without hash verification in MCP server setup |
 
-## External Download (16 rules)
+## Supply Chain (63)
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| EXTDL_001 | HIGH | Runtime URL controls agent behavior |
-| EXTDL_002 | MEDIUM | Remote SDK or script fetch as agent input |
-| EXTDL_003 | LOW | npx auto-install without confirmation |
-| EXTDL_004 | LOW | Global package installation |
-| EXTDL_005 | MEDIUM | Shell profile modification for persistence |
-| EXTDL_006 | HIGH | MCP server auto-registration |
-| EXTDL_007 | CRITICAL | Binary download and execute |
-| EXTDL_008 | LOW | Unverified npx package execution |
-| EXTDL_009 | LOW | pip install arbitrary package |
-| EXTDL_010 | LOW | go install from remote |
-| EXTDL_011 | LOW | System package manager install |
-| EXTDL_012 | LOW | Cargo or gem install from remote |
-| EXTDL_013 | CRITICAL | Curl or wget piped to shell |
-| EXTDL_014 | MEDIUM | Conditional download and install |
-| EXTDL_015 | MEDIUM | Docker pull and run untrusted image |
-| EXTDL_016 | MEDIUM | Download binary or archive from URL |
+Category `supply-chain`: 24 pattern rules, 39 analyzer-emitted (`ci-trust`, `pkgmeta`, `jsrisk`, `pyrisk`, `rsbuild`, `npm-policy`, `pnpm-policy`, `script-risk`).
 
-## Command Execution (16 rules)
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| SUPPLY_001 | HIGH | pattern | Suspicious npm install script |
+| SUPPLY_002 | HIGH | pattern | Python setup.py execution |
+| SUPPLY_003 | CRITICAL | pattern | Download-and-execute |
+| SUPPLY_004 | HIGH | pattern | Makefile hidden commands |
+| SUPPLY_005 | HIGH | pattern | Conditional CI execution |
+| SUPPLY_006 | HIGH | pattern | Obfuscated shell command |
+| SUPPLY_007 | HIGH | pattern | Privilege escalation |
+| SUPPLY_008 | CRITICAL | pattern | Reverse shell pattern |
+| SUPPLY_009 | HIGH | pattern | Path traversal attempt |
+| SUPPLY_010 | MEDIUM | pattern | Symlink attack |
+| SUPPLY_011 | HIGH | pattern | Unattended auto-update |
+| SUPPLY_012 | MEDIUM | pattern | Git clone and execute chain |
+| SUPPLY_013 | MEDIUM | pattern | Unpinned GitHub Actions |
+| SUPPLY_014 | MEDIUM | pattern | Package install from arbitrary URL |
+| SUPPLY_015 | HIGH | pattern | Container bind mount to sensitive host path |
+| SUPPLY_016 | MEDIUM | pattern | Workspace boundary escape |
+| SUPPLY_017 | HIGH | pattern | Hardlink workspace escape |
+| SUPPLY_018 | CRITICAL | pattern | Sandbox escape via process spawn |
+| SUPPLY_019 | MEDIUM | pattern | Stale PID lock exploitation |
+| SUPPLY_020 | HIGH | pattern | GitHub Actions untrusted input injection |
+| SUPPLY_021 | MEDIUM | pattern | GitHub Actions overly broad permissions |
+| SUPPLY_022 | HIGH | pattern | GitHub Actions OIDC token request variables in executable code |
+| SUPPLY_023 | CRITICAL | pattern | GitHub Actions runner process memory access |
+| SUPPLY_025 | HIGH | pattern | Claude Code workspace persistence path |
+| GHA_CACHE_001 | HIGH | ci-trust | Untrusted PR workflow can write cache consumed by privileged workflows |
+| GHA_CHECKOUT_001 | HIGH | ci-trust | Privileged workflow checks out PR code with persisted credentials |
+| GHA_OIDC_001 | HIGH | ci-trust | OIDC token available in a job that executes install/build/test code |
+| GHA_PWN_REQUEST_001 | HIGH | ci-trust | pull_request_target executes untrusted PR code |
+| NPM_GIT_INSTALL_TRUST_001 | INFO | pkgmeta | npm v12 readiness: git dependency needs install trust |
+| NPM_LIFECYCLE_GIT_001 | HIGH | pkgmeta | Git dependency can execute lifecycle code during install |
+| NPM_OPTIONAL_GIT_001 | MEDIUM | pkgmeta | Optional dependency resolves executable code from git |
+| NPM_PUBLISH_SURFACE_001 | HIGH | pkgmeta | Package publish surface exposed to install-time code |
+| NPM_REMOTE_INSTALL_TRUST_001 | INFO | pkgmeta | npm v12 readiness: remote tarball needs install trust |
+| SUPPLY_026 | HIGH | pkgmeta | npm lifecycle script executes local JavaScript |
+| AGENT_PERSISTENCE_001 | HIGH | jsrisk | Persistence through Claude Code or VS Code workspace automation |
+| JS_BUN_SECOND_STAGE_001 | HIGH | jsrisk | Bun second-stage execution |
+| JS_CI_SECRET_HARVEST_001 | CRITICAL | jsrisk | CI credential harvesting with network or registry sink |
+| JS_DAEMON_001 | HIGH | jsrisk | Detached background execution from JavaScript |
+| JS_DNS_TXT_EXFIL_001 | HIGH | jsrisk | DNS TXT exfiltration chain in JavaScript |
+| JS_GITHUB_C2_001 | HIGH | jsrisk | GitHub used as payload or command channel |
+| JS_HOST_TRUST_TAMPER_001 | HIGH | jsrisk | Host trust surface tampering |
+| JS_OBF_001 | MEDIUM | jsrisk | Large obfuscated JavaScript payload |
+| JS_PROC_MEM_OIDC_001 | CRITICAL | jsrisk | Runner process memory access combined with OIDC token reference |
+| JS_SUDOERS_TAMPER_001 | HIGH | jsrisk | Sudoers privilege tampering |
+| JS_WIPER_TRIPWIRE_001 | HIGH | jsrisk | Destructive wipe of sensitive paths |
+| PY_IMPORTTIME_REMOTE_JS_001 | CRITICAL | pyrisk | PyPI import-time remote JavaScript execution |
+| RS_BUILD_WALLET_EXFIL_001 | CRITICAL | rsbuild | Rust build.rs wallet/keystore exfiltration |
+| NPM_ALLOW_GIT_RELAXED_001 | MEDIUM | npm-policy | npm git-dependency resolution pinned open |
+| NPM_ALLOW_REMOTE_RELAXED_001 | MEDIUM | npm-policy | npm remote-tarball resolution pinned open |
+| NPM_ALLOW_SCRIPTS_UNPINNED_001 | MEDIUM | npm-policy | npm allowScripts approval not version-pinned |
+| NPM_DANGEROUS_ALL_SCRIPTS_001 | HIGH | npm-policy | npm dangerously-allow-all-scripts enabled |
+| PNPM_BUILD_APPROVAL_PENDING_001 | MEDIUM | pnpm-policy | pnpm allowBuilds entry pending decision |
+| PNPM_DANGEROUS_BUILDS_001 | HIGH | pnpm-policy | pnpm dangerouslyAllowAllBuilds enabled |
+| PNPM_EXOTIC_SUBDEPS_DISABLED_001 | MEDIUM | pnpm-policy | pnpm blockExoticSubdeps disabled |
+| PNPM_LEGACY_BUILD_POLICY_001 | INFO | pnpm-policy | pnpm legacy v10 build-policy setting |
+| PNPM_MIN_RELEASE_AGE_DISABLED_001 | LOW | pnpm-policy | pnpm minimumReleaseAge disabled |
+| PNPM_MIN_RELEASE_AGE_NON_STRICT_001 | LOW | pnpm-policy | pnpm minimumReleaseAge not strictly enforced |
+| PNPM_STRICT_DEP_BUILDS_DISABLED_001 | MEDIUM | pnpm-policy | pnpm strictDepBuilds disabled |
+| PNPM_TRUST_LOCKFILE_001 | MEDIUM | pnpm-policy | pnpm trustLockfile enabled |
+| PNPM_TRUST_POLICY_OFF_001 | LOW | pnpm-policy | pnpm trustPolicy explicitly off |
+| PY_WORLD_WRITABLE_001 | MEDIUM | script-risk | Python code applies world-writable permissions |
+| SHELL_UNSAFE_NPM_SOURCE_001 | MEDIUM | script-risk | Unencrypted npm dependency source in a script |
+| SHELL_UNSAFE_PIP_SOURCE_001 | MEDIUM | script-risk | Unencrypted pip dependency source in a script |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| CMDEXEC_001 | MEDIUM | Shell subprocess with shell=True |
-| CMDEXEC_002 | MEDIUM | Dynamic code evaluation |
-| CMDEXEC_003 | MEDIUM | Python subprocess execution |
-| CMDEXEC_004 | HIGH | Node.js child process execution |
-| CMDEXEC_005 | HIGH | Shell command with dangerous payload |
-| CMDEXEC_006 | HIGH | Java/Go command execution API |
-| CMDEXEC_007 | HIGH | PowerShell command execution |
-| CMDEXEC_008 | MEDIUM | Terminal multiplexer command injection |
-| CMDEXEC_009 | MEDIUM | Agent shell tool usage |
-| CMDEXEC_010 | MEDIUM | MCP code execution tool |
-| CMDEXEC_011 | MEDIUM | Cron or scheduled command execution |
-| CMDEXEC_012 | LOW | Chained shell command execution |
-| CMDEXEC_013 | LOW | Shell script file execution |
+## Supply Chain Exfil (14)
 
-## Indirect Injection (10 rules)
+Category `supply-chain-exfil`: 10 pattern rules, 4 analyzer-emitted (`script-risk`).
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| INDIRECT_001 | HIGH | Fetch URL and use as instructions |
-| INDIRECT_003 | HIGH | Read external content and apply as rules |
-| INDIRECT_004 | HIGH | Remote config controlling agent behavior |
-| INDIRECT_005 | LOW | User-provided URL consumed by agent |
-| INDIRECT_008 | HIGH | Email or message content as instructions |
-| INDIRECT_009 | MEDIUM | External API response drives agent behavior |
-| INDIRECT_010 | LOW | Unscoped Bash tool in allowed tools |
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| SC-EX-001 | CRITICAL | pattern | Credential file read in Python code |
+| SC-EX-002 | CRITICAL | pattern | File content encoding for exfiltration |
+| SC-EX-003 | CRITICAL | pattern | Environment variable bulk collection with network send |
+| SC-EX-004 | CRITICAL | pattern | .pth file with executable content |
+| SC-EX-005 | HIGH | pattern | Cloud metadata endpoint access in Python |
+| SC-EX-006 | CRITICAL | pattern | Kubernetes secrets API access outside K8s libraries |
+| SC-EX-008 | HIGH | pattern | Hardcoded cryptographic key material |
+| SC-EX-009 | CRITICAL | pattern | Archive creation combined with HTTP POST |
+| SC-EX-010 | MEDIUM | pattern | .pth file presence with non-path content |
+| SUPPLY_024 | HIGH | pattern | Session-Network exfil endpoint |
+| PY_CONTEXT_EXFIL_001 | HIGH | script-risk | Sensitive local context paired with network transmission |
+| PY_DECODE_EXEC_001 | CRITICAL | script-risk | Obfuscated Python payload execution |
+| PY_REMOTE_FETCH_EXEC_001 | CRITICAL | script-risk | Remote Python payload execution |
+| SC-EX-007 | CRITICAL | script-risk | Systemd or cron persistence installation |
 
-## Third-Party Content (10 rules)
+## External Download (16)
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| THIRDPARTY_001 | LOW | Runtime URL controlling behavior |
-| THIRDPARTY_002 | LOW | Mutable GitHub raw content reference |
-| THIRDPARTY_004 | LOW | External API response used without validation |
-| THIRDPARTY_005 | HIGH | Remote template or prompt loaded at runtime |
+Category `external-download`: 16 pattern rules.
 
-## SSRF & Cloud (11 rules)
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| EXTDL_001 | HIGH | pattern | Runtime URL controls agent behavior |
+| EXTDL_002 | MEDIUM | pattern | Remote SDK or script fetch as agent input |
+| EXTDL_003 | LOW | pattern | npx auto-install without confirmation |
+| EXTDL_004 | LOW | pattern | Global package installation |
+| EXTDL_005 | MEDIUM | pattern | Shell profile modification for persistence |
+| EXTDL_006 | HIGH | pattern | MCP server auto-registration |
+| EXTDL_007 | CRITICAL | pattern | Binary download and execute |
+| EXTDL_008 | LOW | pattern | Unverified npx package execution |
+| EXTDL_009 | LOW | pattern | pip install arbitrary package |
+| EXTDL_010 | LOW | pattern | go install from remote |
+| EXTDL_011 | LOW | pattern | System package manager install |
+| EXTDL_012 | LOW | pattern | Cargo or gem install from remote |
+| EXTDL_013 | CRITICAL | pattern | Curl or wget piped to shell |
+| EXTDL_014 | MEDIUM | pattern | Conditional download and install |
+| EXTDL_015 | MEDIUM | pattern | Docker pull and run untrusted image |
+| EXTDL_016 | MEDIUM | pattern | Download binary or archive from URL |
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| SSRF_001 | CRITICAL | Cloud metadata URL |
-| SSRF_002 | HIGH | Internal IP range access |
-| SSRF_003 | HIGH | Kubernetes service discovery |
-| SSRF_004 | CRITICAL | AWS IMDS token request |
-| SSRF_005 | HIGH | Docker socket access |
-| SSRF_006 | HIGH | Localhost bypass |
-| SSRF_007 | CRITICAL | Cloud credential endpoint |
-| SSRF_008 | MEDIUM | DNS rebinding setup |
+## Command Execution (16)
 
-## Unicode Attack (10 rules)
+Category `command-execution`: 16 pattern rules.
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| UNI_001 | HIGH | Right-to-left override |
-| UNI_002 | HIGH | Bidi text manipulation |
-| UNI_003 | MEDIUM | Homoglyph domain spoofing |
-| UNI_004 | MEDIUM | Invisible separator injection |
-| UNI_005 | MEDIUM | Combining character obfuscation |
-| UNI_006 | HIGH | Tag characters for hidden data |
-| UNI_007 | MEDIUM | Punycode domains |
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| CMDEXEC_001 | MEDIUM | pattern | Shell subprocess with shell=True |
+| CMDEXEC_002 | MEDIUM | pattern | Dynamic code evaluation |
+| CMDEXEC_003 | MEDIUM | pattern | Python subprocess execution |
+| CMDEXEC_004 | HIGH | pattern | Node.js child process execution |
+| CMDEXEC_005 | HIGH | pattern | Shell command with dangerous payload |
+| CMDEXEC_006 | HIGH | pattern | Java/Go command execution API |
+| CMDEXEC_007 | HIGH | pattern | PowerShell command execution |
+| CMDEXEC_008 | MEDIUM | pattern | Terminal multiplexer command injection |
+| CMDEXEC_009 | MEDIUM | pattern | Agent shell tool usage |
+| CMDEXEC_010 | MEDIUM | pattern | MCP code execution tool |
+| CMDEXEC_011 | MEDIUM | pattern | Cron or scheduled command execution |
+| CMDEXEC_012 | LOW | pattern | Chained shell command execution |
+| CMDEXEC_013 | LOW | pattern | Shell script file execution |
+| CMDEXEC_014 | HIGH | pattern | Hex or octal escape obfuscation |
+| CMDEXEC_015 | HIGH | pattern | Process substitution or eval-download execution |
+| INDIRECT_010 | LOW | pattern | Unscoped Bash tool in allowed tools |
 
-## Toxic Flow (3 rules)
+## Indirect Injection (10)
 
-Detected by the toxic-flow analyzer (Go engine, not YAML rules).
+Category `indirect-injection`: 10 pattern rules.
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| TOXIC_001 | HIGH | Sensitive source co-occurs with a dangerous sink in one skill |
-| TOXIC_002 | HIGH | Environment-variable read co-occurs with shell execution |
-| TOXIC_003 | HIGH | External API response co-occurs with code execution |
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| INDIRECT_001 | HIGH | pattern | Fetch URL and use as instructions |
+| INDIRECT_003 | HIGH | pattern | Read external content and apply as rules |
+| INDIRECT_004 | HIGH | pattern | Remote config controlling agent behavior |
+| INDIRECT_005 | LOW | pattern | User-provided URL consumed by agent |
+| INDIRECT_008 | HIGH | pattern | Email or message content as instructions |
+| INDIRECT_009 | MEDIUM | pattern | External API response drives agent behavior |
+| INDIRECT_011 | HIGH | pattern | Database or cache query driving agent behavior |
+| INDIRECT_012 | HIGH | pattern | Webhook or callback registration with external service |
+| INDIRECT_013 | HIGH | pattern | Git clone and execute fetched code |
+| INDIRECT_014 | MEDIUM | pattern | Environment variable injection from external source |
 
-## Agent Trust
+## Third-Party Content (10)
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| AGENT_SKILL_WILDCARD_TOOLS_001 | MEDIUM | SKILL.md requests broad tool pre-approval with a whole-value `allowed-tools` wildcard |
-| AGENT_FORCED_HELPER_RISK_001 | HIGH | Mandatory skill instruction is bound to strong hidden behavior in its referenced local helper |
+Category `third-party-content`: 10 pattern rules.
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| THIRDPARTY_001 | LOW | pattern | Runtime URL controlling behavior |
+| THIRDPARTY_002 | LOW | pattern | Mutable GitHub raw content reference |
+| THIRDPARTY_003 | HIGH | pattern | JavaScript eval or Function with external data |
+| THIRDPARTY_004 | LOW | pattern | External API response used without validation |
+| THIRDPARTY_005 | HIGH | pattern | Remote template or prompt loaded at runtime |
+| THIRDPARTY_006 | HIGH | pattern | Unescaped user input in HTML output |
+| THIRDPARTY_007 | HIGH | pattern | Unsafe deserialization from untrusted source |
+| THIRDPARTY_008 | MEDIUM | pattern | Script or asset loaded without integrity check |
+| THIRDPARTY_009 | MEDIUM | pattern | HTTP downgrade from HTTPS |
+| THIRDPARTY_010 | HIGH | pattern | Unsigned plugin or extension loading |
+
+## SSRF & Cloud (11)
+
+Category `ssrf-cloud`: 11 pattern rules.
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| SSRF_001 | CRITICAL | pattern | Cloud metadata URL |
+| SSRF_002 | HIGH | pattern | Internal IP range access |
+| SSRF_003 | HIGH | pattern | Kubernetes service discovery |
+| SSRF_004 | CRITICAL | pattern | AWS IMDS token request |
+| SSRF_005 | HIGH | pattern | Docker socket access |
+| SSRF_006 | HIGH | pattern | Localhost bypass |
+| SSRF_007 | CRITICAL | pattern | Cloud credential endpoint |
+| SSRF_008 | MEDIUM | pattern | DNS rebinding setup |
+| SSRF_009 | HIGH | pattern | IPv4 alternative numeric encoding |
+| SSRF_010 | HIGH | pattern | IPv6 transition address with embedded IPv4 |
+| SSRF_011 | HIGH | pattern | IPv6 multicast SSRF bypass |
+
+## Unicode Attack (10)
+
+Category `unicode-attack`: 10 pattern rules.
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| UNI_001 | HIGH | pattern | Right-to-left override |
+| UNI_002 | HIGH | pattern | Bidi text manipulation |
+| UNI_003 | MEDIUM | pattern | Homoglyph domain spoofing |
+| UNI_004 | MEDIUM | pattern | Invisible separator injection |
+| UNI_005 | MEDIUM | pattern | Combining character obfuscation |
+| UNI_006 | HIGH | pattern | Tag characters for hidden data |
+| UNI_007 | MEDIUM | pattern | Punycode domains |
+| UNI_008 | MEDIUM | pattern | Zero-width character sequences |
+| UNI_009 | MEDIUM | pattern | Unicode normalization inconsistency |
+| UNI_010 | MEDIUM | pattern | Mixed-script confusable in identifiers |
+
+## Toxic Flow (6)
+
+Category `toxic-flow`: 6 analyzer-emitted (`toxicflow`).
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| TOXIC_001 | HIGH | toxicflow | Private data read with public output |
+| TOXIC_002 | HIGH | toxicflow | Private data read with code execution |
+| TOXIC_003 | HIGH | toxicflow | Destructive actions with code execution |
+| TOXIC_CROSS_001 | HIGH | toxicflow | Cross-file credential exfiltration across MCP tools |
+| TOXIC_CROSS_002 | HIGH | toxicflow | Cross-file env-to-exec chain across MCP tools |
+| TOXIC_CROSS_003 | HIGH | toxicflow | Cross-file destructive + exec combo across MCP tools |
+
+## Agent Trust (10)
+
+Category `agent-trust`: 10 analyzer-emitted (`agent-policy`, `skill-policy`, `skill-chain`).
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| AGENTCFG_BROAD_ALLOW_001 | MEDIUM | agent-policy | Claude Code permissions pre-approve dangerous commands |
+| AGENTCFG_BYPASS_PERMS_001 | HIGH | agent-policy | Claude Code permissions default to bypass |
+| AGENTCFG_ENV_EXEC_001 | HIGH | agent-policy | Claude Code settings inject a code-execution environment variable |
+| AGENTCFG_HELPER_REPO_SCRIPT_001 | MEDIUM | agent-policy | Claude Code credential helper runs a repo-shipped script |
+| AGENTCFG_HOOK_FETCH_EXEC_001 | CRITICAL | agent-policy | Claude Code hook downloads and executes remote code |
+| AGENTCFG_MCP_AUTOAPPROVE_001 | MEDIUM | agent-policy | Claude Code auto-approves all project MCP servers |
+| AGENTCFG_PERMS_WEAK_MODE_001 | LOW | agent-policy | Claude Code permissions default to an auto-approving mode |
+| AGENTCFG_SECRET_READ_ALLOW_001 | MEDIUM | agent-policy | Claude Code permissions pre-approve reading secrets |
+| AGENT_SKILL_WILDCARD_TOOLS_001 | MEDIUM | skill-policy | Skill pre-approves every tool |
+| AGENT_FORCED_HELPER_RISK_001 | HIGH | skill-chain | Mandatory skill helper contains hidden high-risk behavior |
+
+## Container Security (1)
+
+Category `container-security`: 1 analyzer-emitted (`kube-policy`).
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| K8S_IDENTITY_CAPABILITIES_001 | LOW | kube-policy | Kubernetes workload requests identity-changing capabilities |
+
+## Rug Pull (1)
+
+Category `rug-pull`: 1 analyzer-emitted (`rugpull`).
+
+| Rule | Severity | Source | Name |
+|------|----------|--------|------|
+| RUGPULL_001 | CRITICAL | rugpull | Tool description changed with dangerous content |
 
 ---
 
