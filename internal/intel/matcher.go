@@ -197,8 +197,9 @@ func unionVersions(a, b []string) []string {
 //   - Name normalisation is ecosystem-specific:
 //   - npm: case-sensitive, scope preserved.
 //   - PyPI: PEP 503 -- lower-case and collapse [-_.]+ to a single '-'.
-//   - Version must appear in Record.Versions exactly. Ranges are
-//     deferred to a later PR; records with no Versions cannot match.
+//   - Version must appear in Record.Versions exactly (PyPI: equal
+//     under PEP 440 normalisation). Ranges are evaluated for npm
+//     only; records with no Versions cannot match elsewhere.
 //   - Withdrawn records were excluded at index time and never appear.
 //
 // The result preserves the in.Path on every Match so terminal output
@@ -423,9 +424,31 @@ func PEP503Normalize(name string) string {
 // style) or pad with leading zeroes do not silently match. The OSV
 // importer is responsible for producing canonicalised version
 // strings.
+//
+// PyPI is the exception: PEP 440 defines version equality on the
+// normalised form with zero-padded release segments, so "1.0" and
+// "1.0.0", or "1.0rc1" and "1.0-RC1", name the same release. Every
+// PyPI caller (installed trees, lockfiles, requirement pins) goes
+// through this one comparison. An empty version never matches; only
+// all-versions entries can match a package whose version is unknown.
 func versionMatches(rec Record, v string) bool {
+	if v == "" {
+		return false
+	}
 	for _, candidate := range rec.Versions {
 		if candidate == v {
+			return true
+		}
+	}
+	if normalizeEcosystem(rec.Ecosystem) != EcosystemPyPI {
+		return false
+	}
+	canonical, ok := PEP440Canonical(v)
+	if !ok {
+		return false
+	}
+	for _, candidate := range rec.Versions {
+		if c, ok := PEP440Canonical(candidate); ok && c == canonical {
 			return true
 		}
 	}

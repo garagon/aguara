@@ -190,7 +190,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	// so a Go / Rust / .NET monorepo audit reports the same
 	// `check.ecosystems` slice as a standalone `aguara check`
 	// against the same path.
-	plan, err := buildCheckPlan(nil, target)
+	plan, err := buildCheckPlanFor(nil, target, flagAuditPath == "" && len(args) == 0)
 	if err != nil {
 		return err
 	}
@@ -791,11 +791,14 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 			label := output.TerminalText(string(f.Severity))
 			fmt.Fprintf(w, "\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 			if f.Path != "" {
-				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Path)))
+				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Location())))
 			}
 		}
 	default:
 		fmt.Fprintf(w, "\n  %s\n", noPackageFindingsLine(st, result.Check.Coverage))
+	}
+	if note := unpinnedNote(result.Check); note != "" {
+		fmt.Fprintf(w, "\n  %s\n", st.Yellow(note))
 	}
 
 	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("CONTENT SCAN", width))

@@ -1,0 +1,3 @@
+six==1.16.0
+# A cycle back to the including file must not loop.
+-r ../requirements.txt
