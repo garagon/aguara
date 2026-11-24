@@ -111,7 +111,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	cfg := config.Config{}
 	if trustProjectPolicy {
-		cfg = loadScanConfig(cmd, targetPath)
+		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
+			return err
+		}
 	}
 
 	// .aguara.yml `baseline:` feeds --baseline when the flag is unset
@@ -281,7 +283,11 @@ func runAutoScan(cmd *cobra.Command) error {
 	return checkFailOnThreshold(aggregate)
 }
 
-func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
+// loadScanConfig reads the target's .aguara.yml and applies its defaults
+// for flags the caller did not set. A `format` value the command cannot
+// render is an error for scan, whose setting it is; audit only borrows
+// the key, so there it is reported and the flag value is kept.
+func loadScanConfig(cmd *cobra.Command, targetPath string) (config.Config, error) {
 	cfg, err := config.Load(targetPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -290,7 +296,15 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 		flagSeverity = cfg.Severity
 	}
 	if !cmd.Flags().Changed("format") && cfg.Format != "" {
-		flagFormat = cfg.Format
+		canonical, ok := canonicalFormat(cmd, cfg.Format)
+		switch {
+		case ok:
+			flagFormat = canonical
+		case cmd.Name() == "scan":
+			return cfg, unsupportedFormatError(cmd, ".aguara.yml format", cfg.Format)
+		default:
+			fmt.Fprintf(os.Stderr, "warning: ignoring %v\n", unsupportedFormatError(cmd, ".aguara.yml format", cfg.Format))
+		}
 	}
 	if !cmd.Flags().Changed("fail-on") && cfg.FailOn != "" {
 		flagFailOn = cfg.FailOn
@@ -298,7 +312,7 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 	if !cmd.Flags().Changed("rules") && cfg.Rules != "" {
 		flagRules = cfg.Rules
 	}
-	return cfg
+	return cfg, nil
 }
 
 func applyCIDefaults() {

@@ -41,8 +41,12 @@ LLM calls; default runs stay offline.`,
   aguara audit . --ci        Package check + content scan, one verdict, gate CI
   aguara check               Check dependencies for known-compromised packages
   aguara explain CRED_001    Show what a rule detects and how to fix it`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateFormatFlag(cmd); err != nil {
+			return err
+		}
 		resolveColorMode()
+		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		checkPathHint()

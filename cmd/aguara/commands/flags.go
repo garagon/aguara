@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,6 +42,52 @@ func addFormatFlag(cmd *cobra.Command, formats ...string) {
 	cmd.Flags().StringVar(&flagFormat, "format", formats[0], "Output format: "+strings.Join(names, ", "))
 	_ = cmd.Flags().SetAnnotation("format", formatsAnnotation, formats)
 	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions(formats, cobra.ShellCompDirectiveNoFileComp))
+}
+
+// commandFormats returns the formats cmd renders, or nil when it has no
+// --format flag.
+func commandFormats(cmd *cobra.Command) []string {
+	f := cmd.Flags().Lookup("format")
+	if f == nil {
+		return nil
+	}
+	return f.Annotations[formatsAnnotation]
+}
+
+// canonicalFormat resolves value (case-insensitive, aliases allowed) to
+// one of the formats cmd renders.
+func canonicalFormat(cmd *cobra.Command, value string) (string, bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if canonical, ok := formatAliases[v]; ok {
+		v = canonical
+	}
+	if slices.Contains(commandFormats(cmd), v) {
+		return v, true
+	}
+	return "", false
+}
+
+// unsupportedFormatError names the formats cmd does render. source says
+// where the value came from ("--format" or a config file).
+func unsupportedFormatError(cmd *cobra.Command, source, value string) error {
+	return fmt.Errorf("unsupported %s %q for %s: supported formats are %s",
+		source, value, cmd.CommandPath(), strings.Join(commandFormats(cmd), ", "))
+}
+
+// validateFormatFlag rejects a --format value the command cannot render
+// (it used to fall back to the terminal report, or for audit to the
+// terminal report on stdout with -o ignored) and stores the canonical
+// lowercase name so every writer compares against the same spelling.
+func validateFormatFlag(cmd *cobra.Command) error {
+	if cmd.Flags().Lookup("format") == nil {
+		return nil
+	}
+	canonical, ok := canonicalFormat(cmd, flagFormat)
+	if !ok {
+		return unsupportedFormatError(cmd, "--format", flagFormat)
+	}
+	flagFormat = canonical
+	return nil
 }
 
 // addOutputFlag registers -o/--output for commands that write a report.

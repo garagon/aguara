@@ -316,7 +316,9 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	}
 	cfg := config.Config{}
 	if trustProjectPolicy {
-		cfg = loadScanConfig(cmd, targetPath)
+		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
+			return nil, err
+		}
 	}
 
 	// .aguara.yml `baseline:` feeds audit's --baseline when unset and we
