@@ -95,6 +95,21 @@ func TestUnsupportedFormatsAreNotParsed(t *testing.T) {
 	}
 }
 
+// Only the ecosystems Aguara has no intelligence for are NoIntel; every
+// other listed format is unevaluated because no parser reads it.
+func TestUnsupportedFormatsNoIntel(t *testing.T) {
+	noIntel := map[string]bool{}
+	for _, f := range unsupportedFormats {
+		if (UnsupportedEvidence{Ecosystem: f.Ecosystem}).NoIntel() {
+			noIntel[f.Kind] = true
+		}
+	}
+	require.Equal(t, map[string]bool{
+		"pubspec.lock": true, "Podfile.lock": true, "Package.resolved": true, "mix.lock": true,
+	}, noIntel)
+	require.False(t, UnsupportedEvidence{}.NoIntel(), "an unknown ecosystem is not claimed to lack intelligence")
+}
+
 func TestCoverageJSONUsesEmptyArrays(t *testing.T) {
 	data, err := json.Marshal(Coverage{})
 	require.NoError(t, err)

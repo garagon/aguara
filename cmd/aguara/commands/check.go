@@ -1031,7 +1031,7 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 	// What was actually read, and what was found but not evaluated.
 	if line := packageCoverageLine(result.Coverage); line != "" {
 		fmt.Fprintf(w, "  %s\n", st.Dim(line))
-		if line := unsupportedEvidenceLine(result.Coverage, plan.rootPath); line != "" {
+		for _, line := range unsupportedEvidenceLines(result.Coverage, plan.rootPath) {
 			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
 		}
 		fmt.Fprintln(w)

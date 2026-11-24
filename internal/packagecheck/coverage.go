@@ -1,6 +1,10 @@
 package packagecheck
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/garagon/aguara/internal/intel"
+)
 
 // Coverage states which dependency evidence a check evaluated, so a
 // result with no findings can be told apart from a result that read
@@ -32,6 +36,14 @@ type UnsupportedEvidence struct {
 	Kind string `json:"kind"`
 	// Ecosystem is the package ecosystem the file describes.
 	Ecosystem string `json:"ecosystem"`
+}
+
+// NoIntel reports whether Aguara has no malicious-package intelligence
+// for the file's ecosystem at all, so a parser would not help: the file
+// is unevaluated because nothing could be matched, not because of its
+// format.
+func (u UnsupportedEvidence) NoIntel() bool {
+	return u.Ecosystem != "" && intel.CanonicaliseEcosystem(u.Ecosystem) == ""
 }
 
 // MarshalJSON keeps both arrays as `[]` rather than `null` when empty.

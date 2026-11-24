@@ -773,7 +773,7 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
 	if line := packageCoverageLine(result.Check.Coverage); line != "" {
 		fmt.Fprintf(w, "\n  %s\n", st.Dim(line))
-		if line := unsupportedEvidenceLine(result.Check.Coverage, result.Target); line != "" {
+		for _, line := range unsupportedEvidenceLines(result.Check.Coverage, result.Target) {
 			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/garagon/aguara/internal/incident"
@@ -75,10 +76,42 @@ func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
 	case c == nil || c.Evaluated():
 		return st.OK("No known-compromised packages or persistence artifacts found.")
 	case len(c.UnsupportedEvidence) > 0:
-		return st.SeverityIcon("MEDIUM") + " " + st.Yellow("No packages were checked: every dependency file found is in a format Aguara cannot parse.")
+		unparsed, noIntel := splitUnsupported(c.UnsupportedEvidence)
+		msg := "No packages were checked: the dependency files found are in formats Aguara cannot parse or ecosystems it has no package intelligence for."
+		switch {
+		case len(noIntel) == 0:
+			msg = "No packages were checked: every dependency file found is in a format Aguara cannot parse."
+		case len(unparsed) == 0:
+			msg = "No packages were checked: Aguara has no package intelligence for the ecosystems of the dependency files found."
+		}
+		return st.SeverityIcon("MEDIUM") + " " + st.Yellow(msg)
 	default:
 		return st.Dim("No dependency files found; no packages were checked.")
 	}
+}
+
+// splitUnsupported separates files Aguara cannot parse from files of
+// ecosystems it has no package intelligence for.
+func splitUnsupported(evidence []packagecheck.UnsupportedEvidence) (unparsed, noIntel []packagecheck.UnsupportedEvidence) {
+	for _, u := range evidence {
+		if u.NoIntel() {
+			noIntel = append(noIntel, u)
+		} else {
+			unparsed = append(unparsed, u)
+		}
+	}
+	return unparsed, noIntel
+}
+
+// noIntelEcosystems lists the distinct ecosystems of evidence, in order.
+func noIntelEcosystems(evidence []packagecheck.UnsupportedEvidence) string {
+	var ecos []string
+	for _, u := range evidence {
+		if !slices.Contains(ecos, u.Ecosystem) {
+			ecos = append(ecos, u.Ecosystem)
+		}
+	}
+	return strings.Join(ecos, ", ")
 }
 
 // packageCoverageLine is the one-line terminal summary of the package
@@ -101,28 +134,44 @@ func packageCoverageLine(c *packagecheck.Coverage) string {
 	return "Coverage: " + strings.Join(parts, " · ")
 }
 
-// unsupportedEvidenceLine lists dependency files that were found but not
-// evaluated, relative to root when possible. Empty when there are none.
-func unsupportedEvidenceLine(c *packagecheck.Coverage, root string) string {
+// unsupportedEvidenceLines lists dependency files that were found but not
+// evaluated, relative to root when possible: one line for formats Aguara
+// cannot parse and one for ecosystems it has no package intelligence
+// for. Empty when there are none.
+func unsupportedEvidenceLines(c *packagecheck.Coverage, root string) []string {
 	if c == nil || len(c.UnsupportedEvidence) == 0 {
-		return ""
+		return nil
 	}
+	unparsed, noIntel := splitUnsupported(c.UnsupportedEvidence)
+	var lines []string
+	if len(unparsed) > 0 {
+		lines = append(lines, fmt.Sprintf("Not evaluated: %s (dependency %s Aguara cannot parse; no packages in %s were checked)",
+			listedPaths(unparsed, root), plural(len(unparsed), "file", "files"), plural(len(unparsed), "it", "them")))
+	}
+	if len(noIntel) > 0 {
+		lines = append(lines, fmt.Sprintf("Not evaluated: %s (Aguara has no package intelligence for %s; no packages in %s were checked)",
+			listedPaths(noIntel, root), output.TerminalText(noIntelEcosystems(noIntel)), plural(len(noIntel), "it", "them")))
+	}
+	return lines
+}
+
+// listedPaths names up to three files for a terminal line.
+func listedPaths(evidence []packagecheck.UnsupportedEvidence, root string) string {
 	const maxListed = 3
-	names := make([]string, 0, maxListed)
-	for i, u := range c.UnsupportedEvidence {
+	names := make([]string, 0, maxListed+1)
+	for i, u := range evidence {
 		if i == maxListed {
-			names = append(names, fmt.Sprintf("+%d more", len(c.UnsupportedEvidence)-maxListed))
+			names = append(names, fmt.Sprintf("+%d more", len(evidence)-maxListed))
 			break
 		}
 		names = append(names, output.TerminalText(displayPath(root, u.Path)))
 	}
-	return fmt.Sprintf("Not evaluated: %s (dependency %s Aguara cannot parse; no packages in %s were checked)",
-		strings.Join(names, ", "), plural(len(c.UnsupportedEvidence), "file", "files"),
-		plural(len(c.UnsupportedEvidence), "it", "them"))
+	return strings.Join(names, ", ")
 }
 
-// unsupportedEvidenceNames names unsupported files for triage messages.
-// Long lists are cut after a few names; the full list stays in
+// unsupportedEvidenceNames names unsupported files for triage messages,
+// noting the files Aguara has no package intelligence for. Long lists
+// are cut after a few names; the full list stays in
 // coverage.unsupported_evidence.
 func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root string) string {
 	const maxNamed = 5
@@ -132,7 +181,11 @@ func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root 
 			names = append(names, fmt.Sprintf("and %d more listed in coverage.unsupported_evidence", len(evidence)-maxNamed))
 			break
 		}
-		names = append(names, displayPath(root, u.Path))
+		name := displayPath(root, u.Path)
+		if u.NoIntel() {
+			name += " (Aguara has no package intelligence for " + u.Ecosystem + ")"
+		}
+		names = append(names, name)
 	}
 	return strings.Join(names, ", ")
 }
