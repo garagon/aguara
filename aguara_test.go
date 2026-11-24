@@ -858,7 +858,7 @@ func TestVerdictBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Findings) == 0 {
-		t.Skip("no findings to check verdict")
+		t.Fatal("expected findings for a prompt-injection fixture, got none")
 	}
 	// With findings of HIGH+ severity, verdict should be block
 	hasHigh := false
@@ -902,7 +902,7 @@ func TestScanProfileContentAware(t *testing.T) {
 	}
 	// Findings should still be present
 	if len(result.Findings) == 0 {
-		t.Skip("no findings to check profile")
+		t.Fatal("expected findings for a prompt-injection fixture, got none")
 	}
 	// But verdict should be clean (no MinimalEnforceRules triggered)
 	hasMinimal := false
@@ -1525,7 +1525,7 @@ func TestScanWithDisabledRules(t *testing.T) {
 
 	// Find a rule that triggered.
 	if len(all.Findings) == 0 {
-		t.Skip("no findings to disable")
+		t.Fatal("expected findings for a prompt-injection fixture, got none")
 	}
 	ruleToDisable := all.Findings[0].RuleID
 
