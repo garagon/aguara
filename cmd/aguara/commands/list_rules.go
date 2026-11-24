@@ -22,6 +22,10 @@ var listRulesCmd = &cobra.Command{
 
 func init() {
 	listRulesCmd.Flags().StringVar(&flagCategory, "category", "", "Filter by category")
+	// A configuration error (unknown --disable-rule ID, invalid --rules
+	// directory) is not command misuse; print the error without the usage
+	// block, as scan, audit and explain do.
+	listRulesCmd.SilenceUsage = true
 	rootCmd.AddCommand(listRulesCmd)
 }
 

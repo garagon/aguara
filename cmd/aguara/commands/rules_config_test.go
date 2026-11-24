@@ -30,9 +30,9 @@ patterns:
 	return dir
 }
 
-// runCLI executes the root command with args and returns stdout, stderr and
+// runRulesConfigCLI executes the root command with args and returns stdout, stderr and
 // the command error.
-func runCLI(t *testing.T, args ...string) (string, string, error) {
+func runRulesConfigCLI(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	resetFlags()
 	flagCategory = ""
@@ -85,7 +85,7 @@ func TestScanRulesFlagRepeatable(t *testing.T) {
 	require.Equal(t, 1, both["PACK_B_001"])
 
 	listIDs := func(args ...string) map[string]int {
-		stdout, _, err := runCLI(t, append([]string{"list-rules", "--format", "json"}, args...)...)
+		stdout, _, err := runRulesConfigCLI(t, append([]string{"list-rules", "--format", "json"}, args...)...)
 		require.NoError(t, err)
 		var listed []rulemeta.Rule
 		require.NoError(t, json.Unmarshal([]byte(stdout), &listed))
@@ -136,27 +136,28 @@ patterns:
 `), 0o600))
 	dupDir := writeCLIRule(t, filepath.Join(base, "dup"), "CRED_002", "collide-marker")
 
-	_, _, err := runCLI(t, "scan", target, "--disable-rule", "TYPO_001")
+	_, _, err := runRulesConfigCLI(t, "scan", target, "--disable-rule", "TYPO_001")
 	requireCLIConfigError(t, err, types.ConfigProblemUnknownRuleID, "TYPO_001")
 	require.Contains(t, err.Error(), "--disable-rule")
 
-	_, _, err = runCLI(t, "scan", target, "--rules", badDir)
+	_, _, err = runRulesConfigCLI(t, "scan", target, "--rules", badDir)
 	requireCLIConfigError(t, err, types.ConfigProblemInvalidRule, "BAD_001")
 
-	_, _, err = runCLI(t, "scan", target, "--rules", dupDir)
+	_, _, err = runRulesConfigCLI(t, "scan", target, "--rules", dupDir)
 	requireCLIConfigError(t, err, types.ConfigProblemDuplicateRuleID, "CRED_002")
 
-	_, _, err = runCLI(t, "audit", target, "--disable-rule", "TYPO_001")
+	_, _, err = runRulesConfigCLI(t, "audit", target, "--disable-rule", "TYPO_001")
 	requireCLIConfigError(t, err, types.ConfigProblemUnknownRuleID, "TYPO_001")
 
-	_, _, err = runCLI(t, "list-rules", "--disable-rule", "TYPO_001")
+	stdout, stderr, err := runRulesConfigCLI(t, "list-rules", "--disable-rule", "TYPO_001")
 	requireCLIConfigError(t, err, types.ConfigProblemUnknownRuleID, "TYPO_001")
+	require.NotContains(t, stdout+stderr, "Usage:", "a configuration error is not command misuse")
 
-	_, _, err = runCLI(t, "explain", "CRED_002", "--rules", badDir)
+	_, _, err = runRulesConfigCLI(t, "explain", "CRED_002", "--rules", badDir)
 	requireCLIConfigError(t, err, types.ConfigProblemInvalidRule, "BAD_001")
 
 	// Valid IDs, in any case, are accepted.
-	_, _, err = runCLI(t, "scan", target, "--disable-rule", "cred_002,nlp_authority_claim", "-o", filepath.Join(base, "out.txt"))
+	_, _, err = runRulesConfigCLI(t, "scan", target, "--disable-rule", "cred_002,nlp_authority_claim", "-o", filepath.Join(base, "out.txt"))
 	require.NoError(t, err)
 }
 
@@ -216,9 +217,10 @@ rule_overrides:
 	msg := string(stderr)
 	require.Contains(t, msg, cfgPath+`:1: unknown key "disabled_rules" (ignored)`)
 	require.Contains(t, msg, `unknown key "severty" in rule_overrides.PROMPT_INJECTION_001`)
-	require.Contains(t, msg, cfgPath+` disable_rules: unknown rule ID "TYPO_001" (ignored)`)
-	require.Contains(t, msg, cfgPath+` rule_overrides: unknown rule ID "NOPE_002" (ignored)`)
-	require.Contains(t, msg, `invalid severity "SEVERE"`)
+	require.Contains(t, msg, cfgPath+` disable_rules: unknown rule ID "TYPO_001" (entry ignored)`)
+	require.Contains(t, msg, cfgPath+` rule_overrides: unknown rule ID "NOPE_002" (entry ignored)`)
+	// Only the severity is dropped; the rest of that override still applies.
+	require.Contains(t, msg, `invalid severity "SEVERE" (use critical, high, medium, low or info) (severity ignored; the rest of the entry still applies)`)
 
 	// The misspelled key had no effect: the finding is still reported.
 	var result struct {

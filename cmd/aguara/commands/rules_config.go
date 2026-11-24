@@ -77,7 +77,7 @@ func resolveCLIRules(cfg config.Config, disable []string, warn io.Writer) (*rule
 	var fatal []types.ConfigProblem
 	for _, p := range res.Problems {
 		if p.Source == fileDisable || p.Source == fileOverrides {
-			fmt.Fprintf(warn, "warning: %s (ignored)\n", p)
+			fmt.Fprintf(warn, "warning: %s (%s)\n", p, ignoredPart(p))
 			continue
 		}
 		fatal = append(fatal, p)
@@ -86,6 +86,16 @@ func resolveCLIRules(cfg config.Config, disable []string, warn io.Writer) (*rule
 		return nil, &types.ConfigError{Problems: fatal}
 	}
 	return res, nil
+}
+
+// ignoredPart says what a warned .aguara.yml problem leaves out: an invalid
+// severity drops only the severity, while the rest of that override
+// (disabled, tool scopes) still applies; any other problem drops the entry.
+func ignoredPart(p types.ConfigProblem) string {
+	if p.Kind == types.ConfigProblemInvalidSeverity {
+		return "severity ignored; the rest of the entry still applies"
+	}
+	return "entry ignored"
 }
 
 // resolveRulesDirs turns the --rules values into absolute directory paths,
