@@ -2,6 +2,7 @@ package incident
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,11 +24,23 @@ const (
 
 // Finding represents a single issue found by the checker.
 type Finding struct {
-	Severity    string `json:"severity"`
-	Title       string `json:"title"`
-	Detail      string `json:"detail"`
-	Path        string `json:"path,omitempty"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Path     string `json:"path,omitempty"`
+	// Line is the 1-based line in Path of the dependency entry that
+	// matched, for dependency files that have one (requirements files,
+	// TOML lockfiles). Omitted when the source has no meaningful line.
+	Line        int    `json:"line,omitempty"`
 	Remediation string `json:"remediation,omitempty"`
+}
+
+// Location renders Path, with ":line" appended when Line is known.
+func (f Finding) Location() string {
+	if f.Line > 0 && f.Path != "" {
+		return fmt.Sprintf("%s:%d", f.Path, f.Line)
+	}
+	return f.Path
 }
 
 // CredentialFile represents a credential path and its rotation guidance.
@@ -193,10 +206,13 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		// snapshot is first in EmbeddedSnapshots(), so hits[0] picks
 		// the curated advisory when both manual and OSV cover the
 		// tuple.
+		// The title lists every matching advisory ID (a GHSA and a MAL
+		// record often describe the same release), matching the
+		// environment and lockfile checks.
 		hit := hits[0]
 		result.Findings = append(result.Findings, Finding{
 			Severity:    SevCritical,
-			Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+			Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, strings.Join(matchIDs(hits), ", ")),
 			Detail:      hit.Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
@@ -282,13 +298,22 @@ func discoverSitePackages() string {
 
 // readInstalledPackages reads METADATA from *.dist-info dirs.
 func readInstalledPackages(siteDir string) []InstalledPackage {
+	packages, _ := readInstalledPackagesLimit(siteDir, 0)
+	return packages
+}
+
+// readInstalledPackagesLimit is readInstalledPackages with an optional
+// cap on dist-info directories (0 = no cap). Exceeding the cap is an
+// error, not a silently partial package list.
+func readInstalledPackagesLimit(siteDir string, limit int) ([]InstalledPackage, error) {
 	var packages []InstalledPackage
 
 	entries, err := os.ReadDir(siteDir)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
+	distInfo := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -296,6 +321,10 @@ func readInstalledPackages(siteDir string) []InstalledPackage {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".dist-info") {
 			continue
+		}
+		distInfo++
+		if limit > 0 && distInfo > limit {
+			return nil, fmt.Errorf("%s has more than %d installed distributions", siteDir, limit)
 		}
 
 		metaPath := filepath.Join(siteDir, name, "METADATA")
@@ -305,19 +334,25 @@ func readInstalledPackages(siteDir string) []InstalledPackage {
 			packages = append(packages, pkg)
 		}
 	}
-	return packages
+	return packages, nil
 }
 
+// maxMetadataBytes bounds how much of a METADATA file is read. Name and
+// Version are among the first headers; the body (long descriptions)
+// follows the first blank line and is never needed.
+const maxMetadataBytes = 1 << 20
+
 // parseMetadata extracts Name and Version from a dist-info METADATA file.
+// The read is bounded and never blocks on a special file, because an
+// environment committed to a cloned project is untrusted input.
 func parseMetadata(path string) InstalledPackage {
-	f, err := os.Open(path)
+	data, _, err := packagecheck.ReadInstalledFilePrefix(path, maxMetadataBytes)
 	if err != nil {
 		return InstalledPackage{}
 	}
-	defer func() { _ = f.Close() }()
 
 	var pkg InstalledPackage
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -360,19 +395,34 @@ var knownSafePth = map[string]bool{
 	"zope-nspkg.pth":           true,
 }
 
+// maxPthBytes bounds how much of a .pth file is inspected. Legitimate
+// .pth files list a few directory paths.
+const maxPthBytes = 1 << 20
+
 // checkPthFile scans a .pth file for executable content.
 func checkPthFile(path string) []Finding {
 	if knownSafePth[filepath.Base(path)] {
 		return nil
 	}
 
-	data, err := os.ReadFile(path)
+	data, truncated, err := packagecheck.ReadInstalledFilePrefix(path, maxPthBytes)
 	if err != nil {
 		return nil
 	}
 
 	content := string(data)
 	if !pthExecRe.MatchString(content) {
+		if truncated {
+			// Only the first maxPthBytes were inspected; an oversized
+			// .pth file is itself abnormal, so say so rather than
+			// reporting the rest as clean.
+			return []Finding{{
+				Severity:    SevWarning,
+				Title:       fmt.Sprintf("%s is larger than the %d-byte inspection limit", filepath.Base(path), maxPthBytes),
+				Path:        path,
+				Remediation: "Inspect this file manually. Legitimate .pth files contain only a few directory paths.",
+			}}
+		}
 		return nil
 	}
 
