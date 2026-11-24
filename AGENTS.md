@@ -33,8 +33,10 @@ version-matching limits.
 
 From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
 `.aguaraignore`, inline `aguara-ignore` directives) by default. In this checkout,
-`scan` also ignores it when a CI environment is detected, and prints a stderr
-notice naming the files whenever applying it changed the result. A local `scan` can still trust
+`scan` also ignores it when a CI environment is detected, except a `fail_on` in
+`.aguara.yml` when `--fail-on` is not passed (a threshold can only add a gate),
+and says so on stderr. It prints a stderr notice naming the files whenever
+applying the policy changed the result. A local `scan` can still trust
 it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.

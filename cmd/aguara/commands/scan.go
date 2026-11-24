@@ -58,11 +58,20 @@ configuration, CI workflow trust issues and supply-chain behavior.
 
 Policy owned by the scanned project (.aguara.yml, .aguaraignore and inline
 aguara-ignore directives) can exclude files and suppress findings. With the
-default --project-policy auto, a local scan applies it and, when it changed
-the result, prints a notice on stderr naming what was applied. With --ci, or when a CI environment is
-detected (CI, GITHUB_ACTIONS, GITLAB_CI, CIRCLECI, BUILDKITE, JENKINS_URL,
-TEAMCITY_VERSION or TRAVIS is set), auto ignores it. Pass --project-policy
-trust to apply it in CI, or --project-policy ignore for unfamiliar content.`,
+default --project-policy auto:
+
+  - A local scan applies it and, when it changed the result, prints a
+    notice on stderr naming what was applied.
+  - With --ci it is not applied; --ci sets its own --fail-on high.
+  - When a CI environment is detected (CI, GITHUB_ACTIONS, GITLAB_CI,
+    CIRCLECI, BUILDKITE, JENKINS_URL, TEAMCITY_VERSION or TRAVIS is set)
+    and --ci is not passed, it is not applied, except a fail_on in
+    .aguara.yml, which still applies when --fail-on is not passed: a
+    failure threshold can only add a gate. A notice on stderr names the
+    CI variable and what was and was not applied.
+
+Pass --project-policy trust to apply all of it in CI, or --project-policy
+ignore to apply none of it (fail_on included) for unfamiliar content.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
@@ -100,7 +109,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
 	scanCmd.Flags().StringVar(&flagBaseline, "baseline", "", "Gate only on findings NOT in this baseline file (fails closed if missing/malformed)")
 	scanCmd.Flags().StringVar(&flagWriteBaseline, "write-baseline", "", "Write current findings as a baseline to this file and exit 0 (skips sensitive findings)")
-	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (apply locally; ignore with --ci or in a detected CI environment), trust, or ignore")
+	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (apply locally; ignore with --ci; in a detected CI environment ignore all but .aguara.yml fail_on), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after a successful scan,
 	// network failures on --auto) should not trigger Cobra's
 	// flag-usage block: a CI log that already says
@@ -126,13 +135,23 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// auto applies the project's own policy only to local runs. In CI the
 	// scanned repository is usually the change under review, so it must
 	// not decide what its own gate sees; --project-policy trust opts in.
-	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && !isCI())
+	ciVar := ""
+	if !flagCI {
+		ciVar = detectedCIVar()
+	}
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "")
 	if err != nil {
 		return err
 	}
 	cfg := config.Config{}
-	if trustProjectPolicy {
+	switch {
+	case trustProjectPolicy:
 		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
+			return err
+		}
+	case ciVar != "" && isAutoProjectPolicy(flagProjectPolicy):
+		// Say what CI detection skipped, and keep the project's fail_on.
+		if err := applyCIProjectPolicy(cmd, targetPath, ciVar); err != nil {
 			return err
 		}
 	}
@@ -235,6 +254,10 @@ func validateBaselineFlags() error {
 }
 
 func runAutoScan(cmd *cobra.Command) error {
+	// --auto scans the machine's MCP client configs, not a project: there
+	// is no .aguara.yml or .aguaraignore to load, and auto has never
+	// applied inline directives here, in CI or not. Only an explicit
+	// --project-policy trust does, which noteProjectPolicy reports.
 	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, false)
 	if err != nil {
 		return err

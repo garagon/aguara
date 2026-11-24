@@ -99,29 +99,38 @@ func Execute() error {
 // In CI the update check is a net-egress side effect with no user to notify,
 // so it is silently suppressed. Local invocations still get the notice unless
 // the user opts out with --no-update-check or AGUARA_NO_UPDATE_CHECK=1.
-// scan also uses it to resolve --project-policy auto to ignore, so a
-// repository under review in CI cannot suppress its own findings.
+func isCI() bool {
+	return detectedCIVar() != ""
+}
+
+// detectedCIVar returns the name of the first recognized CI environment
+// variable that is set, or "" outside CI. scan uses it to resolve
+// --project-policy auto to ignore, so a repository under review in CI
+// cannot suppress its own findings, and names the variable in its notice
+// so a developer with CI exported locally can see why.
 //
 // The ci env var is the de-facto standard and covers GitHub Actions, GitLab,
 // CircleCI, Travis, Buildkite, Bitbucket Pipelines, Drone, Woodpecker, and
 // most others. The explicit names are a fallback for runners that leave CI
 // unset (Jenkins historically, TeamCity).
-func isCI() bool {
+func detectedCIVar() string {
 	if v := os.Getenv("CI"); v != "" && v != "false" && v != "0" {
-		return true
+		return "CI"
 	}
-	for _, k := range [...]string{
-		"GITHUB_ACTIONS",
-		"GITLAB_CI",
-		"CIRCLECI",
-		"BUILDKITE",
-		"JENKINS_URL",
-		"TEAMCITY_VERSION",
-		"TRAVIS",
-	} {
+	for _, k := range ciFallbackVars {
 		if os.Getenv(k) != "" {
-			return true
+			return k
 		}
 	}
-	return false
+	return ""
+}
+
+var ciFallbackVars = [...]string{
+	"GITHUB_ACTIONS",
+	"GITLAB_CI",
+	"CIRCLECI",
+	"BUILDKITE",
+	"JENKINS_URL",
+	"TEAMCITY_VERSION",
+	"TRAVIS",
 }

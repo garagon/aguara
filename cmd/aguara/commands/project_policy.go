@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -57,6 +58,93 @@ func projectConfigSettings(cmd *cobra.Command, cfg config.Config) []string {
 		keys = append(keys, "baseline")
 	}
 	return keys
+}
+
+// isAutoProjectPolicy reports whether --project-policy was left to auto.
+func isAutoProjectPolicy(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	return v == "" || v == "auto"
+}
+
+// applyCIProjectPolicy handles `scan` with --project-policy auto in a
+// detected CI environment without --ci. Policy owned by the scanned
+// project is not applied, with one exception: a fail_on in .aguara.yml
+// still applies when --fail-on was not passed. A failure threshold can
+// only add a gate: without --fail-on and --ci this run has none to
+// loosen, while the settings that can hide findings (ignore,
+// disable_rules, rule_overrides, severity, baseline) stay unapplied.
+// One stderr notice says what was and was not applied, naming the CI
+// variable so a developer with it exported locally can see why.
+func applyCIProjectPolicy(cmd *cobra.Command, targetPath, ciVar string) error {
+	cfg, err := config.Load(targetPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	info, statErr := os.Stat(targetPath)
+	walked := statErr == nil && info.IsDir() && !flagChanged // ignore lists apply only to a directory walk
+
+	var skipped []string
+	appliedFailOn := ""
+	if cfg.Source != "" {
+		keys := projectConfigSettings(cmd, cfg)
+		if !walked {
+			keys = slices.DeleteFunc(keys, func(k string) bool { return k == "ignore" })
+		}
+		if slices.Contains(keys, "fail_on") {
+			if _, err := scanner.ParseSeverity(cfg.FailOn); err != nil {
+				return fmt.Errorf("%s: invalid fail_on %q: %w", cfg.Source, cfg.FailOn, err)
+			}
+			flagFailOn = cfg.FailOn
+			appliedFailOn = cfg.FailOn
+			keys = slices.DeleteFunc(keys, func(k string) bool { return k == "fail_on" })
+		}
+		if len(keys) > 0 {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", cfg.Source, strings.Join(keys, ", ")))
+		}
+	}
+	if walked {
+		if path, ok := projectIgnoreFile(targetPath); ok {
+			skipped = append(skipped, path)
+		}
+	}
+
+	var parts []string
+	if len(skipped) > 0 {
+		parts = append(parts, "not applying policy owned by the scanned project: "+strings.Join(skipped, ", ")+
+			" (pass --project-policy trust if the pipeline owns these files)")
+	}
+	if appliedFailOn != "" {
+		parts = append(parts, fmt.Sprintf("applying fail_on: %s from %s, because a failure threshold can only add a gate", appliedFailOn, cfg.Source))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "notice: CI environment detected (%s); %s\n", ciVar, output.TerminalText(strings.Join(parts, "; ")))
+	return nil
+}
+
+// projectIgnoreFile reports the target's .aguaraignore when it holds at
+// least one pattern, or exists but is not a regular file (a trusted scan
+// would fail on it).
+func projectIgnoreFile(dir string) (string, bool) {
+	path := filepath.Join(dir, ".aguaraignore")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", false
+	}
+	if !info.Mode().IsRegular() {
+		return path, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return path, true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // noteProjectPolicy prints one stderr line when policy owned by the
