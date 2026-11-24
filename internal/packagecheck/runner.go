@@ -2,6 +2,7 @@ package packagecheck
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -31,6 +32,22 @@ type RunResult struct {
 	// UnresolvedIncludes lists each requirements include that was not
 	// read, once even when several targets reach the same directive.
 	UnresolvedIncludes []UnresolvedInclude
+	// ReadFiles lists every dependency file the run read, by resolved
+	// path (symlinks evaluated), including requirements files reached
+	// only through a -r / -c include. A file in this list was
+	// evaluated even when discovery did not return it as a target.
+	ReadFiles []string
+}
+
+// ResolvedPath returns path with its directory's symlinks evaluated, the
+// form RunResult.ReadFiles uses, or path unchanged when it cannot be
+// resolved.
+func ResolvedPath(path string) string {
+	dir, err := realDir(filepath.Dir(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(dir, filepath.Base(path))
 }
 
 // Runner orchestrates per-target parsing + matching. The Matcher
@@ -72,6 +89,8 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("packagecheck: %s: %w", t.Path, err)
 		}
+		out.ReadFiles = append(out.ReadFiles, ResolvedPath(t.Path))
+		out.ReadFiles = append(out.ReadFiles, parsed.files...)
 		refs := parsed.refs
 		findings := 0
 		unpinned := 0
@@ -183,6 +202,9 @@ func advisoryIDs(matches []intel.Match) []string {
 type parsedTarget struct {
 	refs       []PackageRef
 	unresolved []UnresolvedInclude
+	// files are the requirements files read, by resolved path,
+	// including files reached only through an include.
+	files []string
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the

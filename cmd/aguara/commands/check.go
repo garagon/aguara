@@ -849,12 +849,14 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		}
 		parts = append(parts, r)
 	}
+	var run *packagecheck.RunResult
 	if len(plan.packagecheckTargets) > 0 {
-		r, err := runPackagecheckPlan(plan, override)
+		r, rr, err := runPackagecheckPlan(plan, override)
 		if err != nil {
 			return nil, err
 		}
 		parts = append(parts, r)
+		run = rr
 	}
 	if len(plan.pythonEnvs) > 0 {
 		envParts, err := runPythonEnvironments(plan, override)
@@ -883,7 +885,7 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 	} else {
 		result = mergeCheckResults(parts, plan.rootPath)
 	}
-	result.Coverage = checkCoverage(plan, result)
+	result.Coverage = checkCoverage(plan, result, run)
 	return result, nil
 }
 
@@ -892,11 +894,15 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 // incident.Finding entries with per-ecosystem remediation text.
 // The Ecosystems slice carries one entry per lockfile so multi-
 // language repos show every manifest in JSON output.
-func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, error) {
+//
+// The RunResult is returned too: coverage needs the files the run read
+// (including requirements files reached through an include) and the
+// includes it could not read.
+func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, *packagecheck.RunResult, error) {
 	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
 	runRes, err := runner.Run(plan.packagecheckTargets)
 	if err != nil {
-		return nil, fmt.Errorf("aguara check: packagecheck: %w", err)
+		return nil, nil, fmt.Errorf("aguara check: packagecheck: %w", err)
 	}
 	root := plan.rootPath
 	if root == "" {
@@ -944,7 +950,7 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 	for _, u := range runRes.UnresolvedIncludes {
 		result.Findings = append(result.Findings, unresolvedIncludeFinding(u))
 	}
-	return result, nil
+	return result, runRes, nil
 }
 
 // mergeCheckResults concatenates Findings + Credentials +

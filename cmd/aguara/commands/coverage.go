@@ -35,16 +35,23 @@ func (c AuditCoverage) MarshalJSON() ([]byte, error) {
 }
 
 // checkCoverage builds the coverage block for a finished check. A file
-// that discovery also returned as a parsed target is never reported as
-// unsupported, so adding a parser cannot produce a contradictory entry.
-func checkCoverage(plan checkPlan, result *incident.CheckResult) *packagecheck.Coverage {
+// the check read is never reported as unsupported: neither a parsed
+// target nor a requirements file reached through an include (run may be
+// nil when no lockfile was parsed). Paths are compared with symlinks
+// resolved.
+func checkCoverage(plan checkPlan, result *incident.CheckResult, run *packagecheck.RunResult) *packagecheck.Coverage {
 	read := map[string]bool{}
 	for _, e := range result.Ecosystems {
-		read[filepath.Clean(e.Path)] = true
+		read[packagecheck.ResolvedPath(e.Path)] = true
+	}
+	if run != nil {
+		for _, f := range run.ReadFiles {
+			read[f] = true
+		}
 	}
 	unsupported := []packagecheck.UnsupportedEvidence{}
 	for _, u := range plan.unsupported {
-		if !read[filepath.Clean(u.Path)] {
+		if !read[packagecheck.ResolvedPath(u.Path)] {
 			unsupported = append(unsupported, u)
 		}
 	}

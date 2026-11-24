@@ -111,7 +111,11 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 	if err := w.visit(target.Path, constraint, 0); err != nil {
 		return parsedTarget{}, err
 	}
-	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved}, nil
+	files := make([]string, 0, len(w.visited))
+	for key := range w.visited {
+		files = append(files, key)
+	}
+	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files}, nil
 }
 
 type requirementsWalk struct {

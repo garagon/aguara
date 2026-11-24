@@ -9,11 +9,21 @@ import (
 
 // unsupportedFormat is a dependency file Aguara recognizes by name but
 // does not parse. Pattern is matched against the base name with
-// filepath.Match.
+// filepath.Match; when Dir is set, the file's parent directory must
+// also have that name.
 type unsupportedFormat struct {
 	Pattern   string
+	Dir       string
 	Kind      string
 	Ecosystem string
+}
+
+func (f unsupportedFormat) matches(path string) bool {
+	if f.Dir != "" && filepath.Base(filepath.Dir(path)) != f.Dir {
+		return false
+	}
+	ok, _ := filepath.Match(f.Pattern, filepath.Base(path))
+	return ok
 }
 
 // unsupportedFormats is the single list of dependency files that are
@@ -28,9 +38,18 @@ type unsupportedFormat struct {
 // reported as both read and unsupported.
 //
 // Manifests without resolved versions (package.json without a lockfile,
-// pyproject.toml, Cargo.toml, Gemfile, composer.json) are not listed:
-// they do not pin what an install resolves.
+// pyproject.toml, Pipfile, requirements.in, setup.py, Cargo.toml,
+// Gemfile, composer.json) are not listed: they do not pin what an
+// install resolves. Neither is a conda environment.yml: the name is
+// common outside conda, and its conda-channel packages have no
+// intelligence here.
 var unsupportedFormats = []unsupportedFormat{
+	// PyPI: pip requirements files that discovery does not pick up by
+	// name (it reads requirements*.txt and constraints*.txt). They are
+	// reported only when no read requirements file includes them.
+	{Pattern: "*-requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "*_requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "*.txt", Dir: "requirements", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
 	// npm
 	{Pattern: "npm-shrinkwrap.json", Kind: "npm-shrinkwrap.json", Ecosystem: intel.EcosystemNPM},
 	{Pattern: "deno.lock", Kind: "deno.lock", Ecosystem: intel.EcosystemNPM},
@@ -81,10 +100,16 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 			if len(want) > 0 && !want[f.Ecosystem] {
 				continue
 			}
-			if ok, _ := filepath.Match(f.Pattern, d.Name()); ok {
-				out = append(out, UnsupportedEvidence{Path: path, Kind: f.Kind, Ecosystem: f.Ecosystem})
+			if !f.matches(path) {
+				continue
+			}
+			if f.Ecosystem == intel.EcosystemPyPI && (isRequirementsSource(d.Name()) || !pinsRequirements(path)) {
+				// Discovery reads it by name, or it is not a pip
+				// requirements file that pins anything.
 				break
 			}
+			out = append(out, UnsupportedEvidence{Path: path, Kind: f.Kind, Ecosystem: f.Ecosystem})
+			break
 		}
 		return nil
 	})
@@ -92,6 +117,23 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 		return nil, err
 	}
 	return out, nil
+}
+
+// pinsRequirements reports whether path parses as a pip requirements
+// file and pins at least one exact version or includes another file.
+// Those are dependency evidence an install would use; a .txt that is
+// prose, or a list of ranges like a manifest, is not reported.
+func pinsRequirements(path string) bool {
+	file, err := parseRequirementsFile(path)
+	if err != nil {
+		return false
+	}
+	for _, item := range file.items {
+		if item.include != "" || (item.ref != nil && !item.ref.Unpinned) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPythonInstallRoot reports a root that is itself an installed-package

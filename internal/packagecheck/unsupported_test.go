@@ -93,15 +93,55 @@ func TestDiscoverUnsupportedSkipsInstalledRoots(t *testing.T) {
 	}
 }
 
+// Discovery reads requirements*.txt and constraints*.txt by name. pip
+// files under other names pin dependencies just the same, so they are
+// reported when they pin a version or include another file; prose .txt
+// files and range-only lists (like manifests) are not.
+func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"dev-requirements.txt":               "pytest==8.2.0\n",
+		"services/api/test_requirements.txt": "coverage==7.5.1\n",
+		"requirements/dev.txt":               "black==24.4.2\n",
+		"requirements/prod.txt":              "-r base.txt\n",
+		"requirements/notes.txt":             "Install the tools listed below before running the suite.\n",
+		"tox-requirements.txt":               "pytest>=7\n",
+		"requirements/requirements-ci.txt":   "ruff==0.4.4\n", // read by discovery
+		"requirements.in":                    "flask==3.0.0\n",
+		"pyproject.toml":                     "[project]\ndependencies = [\"flask==3.0.0\"]\n",
+		"Pipfile":                            "[packages]\nflask = \"==3.0.0\"\n",
+		"environment.yml":                    "dependencies:\n  - pip:\n    - flask==3.0.0\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	got, err := DiscoverUnsupported(root, nil)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"dev-requirements.txt":               "requirements.txt/PyPI",
+		"services/api/test_requirements.txt": "requirements.txt/PyPI",
+		"requirements/dev.txt":               "requirements.txt/PyPI",
+		"requirements/prod.txt":              "requirements.txt/PyPI",
+	}, unsupportedByPath(t, root, got))
+}
+
 // Every unsupported format must stay out of the parsed set. Adding a
 // parser for one of them fails here until its entry is removed from
 // unsupportedFormats.
 func TestUnsupportedFormatsAreNotParsed(t *testing.T) {
 	for _, f := range unsupportedFormats {
-		t.Run(f.Pattern, func(t *testing.T) {
+		t.Run(f.Dir+"/"+f.Pattern, func(t *testing.T) {
 			root := t.TempDir()
-			name := strings.ReplaceAll(f.Pattern, "*", "-dev")
-			writeTree(t, root, name)
+			name := strings.ReplaceAll(f.Pattern, "*", "dev")
+			if f.Dir != "" {
+				name = f.Dir + "/" + name
+			}
+			path := filepath.Join(root, filepath.FromSlash(name))
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			// Python entries are reported only when they pin something.
+			require.NoError(t, os.WriteFile(path, []byte("flask==3.0.0\n"), 0o644))
 			targets, err := Discover(root, nil)
 			require.NoError(t, err)
 			require.Empty(t, targets, "%s is parsed now: remove it from unsupportedFormats", name)
