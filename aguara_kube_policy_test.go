@@ -143,7 +143,7 @@ func TestKubePolicyFallbackAndNegatives(t *testing.T) {
 func TestKubePolicyRetainsCommands(t *testing.T) {
 	sc, err := aguara.NewScanner(aguara.WithWorkers(1), aguara.WithDeduplicateMode(aguara.DeduplicateSameRuleOnly))
 	require.NoError(t, err)
-	for _, command := range []string{"process.setuid(0)", "os.setgid(0)", "sudo bash -c id", "sudo chmod +s /tmp/helper", "chown root:root /tmp/helper", "setcap cap_setuid+ep /tmp/bin"} {
+	for _, command := range []string{"process.setuid(0)", "os.setgid(0)", "sudo bash -c id", "sudo chmod +s /tmp/helper", "chmod u+s /tmp/helper", "chmod 4755 /tmp/helper", "chown root:root /tmp/helper", "setcap cap_setuid+ep /tmp/bin"} {
 		t.Run(command, func(t *testing.T) {
 			quoted, err := json.Marshal(command)
 			require.NoError(t, err)
