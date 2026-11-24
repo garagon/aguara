@@ -344,9 +344,12 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 		return nil, err
 	}
 	for _, rulesDir := range rulesDirs {
-		customRules, err := rules.LoadFromDir(rulesDir)
+		customRules, skipped, err := rules.LoadFromDir(rulesDir)
 		if err != nil {
 			return nil, fmt.Errorf("loading custom rules from %s: %w", rulesDir, err)
+		}
+		for _, s := range skipped {
+			fmt.Fprintf(os.Stderr, "warning: %s: %s\n", s.Path, s.Reason)
 		}
 		rawRules = append(rawRules, customRules...)
 	}

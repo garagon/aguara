@@ -16,6 +16,7 @@ type scanConfig struct {
 	stateDir        string
 	redact          bool // scrub matched text from credential-leak findings
 	targetPolicy    *bool
+	lenientConfig   bool // skip invalid rule configuration instead of failing
 }
 
 // WithTrustedTargetPolicy allows files being scanned to suppress findings via
@@ -56,17 +57,55 @@ func WithCustomRules(dirs ...string) Option {
 	}
 }
 
-// WithDisabledRules excludes specific rule IDs from scanning.
+// WithDisabledRules excludes specific rule IDs from scanning. IDs are
+// case-insensitive and must name a rule in the catalog (built-in, analyzer
+// or a rule loaded with WithCustomRules); an unknown ID is a ConfigError
+// unless WithLenientConfig is set. Repeated use accumulates.
 func WithDisabledRules(ids ...string) Option {
 	return func(c *scanConfig) {
 		c.disabledRules = append(c.disabledRules, ids...)
 	}
 }
 
-// WithRuleOverrides applies severity overrides or disables rules.
+// WithRuleOverrides applies severity overrides, disables rules, or scopes
+// rules to tools. Keys are rule IDs (case-insensitive) and must name a rule
+// in the catalog. Severity must be one of critical, high, medium, low or
+// info, and ApplyToTools and ExemptTools are mutually exclusive. A problem
+// with an override is a ConfigError unless WithLenientConfig is set.
+//
+// Repeated use merges the maps; a later entry for the same key replaces an
+// earlier one. The map is copied, so changing it afterwards has no effect.
 func WithRuleOverrides(overrides map[string]RuleOverride) Option {
 	return func(c *scanConfig) {
-		c.ruleOverrides = overrides
+		if c.ruleOverrides == nil && len(overrides) > 0 {
+			c.ruleOverrides = make(map[string]RuleOverride, len(overrides))
+		}
+		for id, ovr := range overrides {
+			ovr.ApplyToTools = append([]string(nil), ovr.ApplyToTools...)
+			ovr.ExemptTools = append([]string(nil), ovr.ExemptTools...)
+			c.ruleOverrides[id] = ovr
+		}
+	}
+}
+
+// WithLenientConfig makes rule configuration problems non-fatal, as they
+// were before ConfigError existed: a custom rule that does not compile is
+// skipped, a custom rule whose ID is already defined is skipped (the
+// existing rule is kept), an unknown rule ID in WithDisabledRules or
+// WithRuleOverrides is ignored, an invalid override severity is ignored
+// (the rule keeps its severity and the rest of the override still applies),
+// and when an override sets both ApplyToTools and ExemptTools, ApplyToTools
+// is used.
+//
+// The skipped problems are not discarded: Scanner.ConfigProblems returns
+// them. The package-level Scan, ScanContent and ScanContentAs functions have
+// no scanner to ask, so a caller that wants to read the problems builds the
+// scanner with NewScanner. Prefer the default strict behaviour, which makes
+// NewScanner and the scan functions return a *ConfigError, so a
+// configuration mistake cannot silently weaken a scan.
+func WithLenientConfig() Option {
+	return func(c *scanConfig) {
+		c.lenientConfig = true
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -27,7 +28,7 @@ func LoadFromFS(fsys fs.FS) ([]RawRule, error) {
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
-		rules, err := parseMultiDocYAML(data)
+		rules, err := parseMultiDocYAML(data, path)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", path, err)
 		}
@@ -40,11 +41,18 @@ func LoadFromFS(fsys fs.FS) ([]RawRule, error) {
 // maxRuleFileSize is the maximum size for a single YAML rule file (1 MB).
 const maxRuleFileSize = 1 << 20
 
-// LoadFromDir loads rules from a directory on disk.
-// Files larger than 1 MB are skipped. Unknown YAML keys are rejected.
-func LoadFromDir(dir string) ([]RawRule, error) {
-	var all []RawRule
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// SkippedFile is a rule file LoadFromDir did not load.
+type SkippedFile struct {
+	Path   string
+	Reason string
+}
+
+// LoadFromDir loads rules from a directory on disk. Unknown YAML keys are
+// rejected. Files larger than 1 MB are not loaded; they are returned in
+// skipped so the caller can report them instead of losing the rules
+// silently.
+func LoadFromDir(dir string) (rules []RawRule, skipped []SkippedFile, err error) {
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -52,21 +60,24 @@ func LoadFromDir(dir string) ([]RawRule, error) {
 			return nil
 		}
 		if info.Size() > maxRuleFileSize {
-			fmt.Fprintf(os.Stderr, "warning: skipping oversized rule file %s (%d bytes, max %d)\n", path, info.Size(), maxRuleFileSize)
+			skipped = append(skipped, SkippedFile{
+				Path:   path,
+				Reason: fmt.Sprintf("rule file is %d bytes, over the %d-byte limit; its rules were not loaded", info.Size(), maxRuleFileSize),
+			})
 			return nil
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
-		rules, err := parseMultiDocYAML(data)
+		parsed, err := parseMultiDocYAML(data, path)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", path, err)
 		}
-		all = append(all, rules...)
+		rules = append(rules, parsed...)
 		return nil
 	})
-	return all, err
+	return rules, skipped, err
 }
 
 // UniqueDirs returns dirs without empty entries and without repeats of a
@@ -90,8 +101,10 @@ func UniqueDirs(dirs []string) []string {
 	return out
 }
 
-// parseMultiDocYAML splits a YAML file on "---" boundaries and parses each document.
-func parseMultiDocYAML(data []byte) ([]RawRule, error) {
+// parseMultiDocYAML splits a YAML file on "---" boundaries and parses each
+// document. Empty documents are skipped. A document with content but no id
+// is kept so that Compile reports it, rather than dropping the rule unseen.
+func parseMultiDocYAML(data []byte, source string) ([]RawRule, error) {
 	var rules []RawRule
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -104,9 +117,11 @@ func parseMultiDocYAML(data []byte) ([]RawRule, error) {
 			}
 			return nil, err
 		}
-		if raw.ID != "" {
-			rules = append(rules, raw)
+		if raw.ID == "" && reflect.ValueOf(raw).IsZero() {
+			continue
 		}
+		raw.Source = source
+		rules = append(rules, raw)
 	}
 	return rules, nil
 }

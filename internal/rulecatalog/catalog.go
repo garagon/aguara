@@ -21,7 +21,6 @@ import (
 	"github.com/garagon/aguara/internal/engine"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
-	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/types"
 )
 
@@ -47,9 +46,8 @@ type Options struct {
 	// Category, when non-empty, filters the result to rules whose
 	// Category matches case-insensitively.
 	Category string
-	// Warn receives non-fatal compile warnings from the YAML rule
-	// loader. nil discards them; the CLI wires this to stderr so
-	// the user sees rule-author issues during `list-rules`.
+	// Warn receives the configuration problems Build skipped (see
+	// Resolve). nil discards them.
 	Warn func(format string, args ...any)
 }
 
@@ -64,42 +62,50 @@ type Override struct {
 	Disabled bool   // true  -> drop the rule from list-rules output
 }
 
-// Build returns the merged catalog. Errors come from the
-// custom-rules directory path (missing dir, malformed YAML); built-
-// in rules are embedded and always succeed.
+// Build returns the merged catalog. Configuration problems (a custom rule
+// that does not compile or reuses an existing ID, an unknown ID in
+// DisableRuleIDs or Overrides, an invalid override severity) are skipped and
+// passed to Warn; callers that must reject them use Resolve directly. The
+// error is reserved for custom rules directories that cannot be loaded
+// (missing directory, malformed YAML); built-in rules are embedded and
+// always load.
 //
 // Returned slice is sorted by ID so the CLI output is stable
 // across runs.
 func Build(opts Options) ([]rulemeta.Rule, error) {
-	warn := opts.Warn
-	if warn == nil {
-		warn = func(string, ...any) {}
-	}
-
-	// 1. Built-in pattern rules (embedded YAML files).
-	rawRules, err := rules.LoadFromFS(builtin.FS())
+	res, err := Resolve(opts.input())
 	if err != nil {
-		return nil, fmt.Errorf("rulecatalog: load built-in rules: %w", err)
+		return nil, fmt.Errorf("rulecatalog: %w", err)
 	}
-
-	// 2. Custom rules dirs, when configured.
-	for _, dir := range rules.UniqueDirs(opts.CustomRulesDirs) {
-		customRules, err := rules.LoadFromDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("rulecatalog: load custom rules from %s: %w", dir, err)
+	if opts.Warn != nil {
+		for _, p := range res.Problems {
+			opts.Warn("warning: %s\n", p)
 		}
-		rawRules = append(rawRules, customRules...)
 	}
+	return res.Catalog(opts.Category), nil
+}
 
-	// Compile the YAML rules; compile warnings (regex too long,
-	// missing example, etc.) flow to the caller's warn func so
-	// the CLI surfaces them on stderr.
-	compiled, compileErrs := rules.CompileAll(rawRules)
-	for _, e := range compileErrs {
-		warn("warning: %v\n", e)
+// input describes Options as a Resolve input. Map keys are sorted so the
+// result does not depend on map iteration order.
+func (opts Options) input() Input {
+	in := Input{CustomRulesDirs: opts.CustomRulesDirs}
+	for _, id := range opts.DisableRuleIDs {
+		in.Disabled = append(in.Disabled, Ref{ID: id, Source: "disable list"})
 	}
-
-	return FromCompiled(compiled, opts), nil
+	ids := make([]string, 0, len(opts.Overrides))
+	for id := range opts.Overrides {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		o := opts.Overrides[id]
+		in.Overrides = append(in.Overrides, OverrideRef{
+			ID:       id,
+			Source:   "overrides",
+			Override: rules.RuleOverride{Severity: o.Severity, Disabled: o.Disabled},
+		})
+	}
+	return in
 }
 
 // FromCompiled builds the merged catalog from an already-compiled pattern

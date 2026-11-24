@@ -113,8 +113,17 @@ func (s *Scanner) SetScanProfile(profile ScanProfile) {
 }
 
 // SetToolScopedRules sets per-rule tool filtering from user configuration.
+// Rule IDs are matched case-insensitively.
 func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
-	s.toolScopedRules = rules
+	if len(rules) == 0 {
+		s.toolScopedRules = nil
+		return
+	}
+	normalized := make(map[string]ToolScopedRule, len(rules))
+	for id, scoped := range rules {
+		normalized[strings.ToUpper(strings.TrimSpace(id))] = scoped
+	}
+	s.toolScopedRules = normalized
 }
 
 // IsRuleDisabled reports the scanner-wide rule-ID filter to analyzers that

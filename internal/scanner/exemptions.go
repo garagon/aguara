@@ -67,8 +67,9 @@ func applyToolExemptions(toolName string, findings []Finding, toolScoped map[str
 	}
 	var kept []Finding
 	for _, f := range findings {
-		// Check user-configured tool-scoped overrides first (they take precedence)
-		if scoped, ok := toolScoped[f.RuleID]; ok {
+		// Check user-configured tool-scoped overrides first (they take precedence).
+		// Scanner.SetToolScopedRules stores the keys upper-case.
+		if scoped, ok := toolScoped[strings.ToUpper(f.RuleID)]; ok {
 			if !isToolInScope(toolName, scoped) {
 				continue // tool not in scope, skip finding
 			}

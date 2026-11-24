@@ -82,7 +82,8 @@ context. A single inline scan does not inspect neighboring files.
 
 Important options:
 
-- `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog controls.
+- `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog
+  controls. IDs must exist in the loaded catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
 - `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
@@ -90,6 +91,16 @@ Important options:
   directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
 - `WithRedaction(false)`: exposes raw sensitive evidence; do not use by default.
+- `WithLenientConfig()`: skip invalid rule configuration instead of failing;
+  the skipped problems are returned by `Scanner.ConfigProblems()`.
+
+Invalid rule configuration (a custom rule that does not compile or reuses an
+existing rule ID, an unknown rule ID in a disable list or override, an invalid
+override severity, conflicting tool scopes) makes `NewScanner`, the scan
+functions and `ListRulesE` return a `*ConfigError`; use `errors.As` to read its
+problems. `ListRules` returns nil in that case. `ExplainRule` reports an unknown
+ID with an error matching `errors.Is(err, ErrRuleNotFound)` and reports rule
+loading problems as themselves.
 
 Consumers must bound inline inputs and execution resources themselves. A context
 does not guarantee immediate interruption of every parser or regular expression.

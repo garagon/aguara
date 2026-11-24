@@ -55,11 +55,13 @@ Scans and default `check`/`audit` runs are offline: they use the embedded intell
 
 ### Public Library API (`aguara.go`, `options.go`)
 
-Root package re-exports types from `internal/types` (`Severity`, `Finding`, `ScanResult`, `ContextLine`, `Verdict`, `ScanProfile`, `DeduplicateMode` and their constants) and `discover` (`DiscoverResult`, `DiscoveredServer`, `DiscoveredClient`), and defines `RuleOverride`, `RuleInfo`, `RuleDetail` and `ErrIncompleteScan`.
+Root package re-exports types from `internal/types` (`Severity`, `Finding`, `ScanResult`, `ContextLine`, `Verdict`, `ScanProfile`, `DeduplicateMode`, `ConfigError`, `ConfigProblem`, `ConfigProblemKind` and their constants) and `discover` (`DiscoverResult`, `DiscoveredServer`, `DiscoveredClient`), and defines `RuleOverride`, `RuleInfo`, `RuleDetail`, `ErrIncompleteScan` and `ErrRuleNotFound`.
 
-- Package functions: `Scan()`, `ScanContent()`, `ScanContentAs()`, `ListRules()`, `ExplainRule()`, `Discover()`, `NewScanner()`.
-- Reusable `*Scanner` methods: `Scan()`, `ScanContent()`, `ScanContentAs()`, `ListRules()`, `ExplainRule()`, `RulesLoaded()`.
-- Options: `WithCustomRules`, `WithDisabledRules`, `WithRuleOverrides`, `WithMinSeverity`, `WithWorkers`, `WithIgnorePatterns`, `WithMaxFileSize`, `WithCategory` (ListRules only), `WithToolName`, `WithScanProfile`, `WithDeduplicateMode`, `WithStateDir`, `WithRedaction`, `WithTrustedTargetPolicy`, `WithUntrustedTarget`.
+- Package functions: `Scan()`, `ScanContent()`, `ScanContentAs()`, `ListRules()`, `ListRulesE()`, `ExplainRule()`, `Discover()`, `NewScanner()`.
+- Reusable `*Scanner` methods: `Scan()`, `ScanContent()`, `ScanContentAs()`, `ListRules()`, `ExplainRule()`, `RulesLoaded()`, `ConfigProblems()`.
+- Options: `WithCustomRules`, `WithDisabledRules`, `WithRuleOverrides`, `WithLenientConfig`, `WithMinSeverity`, `WithWorkers`, `WithIgnorePatterns`, `WithMaxFileSize`, `WithCategory` (ListRules only), `WithToolName`, `WithScanProfile`, `WithDeduplicateMode`, `WithStateDir`, `WithRedaction`, `WithTrustedTargetPolicy`, `WithUntrustedTarget`.
+
+Rule configuration is validated in one place, `rulecatalog.Resolve` (`internal/rulecatalog/resolve.go`), used by the library and the CLI: custom rules that do not compile or reuse an existing ID (built-in, analyzer or another custom rule, case-insensitive), unknown rule IDs in disable lists and overrides, invalid override severities and conflicting tool scopes become `ConfigProblem`s. The library returns them as a `*ConfigError` from `NewScanner`, the scan functions and `ListRulesE` unless `WithLenientConfig` is set (then they are skipped and readable through `Scanner.ConfigProblems`). Never drop a configuration problem silently.
 
 Used by external consumers like `aguara-mcp`. Library scans treat their input as untrusted by default: target-owned `.aguaraignore` files and inline `aguara-ignore` directives are ignored unless the caller passes `WithTrustedTargetPolicy()`. The library never reads `.aguara.yml`. Redaction of sensitive matched text is on by default.
 
