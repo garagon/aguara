@@ -66,6 +66,21 @@ func auditCoverage(check *incident.CheckResult, scan *scanner.ScanResult) AuditC
 	return c
 }
 
+// noPackageFindingsLine is the package-check line for a result with no
+// findings. The success mark is kept for checks that read evidence; a
+// check that read nothing says so instead of reporting a clean result.
+// A nil coverage (callers that did not compute it) keeps the old line.
+func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
+	switch {
+	case c == nil || c.Evaluated():
+		return st.OK("No known-compromised packages or persistence artifacts found.")
+	case len(c.UnsupportedEvidence) > 0:
+		return st.SeverityIcon("MEDIUM") + " " + st.Yellow("No packages were checked: every dependency file found is in a format Aguara cannot parse.")
+	default:
+		return st.Dim("No dependency files found; no packages were checked.")
+	}
+}
+
 // packageCoverageLine is the one-line terminal summary of the package
 // evidence a check read.
 func packageCoverageLine(c *packagecheck.Coverage) string {

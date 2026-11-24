@@ -1043,7 +1043,7 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 	fprintIntelFreshness(w, os.Stderr, result.Intel, flagCheckCI)
 
 	if len(result.Findings) == 0 {
-		fmt.Fprintf(w, "  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
+		fmt.Fprintf(w, "  %s\n\n", noPackageFindingsLine(st, result.Coverage))
 		return nil
 	}
 

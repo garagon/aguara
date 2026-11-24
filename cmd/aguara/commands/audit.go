@@ -554,7 +554,31 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 		}
 	}
 
+	applyAuditCoverageTriage(&t, result)
 	return t
+}
+
+// applyAuditCoverageTriage keeps an audit that evaluated nothing from
+// clearing the target. Absence of findings only means something when
+// files were scanned. handoff and action_plan derive from the decision,
+// so a coverage review also withholds install and execution there.
+func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
+	if result.Scan.FilesScanned != 0 {
+		return
+	}
+	t.Reasons = append(t.Reasons, AuditTriageReason{
+		Kind:     "nothing_scanned",
+		Severity: "warning",
+		Message:  "No files were scanned under the target, so the audit evaluated nothing.",
+	})
+	if t.Decision == "proceed" {
+		t.Decision = "review"
+		t.Summary = "Nothing was scanned: the audit evaluated no files, so it cannot clear this target."
+		t.RecommendedNextSteps = []string{
+			"Check that the audit path points at the project you meant to audit.",
+			"Do not treat this result as a clean audit.",
+		}
+	}
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
@@ -707,9 +731,8 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
 		}
 	}
-	if len(result.Check.Findings) == 0 {
-		fmt.Fprintf(w, "\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
-	} else {
+	switch {
+	case len(result.Check.Findings) > 0:
 		for _, f := range result.Check.Findings {
 			label := output.TerminalText(string(f.Severity))
 			fmt.Fprintf(w, "\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
@@ -717,15 +740,20 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Path)))
 			}
 		}
+	default:
+		fmt.Fprintf(w, "\n  %s\n", noPackageFindingsLine(st, result.Check.Coverage))
 	}
 
 	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("CONTENT SCAN", width))
 	if result.Scan.Coverage != nil {
 		fmt.Fprintf(w, "\n  %s\n", st.Dim(fmt.Sprintf("Coverage: %d files scanned", result.Scan.FilesScanned)))
 	}
-	if len(result.Scan.Findings) == 0 {
+	switch {
+	case len(result.Scan.Findings) == 0 && result.Scan.FilesScanned == 0:
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(output.NothingScannedMessage(result.Scan)))
+	case len(result.Scan.Findings) == 0:
 		fmt.Fprintf(w, "\n  %s\n", st.OK("No content findings."))
-	} else {
+	default:
 		// Cap the listing unless --verbose -- a noisy repo can dump
 		// hundreds of low-severity findings into the audit output,
 		// and showing all of them buries the verdict.
@@ -760,7 +788,9 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 
 	// Green is reserved for a clean pass: FINDINGS exits 0 but still
 	// means unresolved findings exist, so it renders yellow with the
-	// medium-tier icon; FAIL is red with the critical icon.
+	// medium-tier icon; FAIL is red with the critical icon. A PASS that
+	// triage still sends to review (nothing scanned, dependency files
+	// not evaluated) is not a clean pass either.
 	verdict := fmt.Sprintf("Verdict: %s", output.TerminalText(strings.ToUpper(result.Verdict.Status)))
 	counts := fmt.Sprintf("(check: %d critical / %d warning, scan: %d critical / %d high)",
 		result.Verdict.CheckCriticals, result.Verdict.CheckWarnings,
@@ -770,6 +800,8 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	case result.Verdict.ThresholdExceeded:
 		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts
 	case result.Verdict.Status == "findings":
+		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
+	case result.Triage.Decision != "" && result.Triage.Decision != "proceed":
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
 	default:
 		line = st.Green(st.Bold("✔ "+verdict)) + " " + counts

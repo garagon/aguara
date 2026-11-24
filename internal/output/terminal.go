@@ -68,9 +68,14 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 
 	f.printHeader(w, result)
 
-	if len(result.Findings) == 0 {
+	switch {
+	case len(result.Findings) == 0 && result.FilesScanned == 0:
+		// Zero files is not a clean result: nothing was evaluated.
+		st := NewStyle(f.NoColor)
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(NothingScannedMessage(result)))
+	case len(result.Findings) == 0:
 		fmt.Fprintf(w, "\n  %s\n", NewStyle(f.NoColor).OK("No security issues found."))
-	} else {
+	default:
 		counts := f.countBySeverity(result.Findings)
 		f.printDashboard(w, counts)
 
@@ -302,6 +307,20 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	if rule := topRuleID(result.Findings); rule != "" {
 		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+TerminalText(rule)))
 	}
+}
+
+// NothingScannedMessage explains a scan that evaluated zero files, in
+// terms of what it was asked to scan.
+func NothingScannedMessage(result *scanner.ScanResult) string {
+	if result.Coverage != nil {
+		switch result.Coverage.Scope {
+		case types.ScanScopeChanged:
+			return "Nothing was scanned: no changed files under the target."
+		case types.ScanScopeAuto:
+			return "Nothing was scanned: the discovered MCP configs had no scannable files."
+		}
+	}
+	return "Nothing was scanned: no scannable files under the target. This is not a clean result."
 }
 
 // filesScannedLabel states how many files were evaluated and, when the

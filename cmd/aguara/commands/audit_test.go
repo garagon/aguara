@@ -652,7 +652,9 @@ func stubAuditResult(t *testing.T, checkC, checkW, scanC, scanH, checkI, scanI i
 	for i := 0; i < checkI; i++ {
 		check.Findings = append(check.Findings, incident.Finding{Severity: incident.SevInfo})
 	}
-	scan := &scanner.ScanResult{}
+	// One scanned file: these stubs model an audit that evaluated the
+	// target. Zero files is its own triage case.
+	scan := &scanner.ScanResult{FilesScanned: 1}
 	for i := 0; i < scanC; i++ {
 		scan.Findings = append(scan.Findings, types.Finding{Severity: scanner.SeverityCritical})
 	}
