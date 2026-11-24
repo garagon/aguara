@@ -74,6 +74,26 @@ type Target struct {
 	Root string
 }
 
+// UnresolvedInclude is a requirements-file -r / -c include that pip
+// would read but the check did not, so any pin in it went unchecked.
+type UnresolvedInclude struct {
+	// Path and Line locate the include directive.
+	Path string
+	Line int
+	// Argument is the include as written, with URL credentials redacted.
+	Argument string
+	// Reason is one of the UnresolvedInclude* constants.
+	Reason string
+}
+
+// Why an include was not read.
+const (
+	UnresolvedIncludeURL      = "url"
+	UnresolvedIncludeOutside  = "outside_project"
+	UnresolvedIncludeMissing  = "missing"
+	UnresolvedIncludeVariable = "environment_variable"
+)
+
 // EcosystemResult is the per-Target summary surfaced in
 // CheckResult.Ecosystems. The shape is stable across ecosystems so
 // the JSON contract does not branch per parser.

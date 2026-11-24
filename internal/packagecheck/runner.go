@@ -28,6 +28,9 @@ type Hit struct {
 type RunResult struct {
 	Ecosystems []EcosystemResult
 	Hits       []Hit
+	// UnresolvedIncludes lists each requirements include that was not
+	// read, once even when several targets reach the same directive.
+	UnresolvedIncludes []UnresolvedInclude
 }
 
 // Runner orchestrates per-target parsing + matching. The Matcher
@@ -63,6 +66,7 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 	// ecosystems never share an entry between targets.
 	cache := newRequirementsCache()
 	seen := map[hitKey]bool{}
+	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
 		parsed, err := parseTargetDetail(t, cache)
 		if err != nil {
@@ -139,8 +143,16 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			PackagesRead:       len(refs),
 			FindingsCount:      findings,
 			Unpinned:           unpinned,
-			UnresolvedIncludes: parsed.unresolvedIncludes,
+			UnresolvedIncludes: len(parsed.unresolved),
 		})
+		for _, u := range parsed.unresolved {
+			key := hitKey{name: u.Argument, path: u.Path, line: u.Line}
+			if seenInclude[key] {
+				continue
+			}
+			seenInclude[key] = true
+			out.UnresolvedIncludes = append(out.UnresolvedIncludes, u)
+		}
 	}
 	return out, nil
 }
@@ -169,8 +181,8 @@ func advisoryIDs(matches []intel.Match) []string {
 // parsedTarget is a parser's result plus the bookkeeping the
 // EcosystemResult reports beyond the refs themselves.
 type parsedTarget struct {
-	refs               []PackageRef
-	unresolvedIncludes int
+	refs       []PackageRef
+	unresolved []UnresolvedInclude
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the

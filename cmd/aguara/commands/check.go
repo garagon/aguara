@@ -909,6 +909,9 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 			Remediation: remediation,
 		})
 	}
+	for _, u := range runRes.UnresolvedIncludes {
+		result.Findings = append(result.Findings, unresolvedIncludeFinding(u))
+	}
 	return result, nil
 }
 
@@ -1042,6 +1045,9 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	// Suppressed under --ci to keep stdout to findings (a stale local
 	// cache still earns a stderr note inside printIntelFreshness).
 	printIntelFreshness(result.Intel, flagCheckCI)
+	if note := unpinnedNote(result); note != "" {
+		fmt.Printf("  %s\n\n", st.Yellow(note))
+	}
 
 	if len(result.Findings) == 0 {
 		fmt.Printf("  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))

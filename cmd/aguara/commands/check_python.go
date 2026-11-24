@@ -211,6 +211,56 @@ func runPythonEnvironments(plan checkPlan, override *incident.IntelOverride) ([]
 	return parts, nil
 }
 
+// unresolvedIncludeFinding reports a requirements include pip would read
+// but the check did not. It is a warning: it is not a known-malicious
+// package, but a pin in that file went unchecked, so the result must not
+// read as a clean pass.
+func unresolvedIncludeFinding(u packagecheck.UnresolvedInclude) incident.Finding {
+	var why, remediation string
+	switch u.Reason {
+	case packagecheck.UnresolvedIncludeURL:
+		why = "it is a URL, which Aguara does not fetch"
+		remediation = "Save the included requirements inside the project and check them, or review what that URL serves before installing."
+	case packagecheck.UnresolvedIncludeOutside:
+		why = "it is outside the checked directory"
+		remediation = "Also run aguara check on the directory that holds the included file, or check from a directory that contains both."
+	case packagecheck.UnresolvedIncludeVariable:
+		why = "its path uses an environment variable"
+		remediation = "Check the file the variable resolves to where the dependencies are installed."
+	default:
+		why = "the file does not exist"
+		remediation = "Restore the file or remove the include; if the build generates it, check it after it is generated."
+	}
+	return incident.Finding{
+		Severity:    incident.SevWarning,
+		Title:       fmt.Sprintf("%s includes %s, which was not checked: %s", filepath.Base(u.Path), u.Argument, why),
+		Detail:      "pip installs the requirements of included files; a compromised pin there would not be reported.",
+		Path:        u.Path,
+		Line:        u.Line,
+		Remediation: remediation,
+	}
+}
+
+// unpinnedNote is the one-line terminal notice for Python dependencies
+// without one exact version, or "" when every entry was pinned.
+func unpinnedNote(result *incident.CheckResult) string {
+	if result == nil {
+		return ""
+	}
+	n := 0
+	for _, e := range result.Ecosystems {
+		n += e.Unpinned
+	}
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return "1 Python dependency is not pinned to one version; only advisories covering every version were checked for it."
+	default:
+		return fmt.Sprintf("%d Python dependencies are not pinned to one version; only advisories covering every version were checked for them.", n)
+	}
+}
+
 // pythonLockFindingText words a PyPI dependency-file hit: every matching
 // advisory ID, the dependency group when the file records one, and an
 // unpinned entry's declared specifier.

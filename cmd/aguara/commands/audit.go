@@ -691,6 +691,9 @@ func writeAuditTerminal(result *AuditResult) error {
 			}
 		}
 	}
+	if note := unpinnedNote(result.Check); note != "" {
+		fmt.Printf("\n  %s\n", st.Yellow(note))
+	}
 
 	fmt.Printf("\n%s\n", st.SectionHeader("CONTENT SCAN", width))
 	if len(result.Scan.Findings) == 0 {

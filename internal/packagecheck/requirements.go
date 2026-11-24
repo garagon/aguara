@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // Requirements-file limits. Includes are followed to a bounded depth and
@@ -81,8 +82,9 @@ type requirementsItem struct {
 //
 // -r and -c includes are followed relative to the including file, only
 // inside the project root (Target.Root), to a bounded depth. A URL,
-// a path outside the project or a missing file is not read; the
-// runner reports the count as unresolved_includes. An unsupported
+// a path outside the project or a missing file is not read; the runner
+// reports each one (RunResult.UnresolvedIncludes) and their count per
+// target (unresolved_includes). An unsupported
 // option, a malformed requirement or an unsafe file is an error.
 // No pip execution, no environment-variable expansion, no network.
 func ParseRequirements(target Target) ([]PackageRef, error) {
@@ -109,7 +111,7 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 	if err := w.visit(target.Path, constraint, 0); err != nil {
 		return parsedTarget{}, err
 	}
-	return parsedTarget{refs: w.coll.refs, unresolvedIncludes: w.unresolved}, nil
+	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved}, nil
 }
 
 type requirementsWalk struct {
@@ -117,7 +119,7 @@ type requirementsWalk struct {
 	rootReal   string
 	visited    map[string]bool
 	coll       *pythonRefCollector
-	unresolved int
+	unresolved []UnresolvedInclude
 }
 
 func (w *requirementsWalk) visit(path string, constraint bool, depth int) error {
@@ -157,9 +159,14 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 			}
 			continue
 		}
-		next, ok := w.resolveInclude(path, item.include)
-		if !ok {
-			w.unresolved++
+		next, reason := w.resolveInclude(path, item.include)
+		if reason != "" {
+			w.unresolved = append(w.unresolved, UnresolvedInclude{
+				Path:     path,
+				Line:     item.line,
+				Argument: types.SanitizeURLUserinfo(item.include, "redacted@"),
+				Reason:   reason,
+			})
 			continue
 		}
 		if err := w.visit(next, constraint || item.constraint, depth+1); err != nil {
@@ -170,25 +177,44 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 }
 
 // resolveInclude maps an include argument to a file inside the project
-// root. URLs, environment-variable references, paths that leave the
-// root (directly or through a symlinked directory) and missing files are
-// not followed.
-func (w *requirementsWalk) resolveInclude(from, arg string) (string, bool) {
-	if arg == "" || strings.Contains(arg, "${") || strings.Contains(arg, "://") || hasURLScheme(arg) {
-		return "", false
+// root, or returns why it is not followed: a URL, an environment-variable
+// reference, a path that leaves the root (directly or through a
+// symlinked directory), or a file that does not exist.
+func (w *requirementsWalk) resolveInclude(from, arg string) (string, string) {
+	switch {
+	case strings.Contains(arg, "://") || hasURLScheme(arg):
+		return "", UnresolvedIncludeURL
+	case arg == "" || strings.Contains(arg, "${"):
+		return "", UnresolvedIncludeVariable
 	}
 	p := filepath.FromSlash(arg)
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(filepath.Dir(from), p)
 	}
-	dirReal, err := realDir(filepath.Dir(p))
-	if err != nil || !withinDir(w.rootReal, dirReal) {
-		return "", false
+	// Resolve the nearest existing directory so a missing file inside the
+	// project is told apart from a path that leaves it.
+	for d := filepath.Dir(p); ; {
+		if r, err := realDir(d); err == nil {
+			if !withinDir(w.rootReal, r) {
+				return "", UnresolvedIncludeOutside
+			}
+			break
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", UnresolvedIncludeOutside
+		}
+		d = parent
+	}
+	if dirReal, err := realDir(filepath.Dir(p)); err != nil {
+		return "", UnresolvedIncludeMissing
+	} else if !withinDir(w.rootReal, dirReal) {
+		return "", UnresolvedIncludeOutside
 	}
 	if _, err := os.Lstat(p); err != nil {
-		return "", false
+		return "", UnresolvedIncludeMissing
 	}
-	return p, true
+	return p, ""
 }
 
 func realDir(dir string) (string, error) {

@@ -98,7 +98,11 @@ func TestParseRequirementsIncludesAndPins(t *testing.T) {
 		"urllib3 2.0.7 [constraint]",
 		"wild (==1.*)",
 	}, refSummary(parsed.refs), "editable, path, archive, VCS and URL requirements are skipped")
-	require.Equal(t, 3, parsed.unresolvedIncludes, "URL include, include outside the project and missing include")
+	require.Equal(t, []string{UnresolvedIncludeURL, UnresolvedIncludeOutside, UnresolvedIncludeMissing}, unresolvedReasons(parsed.unresolved),
+		"URL include, include outside the project and missing include")
+	require.Equal(t, "../outside.txt", parsed.unresolved[1].Argument)
+	require.Equal(t, 20, parsed.unresolved[1].Line)
+	require.Equal(t, target.Path, parsed.unresolved[1].Path)
 	evil := findRef(t, parsed.refs, "Evil_Pkg")
 	require.Equal(t, 10, evil.Line)
 	require.Equal(t, filepath.Join("testdata", "python-requirements", "requirements.txt"), evil.Path)
@@ -106,6 +110,14 @@ func TestParseRequirementsIncludesAndPins(t *testing.T) {
 	require.Equal(t, filepath.Join("testdata", "python-requirements", "requirements", "base.txt"), six.Path)
 	require.Equal(t, 1, six.Line)
 	require.Equal(t, 6, findRef(t, parsed.refs, "requests").Line, "a continued line reports its first physical line")
+}
+
+func unresolvedReasons(list []UnresolvedInclude) []string {
+	out := make([]string, 0, len(list))
+	for _, u := range list {
+		out = append(out, u.Reason)
+	}
+	return out
 }
 
 func findRef(t *testing.T, refs []PackageRef, name string) PackageRef {
@@ -226,7 +238,8 @@ func TestParseRequirementsIncludeBoundaries(t *testing.T) {
 	parsed, err := parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(root, "requirements.txt"), Source: "requirements.txt", Root: root}, newRequirementsCache())
 	require.NoError(t, err)
 	require.Equal(t, []string{"inner-pkg 1.0"}, refSummary(parsed.refs), "nothing outside the project root is read")
-	require.Equal(t, 5, parsed.unresolvedIncludes)
+	require.Equal(t, []string{UnresolvedIncludeOutside, UnresolvedIncludeOutside, UnresolvedIncludeOutside, UnresolvedIncludeVariable, UnresolvedIncludeURL},
+		unresolvedReasons(parsed.unresolved))
 
 	// A linked include file is unsafe input, reported as an error.
 	writeFile(t, filepath.Join(root, "real.txt"), "linked-pkg==1.0\n")
