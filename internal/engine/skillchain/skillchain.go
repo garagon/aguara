@@ -297,6 +297,9 @@ func helperReferences(line string) []string {
 	var refs []ref
 	for _, re := range []*regexp.Regexp{helperCommandRe, directHelperRe} {
 		for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
+			if !standaloneReference(line, m[2], m[3], re == directHelperRe) {
+				continue
+			}
 			refs = append(refs, ref{at: m[2], path: line[m[2]:m[3]]})
 		}
 	}
@@ -306,6 +309,41 @@ func helperReferences(line string) []string {
 		out = append(out, r.path)
 	}
 	return out
+}
+
+// standaloneReference rejects a captured path that is only the start of a
+// longer operand, so it cannot resolve to an unrelated file:
+//   - a path followed by `:` and more text is a URL scheme or a host
+//     (`bash https://...`, `scp host:path`); a colon followed by a space or
+//     the end of the line is sentence punctuation and is accepted;
+//   - a path opened by a quote must close with the same quote right after
+//     it: `bash "scripts/my setup.sh"` names a file with a space, never
+//     `scripts/my`. A backtick before `./` opens a Markdown code span around
+//     the whole command (`./scripts/setup --force`) and is not an operand
+//     quote.
+//
+// direct reports a directHelperRe match, whose capture follows `./`.
+func standaloneReference(line string, start, end int, direct bool) bool {
+	if end+1 < len(line) && line[end] == ':' && line[end+1] != ' ' && line[end+1] != '\t' {
+		return false
+	}
+	open := start - 1
+	if direct {
+		open = start - 3
+	}
+	if open < 0 {
+		return true
+	}
+	switch q := line[open]; q {
+	case '"', '\'':
+		return end < len(line) && line[end] == q
+	case '`':
+		if direct {
+			return true
+		}
+		return end < len(line) && line[end] == q
+	}
+	return true
 }
 
 // helperSignal prefers a finding the helper's own scan reported, so the chain
