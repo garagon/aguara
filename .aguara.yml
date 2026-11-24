@@ -3,15 +3,14 @@
 # This file is specific to THIS repo, not a template for Aguara consumers.
 # Aguara is a security scanner, so by design its own source contains:
 #   - attack pattern signatures embedded in rule YAMLs (internal/rules/builtin/)
-#   - malicious skill fixtures used by integration tests (testdata/, sandbox/)
-#   - benchmark inputs with representative payloads (scripts/)
+#   - attack payloads used as fixtures by Go tests
 #   - documentation that shows example attacks when explaining detections
 #
-# A clean `aguara scan .` against this repo without exclusions produces ~9k
-# findings dominated by that by-design content. This file scopes self-scans
-# to production code paths so contributors get a useful signal-to-noise ratio.
-# Scanning the excluded paths is still useful for research; run without a
-# config (`aguara scan internal/rules/builtin/ --rules=...`) to opt in.
+# This file scopes self-scans of a checkout so contributors get a useful
+# signal-to-noise ratio. It is read only from the scan root: scanning a
+# subdirectory directly (for example `aguara scan internal/rules/builtin`)
+# or passing `--ci` or `--project-policy ignore` scans without these
+# exclusions.
 
 ignore:
   # Rule definitions. Each rule ships its own true_positive examples so the
@@ -19,22 +18,11 @@ ignore:
   # and trigger the rules that produced them.
   - internal/rules/builtin/**
 
-  # Integration test fixtures. Malicious/benign scenarios used by
-  # `internal/scanner/integration_test.go`. Gitignored locally, but extracted
-  # into the tree when the suite runs.
+  # Optional integration fixtures with malicious and benign scenarios, read
+  # by `internal/scanner/integration_test.go` from a root testdata/
+  # directory. The directory is gitignored and not part of a clone; the
+  # tests skip when it is absent.
   - testdata/**
-
-  # Docker sandbox with intentionally malicious skill definitions and
-  # configs used by end-to-end test scripts.
-  - sandbox/**
-
-  # Benchmark inputs and captured outputs (JSON with finding arrays,
-  # pprof traces, etc.). Not source code.
-  - scripts/**
-
-  # Internal Obsidian vault (gitignored). Contains attack examples while
-  # drafting blog posts and distribution content.
-  - DOCS/**
 
   # Release notes and rule docs quote attack patterns when describing what
   # each fix or rule detects.
