@@ -20,15 +20,19 @@ type AuditCoverage struct {
 	FilesScanned        int                                `json:"files_scanned"`
 	PackageEvidence     []packagecheck.EvidenceSummary     `json:"package_evidence"`
 	UnsupportedEvidence []packagecheck.UnsupportedEvidence `json:"unsupported_evidence"`
+	UnresolvedIncludes  []packagecheck.UnresolvedInclude   `json:"unresolved_includes"`
 }
 
-// MarshalJSON keeps both arrays as `[]` rather than `null` when empty.
+// MarshalJSON keeps every array as `[]` rather than `null` when empty.
 func (c AuditCoverage) MarshalJSON() ([]byte, error) {
 	if c.PackageEvidence == nil {
 		c.PackageEvidence = []packagecheck.EvidenceSummary{}
 	}
 	if c.UnsupportedEvidence == nil {
 		c.UnsupportedEvidence = []packagecheck.UnsupportedEvidence{}
+	}
+	if c.UnresolvedIncludes == nil {
+		c.UnresolvedIncludes = []packagecheck.UnresolvedInclude{}
 	}
 	type alias AuditCoverage
 	return json.Marshal(alias(c))
@@ -55,9 +59,14 @@ func checkCoverage(plan checkPlan, result *incident.CheckResult, run *packageche
 			unsupported = append(unsupported, u)
 		}
 	}
+	includes := []packagecheck.UnresolvedInclude{}
+	if run != nil {
+		includes = append(includes, run.UnresolvedIncludes...)
+	}
 	return &packagecheck.Coverage{
 		PackageEvidence:     packagecheck.SummarizeEvidence(result.Ecosystems),
 		UnsupportedEvidence: unsupported,
+		UnresolvedIncludes:  includes,
 	}
 }
 
@@ -70,6 +79,7 @@ func auditCoverage(check *incident.CheckResult, scan *scanner.ScanResult) AuditC
 	if check != nil && check.Coverage != nil {
 		c.PackageEvidence = check.Coverage.PackageEvidence
 		c.UnsupportedEvidence = check.Coverage.UnsupportedEvidence
+		c.UnresolvedIncludes = check.Coverage.UnresolvedIncludes
 	}
 	return c
 }
@@ -135,6 +145,9 @@ func packageCoverageLine(c *packagecheck.Coverage) string {
 		part := fmt.Sprintf("%s %s: %d packages", e.Ecosystem, e.Source, e.PackagesRead)
 		if e.Targets > 1 {
 			part += fmt.Sprintf(" from %d files", e.Targets)
+		}
+		if e.Unpinned > 0 {
+			part += fmt.Sprintf(" (%d unpinned)", e.Unpinned)
 		}
 		parts = append(parts, output.TerminalText(part))
 	}

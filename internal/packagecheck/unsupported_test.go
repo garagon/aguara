@@ -171,7 +171,7 @@ func TestUnsupportedFormatsNoIntel(t *testing.T) {
 func TestCoverageJSONUsesEmptyArrays(t *testing.T) {
 	data, err := json.Marshal(Coverage{})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"package_evidence":[],"unsupported_evidence":[]}`, string(data))
+	require.JSONEq(t, `{"package_evidence":[],"unsupported_evidence":[],"unresolved_includes":[]}`, string(data))
 }
 
 func TestSummarizeEvidenceGroupsByEcosystemAndSource(t *testing.T) {
@@ -180,11 +180,14 @@ func TestSummarizeEvidenceGroupsByEcosystemAndSource(t *testing.T) {
 		{Ecosystem: "Go", Source: "go.sum", Path: "go.sum", PackagesRead: 5},
 		{Ecosystem: "npm", Source: "package-lock.json", Path: "b/package-lock.json", PackagesRead: 4},
 		{Ecosystem: "npm", Source: "node_modules", Path: "node_modules", PackagesRead: 0},
+		{Ecosystem: "PyPI", Source: "requirements.txt", Path: "requirements.txt", PackagesRead: 4, Unpinned: 3},
+		{Ecosystem: "PyPI", Source: "requirements.txt", Path: "api/requirements.txt", PackagesRead: 2, Unpinned: 1},
 	})
 	require.Equal(t, []EvidenceSummary{
 		{Ecosystem: "npm", Source: "package-lock.json", Targets: 2, PackagesRead: 7},
 		{Ecosystem: "Go", Source: "go.sum", Targets: 1, PackagesRead: 5},
 		{Ecosystem: "npm", Source: "node_modules", Targets: 1, PackagesRead: 0},
+		{Ecosystem: "PyPI", Source: "requirements.txt", Targets: 2, PackagesRead: 6, Unpinned: 4},
 	}, got)
 	require.NotNil(t, SummarizeEvidence(nil))
 }

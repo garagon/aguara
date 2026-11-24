@@ -13,8 +13,14 @@ type Coverage struct {
 	// PackageEvidence totals what was read, per ecosystem and source.
 	PackageEvidence []EvidenceSummary `json:"package_evidence"`
 	// UnsupportedEvidence lists dependency files that were found but
-	// that Aguara cannot parse: none of their packages were checked.
+	// that Aguara cannot evaluate: none of their packages were checked.
 	UnsupportedEvidence []UnsupportedEvidence `json:"unsupported_evidence"`
+	// UnresolvedIncludes lists requirements -r / -c includes that a
+	// read file names but the check did not read (a URL, a path outside
+	// the project, an environment variable, a missing file). The file
+	// that names them is in PackageEvidence; each one is also reported
+	// once as a WARNING finding, which is what triage acts on.
+	UnresolvedIncludes []UnresolvedInclude `json:"unresolved_includes"`
 }
 
 // EvidenceSummary totals the evidence read from one source kind
@@ -25,6 +31,10 @@ type EvidenceSummary struct {
 	Source       string `json:"source"`
 	Targets      int    `json:"targets"`
 	PackagesRead int    `json:"packages_read"`
+	// Unpinned counts the PackagesRead entries declared without one
+	// exact version: only advisories covering every version could be
+	// matched for them. Omitted when zero, as in `ecosystems`.
+	Unpinned int `json:"unpinned,omitempty"`
 }
 
 // UnsupportedEvidence is one dependency file Aguara recognizes by name
@@ -32,7 +42,7 @@ type EvidenceSummary struct {
 type UnsupportedEvidence struct {
 	// Path is the file as discovery saw it (joined to the checked root).
 	Path string `json:"path"`
-	// Kind names the file format, e.g. "uv.lock" or "requirements.txt".
+	// Kind names the file format, e.g. "deno.lock" or "requirements.txt".
 	Kind string `json:"kind"`
 	// Ecosystem is the package ecosystem the file describes.
 	Ecosystem string `json:"ecosystem"`
@@ -46,13 +56,16 @@ func (u UnsupportedEvidence) NoIntel() bool {
 	return u.Ecosystem != "" && intel.CanonicaliseEcosystem(u.Ecosystem) == ""
 }
 
-// MarshalJSON keeps both arrays as `[]` rather than `null` when empty.
+// MarshalJSON keeps every array as `[]` rather than `null` when empty.
 func (c Coverage) MarshalJSON() ([]byte, error) {
 	if c.PackageEvidence == nil {
 		c.PackageEvidence = []EvidenceSummary{}
 	}
 	if c.UnsupportedEvidence == nil {
 		c.UnsupportedEvidence = []UnsupportedEvidence{}
+	}
+	if c.UnresolvedIncludes == nil {
+		c.UnresolvedIncludes = []UnresolvedInclude{}
 	}
 	type alias Coverage
 	return json.Marshal(alias(c))
@@ -78,6 +91,7 @@ func SummarizeEvidence(results []EcosystemResult) []EvidenceSummary {
 		}
 		out[i].Targets++
 		out[i].PackagesRead += r.PackagesRead
+		out[i].Unpinned += r.Unpinned
 	}
 	return out
 }
