@@ -13,6 +13,11 @@ import (
 // A project whose only dependency evidence is a format Aguara does not
 // parse must not be cleared for installation, even though the package
 // check found nothing: it never checked those packages.
+//
+// The PyPI rows are the reported case (a uv.lock pinning a version in the
+// embedded intelligence). They stay while those formats are unsupported
+// and go when the Python lockfile parser lands; the other rows use
+// formats that stay unsupported.
 func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cases := map[string]string{
@@ -20,7 +25,11 @@ func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.
 		"poetry.lock":      "[[package]]\nname = \"litellm\"\nversion = \"1.82.7\"\n",
 		"Pipfile.lock":     `{"default":{"litellm":{"version":"==1.82.7"}}}`,
 		"requirements.txt": "litellm==1.82.7\n",
-		"deno.lock":        `{"version":"4","npm":{"left-pad@1.3.0":{}}}`,
+		"deno.lock":        denoLockFixture,
+		"gems.locked":      gemsLockedFixture,
+		"packages.config":  packagesConfigFixture,
+		"paket.lock":       paketLockFixture,
+		"pubspec.lock":     "packages:\n  http:\n    version: \"1.2.0\"\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -54,8 +63,8 @@ func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.
 func TestAuditNamesPartiallyEvaluatedDependencyEvidence(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := projectWith(t, map[string]string{
-		"package-lock.json": packageLockFixture,
-		"worker/uv.lock":    uvLockWithKnownMaliciousVersion,
+		"package-lock.json":  packageLockFixture,
+		"worker/gems.locked": gemsLockedFixture,
 	})
 	result := auditToFile(t, dir)
 	require.Equal(t, "pass", result.Verdict.Status)
@@ -65,11 +74,11 @@ func TestAuditNamesPartiallyEvaluatedDependencyEvidence(t *testing.T) {
 	for _, r := range result.Triage.Reasons {
 		if r.Kind == "partial_dependency_coverage" {
 			require.Equal(t, "warning", r.Severity)
-			require.Contains(t, r.Message, "worker/uv.lock")
+			require.Contains(t, r.Message, "worker/gems.locked")
 		}
 	}
 	require.Equal(t, []string{
-		"Review the dependencies pinned in worker/uv.lock before installing them; this audit did not check them.",
+		"Review the dependencies pinned in worker/gems.locked before installing them; this audit did not check them.",
 		"Do not install dependencies on the strength of this audit.",
 	}, result.Triage.RecommendedNextSteps)
 	require.Equal(t, "review_only", result.Handoff.Status)
@@ -94,13 +103,13 @@ func TestAuditWithoutDependencyFilesStillProceeds(t *testing.T) {
 func TestAuditReviewFindingsAlsoNameUnevaluatedEvidence(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := projectWith(t, map[string]string{
-		"uv.lock":               uvLockWithKnownMaliciousVersion,
+		"packages.config":       packagesConfigFixture,
 		".claude/settings.json": `{"permissions":{"allow":["Bash(*)"]}}`,
 	})
 	result := auditToFile(t, dir)
 	require.Equal(t, "review", result.Triage.Decision)
 	requireTriageReason(t, result.Triage, "dependency_evidence_not_evaluated")
-	require.Contains(t, strings.Join(result.Triage.RecommendedNextSteps, "\n"), "uv.lock")
+	require.Contains(t, strings.Join(result.Triage.RecommendedNextSteps, "\n"), "packages.config")
 	require.False(t, result.Plan.CanInstallDependencies)
 }
 
@@ -110,20 +119,20 @@ func TestUnsupportedEvidenceNamesCapsLongLists(t *testing.T) {
 	var evidence []packagecheck.UnsupportedEvidence
 	for _, dir := range []string{"a", "b", "c", "d", "e", "f", "g"} {
 		evidence = append(evidence, packagecheck.UnsupportedEvidence{
-			Path: filepath.Join("/repo", dir, "requirements.txt"),
+			Path: filepath.Join("/repo", dir, "packages.config"),
 		})
 	}
 	require.Equal(t,
-		"a/requirements.txt, b/requirements.txt, c/requirements.txt, d/requirements.txt, e/requirements.txt, and 2 more listed in coverage.unsupported_evidence",
+		"a/packages.config, b/packages.config, c/packages.config, d/packages.config, e/packages.config, and 2 more listed in coverage.unsupported_evidence",
 		unsupportedEvidenceNames(evidence, "/repo"))
 }
 
 func TestAuditTerminalNamesUnevaluatedDependencyFiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	dir := projectWith(t, map[string]string{"uv.lock": uvLockWithKnownMaliciousVersion})
+	dir := projectWith(t, map[string]string{"deno.lock": denoLockFixture})
 	out := readReport(t, "audit", dir)
 	require.Contains(t, out, "Coverage: no supported dependency evidence was read")
-	require.Contains(t, out, "Not evaluated: uv.lock")
+	require.Contains(t, out, "Not evaluated: deno.lock (dependency file Aguara cannot parse")
 	require.Contains(t, out, "No packages were checked")
 	require.Contains(t, out, "Triage: REVIEW")
 	require.Contains(t, out, "install=no")

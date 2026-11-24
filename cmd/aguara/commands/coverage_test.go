@@ -9,6 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// uvLockWithKnownMaliciousVersion pins a version present in the embedded
+// intelligence. Python lockfiles are listed as unsupported only until a
+// parser for them lands; tests that only need "a dependency file Aguara
+// does not evaluate" use the fixtures below, whose formats stay
+// unsupported, so only the PyPI-specific test changes with that parser.
 const uvLockWithKnownMaliciousVersion = `version = 1
 requires-python = ">=3.11"
 
@@ -17,6 +22,13 @@ name = "litellm"
 version = "1.82.7"
 source = { registry = "https://pypi.org/simple" }
 `
+
+const (
+	denoLockFixture       = `{"version":"4","npm":{"left-pad@1.3.0":{"integrity":"sha512-x"}}}` + "\n"
+	gemsLockedFixture     = "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n"
+	packagesConfigFixture = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<packages>\n  <package id=\"Newtonsoft.Json\" version=\"13.0.1\" targetFramework=\"net48\" />\n</packages>\n"
+	paketLockFixture      = "NUGET\n  remote: https://api.nuget.org/v3/index.json\n    Newtonsoft.Json (13.0.1)\n"
+)
 
 // projectWith creates a project directory holding the given files.
 // A value starting with "@" copies that repository fixture instead.
@@ -62,9 +74,9 @@ func TestScanJSONReportsCoverage(t *testing.T) {
 
 func TestCheckJSONReportsReadAndUnsupportedEvidence(t *testing.T) {
 	dir := projectWith(t, map[string]string{
-		"package-lock.json":        packageLockFixture,
-		"backend/uv.lock":          uvLockWithKnownMaliciousVersion,
-		"backend/requirements.txt": "litellm==1.82.7\n",
+		"package-lock.json":       packageLockFixture,
+		"backend/packages.config": packagesConfigFixture,
+		"backend/paket.lock":      paketLockFixture,
 	})
 	raw := checkToFileRaw(t, dir)
 	var result struct {
@@ -95,11 +107,11 @@ func TestCheckJSONReportsReadAndUnsupportedEvidence(t *testing.T) {
 		rel, err := filepath.Rel(dir, u.Path)
 		require.NoError(t, err)
 		kinds[filepath.ToSlash(rel)] = u.Kind
-		require.Equal(t, "PyPI", u.Ecosystem)
+		require.Equal(t, "NuGet", u.Ecosystem)
 	}
 	require.Equal(t, map[string]string{
-		"backend/uv.lock":          "uv.lock",
-		"backend/requirements.txt": "requirements.txt",
+		"backend/packages.config": "packages.config",
+		"backend/paket.lock":      "paket.lock",
 	}, kinds)
 }
 
@@ -113,21 +125,21 @@ func TestCheckCoverageArraysAreNeverNull(t *testing.T) {
 // An explicit --ecosystem limits the unsupported list to what was asked.
 func TestCheckExplicitEcosystemScopesUnsupportedEvidence(t *testing.T) {
 	dir := projectWith(t, map[string]string{
-		"go.sum":  "@../../../internal/packagecheck/testdata/go-clean/go.sum",
-		"uv.lock": uvLockWithKnownMaliciousVersion,
+		"go.sum":      "@../../../internal/packagecheck/testdata/go-clean/go.sum",
+		"gems.locked": gemsLockedFixture,
 	})
 	raw := checkToFileRaw(t, dir, "--ecosystem", "go")
 	require.Contains(t, string(raw), `"unsupported_evidence": []`)
 
-	raw = checkToFileRaw(t, dir, "--ecosystem", "python")
-	require.Contains(t, string(raw), `"kind": "uv.lock"`)
+	raw = checkToFileRaw(t, dir, "--ecosystem", "ruby")
+	require.Contains(t, string(raw), `"kind": "gems.locked"`)
 }
 
 func TestAuditJSONReportsCoverage(t *testing.T) {
 	dir := projectWith(t, map[string]string{
 		"README.md":         "# project\n",
 		"package-lock.json": packageLockFixture,
-		"uv.lock":           uvLockWithKnownMaliciousVersion,
+		"deno.lock":         denoLockFixture,
 	})
 	out := filepath.Join(t.TempDir(), "audit.json")
 	require.NoError(t, runCLI(t, "audit", dir, "--format", "json", "-o", out))
@@ -150,7 +162,7 @@ func TestAuditJSONReportsCoverage(t *testing.T) {
 	require.Equal(t, 3, result.Coverage.FilesScanned)
 	require.Len(t, result.Coverage.PackageEvidence, 1)
 	require.Len(t, result.Coverage.UnsupportedEvidence, 1)
-	require.Equal(t, "uv.lock", result.Coverage.UnsupportedEvidence[0]["kind"])
+	require.Equal(t, "deno.lock", result.Coverage.UnsupportedEvidence[0]["kind"])
 	require.NotNil(t, result.Check.Coverage, "the nested check result carries its coverage too")
 	require.NotNil(t, result.Scan.Coverage, "the nested scan result carries its coverage too")
 }
@@ -159,12 +171,12 @@ func TestCheckTerminalReportsCoverage(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := projectWith(t, map[string]string{
 		"package-lock.json": packageLockFixture,
-		"backend/uv.lock":   uvLockWithKnownMaliciousVersion,
+		"backend/deno.lock": denoLockFixture,
 	})
 	out := filepath.Join(t.TempDir(), "check.txt")
 	require.NoError(t, runCLI(t, "check", dir, "-o", out))
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)
 	require.Contains(t, string(data), "Coverage: npm package-lock.json: 2 packages")
-	require.Contains(t, string(data), "Not evaluated: backend/uv.lock")
+	require.Contains(t, string(data), "Not evaluated: backend/deno.lock")
 }
