@@ -43,6 +43,10 @@ LLM calls; default runs stay offline.`,
   aguara explain CRED_001    Show what a rule detects and how to fix it`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if err := validateFormatFlag(cmd); err != nil {
+			// The message lists the supported formats; the usage block
+			// would only bury it, and some commands printed it while
+			// others (SilenceUsage) did not.
+			cmd.SilenceUsage = true
 			return err
 		}
 		resolveColorMode()

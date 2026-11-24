@@ -157,6 +157,9 @@ func scopedFlagError(cmd *cobra.Command, err error) error {
 	if hint := flagScopeHints[cmd.Name()+" --"+name]; hint != "" {
 		msg += "; " + hint
 	}
+	// The message names where the flag applies, so the usage block adds
+	// nothing; print it for no command rather than for some.
+	cmd.SilenceUsage = true
 	return errors.New(msg)
 }
 
