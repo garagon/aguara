@@ -5,16 +5,56 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-24
+
+Capability checks now read configuration structure before reporting. A
+Kubernetes workload that requests `SETUID` or `SETGID` is reported as a LOW
+observation instead of a HIGH privilege-escalation finding, capability drops
+and inert settings no longer trigger MCP_009 or SUPPLY_007, and direct Python
+cron writes are detected again.
+
+This release also refreshes offline intelligence from the verified November 23
+snapshot, updates Go dependencies and builds release binaries with Go 1.27.
+Building from source or importing the Go library now requires Go 1.26.0.
+
 ### Added
 
 - Explicit Kubernetes `SETUID`/`SETGID` capability requests now appear as LOW
   configuration observations (`K8S_IDENTITY_CAPABILITIES_001`, `context`) rather
-  than HIGH SUPPLY_007 escalation findings. The requests remain visible; they
-  do not by themselves establish exploitation. Privilege commands in the same
-  manifest retain their existing detection. Only recognized JSON/YAML workload
-  structures are reclassified; ambiguous syntax keeps the existing checks.
-  Explicit `--fail-on low` still applies. The development catalog contains
-  259 detections: 191 pattern rules and 68 analyzer-emitted detections.
+  than HIGH SUPPLY_007 escalation findings. The rule is reported by the
+  `kube-policy` analyzer in the new `container-security` category. The requests
+  remain visible; they do not by themselves establish exploitation. Privilege
+  commands in the same manifest retain their existing detection. Only
+  recognized JSON/YAML workload structures are reclassified; ambiguous syntax
+  keeps the existing checks. Explicit `--fail-on low` still applies.
+
+### Changed
+
+- MCP_009 keeps its ID, HIGH severity, category, and severity/disable overrides.
+  Its findings now report the `mcp-capability` analyzer instead of `pattern`,
+  and their evidence contains the parsed grant. JSON findings can carry two new
+  analyzer values, `mcp-capability` and `kube-policy`, and the new
+  `container-security` category, which also appears as a SARIF rule tag.
+- The catalog exposes 259 detections: 191 pattern rules and 68 analyzer-emitted
+  detections (v0.28.0: 258, with 192 and 66). MCP_009 moved from the pattern
+  rules to an analyzer, and K8S_IDENTITY_CAPABILITIES_001 is new. Scan
+  summaries and `RulesLoaded` count compiled pattern rules, so they report 191.
+- Embedded intelligence now uses the verified November 23 snapshot, filtered
+  through the current malicious-package admission policy: 39,337 record rows
+  and 204,861 all-version entries across eight ecosystems (v0.28.0: 35,774 and
+  203,639). These are separate data structures, not a count of unique packages.
+  Manual incident data is unchanged.
+- Release binaries are built with Go 1.27 (v0.28.0 used Go 1.25), and the
+  container image is built with golang 1.27.4 (v0.28.0 used 1.27.1). Release
+  checksums and container images are signed with Cosign v2.6.5 (v0.28.0 used
+  v2.6.3). The README states the minimum Cosign version for verifying them.
+- Go dependency updates include sigstore-go 1.3.0, OpenTelemetry 1.47.0,
+  golang.org/x/net 0.63.0, golang.org/x/crypto 0.59.0 and goldmark 1.8.7. They
+  clear the Go vulnerability database entries that govulncheck reported for the
+  v0.28.0 dependency set. Tools that read `go.mod` without call analysis may
+  still list GO-2026-5932 against the deprecated `golang.org/x/crypto/openpgp`
+  module; only a dependency's test requires it, and it is not compiled into
+  Aguara.
 
 ### Fixed
 
@@ -27,15 +67,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plain descriptions and full-line comments no longer trigger SUPPLY_007
   from capability words alone. Capability additions and executable privilege
   changes remain detectable. Ambiguous syntax retains the existing checks;
-  rule identity, severity and catalog counts are unchanged.
+  the rule keeps its ID and severity.
 - Capability removal such as Kubernetes `capabilities: {drop: [ALL]}` no
   longer triggers MCP_009. Broad grants under `add`, `allow`, or `grant`
   remain detectable, including YAML block mappings. The check now reads
   configuration structure, so comments, descriptions, and unrelated sibling
   fields cannot supply its grant value.
-- MCP_009 keeps its ID, HIGH severity, category, and severity/disable overrides.
-  Its analyzer is now `mcp-capability` instead of `pattern`; the catalog total
-  is unchanged (191 pattern rules and 67 analyzer-emitted detections).
+
+### Upgrade Notes
+
+- Building from source, `go install` and importing the Go library now require
+  Go 1.26.0 or later (v0.28.0 required Go 1.25.8). Release archives, Homebrew
+  and the container image ship prebuilt binaries and are unaffected.
+- Review CI expectations for Kubernetes manifests. A `SETUID`/`SETGID`
+  capability addition that produced HIGH SUPPLY_007 now produces LOW
+  K8S_IDENTITY_CAPABILITIES_001, so on its own it no longer fails `scan --ci`,
+  `--fail-on high` or an Action step with `fail-on: high`. Use `--fail-on low`
+  to keep failing on these requests. SUPPLY_007 overrides and disables no
+  longer apply to them; disabling K8S_IDENTITY_CAPABILITIES_001 hides the
+  observation without restoring the HIGH finding.
+- Baseline fingerprints include the rule ID, analyzer and evidence text.
+  MCP_009 findings accepted in an older baseline no longer match, and accepted
+  SUPPLY_007 findings for Kubernetes capability requests reappear as
+  K8S_IDENTITY_CAPABILITIES_001. Review them and regenerate the baseline with
+  `--write-baseline`.
+- Consumers that filter JSON findings by `analyzer` or `category` should accept
+  `mcp-capability`, `kube-policy` and `container-security`.
+- Verify release signatures with Cosign v2.6.5 or newer on 2.x, or v3.1.3 or
+  newer on 3.x. Older versions can skip the identity check for the checksum
+  bundle format (GHSA-fx35-mq7g-6g98).
 
 ## [0.28.0] - 2026-09-10
 
@@ -86,6 +146,13 @@ code being inspected.
 - The catalog exposes 258 detections: 192 pattern rules and 66 analyzer-owned
   detections. Reusable scanners now enumerate and explain analyzer rules too;
   `RulesLoaded` still counts compiled pattern rules, not the combined catalog.
+- The pattern matcher's keyword prefilter selects candidates per pattern
+  instead of per rule. In `match_mode: any` rules, a pattern with required
+  keywords runs only when one of them is present, while patterns without
+  reliable keyword evidence still run on every applicable file. This lowers
+  scan latency, including for tools that scan content in-process. Findings and
+  `match_mode: all` behavior are unchanged; custom rules with more than 64
+  patterns use full evaluation.
 
 ### Fixed
 
@@ -1320,7 +1387,7 @@ No signature changes. No removed symbols. No rule-count change.
 
 ### Process
 
-The audit items were surfaced by an external review (Codex) of the v0.14.4 repo on 2026-04-24. Two P2 items from the same audit are deferred to v0.15.0: rule target globs beyond the `*.ext` fast path (depends on the `match_mode` proximity work already planned as T1-01), and decoder-cap bypass via benign-padding (needs perf benchmarks before raising the cap or adding hash-based dedup).
+The audit items were surfaced by an external review of the v0.14.4 repo on 2026-04-24. Two P2 items from the same audit are deferred to v0.15.0: rule target globs beyond the `*.ext` fast path (depends on the `match_mode` proximity work already planned), and decoder-cap bypass via benign-padding (needs perf benchmarks before raising the cap or adding hash-based dedup).
 
 ## [0.14.4] — 2026-04-24
 
