@@ -31,9 +31,11 @@ version-matching limits.
 
 ## Trust Boundary
 
-From v0.28.0, `audit` and CI scans ignore target-owned policy by default. A local
-`scan` can still trust it. Use `--project-policy ignore` when inspecting unfamiliar
-content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
+`.aguaraignore`, inline `aguara-ignore` directives) by default. In this checkout,
+`scan` also ignores it when a CI environment is detected, and prints a stderr
+notice naming the files whenever it applies it. A local `scan` can still trust
+it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 

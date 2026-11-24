@@ -52,6 +52,9 @@ type Config struct {
 	RuleOverrides map[string]RuleOverride `yaml:"rule_overrides,omitempty"`
 	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
 	Baseline      string                  `yaml:"baseline,omitempty"`
+
+	// Source is the file Load read, or "" when no config file was found.
+	Source string `yaml:"-"`
 }
 
 // Load reads the .aguara.yml or .aguara.yaml config file from the given path.
@@ -90,6 +93,7 @@ func Load(dir string) (Config, error) {
 				return Config{}, fmt.Errorf("rule %s: apply_to_tools and exempt_tools are mutually exclusive", id)
 			}
 		}
+		cfg.Source = path
 		return cfg, nil
 	}
 	return Config{}, nil

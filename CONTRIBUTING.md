@@ -141,6 +141,8 @@ After `make build`, a self-scan of a clean checkout still reports findings:
 ./aguara scan . --no-update-check
 ```
 
+The scan prints a notice on stderr that it applied `.aguara.yml`. In a CI environment the file is ignored unless you add `--project-policy trust`.
+
 These are expected. They come from:
 
 - `*_test.go` files that embed attack payloads as test fixtures (most of the findings).

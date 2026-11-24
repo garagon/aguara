@@ -67,7 +67,7 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
 	auditCmd.Flags().BoolVar(&flagAuditVerbose, "verbose", false, "List every content finding instead of capping at 10")
-	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Target policy: auto (ignore), trust, or ignore")
+	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (ignore), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -350,6 +350,9 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	result.RulesLoaded = len(compiled)
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
+	if trustProjectPolicy {
+		noteProjectPolicy(cfg, result)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {

@@ -53,6 +53,16 @@ var scanCmd = &cobra.Command{
 	Use:     "scan [path]",
 	GroupID: groupScan,
 	Short:   "Scan a directory for security issues",
+	Long: `Scan files for prompt injection, credential leaks, risky agent and MCP
+configuration, CI workflow trust issues and supply-chain behavior.
+
+Policy owned by the scanned project (.aguara.yml, .aguaraignore and inline
+aguara-ignore directives) can exclude files and suppress findings. With the
+default --project-policy auto, a local scan applies it and prints a notice on
+stderr naming the files it applied. With --ci, or when a CI environment is
+detected (CI, GITHUB_ACTIONS, GITLAB_CI, CIRCLECI, BUILDKITE, JENKINS_URL,
+TEAMCITY_VERSION or TRAVIS is set), auto ignores it. Pass --project-policy
+trust to apply it in CI, or --project-policy ignore for unfamiliar content.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
@@ -78,7 +88,7 @@ func init() {
 	addDisableRuleFlag(scanCmd)
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
-	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
+	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
@@ -90,7 +100,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
 	scanCmd.Flags().StringVar(&flagBaseline, "baseline", "", "Gate only on findings NOT in this baseline file (fails closed if missing/malformed)")
 	scanCmd.Flags().StringVar(&flagWriteBaseline, "write-baseline", "", "Write current findings as a baseline to this file and exit 0 (skips sensitive findings)")
-	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Target policy: auto (trust local, ignore with --ci), trust, or ignore")
+	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (apply locally; ignore with --ci or in a detected CI environment), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after a successful scan,
 	// network failures on --auto) should not trigger Cobra's
 	// flag-usage block: a CI log that already says
@@ -113,7 +123,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	targetPath := args[0]
 
 	applyCIDefaults()
-	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI)
+	// auto applies the project's own policy only to local runs. In CI the
+	// scanned repository is usually the change under review, so it must
+	// not decide what its own gate sees; --project-policy trust opts in.
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && !isCI())
 	if err != nil {
 		return err
 	}
@@ -155,6 +168,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	result.RulesLoaded = len(compiled)
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
+	if trustProjectPolicy {
+		noteProjectPolicy(cfg, result)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -285,9 +301,16 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
+		if len(result.TargetPolicy.InlineSuppressed) > 0 {
+			// Single-file scans report the base name; keep the full path.
+			aggregate.TargetPolicy.InlineSuppressed = append(aggregate.TargetPolicy.InlineSuppressed, path)
+		}
 	}
 	stopSpinner(sp)
 	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
+	if trustProjectPolicy {
+		noteProjectPolicy(cfg, aggregate)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -349,6 +372,33 @@ func applyCIDefaults() {
 	if os.Getenv("NO_COLOR") != "" {
 		flagNoColor = true
 	}
+}
+
+// noteProjectPolicy prints one stderr line when policy owned by the
+// scanned project shaped the result, naming the files that were applied.
+// A repository can hide its own findings through these files, so a run
+// that honored them says so; nothing is printed when none applied.
+func noteProjectPolicy(cfg config.Config, result *scanner.ScanResult) {
+	var applied []string
+	if cfg.Source != "" {
+		applied = append(applied, cfg.Source)
+	}
+	if result.TargetPolicy.IgnoreFile != "" {
+		applied = append(applied, result.TargetPolicy.IgnoreFile)
+	}
+	if files := result.TargetPolicy.InlineSuppressed; len(files) > 0 {
+		const maxListed = 3
+		listed, more := files, ""
+		if len(files) > maxListed {
+			listed, more = files[:maxListed], fmt.Sprintf(" and %d more", len(files)-maxListed)
+		}
+		applied = append(applied, "inline aguara-ignore directives in "+strings.Join(listed, ", ")+more)
+	}
+	if len(applied) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "notice: applied policy owned by the scanned project: %s (pass --project-policy ignore to scan without it)\n",
+		output.TerminalText(strings.Join(applied, "; ")))
 }
 
 func resolveProjectPolicy(value string, autoTrust bool) (bool, error) {

@@ -339,6 +339,20 @@ type ScanResult struct {
 	// empty result is distinguishable from a clean one; it is omitted
 	// when nil, which keeps existing library results unchanged.
 	Coverage *ScanCoverage `json:"coverage,omitempty"`
+	// TargetPolicy records target-owned policy that shaped this result.
+	// It is empty unless target policy was enabled, and not serialized.
+	TargetPolicy TargetPolicyUse `json:"-"`
+}
+
+// TargetPolicyUse records which policy owned by the scanned target was
+// applied, so a caller can tell the user that the project's own files
+// changed what was reported.
+type TargetPolicyUse struct {
+	// IgnoreFile is the target's .aguaraignore when it was read.
+	IgnoreFile string
+	// InlineSuppressed lists files whose aguara-ignore directives
+	// removed at least one finding, sorted.
+	InlineSuppressed []string
 }
 
 // Scan coverage scopes: which files a scan was asked to evaluate.

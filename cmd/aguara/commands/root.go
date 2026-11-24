@@ -99,6 +99,8 @@ func Execute() error {
 // In CI the update check is a net-egress side effect with no user to notify,
 // so it is silently suppressed. Local invocations still get the notice unless
 // the user opts out with --no-update-check or AGUARA_NO_UPDATE_CHECK=1.
+// scan also uses it to resolve --project-policy auto to ignore, so a
+// repository under review in CI cannot suppress its own findings.
 //
 // The ci env var is the de-facto standard and covers GitHub Actions, GitLab,
 // CircleCI, Travis, Buildkite, Bitbucket Pipelines, Drone, Woodpecker, and

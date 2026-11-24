@@ -119,6 +119,8 @@ type TargetDiscovery struct {
 	IgnorePatterns    []string
 	MaxFileSize       int64 // 0 means use DefaultMaxFileSize
 	IgnoreProjectFile bool  // do not load target-owned .aguaraignore
+	// LoadedIgnoreFile is set by Discover to the .aguaraignore it read.
+	LoadedIgnoreFile string
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
@@ -195,7 +197,11 @@ func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 			td.IgnorePatterns = append(td.IgnorePatterns, line)
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	td.LoadedIgnoreFile = f.Name()
+	return nil
 }
 
 func (td *TargetDiscovery) isIgnored(relPath string) bool {
