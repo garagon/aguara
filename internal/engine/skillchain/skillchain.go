@@ -177,7 +177,7 @@ func analyzeSkill(skillPath, content string, files map[string]string, evidence m
 			if !ok || isSkillFile(helperPath) {
 				continue
 			}
-			signal := helperSignal(helperPath, files, evidence)
+			signal, detail := helperSignal(helperPath, files, evidence)
 			if signal == "" {
 				continue
 			}
@@ -187,7 +187,7 @@ func analyzeSkill(skillPath, content string, files map[string]string, evidence m
 				RuleName:    meta.Name,
 				Severity:    meta.SeverityLevel(),
 				Category:    meta.Category,
-				Description: meta.Description + " Helper evidence: " + signal + ".",
+				Description: meta.Description + " Helper evidence: " + detail + ".",
 				FilePath:    skillPath,
 				Line:        i + 1,
 				MatchedText: line + " -> " + signal,
@@ -223,16 +223,24 @@ func helperReferences(line string) []string {
 
 // helperSignal prefers a finding the helper's own scan reported, so the chain
 // cites that rule ID, and falls back to the Python and shell content checks.
-func helperSignal(helperPath string, files map[string]string, evidence map[string]helperEvidence) string {
+//
+// It returns two forms of the same evidence. signal goes into MatchedText,
+// which baseline and SARIF fingerprints hash, so it names the helper, rule
+// and severity but never a line number: editing the helper above the cited
+// line must not turn a baselined chain finding into a new one. detail adds
+// the line for the human-readable description.
+func helperSignal(helperPath string, files map[string]string, evidence map[string]helperEvidence) (signal, detail string) {
 	if ev, ok := evidence[helperPath]; ok {
-		return fmt.Sprintf("%s line %d reported %s (%s)", helperPath, ev.line, ev.ruleID, ev.severity)
+		signal = fmt.Sprintf("%s reported %s (%s)", helperPath, ev.ruleID, ev.severity)
+		return signal, fmt.Sprintf("%s at line %d", signal, ev.line)
 	}
 	if content, ok := files[helperPath]; ok {
-		if signal := strongHelperSignal(helperPath, content); signal != "" {
-			return helperPath + ": " + signal
+		if check := strongHelperSignal(helperPath, content); check != "" {
+			signal = helperPath + ": " + check
+			return signal, signal
 		}
 	}
-	return ""
+	return "", ""
 }
 
 func resolveHelperPath(skillPath, ref string) (string, bool) {

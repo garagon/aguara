@@ -175,8 +175,9 @@ func TestForcedHelperRiskFromObservedHelperFinding(t *testing.T) {
 			require.Equal(t, "SKILL.md", f.FilePath)
 			require.Equal(t, 1, f.Line)
 			require.Equal(t, types.SeverityHigh, f.Severity)
-			require.Contains(t, f.MatchedText, tt.path+" line 2 reported SUPPLY_007 (HIGH)")
-			require.Contains(t, f.Description, "SUPPLY_007")
+			require.Contains(t, f.MatchedText, tt.path+" reported SUPPLY_007 (HIGH)")
+			require.NotContains(t, f.MatchedText, "line 2")
+			require.Contains(t, f.Description, tt.path+" reported SUPPLY_007 (HIGH) at line 2")
 		})
 	}
 }
@@ -279,7 +280,8 @@ func TestForcedHelperRiskCitesStrongestFindingDeterministically(t *testing.T) {
 		}
 		findings := a.Finalize()
 		require.Len(t, findings, 1)
-		require.Contains(t, findings[0].MatchedText, helper+" line 4 reported RULE_CRIT_A (CRITICAL)")
+		require.Contains(t, findings[0].MatchedText, helper+" reported RULE_CRIT_A (CRITICAL)")
+		require.Contains(t, findings[0].Description, helper+" reported RULE_CRIT_A (CRITICAL) at line 4")
 	}
 }
 
@@ -289,7 +291,7 @@ func TestForcedHelperRiskChecksEveryReferenceOnTheLine(t *testing.T) {
 	a.ObserveFindings("scripts/build.js", []types.Finding{observed("scripts/build.js", "JS_DAEMON_001", types.SeverityHigh, 2)})
 	findings := a.Finalize()
 	require.Len(t, findings, 1)
-	require.Contains(t, findings[0].MatchedText, "scripts/build.js line 2 reported JS_DAEMON_001")
+	require.Contains(t, findings[0].MatchedText, "scripts/build.js reported JS_DAEMON_001")
 }
 
 func TestForcedHelperRiskTrimsSentencePunctuation(t *testing.T) {

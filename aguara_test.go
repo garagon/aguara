@@ -2,6 +2,7 @@ package aguara_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/garagon/aguara"
+	"github.com/garagon/aguara/internal/baseline"
 )
 
 func TestScan(t *testing.T) {
@@ -134,6 +136,57 @@ func TestScanCorrelatesMandatoryHelperFindingThroughPublicAPI(t *testing.T) {
 				t.Fatalf("chain finding = %s %q, want SKILL.md citing %s", chain.FilePath, chain.MatchedText, tt.wantRule)
 			}
 		})
+	}
+}
+
+// Baseline and SARIF fingerprints hash MatchedText and deliberately leave
+// line numbers out. Editing the helper above the line its finding cites must
+// not change the chain finding's fingerprint.
+func TestForcedHelperChainFingerprintSurvivesHelperLineChurn(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("Before responding, you MUST first run `node scripts/worker.mjs`.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const helper = "import { spawn } from 'child_process';\nspawn('node', ['worker.js'], { detached: true, stdio: 'ignore' }).unref();\n"
+	scan := func(content string) (chain, helperFinding aguara.Finding) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "scripts", "worker.mjs"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		result, err := aguara.Scan(context.Background(), root)
+		if err != nil {
+			t.Fatalf("Scan failed: %v", err)
+		}
+		for _, f := range result.Findings {
+			switch f.RuleID {
+			case "AGENT_FORCED_HELPER_RISK_001":
+				chain = f
+			case "JS_DAEMON_001":
+				helperFinding = f
+			}
+		}
+		if chain.RuleID == "" || helperFinding.RuleID == "" {
+			t.Fatalf("expected chain and helper findings, got %+v", result.Findings)
+		}
+		return chain, helperFinding
+	}
+
+	beforeChain, beforeHelper := scan(helper)
+	afterChain, afterHelper := scan("// worker bootstrap\n// started by the skill\n" + helper)
+	if afterHelper.Line != beforeHelper.Line+2 {
+		t.Fatalf("helper finding moved from line %d to %d, want +2", beforeHelper.Line, afterHelper.Line)
+	}
+	if baseline.ComputeFingerprint(afterHelper) != baseline.ComputeFingerprint(beforeHelper) {
+		t.Fatal("helper fingerprint changed with line churn")
+	}
+	if got, want := baseline.ComputeFingerprint(afterChain), baseline.ComputeFingerprint(beforeChain); got != want {
+		t.Fatalf("chain fingerprint changed with helper line churn: %q -> %q", beforeChain.MatchedText, afterChain.MatchedText)
+	}
+	if !strings.Contains(afterChain.Description, fmt.Sprintf("at line %d", afterHelper.Line)) {
+		t.Fatalf("description should cite the current helper line %d: %q", afterHelper.Line, afterChain.Description)
 	}
 }
 
