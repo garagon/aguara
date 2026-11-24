@@ -470,6 +470,9 @@ func newPipeline(cfg *scanConfig, res *rulecatalog.Resolution, matcher *pattern.
 	if len(res.Disabled) > 0 {
 		s.SetDisabledRules(res.Disabled)
 	}
+	if severities := res.SeverityOverrides(); len(severities) > 0 {
+		s.SetSeverityOverrides(severities)
+	}
 	if cfg.deduplicateMode != 0 {
 		s.SetDeduplicateMode(cfg.deduplicateMode)
 	}

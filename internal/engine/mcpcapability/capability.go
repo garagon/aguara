@@ -40,7 +40,8 @@ type Analyzer struct {
 func New() *Analyzer { return NewWithOverride(rules.RuleOverride{}) }
 
 // NewWithOverride preserves the severity/disable contract of the former
-// pattern rule. Other analyzer rules retain their existing override semantics.
+// pattern rule. The scanner applies overrides for other analyzer rules to
+// their findings.
 func NewWithOverride(override rules.RuleOverride) *Analyzer {
 	severity := types.SeverityHigh
 	if s, err := types.ParseSeverity(override.Severity); override.Severity != "" && err == nil {

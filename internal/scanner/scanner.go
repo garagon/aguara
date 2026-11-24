@@ -40,6 +40,7 @@ type Scanner struct {
 	scanProfile          ScanProfile
 	toolScopedRules      map[string]ToolScopedRule
 	disabledRules        map[string]bool
+	severityOverrides    map[string]Severity
 	deduplicateMode      DeduplicateMode
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
@@ -156,6 +157,25 @@ func (s *Scanner) SetDisabledRules(ids []string) {
 		return
 	}
 	s.disabledRules = m
+}
+
+// SetSeverityOverrides replaces the severity of every finding whose rule ID
+// (case-insensitive) has an entry, whichever analyzer emitted it. As with a
+// pattern rule's own severity, a finding inside a Markdown code block is
+// lowered one level from the override. Overrides apply after the
+// disabled-rule filter and before tool exemptions, dedup, scoring and the
+// minimum-severity filter, so they behave exactly like a changed rule
+// severity.
+func (s *Scanner) SetSeverityOverrides(overrides map[string]Severity) {
+	if len(overrides) == 0 {
+		s.severityOverrides = nil
+		return
+	}
+	m := make(map[string]Severity, len(overrides))
+	for id, sev := range overrides {
+		m[strings.ToUpper(strings.TrimSpace(id))] = sev
+	}
+	s.severityOverrides = m
 }
 
 // SetDeduplicateMode sets how findings on the same line are deduplicated.
@@ -396,6 +416,19 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 		findings = kept
 		if len(findings) == 0 {
 			return nil
+		}
+	}
+
+	if len(s.severityOverrides) > 0 {
+		for i := range findings {
+			sev, ok := s.severityOverrides[strings.ToUpper(findings[i].RuleID)]
+			if !ok {
+				continue
+			}
+			if findings[i].InCodeBlock {
+				sev = types.DowngradeSeverity(sev)
+			}
+			findings[i].Severity = sev
 		}
 	}
 

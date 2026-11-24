@@ -347,6 +347,9 @@ func buildScanner(res *rulecatalog.Resolution, cfg config.Config, minSev scanner
 	if len(res.Disabled) > 0 {
 		s.SetDisabledRules(res.Disabled)
 	}
+	if severities := res.SeverityOverrides(); len(severities) > 0 {
+		s.SetSeverityOverrides(severities)
+	}
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}

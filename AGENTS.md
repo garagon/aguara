@@ -83,7 +83,8 @@ context. A single inline scan does not inspect neighboring files.
 Important options:
 
 - `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog
-  controls. IDs must exist in the loaded catalog (case-insensitive).
+  controls for pattern and analyzer rules alike. IDs must exist in the loaded
+  catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
 - `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.

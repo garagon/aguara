@@ -36,12 +36,12 @@ type Options struct {
 	// disable_rules list.
 	DisableRuleIDs []string
 	// Overrides apply per-rule severity changes and disables, the
-	// same surface aguara.WithRuleOverrides exposes. Keyed by
-	// rule ID (case-insensitive). An entry with Disabled=true
-	// drops the rule; an entry with a non-empty Severity replaces
-	// the metadata's severity in the output. Mirrors the
-	// scanner's RuleOverride path so a policy UI built on Build
-	// agrees with what the scanner actually runs.
+	// same surface aguara.WithRuleOverrides exposes, to pattern and
+	// analyzer rules alike. Keyed by rule ID (case-insensitive). An
+	// entry with Disabled=true drops the rule; an entry with a
+	// non-empty Severity replaces the metadata's severity in the
+	// output. Mirrors the scanner's override path so a policy UI
+	// built on Build agrees with what the scanner actually runs.
 	Overrides map[string]Override
 	// Category, when non-empty, filters the result to rules whose
 	// Category matches case-insensitively.
@@ -156,21 +156,13 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 		out = filtered
 	}
 
-	// 5. Per-rule overrides: drop disabled rules and apply
-	// severity overrides. ONLY applied to YAML pattern rules
-	// (Analyzer == ""), matching the scanner contract: the
-	// scanner's rules.ApplyOverrides path operates over
-	// []*rules.CompiledRule only, so analyzer-owned findings
-	// (JS_*, GHA_*, TOXIC_*, ...) are emitted regardless of
-	// RuleOverride. If the catalog ALSO applied Overrides to
-	// analyzer rules, list-rules would claim a policy is in
-	// effect that Scan would not honour for those IDs.
-	//
-	// MCP_009 is the compatibility exception: mcp-capability retains the
-	// severity/disable overrides it supported before its parser migration.
-	// Users who want to suppress any other analyzer rule should use
-	// WithDisabledRules / --disable-rule (the scanner DOES honour
-	// that via Scanner.SetDisabledRules).
+	// 5. Per-rule overrides: drop disabled rules and apply severity
+	// overrides, for pattern and analyzer rules alike. The scanner
+	// applies the same overrides to every finding (pattern rules at
+	// compile time, analyzer rules through Scanner.SetSeverityOverrides
+	// and the disabled-rule filter), so list-rules and explain show the
+	// policy Scan enforces. Invalid severities are left unchanged here;
+	// Resolve reports them.
 	if len(opts.Overrides) > 0 {
 		normalised := make(map[string]Override, len(opts.Overrides))
 		for id, o := range opts.Overrides {
@@ -179,11 +171,7 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 		filtered := out[:0]
 		for _, r := range out {
 			ovr, ok := normalised[strings.ToUpper(r.ID)]
-			// Pass analyzer rules through untouched -- their
-			// behaviour is governed by DisableRuleIDs, not by
-			// Overrides, so the catalog must not pretend
-			// otherwise.
-			if !ok || (r.Analyzer != "" && r.Analyzer != rulemeta.AnalyzerMCPCapability) {
+			if !ok {
 				filtered = append(filtered, r)
 				continue
 			}
@@ -191,12 +179,8 @@ func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule 
 				continue
 			}
 			if ovr.Severity != "" {
-				if r.Analyzer == rulemeta.AnalyzerMCPCapability {
-					if severity, err := types.ParseSeverity(ovr.Severity); err == nil {
-						r.Severity = severity.String()
-					}
-				} else {
-					r.Severity = strings.ToUpper(ovr.Severity)
+				if severity, err := types.ParseSeverity(ovr.Severity); err == nil {
+					r.Severity = severity.String()
 				}
 			}
 			filtered = append(filtered, r)

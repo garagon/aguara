@@ -8,8 +8,9 @@ Kubernetes container paths, not proven escalation or host access. Privilege
 commands remain under SUPPLY_007; MCP_009 broad grants are unchanged. Aliases,
 templates and ambiguous structures keep legacy matching rather than receiving
 this classification. Disabling the new ID hides the observation without bringing
-back a SUPPLY_007 finding for the same declaration. Like other new analyzer rules,
-it supports `--disable-rule`, not the legacy YAML severity-override mechanism.
+back a SUPPLY_007 finding for the same declaration. Like every rule, it can be
+disabled with `--disable-rule` and changed through `rule_overrides` severity and
+`disabled` settings.
 
 MCP_009 uses the `mcp-capability` parser to distinguish broad grants from
 capability drops and denies. It reads literal scalar/list values and

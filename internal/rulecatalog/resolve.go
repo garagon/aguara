@@ -190,6 +190,13 @@ func Resolve(in Input) (*Resolution, error) {
 		}
 		disabled[id] = true
 	}
+	// A Disabled override suppresses the rule like the disable list does,
+	// whichever engine emits it.
+	for id, ovr := range res.Overrides {
+		if ovr.Disabled {
+			disabled[id] = true
+		}
+	}
 	for id := range disabled {
 		res.Disabled = append(res.Disabled, id)
 	}
@@ -197,17 +204,38 @@ func Resolve(in Input) (*Resolution, error) {
 
 	for _, cr := range accepted {
 		id := CanonicalID(cr.ID)
-		ovr, hasOverride := res.Overrides[id]
-		if disabled[id] || (hasOverride && ovr.Disabled) {
+		if disabled[id] {
 			continue
 		}
-		if hasOverride && ovr.Severity != "" {
+		if ovr, ok := res.Overrides[id]; ok && ovr.Severity != "" {
 			sev, _ := types.ParseSeverity(ovr.Severity) // validated above
 			cr.Severity = sev
 		}
 		res.Compiled = append(res.Compiled, cr)
 	}
 	return res, nil
+}
+
+// SeverityOverrides returns the accepted severity overrides keyed by
+// canonical rule ID, for every kind of rule. Pattern rules already carry
+// theirs in Compiled; the scanner applies the map to every finding so that
+// analyzer-emitted rules honour the same override (scanner.SetSeverityOverrides).
+func (r *Resolution) SeverityOverrides() map[string]types.Severity {
+	var out map[string]types.Severity
+	for id, ovr := range r.Overrides {
+		if ovr.Severity == "" {
+			continue
+		}
+		sev, err := types.ParseSeverity(ovr.Severity)
+		if err != nil {
+			continue // cleared during Resolve; defensive only
+		}
+		if out == nil {
+			out = make(map[string]types.Severity)
+		}
+		out[id] = sev
+	}
+	return out
 }
 
 // ToolScopedRules returns the accepted overrides that restrict a rule to, or
