@@ -92,9 +92,26 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 
 // --- target gating ---
 
-// isJavaScriptTarget returns true for .js / .mjs / .cjs files. Checks
-// both Path (real-repo scans) and RelPath (in-memory content with a
-// hinted name).
+// isJavaScriptTarget returns true for JavaScript (.js / .mjs / .cjs) and
+// TypeScript (.ts / .mts / .cts) files. Checks both Path (real-repo scans)
+// and RelPath (in-memory content with a hinted name).
+//
+// TypeScript is routed because the lexical view stays aligned on its syntax:
+// type annotations, generics, `as` casts, decorators, `import type` and
+// template literal types contain no quote, comment or regex-literal starts
+// that plain JavaScript lacks. The two TypeScript-only forms that would
+// mislead the scanner are handled explicitly: a postfix non-null assertion
+// before a division (`total! / n`, see bangIsNonNullAssertion) and the
+// `import x = require('m')` binding form, which the module alias patterns
+// accept next to const/let/var.
+//
+// .jsx and .tsx are deliberately NOT routed. JSX text is prose, not code:
+// an apostrophe in element text opens a string that never closes where the
+// author meant, a closing tag (`</div>`) puts a `/` after `<` and is read
+// as the start of a regex literal that runs to the next slash, and words in
+// element text are treated as code tokens. Every detector here depends on
+// that lexical view, so JSX files would yield both missed chains and code
+// signals made up of rendered text.
 func isJavaScriptTarget(t *scanner.Target) bool {
 	if t == nil {
 		return false
@@ -105,7 +122,7 @@ func isJavaScriptTarget(t *scanner.Target) bool {
 		}
 		ext := strings.ToLower(filepath.Ext(filepath.ToSlash(p)))
 		switch ext {
-		case ".js", ".mjs", ".cjs":
+		case ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts":
 			return true
 		}
 	}
@@ -2192,7 +2209,7 @@ func deleteModeCaps(mode int, optRecursive bool) (canDirFinal, canRecursive bool
 // fsExtra* regexes detect bindings to the fs-extra module specifically, so the
 // fs-extra-only delete methods (remove/emptyDir) are not credited to a core
 // `fs` binding.
-var fsExtraAliasRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]fs-extra['"]\s*\)`)
+var fsExtraAliasRe = regexp.MustCompile(`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]fs-extra['"]\s*\)`)
 var fsExtraAliasESMRe = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]fs-extra['"]`)
 var fsExtraDestructureRe = regexp.MustCompile(`(?:const|let|var)\s+\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"]fs-extra['"]\s*\)`)
 var fsExtraDestructureESMRe = regexp.MustCompile(`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?\{\s*([^}]+)\s*\}\s+from\s*['"]fs-extra['"]`)
@@ -2209,7 +2226,7 @@ var inlineRequireFsDeleteRe = regexp.MustCompile(
 // and named (const { rimraf } = require('rimraf') / import { rimraf } from
 // 'rimraf'), the modern rimraf v4+ API. Every export of rimraf deletes, so any
 // destructured local is a delete sink.
-var rimrafAliasRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]rimraf['"]\s*\)`)
+var rimrafAliasRe = regexp.MustCompile(`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"]rimraf['"]\s*\)`)
 var rimrafAliasESMRe = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]rimraf['"]`)
 
 // rimrafAliasESMCombinedRe captures the DEFAULT alias of a combined import
@@ -3277,7 +3294,7 @@ var inlineRequireReceiverRe = regexp.MustCompile(
 // require(...)`), so a multi-declarator const still binds the alias. The
 // `= require('child_process')` tail keeps it from matching anything else.
 var childProcessAliasAssignRe = regexp.MustCompile(
-	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
+	`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)`,
 )
 
 // childProcessAliasESMRe captures the local variable bound via an
@@ -3337,7 +3354,7 @@ var identifierCPMethodCallRe = regexp.MustCompile(
 // the http / https / net family. Caller filters submatch 1 through
 // the discovered alias set.
 var identifierHTTPMethodCallRe = regexp.MustCompile(
-	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*(?:request|get|post|put|connect|createConnection)\s*\(`,
+	jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*(?:request|get|post|put|connect|createConnection)\s*` + tsCallTypeArgs + `\(`,
 )
 
 // envReadRe captures direct env-variable reads in all the forms a
@@ -3424,9 +3441,9 @@ func findProcMemPair(content []byte) int {
 // methods of the same name.
 var networkSinkRe = regexp.MustCompile(
 	`(?i)(?:` +
-		jsIdentBoundary + `fetch\s*\(` +
-		`|\baxios\.(?:post|put|request|get)\s*\(` +
-		`|\bgot\.(?:post|put|get)\s*\(` +
+		jsIdentBoundary + `fetch\s*` + tsCallTypeArgs + `\(` +
+		`|\baxios\.(?:post|put|request|get)\s*` + tsCallTypeArgs + `\(` +
+		`|\bgot\.(?:post|put|get)\s*` + tsCallTypeArgs + `\(` +
 		`|\bhttp\.request\s*\(|\bhttps\.(?:request|get)\s*\(` +
 		`|\bnet\.connect\s*\(|\bnet\.createconnection\s*\(` +
 		`|\bxmlhttprequest\s*\(` +
@@ -3436,12 +3453,19 @@ var networkSinkRe = regexp.MustCompile(
 		`)`,
 )
 
+// tsCallTypeArgs is an optional TypeScript type-argument list between a
+// callee and its argument list (`fetch<Response>(url)`,
+// `axios.post<Reply<T>>(url, body)`), allowing one level of nesting. In
+// JavaScript the same bytes would be a chained comparison, which real code
+// does not write, so the network-sink signal is unchanged for .js files.
+const tsCallTypeArgs = `(?:<(?:[^<>()\n]|<[^<>()\n]*>){1,120}>\s*)?`
+
 // httpModuleAliasAssignRe captures local names bound to the http,
 // https, or net modules via require, e.g.
 // `const h = require('https')`, `let net = require('node:net')`.
 // Submatch 1 is the local name.
 var httpModuleAliasAssignRe = regexp.MustCompile(
-	`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?(?:http|https|net)['"]\s*\)`,
+	`(?:const|let|var|import)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?(?:http|https|net)['"]\s*\)`,
 )
 
 // httpModuleAliasESMRe captures ESM default and namespace imports of
@@ -3575,7 +3599,7 @@ var execaCallRe = regexp.MustCompile(`(?i)\bexeca(?:sync|command|commandsync)?\s
 // so an unrelated `db.exec('bun run x')` in a shelljs-importing file is
 // NOT treated as a shell command. Mirrors the child_process alias logic.
 var (
-	shelljsAliasAssignRe = regexp.MustCompile(`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)`)
+	shelljsAliasAssignRe = regexp.MustCompile(`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)`)
 	shelljsAliasESMRe    = regexp.MustCompile(`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"` + "`" + `]shelljs['"` + "`" + `]`)
 	shelljsInlineExecRe  = regexp.MustCompile(`(?i)require\s*\(\s*['"` + "`" + `]shelljs['"` + "`" + `]\s*\)\s*\.\s*exec\s*\(`)
 	aliasExecCallRe      = regexp.MustCompile(jsIdentBoundary + `([A-Za-z_$][\w$]*)\s*\.\s*exec\s*\(`)
@@ -3675,7 +3699,7 @@ var dnsInlineRequireResolveTxtRe = regexp.MustCompile(
 // Submatch 1 is the local name. The caller then looks for
 // `<name>.resolveTxt(` calls in the file.
 var dnsAliasAssignRe = regexp.MustCompile(
-	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?dns(?:/promises)?['"]\s*\)`,
+	`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?dns(?:/promises)?['"]\s*\)`,
 )
 
 // dnsAliasESMRe captures the local variable bound via ESM import:
@@ -3990,6 +4014,9 @@ func couldBeRegexStart(content []byte, i int) bool {
 		return true
 	}
 	c := content[j]
+	if c == '!' && bangIsNonNullAssertion(content, j) {
+		return false
+	}
 	if jsRegexLiteralStartingChars[c] {
 		return true
 	}
@@ -4063,6 +4090,67 @@ func couldBeRegexStart(content []byte, i int) bool {
 	switch string(content[j+1 : end]) {
 	case "return", "typeof", "instanceof", "in", "delete",
 		"void", "new", "throw", "yield", "await", "case", "do":
+		return true
+	}
+	return false
+}
+
+// bangIsNonNullAssertion reports whether the `!` at position bang is a
+// TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
+// `f()! / 2`), after which a `/` is division. The `!` must touch the end of
+// an operand: an identifier that is not an expression keyword, a `]`, or a
+// `)` that does not close a control-flow header. In JavaScript the prefix
+// `!` never directly follows an operand, so `!/re/.test(s)`,
+// `return!/re/.test(s)` and `if(x)!/re/.test(s)` keep their regex reading.
+func bangIsNonNullAssertion(content []byte, bang int) bool {
+	if bang == 0 {
+		return false
+	}
+	isJSIdentByte := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '$'
+	}
+	k := bang - 1
+	c := content[k]
+	switch {
+	case c == ']':
+		return true
+	case c == ')':
+		depth := 1
+		k--
+		for k >= 0 && depth > 0 {
+			switch content[k] {
+			case ')':
+				depth++
+			case '(':
+				depth--
+			}
+			k--
+		}
+		if depth != 0 {
+			return false
+		}
+		for k >= 0 && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r' || content[k] == '\n') {
+			k--
+		}
+		end := k + 1
+		for k >= 0 && isJSIdentByte(content[k]) {
+			k--
+		}
+		switch string(content[k+1 : end]) {
+		case "if", "while", "for", "switch", "catch", "with":
+			return false
+		}
+		return true
+	case isJSIdentByte(c):
+		end := k + 1
+		for k >= 0 && isJSIdentByte(content[k]) {
+			k--
+		}
+		switch string(content[k+1 : end]) {
+		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
+			"throw", "yield", "await", "case", "do", "else":
+			return false
+		}
 		return true
 	}
 	return false
@@ -4149,7 +4237,7 @@ func newModuleBindings() moduleBindings {
 // from 'os'` is covered by accepting an optional `<id>,` prefix in
 // each ESM clause.
 var osModuleAliasRe = regexp.MustCompile(
-	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?os['"]\s*\)`,
+	`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?os['"]\s*\)`,
 )
 var osModuleAliasESMRe = regexp.MustCompile(
 	`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?os['"]`,
@@ -4178,7 +4266,7 @@ var osDestructureESMRe = regexp.MustCompile(
 // promises is also included for the same reason. The caller treats
 // any of these as fs for the staging partner check.
 var fsModuleAliasRe = regexp.MustCompile(
-	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]\s*\)`,
+	`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]\s*\)`,
 )
 var fsModuleAliasESMRe = regexp.MustCompile(
 	`import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?(?:fs|fs-extra|fs/promises)['"]`,
@@ -4197,7 +4285,7 @@ var fsModuleAliasESMCombinedRe = regexp.MustCompile(
 // The destructure-with-rename form (`const { promises: fsp } = require('fs')`)
 // is already covered by sourceByLocal[fsp] == "promises".
 var fsPromisesAliasRequireRe = regexp.MustCompile(
-	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?fs/promises['"]\s*\)`,
+	`(?:(?:const|let|var|import)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?fs/promises['"]\s*\)`,
 )
 var fsPromisesAliasDotRe = regexp.MustCompile(
 	`(?:(?:const|let|var)\s+|,\s*)([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](?:node:)?fs['"]\s*\)\s*\.\s*promises\b`,
