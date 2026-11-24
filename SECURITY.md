@@ -10,10 +10,14 @@ If you discover a security vulnerability in Aguara, please report it responsibly
 
 The following are in scope:
 
-- Scanner engine (pattern matching, NLP analysis, toxic-flow tracking)
+- Scanner engine (pattern matching and decoders, configuration and code analyzers, NLP analysis, toxic-flow and skill-chain correlation)
 - Built-in rules (false negatives that miss real threats)
-- CLI argument handling
-- Output formatters (SARIF, JSON, Markdown)
+- Package checks in `check`, `audit` and `clean`, including the lockfile and manifest parsers
+- Threat-intel refresh: signature and digest verification of the advisory bundle in `update` and `--fresh`
+- CLI argument handling and project configuration (`.aguara.yml`, `.aguaraignore`, `--project-policy`)
+- Output formatters (terminal, SARIF, JSON, Markdown) and redaction of sensitive evidence in reports
+- Go library defaults (target-owned suppressions ignored unless the caller opts in, redaction on by default)
+- `install.sh`, the GitHub Action (`action.yml`) and the container image
 
 The following are out of scope:
 
