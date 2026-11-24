@@ -147,7 +147,7 @@ Go's `regexp` does NOT support lookaheads (`(?!...)`) or lookbehinds. Use `exclu
 - Race detector (`-race`) is mandatory - all tests run with it.
 - Integration tests in `internal/scanner/integration_test.go` read 10 malicious and 6 benign scenarios from a root `testdata/` directory. That directory is gitignored and not part of a clone; the tests skip when it is absent. Committed fixtures live under each package's own `testdata/` (for example `internal/packagecheck/testdata/`).
 - Fuzz seed corpora run as part of `make test`; time-budgeted fuzzing runs only through `make fuzz` and the nightly fuzz workflow. Do not start long fuzzing or benchmark runs without being asked.
-- NLP classifier uses Go maps - tied scores produce nondeterministic winners. Don't write tests asserting a single winner on tied scores.
+- Scan results are deterministic: findings are sorted by severity, path, line, column, rule ID and analyzer; the NLP classifier walks categories in a fixed order (`categoryOrder`, the earlier category wins a tied score); NLP JSON extraction visits object keys in sorted order; cross-file toxic-flow pairs are chosen in path order. Do not reintroduce map iteration into anything that selects or orders findings. `aguara_determinism_test.go` scans the same inputs repeatedly and requires byte-identical JSON.
 - Rule self-tests validate `true_positive` matches and `false_positive` non-matches respecting `match_mode`.
 - CLI tests (`cmd/aguara/commands/scan_test.go`) use the `scanToFile` helper, which writes output to a temp file via the `-o` flag, because report output goes to `os.Stdout` directly and Cobra `SetOut()` does not capture it.
 - Always call `resetFlags()` at the start of each CLI test to avoid global flag state leaking.

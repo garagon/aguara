@@ -410,17 +410,43 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 		findings = filtered
 	}
 
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Severity != findings[j].Severity {
-			return findings[i].Severity > findings[j].Severity
-		}
-		if findings[i].FilePath != findings[j].FilePath {
-			return findings[i].FilePath < findings[j].FilePath
-		}
-		return findings[i].Line < findings[j].Line
+	// Dedup and correlation iterate maps, so the slice arrives in a
+	// different order on every run. The comparator below is a total order
+	// on post-dedup findings, which makes the result independent of that
+	// order (and of worker scheduling).
+	sort.SliceStable(findings, func(i, j int) bool {
+		return findingLess(findings[i], findings[j])
 	})
 
 	return findings
+}
+
+// findingLess orders findings by severity (highest first), then file, line,
+// column, rule ID and analyzer. The remaining fields only break ties between
+// findings that dedup would normally have merged.
+func findingLess(a, b Finding) bool {
+	if a.Severity != b.Severity {
+		return a.Severity > b.Severity
+	}
+	if a.FilePath != b.FilePath {
+		return a.FilePath < b.FilePath
+	}
+	if a.Line != b.Line {
+		return a.Line < b.Line
+	}
+	if a.Column != b.Column {
+		return a.Column < b.Column
+	}
+	if a.RuleID != b.RuleID {
+		return a.RuleID < b.RuleID
+	}
+	if a.Analyzer != b.Analyzer {
+		return a.Analyzer < b.Analyzer
+	}
+	if a.MatchedText != b.MatchedText {
+		return a.MatchedText < b.MatchedText
+	}
+	return a.RuleName < b.RuleName
 }
 
 func flattenGroups(groups []meta.CorrelationGroup) []Finding {
