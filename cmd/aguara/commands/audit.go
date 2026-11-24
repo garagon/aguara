@@ -589,29 +589,29 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 		return
 	}
 	files := unsupportedEvidenceNames(cov.UnsupportedEvidence, result.Target)
+	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
+	summary := "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
 	if cov.Evaluated() {
-		// Some evidence was checked; say what was not, without
-		// overriding the decision the evaluated evidence supports.
+		// Some evidence was checked, but action_plan grants or withholds
+		// installation for the whole repository: an install would also
+		// pull the packages in these files, which nothing checked.
 		t.Reasons = append(t.Reasons, AuditTriageReason{
 			Kind:     "partial_dependency_coverage",
-			Severity: "info",
+			Severity: "warning",
 			Message:  "These dependency files could not be evaluated and their packages were not checked: " + files + ".",
 		})
-		t.RecommendedNextSteps = append(t.RecommendedNextSteps,
-			"Review the dependencies pinned in "+files+" separately; this audit did not check them.")
-		return
+		summary = "Some dependency files could not be evaluated, so the audit cannot clear dependency installation."
+	} else {
+		// Dependency evidence exists but none of it could be evaluated.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "dependency_evidence_not_evaluated",
+			Severity: "warning",
+			Message:  "Dependency files were found but none could be evaluated: " + files + ". No package in them was checked against malicious-package intelligence.",
+		})
 	}
-	// Dependency evidence exists but none of it could be evaluated: an
-	// install would pull packages this audit never checked.
-	t.Reasons = append(t.Reasons, AuditTriageReason{
-		Kind:     "dependency_evidence_not_evaluated",
-		Severity: "warning",
-		Message:  "Dependency files were found but none could be evaluated: " + files + ". No package in them was checked against malicious-package intelligence.",
-	})
-	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
 	if t.Decision == "proceed" {
 		t.Decision = "review"
-		t.Summary = "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
+		t.Summary = summary
 		t.RecommendedNextSteps = []string{
 			step,
 			"Do not install dependencies on the strength of this audit.",

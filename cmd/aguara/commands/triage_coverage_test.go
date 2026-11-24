@@ -48,8 +48,9 @@ func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.
 	}
 }
 
-// When some evidence was evaluated, the decision follows that evidence
-// and the unevaluated files are named as an informational reason.
+// Evaluating some dependency files does not clear installation: the
+// action plan covers the whole repository, so an install would also pull
+// the packages in the files nothing checked.
 func TestAuditNamesPartiallyEvaluatedDependencyEvidence(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := projectWith(t, map[string]string{
@@ -57,9 +58,24 @@ func TestAuditNamesPartiallyEvaluatedDependencyEvidence(t *testing.T) {
 		"worker/uv.lock":    uvLockWithKnownMaliciousVersion,
 	})
 	result := auditToFile(t, dir)
-	require.Equal(t, "proceed", result.Triage.Decision)
+	require.Equal(t, "pass", result.Verdict.Status)
+	require.Equal(t, "review", result.Triage.Decision)
+	require.Equal(t, "Some dependency files could not be evaluated, so the audit cannot clear dependency installation.", result.Triage.Summary)
 	requireTriageReason(t, result.Triage, "partial_dependency_coverage")
-	require.Contains(t, strings.Join(result.Triage.RecommendedNextSteps, "\n"), "worker/uv.lock")
+	for _, r := range result.Triage.Reasons {
+		if r.Kind == "partial_dependency_coverage" {
+			require.Equal(t, "warning", r.Severity)
+			require.Contains(t, r.Message, "worker/uv.lock")
+		}
+	}
+	require.Equal(t, []string{
+		"Review the dependencies pinned in worker/uv.lock before installing them; this audit did not check them.",
+		"Do not install dependencies on the strength of this audit.",
+	}, result.Triage.RecommendedNextSteps)
+	require.Equal(t, "review_only", result.Handoff.Status)
+	require.Equal(t, "review_only", result.Plan.TrustState)
+	require.False(t, result.Plan.CanInstallDependencies)
+	require.Len(t, result.Coverage.PackageEvidence, 1, "the evaluated lockfile is still reported")
 }
 
 // A project with no dependency files at all keeps today's package-side

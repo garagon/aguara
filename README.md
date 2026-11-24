@@ -96,7 +96,7 @@ Lockfiles let Aguara check resolved dependencies without installing them. Covera
 | Java | `pom.xml`, Gradle lockfiles |
 | .NET | `packages.lock.json`, supported project files |
 
-Dependency files outside this table are not parsed, including Python lockfiles (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, `requirements.txt`), `npm-shrinkwrap.json` and `deno.lock`. `check` and `audit` list the ones they find under `coverage.unsupported_evidence`. When those are a project's only dependency evidence, `audit` triage returns `review` and its action plan does not allow installing dependencies.
+Dependency files outside this table are not parsed, including Python lockfiles (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, `requirements.txt`), `npm-shrinkwrap.json` and `deno.lock`. `check` and `audit` list the ones they find under `coverage.unsupported_evidence`. When any are found, `audit` triage returns `review` and its action plan does not allow installing dependencies, even if other lockfiles were checked.
 
 Matching supports exact versions and advisories affecting every version of a package. Bounded version ranges are supported for npm semver, not arbitrary ranges in every ecosystem. This is malicious-package detection, not comprehensive CVE coverage.
 
