@@ -368,8 +368,8 @@ func TestMatcherExcludePatterns(t *testing.T) {
 		Patterns: []rules.RawPattern{
 			{Type: rules.PatternRegex, Value: "(?i)pip\\s+install\\s+[a-z]"},
 		},
-		ExcludePatterns: []rules.RawPattern{
-			{Type: rules.PatternContains, Value: "## installation"},
+		ExcludePatterns: []rules.RawExcludePattern{
+			{Type: rules.PatternContains, Value: "## installation", Scope: "context"},
 			{Type: rules.PatternRegex, Value: "(?i)pip\\s+install\\s+--upgrade\\s+pip"},
 		},
 	})
@@ -415,8 +415,8 @@ func TestMatcherExcludePatternsMatchAll(t *testing.T) {
 			{Type: rules.PatternContains, Value: "git clone"},
 			{Type: rules.PatternContains, Value: "make install"},
 		},
-		ExcludePatterns: []rules.RawPattern{
-			{Type: rules.PatternContains, Value: "## building from source"},
+		ExcludePatterns: []rules.RawExcludePattern{
+			{Type: rules.PatternContains, Value: "## building from source", Scope: "context"},
 		},
 	})
 
@@ -439,6 +439,88 @@ func TestMatcherExcludePatternsMatchAll(t *testing.T) {
 	findings2, err := matcher.Analyze(context.Background(), target2)
 	require.NoError(t, err)
 	require.Empty(t, findings2, "should be excluded by heading context")
+}
+
+func analyzeLines(t *testing.T, rule *rules.CompiledRule, relPath, content string) []scanner.Finding {
+	t.Helper()
+	findings, err := pattern.NewMatcher([]*rules.CompiledRule{rule}).Analyze(context.Background(), &scanner.Target{
+		RelPath: relPath,
+		Content: []byte(content),
+	})
+	require.NoError(t, err)
+	return findings
+}
+
+func findingLines(findings []scanner.Finding) []int {
+	var out []int
+	for _, f := range findings {
+		out = append(out, f.Line)
+	}
+	return out
+}
+
+// A line-scoped exclude (the default) describes the matched line itself.
+// A comment or logging call on a neighbouring line must not suppress the
+// credential read below it.
+func TestMatcherExcludeLineScopeIgnoresNeighbours(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "SCOPE_LINE", Name: "Line scope", Severity: "CRITICAL", Category: "test",
+		Targets:  []string{"*.py"},
+		Patterns: []rules.RawPattern{{Type: rules.PatternRegex, Value: `(?i)open\(.*\.aws/credentials`}},
+		ExcludePatterns: []rules.RawExcludePattern{
+			{Type: rules.PatternRegex, Value: `^\s*#`},
+			{Type: rules.PatternRegex, Value: `(?i)(print|log|info)\s*\(`, Scope: "line"},
+		},
+	})
+	read := `k = open(os.path.expanduser("~/.aws/credentials")).read()`
+
+	require.Equal(t, []int{3}, findingLines(analyzeLines(t, rule, "x.py", "import os\n# load config\n"+read+"\n")))
+	require.Equal(t, []int{3}, findingLines(analyzeLines(t, rule, "x.py", "import os, logging\nlogging.info(\"start\")\n"+read+"\n")))
+	require.Empty(t, analyzeLines(t, rule, "x.py", "import os\n# "+read+"\n"), "the commented-out read itself stays excluded")
+	require.Empty(t, analyzeLines(t, rule, "x.py", "print(\"see open(~/.aws/credentials)\")\n"))
+}
+
+// A context-scoped exclude also inspects the ExcludeContextLines lines
+// before the match, and no further.
+func TestMatcherExcludeContextScopeLooksBack(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "SCOPE_CONTEXT", Name: "Context scope", Severity: "LOW", Category: "test",
+		Patterns:        []rules.RawPattern{{Type: rules.PatternContains, Value: "brew install"}},
+		ExcludePatterns: []rules.RawExcludePattern{{Type: rules.PatternContains, Value: "## setup", Scope: "context"}},
+	})
+	require.Empty(t, analyzeLines(t, rule, "x.md", "## Setup\n\n```\nbrew install jq\n```\n"),
+		"heading three lines above is in context")
+	require.Equal(t, []int{5}, findingLines(analyzeLines(t, rule, "x.md", "## Setup\n\nText.\n\nbrew install jq\n")),
+		"heading four lines above is out of context")
+}
+
+// Line scope covers every line a multi-line match spans, so a placeholder
+// value on the last line of the match is still seen.
+func TestMatcherExcludeLineScopeCoversMultilineMatch(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "SCOPE_SPAN", Name: "Span", Severity: "LOW", Category: "test",
+		Patterns:        []rules.RawPattern{{Type: rules.PatternRegex, Value: `environment:\s*\n\s+-\s+TOKEN=`}},
+		ExcludePatterns: []rules.RawExcludePattern{{Type: rules.PatternRegex, Value: `TOKEN=<`}},
+	})
+	require.Empty(t, analyzeLines(t, rule, "x.yaml", "environment:\n  - TOKEN=<your-token>\n"))
+	require.Equal(t, []int{1}, findingLines(analyzeLines(t, rule, "x.yaml", "environment:\n  - TOKEN=abc123\n")))
+}
+
+// In match_mode: all, excludes apply to every contributing hit: an
+// excluded first occurrence no longer hides a later real one, and a
+// pattern whose only hits are excluded does not count as matched.
+func TestMatcherExcludeMatchAllPerHit(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "SCOPE_ALL", Name: "All", Severity: "HIGH", Category: "test", MatchMode: "all",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: "read secrets"},
+			{Type: rules.PatternContains, Value: "send them"},
+		},
+		ExcludePatterns: []rules.RawExcludePattern{{Type: rules.PatternContains, Value: "never"}},
+	})
+	findings := analyzeLines(t, rule, "x.md", "Never read secrets.\nread secrets\nthen send them\n")
+	require.Equal(t, []int{2}, findingLines(findings))
+	require.Empty(t, analyzeLines(t, rule, "x.md", "read secrets\nnever send them\n"))
 }
 
 func TestConfidence_SinglePatternMatch(t *testing.T) {

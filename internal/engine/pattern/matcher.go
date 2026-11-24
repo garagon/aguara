@@ -247,7 +247,7 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 			if seenLines[hit.line] {
 				continue
 			}
-			if isExcluded(rule.ExcludePatterns, lines, hit.line) {
+			if isExcluded(rule.ExcludePatterns, lines, hit) {
 				continue
 			}
 			sev := rule.Severity
@@ -287,10 +287,13 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 }
 
 func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
-	// All patterns must have at least one hit
+	// All patterns must have at least one hit that no exclude pattern
+	// suppresses. Excludes apply to every contributing hit, as they do in
+	// match_mode: any, so a benign form of any pattern's text does not
+	// count and an excluded first occurrence does not hide a later one.
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
-		hits := matchPattern(pat, content, lowerContent, lines)
+		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, content, lowerContent, lines))
 		if len(hits) == 0 {
 			return nil
 		}
@@ -298,9 +301,6 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	}
 	// Use the first hit of the first pattern as the finding location
 	firstHit := allHits[0][0]
-	if isExcluded(rule.ExcludePatterns, lines, firstHit.line) {
-		return nil
-	}
 	var matchedParts []string
 	for _, hits := range allHits {
 		matchedParts = append(matchedParts, hits[0].text)
@@ -328,27 +328,53 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	}
 	for _, hits := range allHits {
 		hit := hits[0]
-		finding.AddEvidenceRange(hit.line, hit.line+strings.Count(hit.text, "\n"))
+		finding.AddEvidenceRange(hit.line, hit.endLine)
 	}
 	return []scanner.Finding{finding}
 }
 
+// matchHit is one pattern match. line and endLine are the 1-based first and
+// last source lines the match spans (equal for a single-line match); text
+// is the matched text, truncated for display.
 type matchHit struct {
-	line int
-	text string
+	line    int
+	endLine int
+	text    string
 }
 
-// isExcluded returns true if the matched line or nearby context (3 lines before)
-// matches any exclude pattern. This allows heading-based exclusions like
-// "## Installation" to suppress matches on following lines.
-func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) bool {
-	if len(excludes) == 0 || lineNum < 1 || lineNum > len(lines) {
+// excludeHits drops the hits that an exclude pattern suppresses. The input
+// slice is returned unchanged when the rule has no excludes.
+func excludeHits(excludes []rules.CompiledExclude, lines []string, hits []matchHit) []matchHit {
+	if len(excludes) == 0 || len(hits) == 0 {
+		return hits
+	}
+	kept := make([]matchHit, 0, len(hits))
+	for _, hit := range hits {
+		if !isExcluded(excludes, lines, hit) {
+			kept = append(kept, hit)
+		}
+	}
+	return kept
+}
+
+// isExcluded reports whether an exclude pattern suppresses hit. A
+// line-scoped exclude (the default) is evaluated against the lines the
+// match spans; a context-scoped exclude also inspects the
+// rules.ExcludeContextLines lines before the match, which lets a
+// documentation heading such as "## Installation" suppress the install
+// command listed under it. Each line is evaluated on its own, so `^` and
+// `$` in an exclude regex anchor to that line.
+func isExcluded(excludes []rules.CompiledExclude, lines []string, hit matchHit) bool {
+	if len(excludes) == 0 || hit.line < 1 || hit.line > len(lines) {
 		return false
 	}
-	// Check the matched line and up to 3 lines before it
-	start := max(lineNum-3, 1)
+	last := min(max(hit.endLine, hit.line), len(lines))
 	for _, ep := range excludes {
-		for i := start; i <= lineNum; i++ {
+		first := hit.line
+		if ep.Scope == rules.ExcludeScopeContext {
+			first = max(hit.line-rules.ExcludeContextLines, 1)
+		}
+		for i := first; i <= last; i++ {
 			line := lines[i-1]
 			switch ep.Type {
 			case rules.PatternRegex:
@@ -383,10 +409,11 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 		for _, loc := range locs {
 			line := lineAt(loc[0])
 			matched := content[loc[0]:loc[1]]
+			endLine := line + strings.Count(matched, "\n")
 			if len(matched) > 200 {
 				matched = matched[:200] + "..."
 			}
-			hits = append(hits, matchHit{line: line, text: matched})
+			hits = append(hits, matchHit{line: line, endLine: endLine, text: matched})
 		}
 	case rules.PatternContains:
 		target := pat.Value // already lowercased during compilation
@@ -404,7 +431,7 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 			end := lowerContent.originalOffset(absPos + len(target))
 			line := lineAt(start)
 			matched := content[start:end]
-			hits = append(hits, matchHit{line: line, text: matched})
+			hits = append(hits, matchHit{line: line, endLine: line + strings.Count(matched, "\n"), text: matched})
 			idx = absPos + len(target)
 		}
 	}

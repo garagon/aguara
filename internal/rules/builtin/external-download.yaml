@@ -79,22 +79,28 @@ patterns:
 exclude_patterns:
   - type: contains
     value: "## installation"
+    scope: context
   - type: contains
     value: "## prerequisites"
+    scope: context
   - type: contains
     value: "## setup"
+    scope: context
   - type: contains
     value: "## getting started"
+    scope: context
 examples:
   true_positive:
     - "npm install -g agent-browser"
     - "sudo npm install -g firecrawl-cli"
     - "sudo pip install some-package"
+    - "## Installation\n\nSee the guide first.\n\nThen run:\nnpm install -g agent-browser"
   false_positive:
     - "npm install express"
     - "pip install -r requirements.txt"
     - "pip install some-package"
     - "go install github.com/org/tool@latest"
+    - "## Installation\n\n```bash\nnpm install -g agent-browser\n```"
 ---
 id: EXTDL_005
 name: "Shell profile modification for persistence"
@@ -201,18 +207,24 @@ exclude_patterns:
     value: "(?i)pip3?\\s+install\\s+(-r\\s|--requirement\\s|-e\\s|--editable\\s|--upgrade\\s+(pip|setuptools|wheel))"
   - type: contains
     value: "## installation"
+    scope: context
   - type: contains
     value: "## prerequisites"
+    scope: context
   - type: contains
     value: "## setup"
+    scope: context
   - type: contains
     value: "## getting started"
+    scope: context
   - type: contains
     value: "## requirements"
+    scope: context
 examples:
   true_positive:
     - "pip install firecrawl-py"
     - "pip3 install browser-use"
+    - "pip install -r requirements.txt\npip install firecrawl-py"
   false_positive:
     - "pip install -r requirements.txt"
     - "pip install -e ."
@@ -256,14 +268,19 @@ patterns:
 exclude_patterns:
   - type: contains
     value: "## installation"
+    scope: context
   - type: contains
     value: "## prerequisites"
+    scope: context
   - type: contains
     value: "## setup"
+    scope: context
   - type: contains
     value: "## getting started"
+    scope: context
   - type: contains
     value: "## requirements"
+    scope: context
 examples:
   true_positive:
     - "brew install playwright"
@@ -272,6 +289,7 @@ examples:
   false_positive:
     - "brew update"
     - "apt-get update"
+    - "## Prerequisites\n\nbrew install playwright"
 ---
 id: EXTDL_012
 name: "Cargo or gem install from remote"

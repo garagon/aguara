@@ -30,6 +30,34 @@ type RawPattern struct {
 	Value string      `yaml:"value"`
 }
 
+// ExcludeScope selects which lines an exclude pattern is evaluated against.
+type ExcludeScope int
+
+const (
+	// ExcludeScopeLine evaluates the exclude only against the line or lines
+	// the match itself spans. It is the default: an exclude that describes a
+	// benign form of the matched text (a comment line, a placeholder value,
+	// a logging call) must not be satisfied by a neighbouring line.
+	ExcludeScopeLine ExcludeScope = iota
+	// ExcludeScopeContext also evaluates the exclude against the
+	// ExcludeContextLines lines before the match. It is meant for excludes
+	// that identify a documentation section, such as an "## Installation"
+	// heading shortly above an install command.
+	ExcludeScopeContext
+)
+
+// ExcludeContextLines is how many lines before a match a context-scoped
+// exclude pattern inspects.
+const ExcludeContextLines = 3
+
+// RawExcludePattern is an exclude pattern as defined in YAML. Scope is
+// optional: "line" (the default) or "context".
+type RawExcludePattern struct {
+	Type  PatternType `yaml:"type"`
+	Value string      `yaml:"value"`
+	Scope string      `yaml:"scope"`
+}
+
 // RawExamples contains test examples for rule self-testing.
 type RawExamples struct {
 	TruePositive  []string `yaml:"true_positive"`
@@ -50,11 +78,11 @@ type RawRule struct {
 	// data leak, exfil chain). The scanner copies this flag onto every
 	// emitted Finding so RedactSensitiveFindings can scrub MatchedText
 	// and the matching context line before JSON/SARIF output.
-	Sensitive       bool         `yaml:"sensitive"`
-	Patterns        []RawPattern `yaml:"patterns"`
-	ExcludePatterns []RawPattern `yaml:"exclude_patterns"`
-	Remediation     string       `yaml:"remediation"`
-	Examples        RawExamples  `yaml:"examples"`
+	Sensitive       bool                `yaml:"sensitive"`
+	Patterns        []RawPattern        `yaml:"patterns"`
+	ExcludePatterns []RawExcludePattern `yaml:"exclude_patterns"`
+	Remediation     string              `yaml:"remediation"`
+	Examples        RawExamples         `yaml:"examples"`
 }
 
 // CompiledPattern is a pattern ready for matching.
@@ -62,6 +90,12 @@ type CompiledPattern struct {
 	Type  PatternType
 	Regex *regexp.Regexp // set when Type == PatternRegex
 	Value string         // set when Type == PatternContains (lowercased)
+}
+
+// CompiledExclude is an exclude pattern ready for matching.
+type CompiledExclude struct {
+	CompiledPattern
+	Scope ExcludeScope
 }
 
 // CompiledRule is a rule compiled and ready for execution.
@@ -81,7 +115,7 @@ type CompiledRule struct {
 	MatchMode       MatchMode
 	Sensitive       bool
 	Patterns        []CompiledPattern
-	ExcludePatterns []CompiledPattern
+	ExcludePatterns []CompiledExclude
 	Remediation     string
 	Examples        RawExamples
 }

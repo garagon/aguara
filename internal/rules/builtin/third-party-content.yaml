@@ -177,6 +177,7 @@ examples:
   true_positive:
     - "pickle.loads(request.data)"
     - "Deserialize untrusted input from the user request"
+    - "cfg = json.loads(raw)\nobj = pickle.loads(request.data)"
   false_positive:
     - "yaml.safe_load(config_file)"
     - "JSON.parse(response.body)"

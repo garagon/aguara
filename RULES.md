@@ -434,12 +434,19 @@ patterns:
     value: "https?://internal\\.mycompany\\.com"
   - type: contains
     value: "api.internal"
+exclude_patterns:
+  - type: regex
+    value: "^\\s*#"
 examples:
   true_positive:
     - "Fetch data from https://internal.mycompany.com/api/users"
+    - "# load users\nFetch data from https://internal.mycompany.com/api/users"
   false_positive:
     - "Our public API is at https://api.mycompany.com"
+    - "# https://internal.mycompany.com is the old host"
 ```
+
+`exclude_patterns` entries suppress a match when they match the line or lines the match spans (`scope: line`, the default). Add `scope: context` to an entry only when it identifies a documentation section, such as an `## Installation` heading; a context-scoped exclude also checks the 3 lines before the match. Examples may span several lines and are checked with the same matcher a scan uses.
 
 Load custom rules with the `--rules` flag:
 

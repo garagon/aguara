@@ -71,14 +71,32 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 	}
 
 	for i, p := range raw.ExcludePatterns {
-		cp, err := compilePattern(p)
+		cp, err := compilePattern(RawPattern{Type: p.Type, Value: p.Value})
 		if err != nil {
 			return nil, fmt.Errorf("rule %s exclude_pattern %d: %w", raw.ID, i, err)
 		}
-		compiled.ExcludePatterns = append(compiled.ExcludePatterns, cp)
+		scope, err := parseExcludeScope(p.Scope)
+		if err != nil {
+			return nil, fmt.Errorf("rule %s exclude_pattern %d: %w", raw.ID, i, err)
+		}
+		compiled.ExcludePatterns = append(compiled.ExcludePatterns, CompiledExclude{CompiledPattern: cp, Scope: scope})
 	}
 
 	return compiled, nil
+}
+
+// parseExcludeScope maps the optional YAML scope of an exclude pattern.
+// An omitted scope means "line" so an exclude never looks past the match
+// unless the rule author asks for it.
+func parseExcludeScope(s string) (ExcludeScope, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "line":
+		return ExcludeScopeLine, nil
+	case "context":
+		return ExcludeScopeContext, nil
+	default:
+		return ExcludeScopeLine, fmt.Errorf("unknown scope %q (want \"line\" or \"context\")", s)
+	}
 }
 
 // maxPatternLength is the maximum length of a single regex or contains pattern value.
