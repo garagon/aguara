@@ -2,11 +2,13 @@ package rulecatalog_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
+	"github.com/garagon/aguara/internal/scanner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -329,6 +331,32 @@ func TestBuildOverridesDisableAndSeverityAllRules(t *testing.T) {
 		}
 	}
 	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must apply to analyzer rules")
+}
+
+// TestBuiltinRuleTablesReferenceCatalogRules fails when a built-in table
+// that drives scanner behaviour names a rule ID the built-in catalog does
+// not contain. Such an entry never matches a finding, so it silently does
+// nothing; the scan profiles once depended on IDs from a consumer's own rule
+// pack in exactly this way and reported CRITICAL findings as clean. Add any
+// new built-in rule table (exemptions, profile lists, ...) here.
+func TestBuiltinRuleTablesReferenceCatalogRules(t *testing.T) {
+	cat, err := rulecatalog.Build(rulecatalog.Options{})
+	require.NoError(t, err)
+	ids := make(map[string]bool, len(cat))
+	for _, r := range cat {
+		ids[r.ID] = true
+	}
+	tables := map[string][]string{}
+	for id := range scanner.BuiltinToolExemptions {
+		tables["scanner.BuiltinToolExemptions"] = append(tables["scanner.BuiltinToolExemptions"], id)
+	}
+	require.NotEmpty(t, tables["scanner.BuiltinToolExemptions"])
+	for table, refs := range tables {
+		for _, id := range refs {
+			require.Truef(t, ids[id], "%s names %q, which is not in the built-in catalog", table, id)
+			require.Equalf(t, strings.ToUpper(id), id, "%s key %q must be upper-case; lookups use canonical IDs", table, id)
+		}
+	}
 }
 
 func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {

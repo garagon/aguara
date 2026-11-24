@@ -38,6 +38,7 @@ type Scanner struct {
 	onProgress           func(current, total int)
 	toolName             string
 	scanProfile          ScanProfile
+	profileEnforced      map[string]bool
 	toolScopedRules      map[string]ToolScopedRule
 	disabledRules        map[string]bool
 	severityOverrides    map[string]Severity
@@ -111,6 +112,23 @@ func (s *Scanner) SetToolName(name string) {
 // SetScanProfile sets the enforcement profile.
 func (s *Scanner) SetScanProfile(profile ScanProfile) {
 	s.scanProfile = profile
+}
+
+// SetProfileEnforcedRules sets the rule IDs (case-insensitive) that
+// ProfileContentAware blocks on and ProfileMinimal flags regardless of
+// severity. The caller validates the IDs; see applyProfile for the verdicts.
+func (s *Scanner) SetProfileEnforcedRules(ids []string) {
+	if len(ids) == 0 {
+		s.profileEnforced = nil
+		return
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.ToUpper(strings.TrimSpace(id)); id != "" {
+			m[id] = true
+		}
+	}
+	s.profileEnforced = m
 }
 
 // SetToolScopedRules sets per-rule tool filtering from user configuration.
@@ -364,7 +382,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	verdict := computeVerdict(findings)
 	if s.scanProfile != ProfileStrict && len(findings) > 0 {
-		verdict = applyProfile(s.scanProfile, findings)
+		verdict = applyProfile(s.scanProfile, findings, s.profileEnforced)
 	}
 
 	// Persist state (rug-pull hashes) if configured

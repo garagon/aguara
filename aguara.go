@@ -173,7 +173,9 @@ func ScanContent(ctx context.Context, content string, filename string, opts ...O
 
 // ScanContentAs scans inline content with tool context for false-positive reduction.
 // toolName identifies the tool that generated the content (e.g. "Bash", "Edit", "WebFetch").
-// When provided, built-in tool exemptions and scan profiles can reduce false positives.
+// When provided, built-in tool exemptions and tool-scoped WithRuleOverrides
+// entries remove findings that are false positives for that tool (tool names
+// match case-insensitively).
 // Text detection uses NFKC normalization; npm manifest parsing retains original syntax.
 func ScanContentAs(ctx context.Context, content string, filename string, toolName string, opts ...Option) (*ScanResult, error) {
 	return scanContentInternal(ctx, content, filename, toolName, opts)
@@ -464,6 +466,9 @@ func newPipeline(cfg *scanConfig, res *rulecatalog.Resolution, matcher *pattern.
 	if cfg.scanProfile != ProfileStrict {
 		s.SetScanProfile(cfg.scanProfile)
 	}
+	if len(res.Enforced) > 0 {
+		s.SetProfileEnforcedRules(res.Enforced)
+	}
 	if toolScoped := res.ToolScopedRules(); len(toolScoped) > 0 {
 		s.SetToolScopedRules(toolScoped)
 	}
@@ -529,6 +534,9 @@ func (c *scanConfig) ruleInput() rulecatalog.Input {
 	in := rulecatalog.Input{CustomRulesDirs: c.customRulesDirs}
 	for _, id := range c.disabledRules {
 		in.Disabled = append(in.Disabled, rulecatalog.Ref{ID: id, Source: "WithDisabledRules"})
+	}
+	for _, id := range c.profileEnforced {
+		in.Enforced = append(in.Enforced, rulecatalog.Ref{ID: id, Source: "WithProfileEnforcedRules"})
 	}
 	ids := make([]string, 0, len(c.ruleOverrides))
 	for id := range c.ruleOverrides {

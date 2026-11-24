@@ -38,6 +38,9 @@ type Input struct {
 	// and for two keys that name the same rule; callers that start from a
 	// map should sort the keys.
 	Overrides []OverrideRef
+	// Enforced lists the rule IDs the content-aware and minimal scan
+	// profiles keep enforcing.
+	Enforced []Ref
 }
 
 // Resolution is validated rule configuration, ready to build a scanner or a
@@ -49,6 +52,9 @@ type Resolution struct {
 	Compiled []*rules.CompiledRule
 	// Disabled lists the canonical (upper-case) IDs to suppress, sorted.
 	Disabled []string
+	// Enforced lists the canonical IDs the relaxed scan profiles keep
+	// enforcing, sorted.
+	Enforced []string
 	// Overrides holds the accepted overrides keyed by canonical rule ID.
 	// Severity is canonical ("HIGH"); an invalid severity is cleared and
 	// reported.
@@ -68,8 +74,9 @@ func CanonicalID(id string) string {
 }
 
 // Resolve loads the built-in rules and the custom rule directories, compiles
-// them, and validates the disable list and overrides against the resulting
-// catalog (pattern rules plus analyzer-emitted rules).
+// them, and validates the disable list, the overrides and the profile
+// enforcement list against the resulting catalog (pattern rules plus
+// analyzer-emitted rules).
 //
 // Problems with individual inputs do not stop resolution: the offending input
 // is skipped (a rule that does not compile, a custom rule that reuses an ID,
@@ -201,6 +208,23 @@ func Resolve(in Input) (*Resolution, error) {
 		res.Disabled = append(res.Disabled, id)
 	}
 	sort.Strings(res.Disabled)
+
+	enforced := map[string]bool{}
+	for _, ref := range in.Enforced {
+		id := CanonicalID(ref.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := known[id]; !ok {
+			addProblem(types.ConfigProblemUnknownRuleID, ref.ID, ref.Source, "unknown rule ID %q", ref.ID)
+			continue
+		}
+		if !enforced[id] {
+			enforced[id] = true
+			res.Enforced = append(res.Enforced, id)
+		}
+	}
+	sort.Strings(res.Enforced)
 
 	for _, cr := range accepted {
 		id := CanonicalID(cr.ID)

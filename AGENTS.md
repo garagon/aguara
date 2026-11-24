@@ -115,6 +115,12 @@ exported through public aliases, rather than copying a partial struct.
 - Severity is numeric in JSON: INFO=0, LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4.
 - `decision_impact` distinguishes `context` and `review`; it is not a downstream
   application's allow/block policy.
+- `verdict` (clean=0, flag=1, block=2) depends on the scan profile. With the
+  default `strict` profile any HIGH or CRITICAL finding blocks. `content-aware`
+  blocks only on findings from rules named in `WithProfileEnforcedRules` and
+  flags other HIGH or CRITICAL findings; `minimal` never blocks and flags
+  enforced-rule and HIGH or CRITICAL findings. No profile reports `clean` while
+  a HIGH or CRITICAL finding remains. Findings are reported in every profile.
 - `matched_text`, description and context may be redacted. Do not parse them as
   stable identifiers or expect raw secrets.
 - Go results have `Duration time.Duration`; JSON exposes `duration_ms`.

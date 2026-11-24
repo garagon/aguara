@@ -12,6 +12,7 @@ type scanConfig struct {
 	category        string // only for ListRules
 	toolName        string
 	scanProfile     ScanProfile
+	profileEnforced []string
 	deduplicateMode DeduplicateMode
 	stateDir        string
 	redact          bool // scrub matched text from credential-leak findings
@@ -151,21 +152,47 @@ func WithCategory(cat string) Option {
 }
 
 // WithToolName sets the tool context for false-positive reduction.
-// When set, built-in tool exemptions and scan profiles can filter findings
-// that are always false positives for that tool (e.g. TC-005 in Edit).
+// When set, built-in tool exemptions remove findings that are always false
+// positives for that tool (e.g. MCPCFG_004 in WebFetch), and tool-scoped
+// WithRuleOverrides entries apply. Tool names match case-insensitively.
 func WithToolName(name string) Option {
 	return func(c *scanConfig) {
 		c.toolName = name
 	}
 }
 
-// WithScanProfile sets the enforcement profile for the scan.
-// ProfileStrict (default) enforces all rules. ProfileContentAware only enforces
-// MinimalEnforceRules (path traversal, system dir write, credentials).
-// ProfileMinimal flags MinimalEnforceRules but doesn't block.
+// WithScanProfile sets the enforcement profile for the scan. Profiles only
+// change ScanResult.Verdict; findings are always reported.
+//
+//   - ProfileStrict (default): any HIGH or CRITICAL finding blocks; any
+//     other finding flags.
+//   - ProfileContentAware: a finding from a rule named in
+//     WithProfileEnforcedRules blocks, whatever its severity; otherwise any
+//     HIGH or CRITICAL finding flags; LOW, MEDIUM and INFO findings alone
+//     are clean.
+//   - ProfileMinimal: never blocks. A finding from an enforced rule, or any
+//     HIGH or CRITICAL finding, flags; LOW, MEDIUM and INFO findings alone
+//     are clean.
+//
+// No profile reports clean while a HIGH or CRITICAL finding remains. To keep
+// a rule out of the verdict entirely, disable it or exempt it for the tool
+// with WithRuleOverrides.
 func WithScanProfile(profile ScanProfile) Option {
 	return func(c *scanConfig) {
 		c.scanProfile = profile
+	}
+}
+
+// WithProfileEnforcedRules names the rules ProfileContentAware blocks on and
+// ProfileMinimal flags regardless of severity. IDs are case-insensitive and
+// must exist in the catalog of loaded rules, so consumer-defined rule IDs
+// need their rule pack loaded with WithCustomRules; an unknown ID is a
+// ConfigError unless WithLenientConfig is set. Repeated use accumulates. It
+// has no effect with ProfileStrict, which already blocks on every HIGH or
+// CRITICAL finding.
+func WithProfileEnforcedRules(ids ...string) Option {
+	return func(c *scanConfig) {
+		c.profileEnforced = append(c.profileEnforced, ids...)
 	}
 }
 
