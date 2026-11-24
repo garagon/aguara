@@ -675,45 +675,53 @@ func writeAuditJSON(result *AuditResult) error {
 	})
 }
 
+// writeAuditTerminal renders the terminal report to stdout, or to the
+// -o file when one is set (color is already off for a file).
 func writeAuditTerminal(result *AuditResult) error {
+	return writeReport(func(w io.Writer) error {
+		return renderAuditTerminal(w, result)
+	})
+}
+
+func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	st := output.NewStyle(flagNoColor)
-	width := output.DetectWidth(os.Stdout)
+	width := output.DetectWidth(w)
 	sep := st.Separator(width)
 
-	fmt.Printf("\n%s\n", sep)
-	fmt.Printf("  %s\n", st.Bold("AGUARA AUDIT"))
-	fmt.Printf("  Target: %s\n", output.TerminalText(result.Target))
-	fmt.Printf("%s\n", sep)
+	fmt.Fprintf(w, "\n%s\n", sep)
+	fmt.Fprintf(w, "  %s\n", st.Bold("AGUARA AUDIT"))
+	fmt.Fprintf(w, "  Target: %s\n", output.TerminalText(result.Target))
+	fmt.Fprintf(w, "%s\n", sep)
 
-	fmt.Printf("\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
+	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
 	if len(result.Check.Findings) == 0 {
-		fmt.Printf("\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
+		fmt.Fprintf(w, "\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
 	} else {
 		for _, f := range result.Check.Findings {
 			label := output.TerminalText(string(f.Severity))
-			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
+			fmt.Fprintf(w, "\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 			if f.Path != "" {
-				fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Path)))
+				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Path)))
 			}
 		}
 	}
 
-	fmt.Printf("\n%s\n", st.SectionHeader("CONTENT SCAN", width))
+	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("CONTENT SCAN", width))
 	if len(result.Scan.Findings) == 0 {
-		fmt.Printf("\n  %s\n", st.OK("No content findings."))
+		fmt.Fprintf(w, "\n  %s\n", st.OK("No content findings."))
 	} else {
 		// Cap the listing unless --verbose -- a noisy repo can dump
 		// hundreds of low-severity findings into the audit output,
 		// and showing all of them buries the verdict.
 		const maxList = 10
 		shown := 0
-		fmt.Println()
+		fmt.Fprintln(w)
 		for _, f := range result.Scan.Findings {
 			if !flagAuditVerbose && shown >= maxList {
 				break
 			}
 			label := f.Severity.String()
-			fmt.Printf("  %s %s %s %s\n",
+			fmt.Fprintf(w, "  %s %s %s %s\n",
 				st.SeverityIcon(label),
 				st.Bold(st.Cell(output.TerminalText(f.RuleID), 24)),
 				st.Cell(output.TerminalText(f.RuleName), 36),
@@ -721,7 +729,7 @@ func writeAuditTerminal(result *AuditResult) error {
 			shown++
 		}
 		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
-			fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
+			fmt.Fprintf(w, "  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
 				len(result.Scan.Findings)-maxList)))
 		}
 	}
@@ -730,9 +738,9 @@ func writeAuditTerminal(result *AuditResult) error {
 	// (stdout stays verdict + findings); a stale local cache still notes
 	// to stderr inside printIntelFreshness.
 	if !flagAuditCI {
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
-	printIntelFreshness(result.Intel, flagAuditCI)
+	fprintIntelFreshness(w, os.Stderr, result.Intel, flagAuditCI)
 
 	// Green is reserved for a clean pass: FINDINGS exits 0 but still
 	// means unresolved findings exist, so it renders yellow with the
@@ -751,7 +759,7 @@ func writeAuditTerminal(result *AuditResult) error {
 		line = st.Green(st.Bold("✔ "+verdict)) + " " + counts
 	}
 
-	fmt.Printf("\n%s\n  %s\n%s\n", sep, line, sep)
+	fmt.Fprintf(w, "\n%s\n  %s\n%s\n", sep, line, sep)
 
 	if result.Triage.Decision != "" {
 		var triageLine string
@@ -763,12 +771,12 @@ func writeAuditTerminal(result *AuditResult) error {
 		default:
 			triageLine = st.Green(st.Bold("✔ Triage: PROCEED"))
 		}
-		fmt.Printf("  %s\n", triageLine)
+		fmt.Fprintf(w, "  %s\n", triageLine)
 		if result.Triage.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Triage.Summary)))
+			fmt.Fprintf(w, "  %s\n", st.Dim(output.TerminalText(result.Triage.Summary)))
 		}
 		if len(result.Triage.RecommendedNextSteps) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Next: "+output.TerminalText(result.Triage.RecommendedNextSteps[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Next: "+output.TerminalText(result.Triage.RecommendedNextSteps[0])))
 		}
 	}
 
@@ -782,15 +790,15 @@ func writeAuditTerminal(result *AuditResult) error {
 		default:
 			handoffLine = st.Green(st.Bold("✔ Agent handoff: ALLOWED"))
 		}
-		fmt.Printf("  %s\n", handoffLine)
+		fmt.Fprintf(w, "  %s\n", handoffLine)
 		if result.Handoff.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Handoff.Summary)))
+			fmt.Fprintf(w, "  %s\n", st.Dim(output.TerminalText(result.Handoff.Summary)))
 		}
 		if len(result.Handoff.AllowedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Allowed: "+output.TerminalText(result.Handoff.AllowedActions[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Allowed: "+output.TerminalText(result.Handoff.AllowedActions[0])))
 		}
 		if len(result.Handoff.BlockedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Blocked: "+output.TerminalText(result.Handoff.BlockedActions[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Blocked: "+output.TerminalText(result.Handoff.BlockedActions[0])))
 		}
 	}
 
@@ -803,12 +811,12 @@ func writeAuditTerminal(result *AuditResult) error {
 		if !result.Plan.CanInstallDependencies {
 			installStatus = "no"
 		}
-		fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
+		fmt.Fprintf(w, "  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
 			installStatus, execStatus, output.TerminalText(result.Plan.TrustState))))
 	}
 
 	if rule := topScanRule(result.Scan.Findings); rule != "" {
-		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+output.TerminalText(rule)))
+		fmt.Fprintf(w, "  %s\n", st.Dim("Next: aguara explain "+output.TerminalText(rule)))
 	}
 	return nil
 }

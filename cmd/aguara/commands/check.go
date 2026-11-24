@@ -959,9 +959,17 @@ func writeCheckJSON(result *incident.CheckResult) error {
 	})
 }
 
+// writeCheckTerminal renders the terminal report to stdout, or to the
+// -o file when one is set (color is already off for a file).
 func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
+	return writeReport(func(w io.Writer) error {
+		return renderCheckTerminal(w, result, plan)
+	})
+}
+
+func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPlan) error {
 	st := output.NewStyle(flagNoColor)
-	width := output.DetectWidth(os.Stdout)
+	width := output.DetectWidth(w)
 	sep := st.Separator(width)
 
 	ecosystem := plan.singleEcoToken()
@@ -970,8 +978,8 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		envLabel = "project dependencies"
 	}
 
-	fmt.Printf("\n%s\n", sep)
-	fmt.Printf("  %s\n", st.Bold("AGUARA CHECK"))
+	fmt.Fprintf(w, "\n%s\n", sep)
+	fmt.Fprintf(w, "  %s\n", st.Bold("AGUARA CHECK"))
 	var meta string
 	switch {
 	case plan.isMulti():
@@ -984,29 +992,29 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	default:
 		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
 	}
-	fmt.Printf("  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
-	fmt.Printf("%s\n\n", sep)
+	fmt.Fprintf(w, "  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
+	fmt.Fprintf(w, "%s\n\n", sep)
 
 	// Provenance line: which intel answered this scan, and how old it is.
 	// Suppressed under --ci to keep stdout to findings (a stale local
 	// cache still earns a stderr note inside printIntelFreshness).
-	printIntelFreshness(result.Intel, flagCheckCI)
+	fprintIntelFreshness(w, os.Stderr, result.Intel, flagCheckCI)
 
 	if len(result.Findings) == 0 {
-		fmt.Printf("  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
+		fmt.Fprintf(w, "  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
 		return nil
 	}
 
 	for _, f := range result.Findings {
 		label := output.TerminalText(string(f.Severity))
-		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
+		fmt.Fprintf(w, "  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 		if f.Path != "" {
-			fmt.Printf("             %s\n", st.Dim("Path: "+output.TerminalText(f.Path)))
+			fmt.Fprintf(w, "             %s\n", st.Dim("Path: "+output.TerminalText(f.Path)))
 		}
 		if f.Detail != "" {
-			fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Detail)))
+			fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Detail)))
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Credentials at risk
@@ -1017,13 +1025,13 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		}
 	}
 	if atRisk > 0 {
-		fmt.Printf("%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %-30s %s  %s\n", output.TerminalText(c.Path), st.Red("EXISTS"), st.Dim(output.TerminalText(c.Guidance)))
+				fmt.Fprintf(w, "  %-30s %s  %s\n", output.TerminalText(c.Path), st.Red("EXISTS"), st.Dim(output.TerminalText(c.Guidance)))
 			}
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Action guidance is ecosystem-specific because `aguara clean`
@@ -1033,20 +1041,20 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	// credentials" guidance; the Python path keeps the
 	// `aguara clean` recommendation since it owns the
 	// persistence-artifact cleanup.
-	fmt.Printf("%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
+	fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
 	switch ecosystem {
 	case ecoPython:
-		fmt.Println("  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
-		fmt.Println("  2. Rotate ALL credentials listed above")
-		fmt.Println("  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+		fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
+		fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
+		fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
 	default:
 		// Single packagecheck ecosystem, or single npm, or
 		// multi-ecosystem: same guidance shape (the
 		// per-ecosystem package-manager commands live in each
 		// Finding.Remediation, not in this summary).
-		fmt.Println("  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
-		fmt.Println("  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
-		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
+		fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
+		fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
+		fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
 	}
 
 	// Build summary line
@@ -1067,7 +1075,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	if warnCount > 0 {
 		parts = append(parts, st.Yellow(fmt.Sprintf("%d warning", warnCount)))
 	}
-	fmt.Printf("\n%s\n  %s\n%s\n", sep, strings.Join(parts, " · "), sep)
+	fmt.Fprintf(w, "\n%s\n  %s\n%s\n", sep, strings.Join(parts, " · "), sep)
 
 	return nil
 }

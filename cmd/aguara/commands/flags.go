@@ -45,7 +45,7 @@ func addFormatFlag(cmd *cobra.Command, formats ...string) {
 
 // addOutputFlag registers -o/--output for commands that write a report.
 func addOutputFlag(cmd *cobra.Command) {
-	cmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output file path (default: stdout)")
+	cmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Write the report to this file instead of stdout, in the selected --format and without color")
 }
 
 // addSeverityFlag registers --severity, the minimum severity a content
