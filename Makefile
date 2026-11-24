@@ -62,10 +62,11 @@ bench:
 # Only packages that declare a benchmark are built: linking a test
 # binary for every package roughly triples the cost.
 bench-check:
-	go test -run '^$$' -bench . -benchtime 1x \
-		$$(go list -f '{{.ImportPath}} {{.Dir}}' ./... | while read -r pkg dir; do \
+	@pkgs=$$(go list -f '{{.ImportPath}} {{.Dir}}' ./... | while read -r pkg dir; do \
 			grep -qs '^func Benchmark' "$$dir"/*_test.go && echo "$$pkg"; \
-		done)
+		done); \
+	test -n "$$pkgs" || { echo "bench-check: no benchmark packages found" >&2; exit 1; }; \
+	go test -run '^$$' -bench . -benchtime 1x $$pkgs
 
 # Run every Fuzz* target once for FUZZTIME each. Go only accepts one
 # -fuzz pattern per invocation, hence the loop. A found crasher is

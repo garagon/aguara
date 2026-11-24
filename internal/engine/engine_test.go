@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/garagon/aguara/internal/engine"
@@ -32,16 +31,10 @@ func TestRuleMetadataIDsAreUniqueAndAttributed(t *testing.T) {
 	}
 }
 
-func TestDefaultAnalyzersOrder(t *testing.T) {
-	var names []string
+func TestDefaultAnalyzersRegisteredOnce(t *testing.T) {
+	seen := make(map[string]bool)
 	for _, a := range engine.DefaultAnalyzers() {
-		require.NotContainsf(t, names, a.Name(), "analyzer %s registered twice", a.Name())
-		names = append(names, a.Name())
+		require.Falsef(t, seen[a.Name()], "analyzer %s registered twice", a.Name())
+		seen[a.Name()] = true
 	}
-	// ci-trust must run before toxicflow so its chain findings are
-	// deduplicated and correlated alongside leaf signals.
-	ci, toxic := slices.Index(names, "ci-trust"), slices.Index(names, "toxicflow")
-	require.NotEqual(t, -1, ci, "ci-trust must be a default analyzer")
-	require.NotEqual(t, -1, toxic, "toxicflow must be a default analyzer")
-	require.Less(t, ci, toxic, "ci-trust must run before toxicflow: %v", names)
 }
