@@ -256,7 +256,7 @@ type checkPlan struct {
 	// to the Python default.
 	explicitEcosystem bool
 	// unsupported lists dependency files found under the root that no
-	// parser reads (uv.lock, requirements.txt, ...). They are reported
+	// parser reads (deno.lock, gems.locked, dev-requirements.txt, ...). They are reported
 	// in the coverage block so an unread lockfile cannot pass as a
 	// clean check. Scoped to the requested ecosystems when explicit.
 	unsupported []packagecheck.UnsupportedEvidence

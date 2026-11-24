@@ -111,9 +111,11 @@ exported through public aliases, rather than copying a partial struct.
 - Go results have `Duration time.Duration`; JSON exposes `duration_ms`.
 - Empty scan findings serialize as `[]`, not `null`.
 - CLI JSON from `scan`, `check` and `audit` carries a `coverage` block: files
-  scanned, package evidence read, and `unsupported_evidence` (dependency files
-  found but not parsed). Zero files or zero evaluated evidence is not a clean
-  result. Library `ScanResult` values leave `coverage` unset.
+  scanned, package evidence read (with `unpinned` counts),
+  `unsupported_evidence` (dependency files found but not evaluated) and
+  `unresolved_includes` (requirements includes not read). Zero files, zero
+  evaluated evidence, unsupported files or a file with no pinned entry is not a
+  clean result. Library `ScanResult` values leave `coverage` unset.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a
