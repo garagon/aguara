@@ -2,7 +2,6 @@ package packagecheck
 
 import (
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -32,14 +31,6 @@ type unsupportedFormat struct {
 // pyproject.toml, Cargo.toml, Gemfile, composer.json) are not listed:
 // they do not pin what an install resolves.
 var unsupportedFormats = []unsupportedFormat{
-	// PyPI
-	{Pattern: "uv.lock", Kind: "uv.lock", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "poetry.lock", Kind: "poetry.lock", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "Pipfile.lock", Kind: "Pipfile.lock", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "pdm.lock", Kind: "pdm.lock", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "pylock.toml", Kind: "pylock.toml", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "pylock.*.toml", Kind: "pylock.toml", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
 	// npm
 	{Pattern: "npm-shrinkwrap.json", Kind: "npm-shrinkwrap.json", Ecosystem: intel.EcosystemNPM},
 	{Pattern: "deno.lock", Kind: "deno.lock", Ecosystem: intel.EcosystemNPM},
@@ -55,25 +46,16 @@ var unsupportedFormats = []unsupportedFormat{
 	{Pattern: "mix.lock", Kind: "mix.lock", Ecosystem: "Hex"},
 }
 
-// pythonEnvDirs are installed-package trees, not project files: a
-// dependency's own requirements.txt inside them says nothing about the
-// project.
-var pythonEnvDirs = map[string]bool{
-	"site-packages": true,
-	"dist-packages": true,
-	"__pycache__":   true,
-	".tox":          true,
-	".nox":          true,
-}
-
 // DiscoverUnsupported walks root like Discover and returns the
 // dependency files listed in unsupportedFormats. When ecosystems is
-// non-empty only those ecosystems are reported. It skips the same
-// directories as Discover, installed trees (node_modules, site-packages,
-// virtual environments) and roots inside them.
+// non-empty only those ecosystems are reported. It skips exactly the
+// directories Discover skips, by name (node_modules, vendor, .venv,
+// site-packages, ...), and returns nothing for a root that is itself an
+// installed tree. A directory is never skipped for a marker file it
+// contains: a planted pyvenv.cfg must not hide the files beside it.
 func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidence, error) {
 	out := []UnsupportedEvidence{}
-	if hasNodeModulesAncestor(root) || isPythonEnvDir(root) {
+	if hasNodeModulesAncestor(root) || isPythonInstallRoot(root) {
 		return out, nil
 	}
 	want := map[string]bool{}
@@ -90,7 +72,7 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 			return nil
 		}
 		if d.IsDir() {
-			if path != root && (defaultSkipDirs[d.Name()] || isPythonEnvDir(path)) {
+			if path != root && (defaultSkipDirs[d.Name()] || isPythonEnvironmentDir(d.Name())) {
 				return fs.SkipDir
 			}
 			return nil
@@ -112,12 +94,9 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 	return out, nil
 }
 
-// isPythonEnvDir reports whether dir is an installed Python tree: a
-// site-packages style directory or a virtual environment root.
-func isPythonEnvDir(dir string) bool {
-	if pythonEnvDirs[filepath.Base(filepath.Clean(dir))] {
-		return true
-	}
-	_, err := os.Lstat(filepath.Join(dir, "pyvenv.cfg"))
-	return err == nil
+// isPythonInstallRoot reports a root that is itself an installed-package
+// tree, by its own name only, as Discover decides it.
+func isPythonInstallRoot(root string) bool {
+	abs, err := filepath.Abs(root)
+	return err == nil && pythonInstallDirs[filepath.Base(abs)]
 }

@@ -10,10 +10,8 @@ import (
 )
 
 // uvLockWithKnownMaliciousVersion pins a version present in the embedded
-// intelligence. Python lockfiles are listed as unsupported only until a
-// parser for them lands; tests that only need "a dependency file Aguara
-// does not evaluate" use the fixtures below, whose formats stay
-// unsupported, so only the PyPI-specific test changes with that parser.
+// intelligence (litellm 1.82.7). Tests that need "a dependency file
+// Aguara does not evaluate" use the fixtures below instead.
 const uvLockWithKnownMaliciousVersion = `version = 1
 requires-python = ">=3.11"
 

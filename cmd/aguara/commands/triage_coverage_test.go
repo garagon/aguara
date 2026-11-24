@@ -13,23 +13,14 @@ import (
 // A project whose only dependency evidence is a format Aguara does not
 // parse must not be cleared for installation, even though the package
 // check found nothing: it never checked those packages.
-//
-// The PyPI rows are the reported case (a uv.lock pinning a version in the
-// embedded intelligence). They stay while those formats are unsupported
-// and go when the Python lockfile parser lands; the other rows use
-// formats that stay unsupported.
 func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cases := map[string]string{
-		"uv.lock":          uvLockWithKnownMaliciousVersion,
-		"poetry.lock":      "[[package]]\nname = \"litellm\"\nversion = \"1.82.7\"\n",
-		"Pipfile.lock":     `{"default":{"litellm":{"version":"==1.82.7"}}}`,
-		"requirements.txt": "litellm==1.82.7\n",
-		"deno.lock":        denoLockFixture,
-		"gems.locked":      gemsLockedFixture,
-		"packages.config":  packagesConfigFixture,
-		"paket.lock":       paketLockFixture,
-		"pubspec.lock":     "packages:\n  http:\n    version: \"1.2.0\"\n",
+		"deno.lock":       denoLockFixture,
+		"gems.locked":     gemsLockedFixture,
+		"packages.config": packagesConfigFixture,
+		"paket.lock":      paketLockFixture,
+		"pubspec.lock":    "packages:\n  http:\n    version: \"1.2.0\"\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -55,6 +46,27 @@ func TestAuditDoesNotProceedWhenNoDependencyEvidenceCouldBeEvaluated(t *testing.
 			require.Empty(t, result.Coverage.PackageEvidence)
 		})
 	}
+}
+
+// The case that started this work: a uv.lock pinning a version present
+// in the embedded intelligence. Python lockfiles are parsed now, so the
+// pin is a CRITICAL finding, triage stops, and --ci fails the run.
+func TestAuditStopsOnMaliciousUVLockPin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := projectWith(t, map[string]string{"uv.lock": uvLockWithKnownMaliciousVersion, "README.md": "# app\n"})
+
+	result := auditToFile(t, dir)
+	require.Equal(t, "stop", result.Triage.Decision)
+	requireTriageReason(t, result.Triage, "known_malicious_package")
+	require.Equal(t, 1, result.Verdict.CheckCriticals)
+	require.Equal(t, "blocked", result.Plan.TrustState)
+	require.False(t, result.Plan.CanInstallDependencies)
+	require.Empty(t, result.Coverage.UnsupportedEvidence, "uv.lock was read, so it is not unsupported evidence")
+	require.Len(t, result.Coverage.PackageEvidence, 1)
+	require.Equal(t, "uv.lock", result.Coverage.PackageEvidence[0].Source)
+
+	err := runCLI(t, "audit", dir, "--ci", "--format", "json", "-o", filepath.Join(t.TempDir(), "a.json"))
+	require.ErrorIs(t, err, ErrThresholdExceeded)
 }
 
 // Evaluating some dependency files does not clear installation: the

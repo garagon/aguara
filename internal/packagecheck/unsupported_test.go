@@ -23,41 +23,59 @@ func writeTree(t *testing.T, root string, files ...string) {
 func TestDiscoverUnsupportedFindsKnownDependencyFiles(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root,
-		"uv.lock",
-		"services/api/poetry.lock",
-		"services/api/requirements-dev.txt",
 		"web/deno.lock",
+		"services/api/packages.config",
 		"app/ios/Podfile.lock",
 		"README.md",
-		"package-lock.json", // parsed, never unsupported
-		// Installed trees and skipped directories are not project evidence.
-		"node_modules/dep/requirements.txt",
-		".venv/pyvenv.cfg",
-		".venv/lib/python3.12/site-packages/dep/requirements.txt",
-		"lib/site-packages/other/poetry.lock",
-		"vendor/x/uv.lock",
+		// Parsed formats are never unsupported.
+		"package-lock.json",
+		"uv.lock",
+		"services/api/requirements-dev.txt",
+		// Installed trees and skipped directories are not project
+		// evidence; they are skipped by name, as Discover skips them.
+		"node_modules/dep/deno.lock",
+		".venv/lib/python3.12/site-packages/dep/paket.lock",
+		"lib/site-packages/other/deno.lock",
+		"vendor/x/gems.locked",
 	)
 
 	got, err := DiscoverUnsupported(root, nil)
 	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"web/deno.lock":                "deno.lock/npm",
+		"services/api/packages.config": "packages.config/NuGet",
+		"app/ios/Podfile.lock":         "Podfile.lock/CocoaPods",
+	}, unsupportedByPath(t, root, got))
+}
+
+func unsupportedByPath(t *testing.T, root string, got []UnsupportedEvidence) map[string]string {
+	t.Helper()
 	rel := map[string]string{}
 	for _, u := range got {
 		r, err := filepath.Rel(root, u.Path)
 		require.NoError(t, err)
 		rel[filepath.ToSlash(r)] = u.Kind + "/" + u.Ecosystem
 	}
+	return rel
+}
+
+// A pyvenv.cfg is ordinary repository content: planting one at the root
+// or beside a dependency file must not hide that file, the same rule
+// Discover applies.
+func TestDiscoverUnsupportedIgnoresPlantedVenvMarkers(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, "pyvenv.cfg", "deno.lock", "tools/pyvenv.cfg", "tools/gems.locked")
+	got, err := DiscoverUnsupported(root, nil)
+	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"uv.lock":                           "uv.lock/PyPI",
-		"services/api/poetry.lock":          "poetry.lock/PyPI",
-		"services/api/requirements-dev.txt": "requirements.txt/PyPI",
-		"web/deno.lock":                     "deno.lock/npm",
-		"app/ios/Podfile.lock":              "Podfile.lock/CocoaPods",
-	}, rel)
+		"deno.lock":         "deno.lock/npm",
+		"tools/gems.locked": "gems.locked/RubyGems",
+	}, unsupportedByPath(t, root, got))
 }
 
 func TestDiscoverUnsupportedFiltersByEcosystem(t *testing.T) {
 	root := t.TempDir()
-	writeTree(t, root, "uv.lock", "deno.lock", "packages.config")
+	writeTree(t, root, "gems.locked", "deno.lock", "packages.config")
 	got, err := DiscoverUnsupported(root, []string{intel.EcosystemNuGet})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -67,7 +85,7 @@ func TestDiscoverUnsupportedFiltersByEcosystem(t *testing.T) {
 func TestDiscoverUnsupportedSkipsInstalledRoots(t *testing.T) {
 	for _, dir := range []string{"node_modules", "site-packages"} {
 		root := filepath.Join(t.TempDir(), dir)
-		writeTree(t, root, "dep/requirements.txt", "dep/uv.lock")
+		writeTree(t, root, "dep/deno.lock", "dep/paket.lock")
 		got, err := DiscoverUnsupported(root, nil)
 		require.NoError(t, err)
 		require.Empty(t, got, "%s is an installed tree, not a project", dir)
