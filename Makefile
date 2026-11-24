@@ -36,7 +36,7 @@ SMOKE_ARTIFACTS := smoke-npm-compromised.json smoke-npm-clean.json \
 	smoke-v016-audit.json smoke-v016-audit.stderr.txt \
 	smoke-v016-audit-clean.json
 
-.PHONY: build test lint run clean fmt vet wasm wasm-serve bench fuzz \
+.PHONY: build test lint run clean fmt vet wasm wasm-serve bench bench-check fuzz \
 	bench-docker-image race-docker-image \
 	bench-docker smoke-docker test-race-docker verify-docker \
 	test-install-sh-docker
@@ -56,6 +56,17 @@ test:
 bench:
 	go test -run '^$$' -bench 'BenchmarkCached_(PlainText|StructuredMarkdown|JSONConfig|LargeContent|MixedWorkload)$$' -benchmem -count=3 .
 	go test -run '^$$' -bench 'Benchmark(NLPAnalyzer|ScannerE2E)$$' -benchmem -count=3 ./internal/engine/nlp ./internal/scanner
+
+# Compile and run every benchmark exactly once so a broken benchmark
+# fails CI instead of rotting unnoticed. This is not a measurement.
+# Only packages that declare a benchmark are built: linking a test
+# binary for every package roughly triples the cost.
+bench-check:
+	@pkgs=$$(go list -f '{{.ImportPath}} {{.Dir}}' ./... | while read -r pkg dir; do \
+			grep -qs '^func Benchmark' "$$dir"/*_test.go && echo "$$pkg"; \
+		done); \
+	test -n "$$pkgs" || { echo "bench-check: no benchmark packages found" >&2; exit 1; }; \
+	go test -run '^$$' -bench . -benchtime 1x $$pkgs
 
 # Run every Fuzz* target once for FUZZTIME each. Go only accepts one
 # -fuzz pattern per invocation, hence the loop. A found crasher is

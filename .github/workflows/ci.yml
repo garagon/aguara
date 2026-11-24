@@ -32,5 +32,8 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Benchmarks compile and run once
+        run: make bench-check
+
       - name: Vet
         run: make vet

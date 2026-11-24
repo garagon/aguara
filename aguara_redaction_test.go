@@ -161,7 +161,7 @@ func TestScanContent_NoRedactPreservesMatch(t *testing.T) {
 		}
 	}
 	if !sawAnyCredential {
-		t.Skip("no credential-leak finding produced — rules may not match this fixture")
+		t.Fatal("expected a credential-leak finding for an AWS access key fixture, got none")
 	}
 	t.Fatalf("WithRedaction(false) did not preserve the raw secret in any credential-leak finding")
 }

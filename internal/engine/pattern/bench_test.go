@@ -54,21 +54,23 @@ func BenchmarkMatcherNoAC(b *testing.B) {
 	rawRules, _ := rules.LoadFromFS(builtin.FS())
 	compiled, _ := rules.CompileAll(rawRules)
 
-	// Build matcher without AC (simulate old behavior)
-	m := &Matcher{
-		byExt:   make(map[string][]*rules.CompiledRule),
-		acByExt: make(map[string]*acSearcher),
-		// acAll intentionally nil - no AC pre-filter
-	}
-	for _, rule := range compiled {
-		if len(rule.Targets) == 0 {
-			m.allFileRules = append(m.allFileRules, rule)
-			continue
-		}
-		for _, glob := range rule.Targets {
-			ext := globToExt(glob)
-			m.byExt[ext] = append(m.byExt[ext], rule)
-		}
+	// Baseline without any Aho-Corasick pre-filtering: build the matcher
+	// through NewMatcher so rule grouping matches production, then drop
+	// the contains automatons and replace the keyword prefilter with a
+	// pass-through one that marks every rule unfiltered. Analyze requires
+	// a non-nil prefilter, and a nil or empty one would skip every
+	// pattern instead of running all of them.
+	m := NewMatcher(compiled)
+	m.acAll = nil
+	m.acByExt = make(map[string]*acSearcher)
+	m.pf = passThroughPrefilter(compiled)
+
+	// The baseline must do the same detection work as the production
+	// matcher, otherwise the comparison is meaningless.
+	want, _ := NewMatcher(compiled).Analyze(context.Background(), &scanner.Target{RelPath: "test.md", Content: lines})
+	got, _ := m.Analyze(context.Background(), &scanner.Target{RelPath: "test.md", Content: lines})
+	if len(got) != len(want) || len(want) == 0 {
+		b.Fatalf("baseline matcher found %d findings, production matcher found %d", len(got), len(want))
 	}
 
 	b.ResetTimer()
@@ -76,4 +78,24 @@ func BenchmarkMatcherNoAC(b *testing.B) {
 		target := &scanner.Target{RelPath: "test.md", Content: lines}
 		_, _ = m.Analyze(context.Background(), target)
 	}
+}
+
+// passThroughPrefilter returns a prefilter with no keyword automaton that
+// marks every rule unfiltered, so Analyze runs every pattern of every
+// applicable rule.
+func passThroughPrefilter(compiled []*rules.CompiledRule) *prefilter {
+	pf := &prefilter{
+		noKeywordRules: make(map[string]bool, len(compiled)),
+		unconditional:  make(map[string]uint64),
+		allPatterns:    make(map[string]uint64, len(compiled)),
+		matchModes:     make(map[string]rules.MatchMode, len(compiled)),
+		unfiltered:     make(map[string]bool, len(compiled)),
+	}
+	for _, rule := range compiled {
+		pf.noKeywordRules[rule.ID] = true
+		pf.allPatterns[rule.ID] = ^uint64(0)
+		pf.matchModes[rule.ID] = rule.MatchMode
+		pf.unfiltered[rule.ID] = true
+	}
+	return pf
 }
