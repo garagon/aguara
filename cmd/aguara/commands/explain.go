@@ -30,6 +30,8 @@ func init() {
 	// wrong". Same SilenceUsage pattern PR #91 applied to scan /
 	// check / audit / update.
 	explainCmd.SilenceUsage = true
+	addFormatFlag(explainCmd, "terminal", "json")
+	addRulesFlag(explainCmd)
 	rootCmd.AddCommand(explainCmd)
 }
 

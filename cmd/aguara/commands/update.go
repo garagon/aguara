@@ -55,6 +55,8 @@ This command updates THREAT INTEL only. It does not update the Aguara binary.`,
 }
 
 func init() {
+	addFormatFlag(updateCmd, "terminal", "json")
+	addOutputFlag(updateCmd)
 	updateCmd.Flags().DurationVar(&flagUpdateTimeout, "timeout", intel.DefaultHTTPTimeout, "Overall HTTP timeout for the refresh")
 	// --ecosystem is retained for backward compatibility but ignored:
 	// the published bundle is a single signed artifact covering every

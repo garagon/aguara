@@ -73,14 +73,14 @@ func init() {
 	)
 	rootCmd.SetHelpCommandGroupID(groupSetup)
 	rootCmd.SetCompletionCommandGroupID(groupSetup)
-	rootCmd.PersistentFlags().StringVar(&flagSeverity, "severity", "info", "Minimum severity to report (critical, high, medium, low, info)")
-	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "terminal", "Output format (terminal, json, sarif, markdown)")
-	rootCmd.PersistentFlags().StringVarP(&flagOutput, "output", "o", "", "Output file path (default: stdout)")
-	rootCmd.PersistentFlags().IntVar(&flagWorkers, "workers", 0, "Number of worker goroutines (default: NumCPU)")
-	rootCmd.PersistentFlags().StringVar(&flagRules, "rules", "", "Additional rules directory")
+	// Only opt-outs that every command satisfies stay global: a command
+	// that prints no color or never checks for updates already honors
+	// them, and wrappers pass them unconditionally (the GitHub Action,
+	// the release smoke tests). Output and analysis flags are registered
+	// per command in flags.go so an ignored flag is rejected instead.
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable colored output")
-	rootCmd.PersistentFlags().StringSliceVar(&flagDisableRules, "disable-rule", nil, "Rule IDs to disable (comma-separated, repeatable)")
-	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable update check")
+	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable the release update check")
+	rootCmd.SetFlagErrorFunc(scopedFlagError)
 }
 
 // Execute runs the root command.

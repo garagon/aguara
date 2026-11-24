@@ -21,6 +21,9 @@ var listRulesCmd = &cobra.Command{
 }
 
 func init() {
+	addFormatFlag(listRulesCmd, "terminal", "json")
+	addRulesFlag(listRulesCmd)
+	addDisableRuleFlag(listRulesCmd)
 	listRulesCmd.Flags().StringVar(&flagCategory, "category", "", "Filter by category")
 	rootCmd.AddCommand(listRulesCmd)
 }

@@ -29,6 +29,8 @@ and disables persistence backdoors. Use --dry-run to preview without changes.`,
 }
 
 func init() {
+	addFormatFlag(cleanCmd, "terminal", "json")
+	addOutputFlag(cleanCmd)
 	cleanCmd.Flags().BoolVar(&flagCleanDryRun, "dry-run", false, "Show what would be removed without making changes")
 	cleanCmd.Flags().BoolVar(&flagCleanPurgeCaches, "purge-caches", false, "Also purge pip/uv package caches")
 	cleanCmd.Flags().BoolVar(&flagCleanYes, "yes", false, "Skip confirmation prompt")

@@ -53,6 +53,11 @@ to fail-on critical with no color (the default for unattended CI runs).`,
 }
 
 func init() {
+	addFormatFlag(auditCmd, "terminal", "json")
+	addOutputFlag(auditCmd)
+	addWorkersFlag(auditCmd)
+	addRulesFlag(auditCmd)
+	addDisableRuleFlag(auditCmd)
 	auditCmd.Flags().StringVar(&flagAuditPath, "path", "", "Path to audit (also accepted as a positional argument; defaults to '.')")
 	auditCmd.Flags().BoolVar(&flagAuditCI, "ci", false, "CI mode: --fail-on critical, no color")
 	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
@@ -300,9 +305,10 @@ func applyAuditCIDefaults() {
 // command does not duplicate scanner-construction logic; if the
 // scan pipeline grows new flags, audit picks them up automatically.
 //
-// Note we do NOT honour --severity for audit: the audit's job is
-// to be a strict gate, so we always run with SeverityInfo and let
-// the verdict / --fail-on threshold filter what matters.
+// audit has no --severity flag: the audit's job is to be a strict
+// gate, so it always runs with SeverityInfo and lets the verdict /
+// --fail-on threshold decide what matters. Passing --severity to audit
+// is rejected at parse time rather than silently ignored.
 func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
 	trustProjectPolicy, err := resolveProjectPolicy(flagAuditProjectPolicy, false)
 	if err != nil {

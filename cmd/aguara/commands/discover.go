@@ -20,6 +20,7 @@ var discoverCmd = &cobra.Command{
 }
 
 func init() {
+	addFormatFlag(discoverCmd, "terminal", "json", "markdown")
 	rootCmd.AddCommand(discoverCmd)
 }
 

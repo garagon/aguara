@@ -63,6 +63,12 @@ var scanCmd = &cobra.Command{
 }
 
 func init() {
+	addSeverityFlag(scanCmd)
+	addFormatFlag(scanCmd, "terminal", "json", "sarif", "markdown")
+	addOutputFlag(scanCmd)
+	addWorkersFlag(scanCmd)
+	addRulesFlag(scanCmd)
+	addDisableRuleFlag(scanCmd)
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")

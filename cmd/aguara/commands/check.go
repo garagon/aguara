@@ -117,6 +117,8 @@ all supported ecosystems.`,
 }
 
 func init() {
+	addFormatFlag(checkCmd, "terminal", "json")
+	addOutputFlag(checkCmd)
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages (also accepted as a positional argument)")
 	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
