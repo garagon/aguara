@@ -65,41 +65,24 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemPyPI, pickPythonTargets},
 }
 
-// pythonInstallDirs hold installed distributions, not projects. The
-// walk never descends into them (an installed package may ship its own
-// lockfiles or requirements files as data), and Python pickers do not
-// fire beneath them when the scan root is inside one.
+// pythonInstallDirs hold installed distributions, not projects: an
+// installed package may ship its own lockfiles or requirements files as
+// data. The walk never descends into them below the scan root.
 var pythonInstallDirs = map[string]bool{
 	"site-packages":  true,
 	"dist-packages":  true,
 	"__pypackages__": true,
 }
 
-// isPythonEnvironmentDir reports a virtual environment or installed
-// tree the discovery walk must skip: the conventional .venv name, an
-// installed-package directory, or any directory holding a PEP 405
-// pyvenv.cfg marker (venv, virtualenv, uv and tox environments).
-func isPythonEnvironmentDir(path, name string) bool {
-	if name == ".venv" || pythonInstallDirs[name] {
-		return true
-	}
-	info, err := os.Lstat(filepath.Join(path, "pyvenv.cfg"))
-	return err == nil && info.Mode().IsRegular()
-}
-
-// hasPythonInstallAncestor reports whether any segment of dir is an
-// installed-package directory such as site-packages.
-func hasPythonInstallAncestor(dir string) bool {
-	for d := filepath.Clean(dir); ; {
-		if pythonInstallDirs[filepath.Base(d)] {
-			return true
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return false
-		}
-		d = parent
-	}
+// isPythonEnvironmentDir reports, by name only, a directory the walk
+// skips below the scan root: the conventional .venv environment or an
+// installed-package directory. A directory is never skipped for its
+// contents: a pyvenv.cfg file is ordinary repository content, and
+// honouring it would let one file hide every lockfile beside it. A real
+// virtual environment under another name is still walked, and its
+// installed packages are skipped by the site-packages name.
+func isPythonEnvironmentDir(name string) bool {
+	return name == ".venv" || pythonInstallDirs[name]
 }
 
 // pythonLockfileNames are the fixed-name Python dependency files, in the
@@ -115,9 +98,6 @@ var pythonLockfileNames = []string{"uv.lock", "poetry.lock", "Pipfile.lock", "pd
 // Linked candidates are kept so parsing reports them as errors instead
 // of silently dropping a dependency file.
 func pickPythonTargets(dir string) []Target {
-	if hasPythonInstallAncestor(dir) {
-		return nil
-	}
 	var out []Target
 	for _, name := range pythonLockfileNames {
 		if manifestCandidate(filepath.Join(dir, name)) {
@@ -162,6 +142,16 @@ func Discover(root string, ecosystems []string) ([]Target, error) {
 		}
 	}
 
+	// A scan root that is itself an installed tree (`aguara check
+	// .venv/lib/python3.12/site-packages`) is the installed-environment
+	// check's input; its packages' bundled Python dependency files are not
+	// the user's. Only the root's own name counts: directories above the
+	// root never change what is read.
+	rootIsPythonInstall := false
+	if abs, err := filepath.Abs(root); err == nil {
+		rootIsPythonInstall = pythonInstallDirs[filepath.Base(abs)]
+	}
+
 	var targets []Target
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -177,11 +167,11 @@ func Discover(root string, ecosystems []string) ([]Target, error) {
 		if !d.IsDir() {
 			return nil
 		}
-		if path != root && (defaultSkipDirs[d.Name()] || isPythonEnvironmentDir(path, d.Name())) {
+		if path != root && (defaultSkipDirs[d.Name()] || isPythonEnvironmentDir(d.Name())) {
 			return fs.SkipDir
 		}
 		for _, p := range lockfilePickers {
-			if !want[p.ecosystem] {
+			if !want[p.ecosystem] || (rootIsPythonInstall && p.ecosystem == intel.EcosystemPyPI) {
 				continue
 			}
 			for _, t := range p.pick(path) {

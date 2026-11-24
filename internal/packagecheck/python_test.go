@@ -391,7 +391,8 @@ func TestDiscoverPythonTargetsAndSkipsEnvironments(t *testing.T) {
 		writeFile(t, filepath.Join(root, f), "")
 	}
 	writeFile(t, filepath.Join(root, "services", "api", "requirements.txt"), "")
-	// Environments and installed trees are not projects.
+	// Installed trees and .venv are not projects. A pyvenv.cfg marker
+	// does not hide the directory that carries it.
 	writeFile(t, filepath.Join(root, ".venv", "requirements.txt"), "")
 	writeFile(t, filepath.Join(root, "env", "pyvenv.cfg"), "home = /usr/bin\n")
 	writeFile(t, filepath.Join(root, "env", "lib", "python3.12", "site-packages", "pkg", "uv.lock"), "")
@@ -411,11 +412,16 @@ func TestDiscoverPythonTargetsAndSkipsEnvironments(t *testing.T) {
 	require.Equal(t, []string{
 		"PyPI:Pipfile.lock", "PyPI:constraints.txt", "PyPI:pdm.lock", "PyPI:poetry.lock", "PyPI:pylock.dev.toml", "PyPI:pylock.toml",
 		"PyPI:requirements-dev.txt", "PyPI:requirements.txt", "PyPI:services/api/requirements.txt", "PyPI:uv.lock",
+		"crates.io:env/Cargo.lock",
 	}, got)
 
-	// A root inside site-packages does not report installed packages' files.
+	// The scan root is what the user asked for, even inside an
+	// installed tree; only the root's own name marks it as one.
 	inside := filepath.Join(root, "env", "lib", "python3.12", "site-packages", "pkg")
 	targets, err = Discover(inside, []string{intel.EcosystemPyPI})
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	targets, err = Discover(filepath.Dir(inside), []string{intel.EcosystemPyPI})
 	require.NoError(t, err)
 	require.Empty(t, targets)
 }
