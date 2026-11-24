@@ -153,7 +153,9 @@ func TestApplyProfileVerdicts(t *testing.T) {
 	}{
 		{"strict critical", ProfileStrict, nil, []Finding{critical}, VerdictBlock},
 		{"strict medium", ProfileStrict, nil, []Finding{medium}, VerdictFlag},
-		{"strict ignores enforced list", ProfileStrict, enforced, []Finding{enforcedLow}, VerdictFlag},
+		{"strict enforced low blocks", ProfileStrict, enforced, []Finding{enforcedLow}, VerdictBlock},
+		{"strict enforced list without its finding", ProfileStrict, enforced, []Finding{medium}, VerdictFlag},
+		{"unknown profile enforced low blocks", ScanProfile(99), enforced, []Finding{enforcedLow}, VerdictBlock},
 
 		{"content-aware critical", ProfileContentAware, nil, []Finding{critical}, VerdictFlag},
 		{"content-aware high", ProfileContentAware, nil, []Finding{high}, VerdictFlag},

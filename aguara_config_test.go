@@ -573,7 +573,7 @@ patterns:
 	content := "tool argument with consumer-enforced-marker"
 
 	for profile, want := range map[aguara.ScanProfile]aguara.Verdict{
-		aguara.ProfileStrict:       aguara.VerdictFlag, // LOW finding
+		aguara.ProfileStrict:       aguara.VerdictBlock, // enforced, even though LOW
 		aguara.ProfileContentAware: aguara.VerdictBlock,
 		aguara.ProfileMinimal:      aguara.VerdictFlag,
 	} {

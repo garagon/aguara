@@ -164,37 +164,42 @@ func WithToolName(name string) Option {
 // WithScanProfile sets the enforcement profile for the scan. Profiles only
 // change ScanResult.Verdict; findings are always reported.
 //
-//   - ProfileStrict (default): any HIGH or CRITICAL finding blocks; any
-//     other finding flags.
-//   - ProfileContentAware: a finding from a rule named in
+//   - ProfileStrict (default): a finding from a rule named in
 //     WithProfileEnforcedRules blocks, whatever its severity; otherwise any
-//     HIGH or CRITICAL finding flags; LOW, MEDIUM and INFO findings alone
-//     are clean.
+//     HIGH or CRITICAL finding blocks and any other finding flags.
+//   - ProfileContentAware: a finding from an enforced rule blocks, whatever
+//     its severity; otherwise any HIGH or CRITICAL finding flags; LOW,
+//     MEDIUM and INFO findings alone are clean.
 //   - ProfileMinimal: never blocks. A finding from an enforced rule, or any
 //     HIGH or CRITICAL finding, flags; LOW, MEDIUM and INFO findings alone
 //     are clean.
 //
-// No profile reports clean while a HIGH or CRITICAL finding remains. To keep
-// a rule out of the verdict entirely, disable it or exempt it for the tool
-// with WithRuleOverrides.
+// No profile reports clean while a HIGH or CRITICAL finding remains, and an
+// enforced rule never gets a weaker verdict under strict than under a
+// relaxed profile. The verdict is computed from the findings that remain
+// after disabled rules, tool exemptions (built-in or WithRuleOverrides) and
+// WithMinSeverity have removed theirs, including an enforced rule's.
 func WithScanProfile(profile ScanProfile) Option {
 	return func(c *scanConfig) {
 		c.scanProfile = profile
 	}
 }
 
-// WithProfileEnforcedRules names the rules ProfileContentAware blocks on and
-// ProfileMinimal flags regardless of severity. IDs are case-insensitive and
-// must exist in the catalog of loaded rules, so consumer-defined rule IDs
-// need their rule pack loaded with WithCustomRules; an unknown ID is a
-// ConfigError unless WithLenientConfig is set. A rule that is also disabled
+// WithProfileEnforcedRules names rules whose findings block regardless of
+// severity under every profile except ProfileMinimal, which flags them. IDs
+// are case-insensitive and must exist in the catalog of loaded rules, so
+// consumer-defined rule IDs need their rule pack loaded with WithCustomRules;
+// an unknown ID is a ConfigError unless WithLenientConfig is set. The
+// verdict only sees findings that remain after tool exemptions and
+// WithMinSeverity, which can remove an enforced rule's finding. A rule that
+// is also disabled
 // (WithDisabledRules, or a Disabled entry in WithRuleOverrides) is a
 // ConfigProblemConflictingOverride: a disabled rule never produces a
 // finding, so the enforcement would do nothing. With WithLenientConfig the
 // rule stays disabled, the entry is not enforced, and the problem is
-// returned by Scanner.ConfigProblems. Repeated use accumulates. It has no
-// effect with ProfileStrict, which already blocks on every HIGH or CRITICAL
-// finding.
+// returned by Scanner.ConfigProblems. Repeated use accumulates. With
+// ProfileStrict, a finding from an enforced rule also blocks whatever its
+// severity.
 func WithProfileEnforcedRules(ids ...string) Option {
 	return func(c *scanConfig) {
 		c.profileEnforced = append(c.profileEnforced, ids...)

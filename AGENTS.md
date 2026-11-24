@@ -115,12 +115,19 @@ exported through public aliases, rather than copying a partial struct.
 - Severity is numeric in JSON: INFO=0, LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4.
 - `decision_impact` distinguishes `context` and `review`; it is not a downstream
   application's allow/block policy.
-- `verdict` (clean=0, flag=1, block=2) depends on the scan profile. With the
-  default `strict` profile any HIGH or CRITICAL finding blocks. `content-aware`
-  blocks only on findings from rules named in `WithProfileEnforcedRules` and
-  flags other HIGH or CRITICAL findings; `minimal` never blocks and flags
-  enforced-rule and HIGH or CRITICAL findings. No profile reports `clean` while
-  a HIGH or CRITICAL finding remains. Findings are reported in every profile.
+- `verdict` (clean=0, flag=1, block=2) depends on the scan profile. A finding
+  from a rule named in `WithProfileEnforcedRules` blocks under every profile
+  except `minimal`. Otherwise the default `strict` profile blocks on any HIGH or
+  CRITICAL finding, `content-aware` flags HIGH or CRITICAL findings, and
+  `minimal` never blocks and flags enforced-rule and HIGH or CRITICAL findings.
+  No profile reports `clean` while a HIGH or CRITICAL finding remains. Findings
+  are reported in every profile.
+- The CLI (`--profile`) and the WASM build have no enforcement list, so there
+  `content-aware` and `minimal` behave the same: HIGH or CRITICAL findings flag
+  and nothing blocks.
+- The verdict is computed from the findings that remain after disabled rules,
+  tool exemptions (built-in or tool-scoped overrides) and the minimum-severity
+  filter. These can remove an enforced rule's finding before the verdict sees it.
 - `matched_text`, description and context may be redacted. Do not parse them as
   stable identifiers or expect raw secrets.
 - Go results have `Duration time.Duration`; JSON exposes `duration_ms`.

@@ -114,9 +114,10 @@ func (s *Scanner) SetScanProfile(profile ScanProfile) {
 	s.scanProfile = profile
 }
 
-// SetProfileEnforcedRules sets the rule IDs (case-insensitive) that
-// ProfileContentAware blocks on and ProfileMinimal flags regardless of
-// severity. The caller validates the IDs; see applyProfile for the verdicts.
+// SetProfileEnforcedRules sets the rule IDs (case-insensitive) whose
+// findings block under every profile except ProfileMinimal, which flags
+// them, regardless of severity. The caller validates the IDs; see
+// applyProfile for the verdicts.
 func (s *Scanner) SetProfileEnforcedRules(ids []string) {
 	if len(ids) == 0 {
 		s.profileEnforced = nil
@@ -381,7 +382,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	findings = s.postProcess(findings)
 
 	verdict := computeVerdict(findings)
-	if s.scanProfile != ProfileStrict && len(findings) > 0 {
+	if (s.scanProfile != ProfileStrict || len(s.profileEnforced) > 0) && len(findings) > 0 {
 		verdict = applyProfile(s.scanProfile, findings, s.profileEnforced)
 	}
 

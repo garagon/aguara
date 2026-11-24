@@ -253,8 +253,9 @@ func DowngradeSeverity(sev Severity) Severity {
 type ScanProfile int
 
 const (
-	// ProfileStrict enforces all rules (default for standalone scanning): any
-	// HIGH or CRITICAL finding blocks, any other finding flags.
+	// ProfileStrict enforces all rules (default for standalone scanning): a
+	// finding from a profile-enforced rule or any HIGH or CRITICAL finding
+	// blocks, any other finding flags.
 	ProfileStrict ScanProfile = iota
 	// ProfileContentAware blocks only on findings from the caller's
 	// profile-enforced rules (whatever their severity); other HIGH or

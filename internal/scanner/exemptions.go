@@ -110,22 +110,22 @@ func computeVerdict(findings []Finding) Verdict {
 
 // applyProfile adjusts the verdict based on the scan profile. Findings are
 // always preserved; only the verdict changes. enforced holds the upper-case
-// rule IDs the caller asked the relaxed profiles to keep enforcing.
+// rule IDs the caller asked every profile to keep enforcing.
 //
-//   - ProfileStrict: computeVerdict (any HIGH or CRITICAL finding blocks).
-//   - ProfileContentAware: block when a finding comes from an enforced rule,
-//     whatever its severity; otherwise flag when any finding is HIGH or
-//     CRITICAL; otherwise clean.
-//   - ProfileMinimal: never blocks. Flag when a finding comes from an
-//     enforced rule or is HIGH or CRITICAL; otherwise clean.
+//   - A finding from an enforced rule blocks, whatever its severity, under
+//     every profile except ProfileMinimal.
+//   - Otherwise ProfileStrict (and any unknown profile) uses computeVerdict:
+//     any HIGH or CRITICAL finding blocks, any other finding flags.
+//   - Otherwise ProfileContentAware and ProfileMinimal flag when a finding
+//     comes from an enforced rule or is HIGH or CRITICAL, and are clean when
+//     not. ProfileMinimal therefore never blocks.
 //
-// Neither relaxed profile reports clean while a HIGH or CRITICAL finding
-// remains: a rule is only kept out of the verdict when its finding is
-// removed, by a disabled rule or a tool exemption that names it.
+// Enforcement only ever raises a verdict, so strict is never more lenient
+// than a relaxed profile. No profile reports clean while a HIGH or CRITICAL
+// finding remains: a rule is only kept out of the verdict when its finding
+// is removed, by a disabled rule, a tool exemption or the minimum-severity
+// filter.
 func applyProfile(profile ScanProfile, findings []Finding, enforced map[string]bool) Verdict {
-	if profile != ProfileContentAware && profile != ProfileMinimal {
-		return computeVerdict(findings)
-	}
 	hasEnforced, hasHigh := false, false
 	for _, f := range findings {
 		if enforced[strings.ToUpper(f.RuleID)] {
@@ -135,9 +135,12 @@ func applyProfile(profile ScanProfile, findings []Finding, enforced map[string]b
 			hasHigh = true
 		}
 	}
+	relaxed := profile == ProfileContentAware || profile == ProfileMinimal
 	switch {
-	case hasEnforced && profile == ProfileContentAware:
+	case hasEnforced && profile != ProfileMinimal:
 		return VerdictBlock
+	case !relaxed:
+		return computeVerdict(findings)
 	case hasEnforced || hasHigh:
 		return VerdictFlag
 	default:
