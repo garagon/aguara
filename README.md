@@ -260,7 +260,7 @@ The v0.29.0 catalog contains **259 detections: 191 YAML pattern rules and 68 ana
 
 ## Rules and Architecture
 
-Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. Fifteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. Skill-chain correlation runs separately across files.
+Content analysis combines pattern matching and decoding, configuration parsers, language-specific checks, prompt-injection analysis, and bounded cross-file correlation. Fifteen per-file analyzers run by default; rug-pull tracking joins with `--monitor`. After the per-file pass, toxic-flow and skill-chain correlation run across files.
 
 From v0.29.0, MCP_009 runs as a configuration parser: broad capability grants are
 distinguished from `drop`/`deny` values and unrelated fields. Explicit Kubernetes
