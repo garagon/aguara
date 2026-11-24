@@ -67,6 +67,7 @@ func CheckEnvironment(opts CheckOptions) (*CheckResult, error) {
 			Detail:      hits[0].Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Delete and recreate this virtual environment from a lockfile that does not pin %s %s, and rotate credentials that processes using it could reach.", pkg.Name, pkg.Version),
+			AdvisoryIDs: matchIDs(hits),
 		})
 		pypiFindings++
 	}

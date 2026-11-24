@@ -907,6 +907,7 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 			Path:        hit.Ref.Path,
 			Line:        hit.Ref.Line,
 			Remediation: remediation,
+			AdvisoryIDs: hit.AdvisoryIDs,
 		})
 	}
 	for _, u := range runRes.UnresolvedIncludes {

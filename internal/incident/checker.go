@@ -33,6 +33,10 @@ type Finding struct {
 	// TOML lockfiles). Omitted when the source has no meaningful line.
 	Line        int    `json:"line,omitempty"`
 	Remediation string `json:"remediation,omitempty"`
+	// AdvisoryIDs lists every advisory that matched a package finding,
+	// the same IDs the title names. Omitted for findings that are not
+	// advisory matches.
+	AdvisoryIDs []string `json:"advisory_ids,omitempty"`
 }
 
 // Location renders Path, with ":line" appended when Line is known.
@@ -216,6 +220,7 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 			Detail:      hit.Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
+			AdvisoryIDs: matchIDs(hits),
 		})
 		pypiFindings++
 	}
