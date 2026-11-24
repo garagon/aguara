@@ -147,6 +147,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	result.RulesLoaded = len(compiled)
 	result.Target = targetPath
+	result.Coverage = scanCoverage(result)
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -270,6 +271,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		aggregate.FilesScanned += result.FilesScanned
 	}
 	stopSpinner(sp)
+	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -509,6 +511,16 @@ func contextWithInterrupt() (context.Context, context.CancelFunc) {
 		cancel()
 	}()
 	return ctx, cancel
+}
+
+// scanCoverage states what a path scan evaluated: every eligible file
+// under the target, or only the git-changed ones with --changed.
+func scanCoverage(result *scanner.ScanResult) *types.ScanCoverage {
+	scope := types.ScanScopePath
+	if flagChanged {
+		scope = types.ScanScopeChanged
+	}
+	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope}
 }
 
 func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {

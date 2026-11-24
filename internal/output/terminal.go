@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // ANSI color codes
@@ -276,7 +277,7 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	fmt.Fprintf(w, "\n%s\n", f.color(dim, sep))
 
 	parts := []string{
-		fmt.Sprintf("%d files scanned", result.FilesScanned),
+		filesScannedLabel(result),
 		fmt.Sprintf("%d findings", len(result.Findings)),
 		fmt.Sprintf("%d rules", result.RulesLoaded),
 	}
@@ -301,6 +302,21 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	if rule := topRuleID(result.Findings); rule != "" {
 		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+TerminalText(rule)))
 	}
+}
+
+// filesScannedLabel states how many files were evaluated and, when the
+// scan was limited, which ones ("3 changed files scanned").
+func filesScannedLabel(result *scanner.ScanResult) string {
+	noun := "files"
+	if result.Coverage != nil {
+		switch result.Coverage.Scope {
+		case types.ScanScopeChanged:
+			noun = "changed " + noun
+		case types.ScanScopeAuto:
+			noun = "MCP config " + noun
+		}
+	}
+	return fmt.Sprintf("%d %s scanned", result.FilesScanned, noun)
 }
 
 // topRuleID returns the rule behind the most severe finding -- the one

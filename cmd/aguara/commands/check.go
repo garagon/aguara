@@ -254,6 +254,11 @@ type checkPlan struct {
 	// ("Maven / Gradle dependencies") instead of falling back
 	// to the Python default.
 	explicitEcosystem bool
+	// unsupported lists dependency files found under the root that no
+	// parser reads (uv.lock, requirements.txt, ...). They are reported
+	// in the coverage block so an unread lockfile cannot pass as a
+	// clean check. Scoped to the requested ecosystems when explicit.
+	unsupported []packagecheck.UnsupportedEvidence
 }
 
 // intelEcosystems returns the OSV bucket IDs the plan needs intel
@@ -550,6 +555,13 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				)
 			}
 		}
+		root := path
+		if root == "" {
+			root = "."
+		}
+		if err := plan.discoverUnsupported(root, plan.requestedEcosystems); err != nil {
+			return checkPlan{}, err
+		}
 		return plan, nil
 	}
 
@@ -582,6 +594,9 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 			return checkPlan{}, fmt.Errorf("check: discover %s: %w", resolved, err)
 		}
 		plan.packagecheckTargets = targets
+		if err := plan.discoverUnsupported(resolved, nil); err != nil {
+			return checkPlan{}, err
+		}
 	}
 
 	// Python legacy: explicit path heuristic (site-packages-shaped
@@ -603,6 +618,20 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 	}
 
 	return plan, nil
+}
+
+// discoverUnsupported records dependency files under root that no parser
+// reads. Explicit --ecosystem plans only report those ecosystems.
+func (p *checkPlan) discoverUnsupported(root string, ecosystems []string) error {
+	if !statDir(root) {
+		return nil
+	}
+	found, err := packagecheck.DiscoverUnsupported(root, ecosystems)
+	if err != nil {
+		return fmt.Errorf("check: discover %s: %w", root, err)
+	}
+	p.unsupported = found
+	return nil
 }
 
 // canonicaliseCheckEcosystem maps a raw --ecosystem flag value to
@@ -792,6 +821,7 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		parts = append(parts, r)
 	}
 
+	var result *incident.CheckResult
 	if len(parts) == 0 {
 		// Explicit --path with no signals. Return the canonical
 		// empty CheckResult so the JSON contract still emits
@@ -800,15 +830,18 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		if env == "" {
 			env = "."
 		}
-		return &incident.CheckResult{
+		result = &incident.CheckResult{
 			Environment: env,
 			Findings:    []incident.Finding{},
 			Credentials: []incident.CredentialFile{},
 			Ecosystems:  []packagecheck.EcosystemResult{},
 			Intel:       incident.IntelSummaryForOverride(override),
-		}, nil
+		}
+	} else {
+		result = mergeCheckResults(parts, plan.rootPath)
 	}
-	return mergeCheckResults(parts, plan.rootPath), nil
+	result.Coverage = checkCoverage(plan, result)
+	return result, nil
 }
 
 // runPackagecheckPlan runs the packagecheck Runner against every
@@ -994,6 +1027,15 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 	}
 	fmt.Fprintf(w, "  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
 	fmt.Fprintf(w, "%s\n\n", sep)
+
+	// What was actually read, and what was found but not evaluated.
+	if line := packageCoverageLine(result.Coverage); line != "" {
+		fmt.Fprintf(w, "  %s\n", st.Dim(line))
+		if line := unsupportedEvidenceLine(result.Coverage, plan.rootPath); line != "" {
+			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
+		}
+		fmt.Fprintln(w)
+	}
 
 	// Provenance line: which intel answered this scan, and how old it is.
 	// Suppressed under --ci to keep stdout to findings (a stale local

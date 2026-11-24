@@ -91,6 +91,9 @@ type AuditResult struct {
 	Handoff AuditAgentHandoff     `json:"agent_handoff"`
 	Plan    AuditActionPlan       `json:"action_plan"`
 	Intel   incident.IntelSummary `json:"intel"`
+	// Coverage states what the audit evaluated: files scanned, package
+	// evidence read, and dependency files found but not evaluated.
+	Coverage AuditCoverage `json:"coverage"`
 
 	scanGate    []types.Finding
 	scanGateSet bool
@@ -212,10 +215,11 @@ func runAudit(cmd *cobra.Command, args []string) error {
 
 	// 3. Compose result + verdict.
 	result := &AuditResult{
-		Target: target,
-		Check:  checkResult,
-		Scan:   scanResult,
-		Intel:  checkResult.Intel,
+		Target:   target,
+		Check:    checkResult,
+		Scan:     scanResult,
+		Intel:    checkResult.Intel,
+		Coverage: auditCoverage(checkResult, scanResult),
 	}
 
 	// Baseline applies to the SCAN side only; package (check) findings
@@ -345,6 +349,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	}
 	result.RulesLoaded = len(compiled)
 	result.Target = targetPath
+	result.Coverage = scanCoverage(result)
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -696,6 +701,12 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	fmt.Fprintf(w, "%s\n", sep)
 
 	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
+	if line := packageCoverageLine(result.Check.Coverage); line != "" {
+		fmt.Fprintf(w, "\n  %s\n", st.Dim(line))
+		if line := unsupportedEvidenceLine(result.Check.Coverage, result.Target); line != "" {
+			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
+		}
+	}
 	if len(result.Check.Findings) == 0 {
 		fmt.Fprintf(w, "\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
 	} else {
@@ -709,6 +720,9 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	}
 
 	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("CONTENT SCAN", width))
+	if result.Scan.Coverage != nil {
+		fmt.Fprintf(w, "\n  %s\n", st.Dim(fmt.Sprintf("Coverage: %d files scanned", result.Scan.FilesScanned)))
+	}
 	if len(result.Scan.Findings) == 0 {
 		fmt.Fprintf(w, "\n  %s\n", st.OK("No content findings."))
 	} else {

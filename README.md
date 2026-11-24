@@ -198,6 +198,8 @@ The default SARIF upload needs `security-events: write`. See [`action.yml`](acti
 
 `scan` offers terminal, JSON, SARIF, and Markdown output. `audit` offers a combined terminal or JSON report. Use SARIF from `scan` for GitHub Code Scanning; other SAST services may require a different schema.
 
+JSON reports from `scan`, `check` and `audit` include a `coverage` block stating what was evaluated: files scanned, package evidence read per ecosystem and source, and `unsupported_evidence`, dependency files that were found but that Aguara cannot parse (for example `uv.lock`, `poetry.lock` or `requirements.txt`). No packages in those files were checked. Read the coverage before treating an empty result as clean.
+
 The [Go library](https://pkg.go.dev/github.com/garagon/aguara) exposes the same content-scanning engine for tools that need analysis without a CLI subprocess:
 
 ```go

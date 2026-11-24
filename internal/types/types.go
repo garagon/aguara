@@ -335,6 +335,23 @@ type ScanResult struct {
 	Baseline     *BaselineSummary `json:"baseline,omitempty"`
 	Duration     time.Duration    `json:"-"`
 	Target       string           `json:"-"`
+	// Coverage states what the scan evaluated. The CLI sets it so an
+	// empty result is distinguishable from a clean one; it is omitted
+	// when nil, which keeps existing library results unchanged.
+	Coverage *ScanCoverage `json:"coverage,omitempty"`
+}
+
+// Scan coverage scopes: which files a scan was asked to evaluate.
+const (
+	ScanScopePath    = "path"    // every eligible file under the target
+	ScanScopeChanged = "changed" // only git-changed files under the target
+	ScanScopeAuto    = "auto"    // auto-discovered MCP client configurations
+)
+
+// ScanCoverage states what a content scan evaluated.
+type ScanCoverage struct {
+	FilesScanned int    `json:"files_scanned"`
+	Scope        string `json:"scope"`
 }
 
 // MarshalJSON implements custom JSON marshaling so Duration serializes
