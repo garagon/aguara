@@ -569,14 +569,33 @@ var specifierOperators = []string{"===", "==", "!=", "~=", "<=", ">=", "<", ">"}
 var specifierVersion = regexp.MustCompile(`^[A-Za-z0-9._*+!-]+$`)
 
 // parseVersionSpecifier validates a PEP 440 specifier set and reports
-// the version when the set pins exactly one release: a single `==`
-// clause without a wildcard, or a single `===` clause.
+// the version when the set pins exactly one release: `==` clauses
+// without a wildcard, or `===` clauses, that all agree.
 func parseVersionSpecifier(spec string) (string, bool, error) {
 	if spec == "" {
 		return "", false, nil
 	}
+	// Repeated pins name one release when they agree: literally, or as
+	// `==` clauses equal under PEP 440 ("==1.0,==1.0.0"). An `===` pin is
+	// a string comparison in pip, so it only agrees with an identical
+	// string. The first pin is reported.
 	var pin string
 	pins := 0
+	agree := true
+	allEqualsOp := true
+	addPin := func(op, v string) {
+		pins++
+		if op == "===" {
+			allEqualsOp = false
+		}
+		if pins == 1 {
+			pin = v
+			return
+		}
+		if v != pin && (!allEqualsOp || !intel.PEP440Equal(v, pin)) {
+			agree = false
+		}
+	}
 	for _, clause := range strings.Split(spec, ",") {
 		clause = strings.TrimSpace(clause)
 		op := ""
@@ -595,17 +614,15 @@ func parseVersionSpecifier(spec string) (string, bool, error) {
 		}
 		switch {
 		case op == "===":
-			pins++
-			pin = v
+			addPin(op, v)
 		case op == "==" && !strings.HasSuffix(v, ".*"):
 			if _, ok := intel.PEP440Canonical(v); !ok {
 				return "", false, fmt.Errorf("invalid version %q", v)
 			}
-			pins++
-			pin = v
+			addPin(op, v)
 		}
 	}
-	if pins == 1 {
+	if pins > 0 && agree {
 		return pin, true, nil
 	}
 	return "", false, nil
