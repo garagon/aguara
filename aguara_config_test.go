@@ -150,6 +150,22 @@ func TestWithCustomRulesSameDirectoryLoadsOnce(t *testing.T) {
 	}
 }
 
+// TestWithCustomRulesRelativeAndAbsoluteDirLoadOnce: directories were
+// compared after filepath.Clean only, so "pack" and its absolute path were
+// loaded twice and every rule in them reported as a duplicate ID.
+func TestWithCustomRulesRelativeAndAbsoluteDirLoadOnce(t *testing.T) {
+	base := t.TempDir()
+	abs := writeMarkerRule(t, filepath.Join(base, "pack"), "PACK_A_001", "pack-a-marker")
+	t.Chdir(base)
+	sc, err := aguara.NewScanner(aguara.WithCustomRules("pack", abs, "./pack/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := catalogCount(sc.ListRules(), "PACK_A_001"); n != 1 {
+		t.Fatalf("PACK_A_001 listed %d times, want 1", n)
+	}
+}
+
 // TestInvalidCustomRuleIsConfigError: a custom rule with an invalid regex
 // used to be skipped with no signal, so the scan ran without it.
 func TestInvalidCustomRuleIsConfigError(t *testing.T) {

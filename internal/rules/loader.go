@@ -81,9 +81,10 @@ func LoadFromDir(dir string) (rules []RawRule, skipped []SkippedFile, err error)
 }
 
 // UniqueDirs returns dirs without empty entries and without repeats of a
-// directory already listed (compared after filepath.Clean), keeping the
-// order of first appearance. Loading the same directory twice would define
-// every rule in it twice.
+// directory already listed, keeping the order of first appearance.
+// Directories are compared by absolute path, so a relative and an absolute
+// spelling of the same directory count once. Loading the same directory
+// twice would define every rule in it twice.
 func UniqueDirs(dirs []string) []string {
 	var out []string
 	seen := make(map[string]bool, len(dirs))
@@ -91,7 +92,10 @@ func UniqueDirs(dirs []string) []string {
 		if dir == "" {
 			continue
 		}
-		key := filepath.Clean(dir)
+		key, err := filepath.Abs(dir)
+		if err != nil {
+			key = filepath.Clean(dir)
+		}
 		if seen[key] {
 			continue
 		}
