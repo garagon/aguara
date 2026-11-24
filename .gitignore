@@ -3,6 +3,9 @@
 *.exe
 *.test
 /.bench/
+# GoReleaser output. It is written before the builds run, so an untracked
+# dist/ would mark release binaries as built from a modified tree.
+/dist/
 
 # IDE
 .idea/
