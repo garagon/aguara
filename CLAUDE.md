@@ -8,21 +8,7 @@ Aguara v0.28.0 (2026-09-10): untrusted-project defaults, audit triage and agent 
 
 Distribution: install.sh (mandatory checksum verification, bounded curl + retry), Homebrew tap, Docker (GHCR, multi-arch `linux/amd64+arm64`, runs as non-root UID 10001, base images digest-pinned, signed at digest with Cosign + SBOM + SLSA provenance attestations), GoReleaser (releases signed via Cosign keyless, SPDX SBOM per archive, `-trimpath` for reproducibility), GitHub Action, go install.
 
-GitHub: 84 stars, 15 forks. 3 awesome-list PRs pending review in external repos (sbilly/awesome-security, Puliczek/awesome-mcp-security, ottosulin/awesome-ai-security; 3 others merged, forks deleted 2026-07-01). Issue #230: external contributor building an out-of-tree ATR rule pack for `--rules` (welcomed; link from README when it ships).
-
 Pattern matcher already uses an Aho-Corasick keyword prefilter (active in production since v0.14.0). Real perf is ~210ms/op on the synthetic bench (was ~770ms without AC), so do not treat "pattern matcher perf" as an open backlog item unless pprof shows a concrete regression. Pending improvements: WASM build (cmd/wasm/ incomplete), adoption/marketing.
-
-Internal docs (gitignored) in `DOCS/` as an Obsidian vault. See `DOCS/Aguara/CONVENTIONS.md` for vault rules and `DOCS/Aguara/00 Dashboard.md` for the entry point.
-
-Key locations:
-- Dashboard (MOC): `DOCS/Aguara/00 Dashboard.md`
-- Conventions: `DOCS/Aguara/CONVENTIONS.md` - frontmatter schema, types, statuses, tags, naming
-- Product versions: `DOCS/Aguara/product/v0.10.0/_index.md` (version hub with links to all generated content; v0.11.0–v0.14.0 hubs not yet created)
-- Distribution channels: `DOCS/Aguara/distribution/<channel>/_index.md` (each has submission log)
-- Growth plan: `DOCS/Aguara/product/roadmap.md`
-- Templates: `DOCS/Aguara/templates/` (channel.md, product-version.md)
-- Demo video project: `/Users/dev/Dev/videos/aguara-demo/` (Remotion, React-based)
-- Oktsec docs (separate project): `DOCS/Oktsec/`
 
 ## Build & Test Commands
 
@@ -151,74 +137,6 @@ Go's `regexp` does NOT support lookaheads (`(?!...)`) or lookbehinds. Use `exclu
 4. Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
 5. GoReleaser auto-runs: builds binaries, updates Homebrew tap (`garagon/homebrew-tap`), publishes Docker image to `ghcr.io/garagon/aguara`
 6. Clean up: delete release branch locally and remotely
-
-## Obsidian Vault Workflow (DOCS/Aguara/)
-
-The `DOCS/Aguara/` directory is an Obsidian vault. Claude Code must follow `CONVENTIONS.md` when creating or editing docs.
-
-### Working with the vault
-
-1. **Start from the Dashboard**: Read `DOCS/Aguara/00 Dashboard.md` to understand current state.
-2. **Follow CONVENTIONS.md**: Every `.md` file needs frontmatter (type, tags, status, dates). Read `DOCS/Aguara/CONVENTIONS.md` before creating files.
-3. **Use templates**: Copy from `DOCS/Aguara/templates/` when creating new channels or product versions.
-4. **Use wikilinks**: Link between docs with `[[path/to/file]]` syntax (Obsidian-style).
-
-### Automatic checklist and status tracking
-
-When completing a distribution task (submitting a post, publishing a blog, opening a PR):
-1. **Update the submission log** in the channel's `_index.md` - add a row with date, action, status, URL.
-2. **Update frontmatter status** - change `status: ready` to `status: published`, add `published_url:` and `posted: YYYY-MM-DD`.
-3. **Update the Dashboard** - mark the channel as done in the Distribution table (`00 Dashboard.md`).
-4. **Update the version hub** - if content was for a specific version, confirm links in `product/vX.Y.Z/_index.md`.
-
-When completing a product task (fixing a bug, adding a feature, releasing a version):
-1. **Update Dashboard metrics** - star count, rule count, test count, coverage.
-2. **Update CLAUDE.md** - if rule count, test count, or version changes.
-3. **Create status file** - `product/vX.Y.Z/status-YYYY-MM-DD.md` for significant milestones.
-
-### Data consistency rule
-
-When any of these values change, update ALL references across the vault:
-- Rule count (currently 191 YAML / 259 cataloged)
-- Test count (currently ~750)
-- Coverage (currently 82% on the Codecov badge; badge scope excludes tools/ and benchmarks/)
-- Star/fork count (currently 48/6)
-- Watch skill count (currently 28,000+)
-- Version number (currently v0.28.0)
-
-Use `Grep` to find all occurrences before updating.
-
-### Content generation workflow
-
-All external content (blog posts, social media, Reddit, newsletters) MUST go through this 4-stage pipeline:
-
-1. **Literature Scout** - Research what already exists on the topic. Check competitor tools, recent posts in the target community, trending discussions. Identify gaps and angles that haven't been covered.
-2. **Cybersecurity Analyzer** - Validate every technical claim against the actual codebase. Cross-reference rule IDs, analysis layers, detection capabilities. No exaggeration, no hand-waving.
-3. **Research Cybersecurity** - Ground the content in real threat models, CVEs, attack patterns, or published research. Link claims to concrete examples (e.g., specific prompt injection techniques, real supply chain attacks).
-4. **Editor** - Final pass for tone and quality. Must read like a human wrote it - natural, accessible, didactic. No AI patterns ("leverage", "utilize", "robust", "cutting-edge", "seamlessly", "game-changing", "in today's landscape"). No em-dashes. No filler. Direct, technical, conversational.
-
-Content must pass ALL four stages before being marked `status: ready`.
-
-### Review checklist (before publishing any content)
-
-- [ ] Data check: rule count, test count, star count, Watch skill count are current
-- [ ] Technical accuracy: claims match actual implementation
-- [ ] No AI patterns: no "leverage", "utilize", "robust", "cutting-edge", "game-changing"
-- [ ] No em-dashes: use hyphens (-) not em-dashes
-- [ ] Natural voice: reads like a person wrote it
-- [ ] Links work: GitHub URLs, Watch URL, install commands are correct
-
-## Growth & Visibility
-
-- **Awesome list PRs**: Create fork -> PR -> delete fork immediately after merge/close (keep garagon account clean). Currently 7 forks + 7 open PRs across external repos.
-- **punkpeye awesome-mcp repos** use emoji format: `🏎️` (Go), `🏠` (local), `🍎🪟🐧` (OS).
-- **wong2/awesome-mcp-servers** does NOT accept PRs - must use mcpservers.org/submit web form.
-- **GitHub topics**: 15 keywords max useful for SEO.
-- **OpenAlternative.co / OpenSourceAlternative.to**: Don't accept CLIs. Descartados.
-- **awesome-go**: Eligible 2026-07-17 (repo created 2026-02-17; requires 5-month age). Codecov badge shipped via coverage workflow; entry draft in the vault's awesome-lists channel.
-- **Official MCP Registry**: Only accepts npm/TypeScript packages. Not applicable for Go.
-- Distribution channels with submission tracking: `DOCS/Aguara/distribution/`.
-- Demo video: Remotion project at `/Users/dev/Dev/videos/aguara-demo/`. Terminal segments recorded with VHS (charmbracelet/vhs), slides as React components, rendered with `npx remotion render AguaraDemo output.mp4`.
 
 ## Community Contributions
 
