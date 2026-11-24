@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/garagon/aguara/internal/rulecatalog"
+	"github.com/garagon/aguara/internal/config"
 )
 
 var flagCategory string
@@ -32,17 +32,13 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	// surfaced YAML rules, so analyzer-emitted rules like
 	// JS_DNS_TXT_EXFIL_001 or GHA_PWN_REQUEST_001 appeared in
 	// findings but could not be listed or explained.
-	cat, err := rulecatalog.Build(rulecatalog.Options{
-		CustomRulesDirs: flagRules,
-		DisableRuleIDs:  flagDisableRules,
-		Category:        flagCategory,
-		Warn: func(format string, a ...any) {
-			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
-		},
-	})
+	// Same validation as scan: a custom rule that does not compile or
+	// reuses an ID, or an unknown --disable-rule ID, is an error.
+	res, err := resolveCLIRules(config.Config{}, flagDisableRules, cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
+	cat := res.Catalog(flagCategory)
 
 	w := cmd.OutOrStdout()
 

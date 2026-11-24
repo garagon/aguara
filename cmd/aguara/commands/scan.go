@@ -18,8 +18,7 @@ import (
 	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/engine/rugpull"
 	"github.com/garagon/aguara/internal/output"
-	"github.com/garagon/aguara/internal/rules"
-	"github.com/garagon/aguara/internal/rules/builtin"
+	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/state"
 	"github.com/garagon/aguara/internal/types"
@@ -119,12 +118,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	compiled, err := loadAndCompileRules(cfg)
+	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
 		return err
 	}
 
-	s, store := buildScanner(compiled, cfg, minSev, trustProjectPolicy)
+	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)
 
 	sp := startSpinnerIfTerminal(s, "Discovering files...")
 
@@ -136,7 +135,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	result.RulesLoaded = len(compiled)
+	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
 
 	if store != nil {
@@ -230,12 +229,12 @@ func runAutoScan(cmd *cobra.Command) error {
 	// Use empty config for auto mode (no per-target .aguara.yml)
 	cfg := config.Config{}
 
-	compiled, err := loadAndCompileRules(cfg)
+	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
 		return err
 	}
 
-	s, store := buildScanner(compiled, cfg, minSev, trustProjectPolicy)
+	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)
 
 	sp := startSpinnerIfTerminal(s, "Scanning configs...")
 
@@ -244,7 +243,7 @@ func runAutoScan(cmd *cobra.Command) error {
 
 	// Aggregate findings from all config files
 	aggregate := &scanner.ScanResult{
-		RulesLoaded: len(compiled),
+		RulesLoaded: len(res.Compiled),
 		Target:      "(auto-discovered)",
 	}
 
@@ -279,6 +278,9 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 	cfg, err := config.Load(targetPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 	if !cmd.Flags().Changed("severity") && cfg.Severity != "" {
 		flagSeverity = cfg.Severity
@@ -333,112 +335,17 @@ func parseSeverityFlag() (scanner.Severity, error) {
 	return sev, nil
 }
 
-func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
-	rawRules, err := rules.LoadFromFS(builtin.FS())
-	if err != nil {
-		return nil, fmt.Errorf("loading built-in rules: %w", err)
-	}
-
-	rulesDirs, err := resolveRulesDirs(flagRules)
-	if err != nil {
-		return nil, err
-	}
-	for _, rulesDir := range rulesDirs {
-		customRules, skipped, err := rules.LoadFromDir(rulesDir)
-		if err != nil {
-			return nil, fmt.Errorf("loading custom rules from %s: %w", rulesDir, err)
-		}
-		for _, s := range skipped {
-			fmt.Fprintf(os.Stderr, "warning: %s: %s\n", s.Path, s.Reason)
-		}
-		rawRules = append(rawRules, customRules...)
-	}
-
-	compiled, errs := rules.CompileAll(rawRules)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-
-	if len(cfg.RuleOverrides) > 0 {
-		overrides := make(map[string]rules.RuleOverride, len(cfg.RuleOverrides))
-		for id, ovr := range cfg.RuleOverrides {
-			overrides[id] = rules.RuleOverride{
-				Severity:     ovr.Severity,
-				Disabled:     ovr.Disabled,
-				ApplyToTools: ovr.ApplyToTools,
-				ExemptTools:  ovr.ExemptTools,
-			}
-		}
-		var ovrErrs []error
-		compiled, ovrErrs = rules.ApplyOverrides(compiled, overrides)
-		for _, e := range ovrErrs {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-		}
-	}
-
-	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
-		disabled := make(map[string]bool)
-		for _, id := range disableList {
-			disabled[id] = true
-		}
-		compiled = rules.FilterByIDs(compiled, disabled)
-	}
-
-	return compiled, nil
-}
-
-// resolveRulesDirs turns the --rules values into absolute directory paths,
-// in order, without repeats. Each value must name an existing directory.
-func resolveRulesDirs(values []string) ([]string, error) {
-	var dirs []string
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		rulesDir, err := filepath.Abs(value)
-		if err != nil {
-			return nil, fmt.Errorf("resolving rules path: %w", err)
-		}
-		info, err := os.Stat(rulesDir)
-		if err != nil {
-			return nil, fmt.Errorf("rules directory: %w", err)
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("--rules path is not a directory: %s", rulesDir)
-		}
-		dirs = append(dirs, rulesDir)
-	}
-	return rules.UniqueDirs(dirs), nil
-}
-
-// collectDisabledRules merges the config file's disable_rules with the
-// --disable-rule flag, trims whitespace, and drops empties. Returned once so
-// both the pattern-rule filter and the scanner-pipeline filter see the same
-// canonical list — analyzer-emitted rule IDs (GHA_*, TOXIC_*, etc.) need the
-// pipeline-level filter because they never appear in the compiled rule list.
-func collectDisabledRules(cfg config.Config) []string {
-	raw := append([]string{}, cfg.DisableRules...)
-	raw = append(raw, flagDisableRules...)
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, id := range raw {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scanner.Severity, trustProjectPolicy bool) (*scanner.Scanner, *state.Store) {
+// buildScanner wires the scan pipeline from validated rule configuration
+// (see resolveCLIRules). The disable list and tool scopes come from res, so
+// they carry the IDs that passed validation; cfg supplies the remaining
+// project settings.
+func buildScanner(res *rulecatalog.Resolution, cfg config.Config, minSev scanner.Severity, trustProjectPolicy bool) (*scanner.Scanner, *state.Store) {
 	s := scanner.New(flagWorkers)
 	s.SetMinSeverity(minSev)
 	s.SetRedaction(!flagNoRedact)
 	s.SetProjectPolicyEnabled(trustProjectPolicy)
-	if disableList := collectDisabledRules(cfg); len(disableList) > 0 {
-		s.SetDisabledRules(disableList)
+	if len(res.Disabled) > 0 {
+		s.SetDisabledRules(res.Disabled)
 	}
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
@@ -460,28 +367,12 @@ func buildScanner(compiled []*rules.CompiledRule, cfg config.Config, minSev scan
 		s.SetScanProfile(profile)
 	}
 
-	// Propagate tool-scoped rule overrides from config
-	if len(cfg.RuleOverrides) > 0 {
-		toolScoped := make(map[string]scanner.ToolScopedRule)
-		for id, ovr := range cfg.RuleOverrides {
-			if len(ovr.ApplyToTools) > 0 || len(ovr.ExemptTools) > 0 {
-				toolScoped[id] = scanner.ToolScopedRule{
-					ApplyToTools: ovr.ApplyToTools,
-					ExemptTools:  ovr.ExemptTools,
-				}
-			}
-		}
-		if len(toolScoped) > 0 {
-			s.SetToolScopedRules(toolScoped)
-		}
+	if toolScoped := res.ToolScopedRules(); len(toolScoped) > 0 {
+		s.SetToolScopedRules(toolScoped)
 	}
 
-	s.RegisterAnalyzer(pattern.NewMatcher(compiled))
-	// Preserve MCP_009's existing override behavior after its parser migration.
-	capabilityOverride := cfg.RuleOverrides["MCP_009"]
-	engine.RegisterDefaults(s, map[string]rules.RuleOverride{
-		"MCP_009": {Severity: capabilityOverride.Severity, Disabled: capabilityOverride.Disabled},
-	})
+	s.RegisterAnalyzer(pattern.NewMatcher(res.Compiled))
+	engine.RegisterDefaults(s, res.Overrides)
 
 	var store *state.Store
 	if flagMonitor {
