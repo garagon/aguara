@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -241,12 +242,16 @@ func runAutoScan(cmd *cobra.Command) error {
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
-	// Aggregate findings from all config files
+	// Aggregate findings from all config files. The aggregate verdict and
+	// risk score are the highest of the scanned configurations, so one
+	// CRITICAL finding is not reported under a clean verdict.
 	aggregate := &scanner.ScanResult{
 		RulesLoaded: len(res.Compiled),
 		Target:      "(auto-discovered)",
+		ToolName:    flagToolName,
 	}
 
+	start := time.Now()
 	for i, path := range paths {
 		if sp != nil {
 			sp.Update(fmt.Sprintf("Scanning config %d/%d...", i+1, len(paths)))
@@ -258,7 +263,10 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
+		aggregate.Verdict = max(aggregate.Verdict, result.Verdict)
+		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
 	}
+	aggregate.Duration = time.Since(start)
 	stopSpinner(sp)
 
 	if store != nil {
