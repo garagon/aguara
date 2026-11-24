@@ -74,11 +74,16 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 
-	// Build code block map for markdown files
+	// Build code block map for markdown files. In ordinary documentation a
+	// fenced block is an example, so a match there is reported one severity
+	// level lower. In a SKILL.md or agent instruction file the fenced block
+	// is what the agent is told to run, so it keeps the rule's severity
+	// (InCodeBlock is still reported).
 	var cbMap []bool
 	if isMarkdownLike(target.RelPath) {
 		cbMap = BuildCodeBlockMap(lines)
 	}
+	downgradeCode := cbMap != nil && !types.IsAgentDirectiveFile(target.RelPath)
 
 	// Collect applicable rules: allFileRules + extension-matched rules
 	keys := lookupKeys(target.RelPath)
@@ -121,9 +126,9 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap)...)
+			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
+			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		}
 	}
 
@@ -250,7 +255,7 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
@@ -278,7 +283,7 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 			}
 			sev := rule.Severity
 			inCB := isInCodeBlock(cbMap, hit.line)
-			if inCB {
+			if inCB && downgradeCode {
 				sev = types.DowngradeSeverity(sev)
 			}
 			seenLines[hit.line] = true
@@ -312,7 +317,7 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
 	// All patterns must have at least one hit that no exclude pattern
 	// suppresses. Excludes apply to every contributing hit, as they do in
 	// match_mode: any, so a benign form of any pattern's text does not
@@ -333,7 +338,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	}
 	sev := rule.Severity
 	inCB := isInCodeBlock(cbMap, firstHit.line)
-	if inCB {
+	if inCB && downgradeCode {
 		sev = types.DowngradeSeverity(sev)
 	}
 	finding := scanner.Finding{
@@ -483,26 +488,55 @@ func isMarkdownLike(relPath string) bool {
 }
 
 // BuildCodeBlockMap returns a bool slice where index i is true if lines[i]
-// is inside a fenced code block (``` delimited). O(n) single pass.
+// is inside a fenced code block. Fences follow CommonMark: a run of at
+// least three backticks or tildes opens a block and may carry an info
+// string ("```bash", "~~~ python"), except that a backtick fence's info
+// string cannot contain a backtick. Only a run of the same character at
+// least as long as the opening run, followed by nothing but whitespace,
+// closes the block, so "```python" or a shorter run inside a "````" block
+// is content. A block left open runs to the end of the file. Leading
+// indentation is ignored so fences nested in list items are recognised.
+// The opening fence line is outside the block and the closing fence line
+// inside it. O(n) single pass.
 func BuildCodeBlockMap(lines []string) []bool {
 	m := make([]bool, len(lines))
-	inBlock := false
+	var fenceChar byte
+	fenceLen := 0 // 0 when outside a block
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			if inBlock {
-				// closing fence — this line is still inside the block
-				m[i] = true
-				inBlock = false
-			} else {
-				// opening fence — this line is not inside content
-				inBlock = true
-			}
+		trimmed := strings.TrimLeft(line, " \t")
+		if fenceLen == 0 {
+			fenceChar, fenceLen = openingFence(trimmed)
 			continue
 		}
-		m[i] = inBlock
+		m[i] = true
+		if c, n := fenceRun(trimmed); c == fenceChar && n >= fenceLen && strings.TrimSpace(trimmed[n:]) == "" {
+			fenceLen = 0
+		}
 	}
 	return m
+}
+
+// fenceRun returns the fence character starting s and how many times it
+// repeats, or (0, 0) when s does not start with a backtick or tilde.
+func fenceRun(s string) (byte, int) {
+	if s == "" || (s[0] != '`' && s[0] != '~') {
+		return 0, 0
+	}
+	n := 1
+	for n < len(s) && s[n] == s[0] {
+		n++
+	}
+	return s[0], n
+}
+
+// openingFence returns the fence character and length when s opens a
+// fenced code block, and (0, 0) otherwise.
+func openingFence(s string) (byte, int) {
+	c, n := fenceRun(s)
+	if n < 3 || (c == '`' && strings.IndexByte(s[n:], '`') >= 0) {
+		return 0, 0
+	}
+	return c, n
 }
 
 // isInCodeBlock checks whether a 1-based line number falls inside a code block.

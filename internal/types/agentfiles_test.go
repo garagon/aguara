@@ -72,3 +72,21 @@ func TestIsAgentInstructionFile(t *testing.T) {
 		}
 	}
 }
+
+func TestIsAgentDirectiveFile(t *testing.T) {
+	for _, p := range []string{
+		"SKILL.md", "skill.md", ".claude/skills/pdf/SKILL.md", `skills\x\SKILL.md`,
+		"AGENTS.md", ".cursor/rules/a.mdc", ".cursorrules", "CLAUDE.md",
+	} {
+		if !IsAgentDirectiveFile(p) {
+			t.Errorf("IsAgentDirectiveFile(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{
+		"README.md", "docs/install.md", ".claude/skills/pdf/reference.md", "SKILL.md.bak", "MYSKILL.md",
+	} {
+		if IsAgentDirectiveFile(p) {
+			t.Errorf("IsAgentDirectiveFile(%q) = true, want false", p)
+		}
+	}
+}

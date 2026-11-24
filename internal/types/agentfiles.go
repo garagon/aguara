@@ -55,6 +55,21 @@ func IsAgentInstructionFile(path string) bool {
 	return false
 }
 
+// IsAgentDirectiveFile reports whether everything in path, fenced code
+// blocks included, is something an agent is told to act on: a skill
+// definition (SKILL.md) or an agent instruction file. In ordinary
+// documentation a fenced block is an example for a human reader, so
+// scanners treat matches there as less severe; in these files the fenced
+// `curl ... | bash` under "Setup" is the command the agent will run, so
+// code blocks must not lower severity or confidence.
+func IsAgentDirectiveFile(path string) bool {
+	base := path
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		base = path[i+1:]
+	}
+	return strings.EqualFold(base, "SKILL.md") || IsAgentInstructionFile(path)
+}
+
 // instructionBaseNames are instruction files recognised by name alone.
 var instructionBaseNames = map[string]bool{
 	// Cross-tool convention read by Codex, Cursor, GitHub Copilot, Devin

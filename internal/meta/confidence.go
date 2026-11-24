@@ -43,9 +43,11 @@ var docSectionHeadings = []string{
 // values based on contextual signals like code blocks, documentation sections,
 // file type, and correlation.
 func AdjustConfidence(findings []types.Finding) []types.Finding {
-	// Pass 1: downgrade confidence for findings inside code blocks
+	// Pass 1: downgrade confidence for findings inside code blocks of
+	// ordinary documentation. In a SKILL.md or agent instruction file a
+	// fenced block is what the agent is told to run, not an example.
 	for i := range findings {
-		if findings[i].InCodeBlock && findings[i].Confidence > 0 {
+		if findings[i].InCodeBlock && findings[i].Confidence > 0 && !types.IsAgentDirectiveFile(findings[i].FilePath) {
 			findings[i].Confidence *= 0.6
 		}
 	}
