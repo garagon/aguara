@@ -1,7 +1,10 @@
 package skillchain
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
@@ -401,4 +404,66 @@ func TestAccumulateKeepsOnlyContentTheChecksRead(t *testing.T) {
 	a.ObserveFindings("docs/README.md", []types.Finding{observed("docs/README.md", "CMDEXEC_005", types.SeverityMedium, 1)})
 	require.Len(t, a.evidence, 1)
 	require.Contains(t, a.evidence, "scripts/e.ts")
+}
+
+// countContentChecks replaces the content check with a counting wrapper for
+// the duration of the test.
+func countContentChecks(t *testing.T) *int {
+	t.Helper()
+	calls := 0
+	original := contentCheck
+	contentCheck = func(path, content string) string {
+		calls++
+		return original(path, content)
+	}
+	t.Cleanup(func() { contentCheck = original })
+	return &calls
+}
+
+// A large helper named many times on one line, and by several skills, runs
+// the content checks once per scan instead of once per reference.
+func TestFinalizeEvaluatesEachHelperOnce(t *testing.T) {
+	calls := countContentChecks(t)
+	helper := strings.Repeat("value = 1\n", 30000)
+	refs := strings.TrimSpace(strings.Repeat("`python scripts/big.py` ", 2000))
+	a := New()
+	a.Accumulate("skills/a/SKILL.md", "Before responding, you MUST first run "+refs+".")
+	a.Accumulate("skills/a/scripts/big.py", helper)
+	a.Accumulate("skills/a/sub/SKILL.md", "Always run `python ../scripts/big.py` first.")
+
+	start := time.Now()
+	require.Empty(t, a.Finalize())
+	require.Equal(t, 1, *calls)
+	require.Less(t, time.Since(start), 10*time.Second)
+}
+
+func TestFinalizeBoundsDistinctHelpersPerSkill(t *testing.T) {
+	calls := countContentChecks(t)
+	a := New()
+	var refs []string
+	for i := 0; i <= maxHelpersPerSkill; i++ {
+		path := fmt.Sprintf("scripts/h%03d.sh", i)
+		refs = append(refs, "`bash "+path+"`")
+		a.Accumulate(path, "true\n")
+	}
+	// References to files that are not in the scan do not use up the bound.
+	unknown := strings.Repeat("`bash scripts/missing.sh` ", 50)
+	a.Accumulate("SKILL.md", "Before responding, you MUST first run "+unknown+strings.Join(refs[:maxHelpersPerSkill-1], " ")+" "+refs[maxHelpersPerSkill-1]+".")
+	last := fmt.Sprintf("scripts/h%03d.sh", maxHelpersPerSkill-1)
+	a.ObserveFindings(last, []types.Finding{observed(last, "SUPPLY_003", types.SeverityCritical, 1)})
+	findings := a.Finalize()
+	require.Len(t, findings, 1, "the helper at the bound is still evaluated")
+	require.LessOrEqual(t, *calls, maxHelpersPerSkill)
+
+	// One more distinct helper than the bound is not evaluated.
+	calls2 := countContentChecks(t)
+	b := New()
+	for i := 0; i <= maxHelpersPerSkill; i++ {
+		b.Accumulate(fmt.Sprintf("scripts/h%03d.sh", i), "true\n")
+	}
+	b.Accumulate("SKILL.md", "Before responding, you MUST first run "+strings.Join(refs, " ")+".")
+	beyond := fmt.Sprintf("scripts/h%03d.sh", maxHelpersPerSkill)
+	b.ObserveFindings(beyond, []types.Finding{observed(beyond, "SUPPLY_003", types.SeverityCritical, 1)})
+	require.Empty(t, b.Finalize())
+	require.Equal(t, maxHelpersPerSkill, *calls2)
 }

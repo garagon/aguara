@@ -191,16 +191,61 @@ func (a *Analyzer) Finalize() []types.Finding {
 	}
 	sort.Strings(skills)
 
+	c := &correlation{files: files, evidence: evidence, signals: make(map[string]helperResult)}
 	var findings []types.Finding
 	for _, path := range skills {
-		findings = append(findings, analyzeSkill(path, files[path], files, evidence)...)
+		findings = append(findings, c.analyzeSkill(path, files[path])...)
 	}
 	return findings
 }
 
-func analyzeSkill(skillPath, content string, files map[string]string, evidence map[string]helperEvidence) []types.Finding {
+// maxHelpersPerSkill bounds how many distinct scanned helper files one
+// SKILL.md can make the correlator evaluate. Real skills name a handful of
+// helpers; the bound keeps a crafted SKILL.md from multiplying work, and
+// because only files that exist in the scan count toward it, reaching it
+// requires shipping that many real helper files ahead of the one evaluated
+// last. Repeated references to the same helper are free: each helper is
+// evaluated once per scan (see correlation.signals).
+const maxHelpersPerSkill = 256
+
+// correlation is the state of one Finalize pass. signals caches each
+// resolved helper's result so a helper named many times, or by several
+// skills, runs the content checks once.
+type correlation struct {
+	files    map[string]string
+	evidence map[string]helperEvidence
+	signals  map[string]helperResult
+}
+
+type helperResult struct {
+	signal, detail string
+}
+
+// contentCheck is the Python/shell content check; tests replace it to count
+// evaluations.
+var contentCheck = strongHelperSignal
+
+func (c *correlation) isKnown(path string) bool {
+	if _, ok := c.evidence[path]; ok {
+		return true
+	}
+	_, ok := c.files[path]
+	return ok
+}
+
+func (c *correlation) helperSignal(path string) (signal, detail string) {
+	if r, ok := c.signals[path]; ok {
+		return r.signal, r.detail
+	}
+	signal, detail = helperSignal(path, c.files, c.evidence)
+	c.signals[path] = helperResult{signal: signal, detail: detail}
+	return signal, detail
+}
+
+func (c *correlation) analyzeSkill(skillPath, content string) []types.Finding {
 	lines := strings.Split(content, "\n")
 	inFence := false
+	considered := make(map[string]bool)
 	for i, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
 		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
@@ -212,10 +257,14 @@ func analyzeSkill(skillPath, content string, files map[string]string, evidence m
 		}
 		for _, ref := range helperReferences(line) {
 			helperPath, ok := resolveHelperPath(skillPath, ref)
-			if !ok || isSkillFile(helperPath) {
+			if !ok || isSkillFile(helperPath) || considered[helperPath] || !c.isKnown(helperPath) {
 				continue
 			}
-			signal, detail := helperSignal(helperPath, files, evidence)
+			if len(considered) >= maxHelpersPerSkill {
+				return nil
+			}
+			considered[helperPath] = true
+			signal, detail := c.helperSignal(helperPath)
 			if signal == "" {
 				continue
 			}
@@ -273,7 +322,7 @@ func helperSignal(helperPath string, files map[string]string, evidence map[strin
 		return signal, fmt.Sprintf("%s at line %d", signal, ev.line)
 	}
 	if content, ok := files[helperPath]; ok {
-		if check := strongHelperSignal(helperPath, content); check != "" {
+		if check := contentCheck(helperPath, content); check != "" {
 			signal = helperPath + ": " + check
 			return signal, signal
 		}
