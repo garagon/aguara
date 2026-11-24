@@ -134,11 +134,12 @@ func inDocSection(ctx []types.ContextLine) bool {
 // Documentation formats get a slight penalty (0.9) while executable/config
 // files get no adjustment (1.0).
 func fileTypeMultiplier(filePath string) float64 {
-	// Agent instruction files (.cursorrules, AGENTS.md, copilot-
-	// instructions.md, ...) are directives the agent obeys, not prose
-	// examples. A prompt injection there is more likely real and more
-	// dangerous than the same pattern in a README, so it is weighted UP
-	// rather than getting the documentation penalty below.
+	// Agent instruction files (AGENTS.md, CLAUDE.md, .cursorrules,
+	// .cursor/rules/*.mdc, .windsurf/rules/*.md, ...; see
+	// types.IsAgentInstructionFile) are directives the agent obeys, not
+	// prose examples. A prompt injection there is more likely real and
+	// more dangerous than the same pattern in a README, so it is weighted
+	// UP rather than getting the documentation penalty below.
 	if types.IsAgentInstructionFile(filePath) {
 		return 1.25
 	}

@@ -5,6 +5,7 @@ package pattern
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/garagon/aguara/internal/rules"
@@ -75,19 +76,20 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 	// Build code block map for markdown files
 	var cbMap []bool
-	if isMarkdown(target.RelPath) {
+	if isMarkdownLike(target.RelPath) {
 		cbMap = BuildCodeBlockMap(lines)
 	}
 
 	// Collect applicable rules: allFileRules + extension-matched rules
-	applicable := m.rulesForFile(target.RelPath)
+	keys := lookupKeys(target.RelPath)
+	applicable := m.rulesForFile(target.RelPath, keys)
 
 	// Pre-filter: run keyword AC to find which rules could possibly match.
 	// Rules whose required literal substrings don't appear are skipped entirely.
 	candidatePatterns := m.pf.candidatePatternMasks(lowerContent.text)
 
 	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
-	acHitRules := m.acPrefilter(target.RelPath, lowerContent.text)
+	acHitRules := m.acPrefilter(keys, lowerContent.text)
 
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
@@ -134,8 +136,9 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 // acPrefilter runs all AC automatons applicable to this file and returns the set
 // of rule IDs that had at least one contains hit. Returns nil if no AC searchers
-// are available (meaning no optimization - all rules run).
-func (m *Matcher) acPrefilter(relPath, lowerContent string) map[string]bool {
+// are available (meaning no optimization - all rules run). keys are the
+// file's rule lookup keys from lookupKeys.
+func (m *Matcher) acPrefilter(keys []string, lowerContent string) map[string]bool {
 	if m.acAll == nil && len(m.acByExt) == 0 {
 		return nil
 	}
@@ -149,23 +152,35 @@ func (m *Matcher) acPrefilter(relPath, lowerContent string) map[string]bool {
 		}
 	}
 
-	// Search with extension-specific AC automatons
-	ext := strings.ToLower(filepath.Ext(relPath))
-	if ext != "" {
-		if ac, ok := m.acByExt[ext]; ok {
+	// Search with the extension and file-name specific AC automatons
+	for _, key := range keys {
+		if ac, ok := m.acByExt[key]; ok {
 			for _, match := range ac.findAll(lowerContent) {
 				hitRules[match.ruleID] = true
 			}
 		}
 	}
-	base := filepath.Base(relPath)
-	if ac, ok := m.acByExt[base]; ok {
-		for _, match := range ac.findAll(lowerContent) {
-			hitRules[match.ruleID] = true
-		}
-	}
 
 	return hitRules
+}
+
+// lookupKeys returns the byExt/acByExt keys that select rules for relPath:
+// its lowercased extension, its base name (for literal-file-name targets
+// such as "Makefile"), and ".md" for an agent instruction file without a
+// Markdown extension (.mdc, .cursorrules, .rules, ...). Those files are
+// Markdown documents an agent obeys, so the Markdown-targeted rules,
+// prompt injection included, must apply to them.
+func lookupKeys(relPath string) []string {
+	keys := make([]string, 0, 3)
+	ext := strings.ToLower(filepath.Ext(relPath))
+	if ext != "" {
+		keys = append(keys, ext)
+	}
+	keys = append(keys, filepath.Base(relPath))
+	if ext != ".md" && types.IsAgentInstructionFile(relPath) {
+		keys = append(keys, ".md")
+	}
+	return keys
 }
 
 // isContainsOnly returns true if the rule has only contains patterns (no regex).
@@ -180,8 +195,9 @@ func isContainsOnly(rule *rules.CompiledRule) bool {
 
 // rulesForFile returns the rules applicable to a given file path.
 // Combines allFileRules (targets: []) with rules matching the file's extension
-// and literal filename.
-func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
+// and literal filename, plus the Markdown rules for an agent instruction
+// file (see lookupKeys).
+func (m *Matcher) rulesForFile(relPath string, keys []string) []*rules.CompiledRule {
 	result := make([]*rules.CompiledRule, 0, len(m.allFileRules)+20)
 	result = append(result, m.allFileRules...)
 
@@ -193,6 +209,16 @@ func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
 	base := filepath.Base(relPath)
 	if rules, ok := m.byExt[base]; ok {
 		result = append(result, rules...)
+	}
+	// Markdown rules for an instruction file with another extension. A rule
+	// that also targets the file's own extension is already listed.
+	if len(keys) > 0 && keys[len(keys)-1] == ".md" && ext != ".md" {
+		listed := len(result)
+		for _, r := range m.byExt[".md"] {
+			if !slices.Contains(result[:listed], r) {
+				result = append(result, r)
+			}
+		}
 	}
 
 	// Apply `!`-prefixed exclude targets: a rule scoped broadly (e.g.
@@ -448,10 +474,12 @@ func lineNumberAtOffset(content string, offset int) int {
 	return line
 }
 
-// isMarkdown returns true if the file path has a markdown extension.
-func isMarkdown(relPath string) bool {
+// isMarkdownLike reports whether the file is Markdown: it has a Markdown
+// extension or is an agent instruction file (Markdown under another name,
+// such as .mdc or .cursorrules).
+func isMarkdownLike(relPath string) bool {
 	ext := strings.ToLower(filepath.Ext(relPath))
-	return ext == ".md" || ext == ".markdown"
+	return ext == ".md" || ext == ".markdown" || types.IsAgentInstructionFile(relPath)
 }
 
 // BuildCodeBlockMap returns a bool slice where index i is true if lines[i]

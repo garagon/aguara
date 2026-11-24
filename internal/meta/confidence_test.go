@@ -121,6 +121,23 @@ func TestAdjustConfidenceInstructionFileBoost(t *testing.T) {
 	require.InDelta(t, 1.0, result[3].Confidence, 0.001)  // 0.90 * 1.25 clamped to 1.0
 }
 
+// Instruction files recognised by their directory or by the .mdc
+// extension get the same boost as base-name instruction files.
+func TestAdjustConfidenceInstructionDirectoryBoost(t *testing.T) {
+	paths := []string{
+		".windsurf/rules/general.md", ".cursor/rules/style.mdc", ".clinerules/a.md",
+		".github/instructions/web.instructions.md", ".claude/agents/helper.md", "CLAUDE.md",
+		".roorules", ".goosehints",
+	}
+	var findings []types.Finding
+	for i, p := range paths {
+		findings = append(findings, types.Finding{RuleID: "R", FilePath: p, Line: 10 * (i + 1), Confidence: 0.70})
+	}
+	for i, f := range meta.AdjustConfidence(findings) {
+		require.InDelta(t, 0.875, f.Confidence, 0.01, paths[i])
+	}
+}
+
 func TestAdjustConfidenceZeroConfidenceUntouched(t *testing.T) {
 	findings := []types.Finding{
 		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: 0, InCodeBlock: true},

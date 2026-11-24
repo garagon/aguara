@@ -395,12 +395,12 @@ func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanne
 	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 	var cbMap []bool
-	if isMarkdown(target.RelPath) {
+	if isMarkdownLike(target.RelPath) {
 		cbMap = BuildCodeBlockMap(lines)
 	}
 
 	var findings []scanner.Finding
-	for _, rule := range m.rulesForFile(target.RelPath) {
+	for _, rule := range m.rulesForFile(target.RelPath, lookupKeys(target.RelPath)) {
 		switch rule.MatchMode {
 		case rules.MatchAny:
 			findings = append(findings,

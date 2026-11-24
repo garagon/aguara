@@ -110,6 +110,41 @@ func TestInjectionAnalyzerAgentInstructionFile(t *testing.T) {
 	findings, err := analyzer.Analyze(context.Background(), target)
 	require.NoError(t, err)
 	require.NotEmpty(t, findings, "should analyze .cursorrules as an instruction surface")
+
+	for _, path := range []string{".cursor/rules/a.mdc", ".rules", ".goosehints", ".roorules", ".roo/rules/a"} {
+		findings, err := analyzer.Analyze(context.Background(), &scanner.Target{RelPath: path, Content: content})
+		require.NoError(t, err)
+		require.NotEmpty(t, findings, "should analyze %s as an instruction surface", path)
+	}
+}
+
+// YAML frontmatter is metadata, not a Markdown heading. Without special
+// handling CommonMark turns the closing "---" into a setext underline, so
+// a Cursor rule's "globs: ... alwaysApply: false" became a heading and the
+// heading-mismatch check flagged the ordinary rule body below it.
+func TestInjectionAnalyzerFrontmatterIsNotAHeading(t *testing.T) {
+	content := []byte("---\nglobs: [\"**/*.py\"]\nalwaysApply: false\n---\n\n" +
+		"Read API keys from environment variables and send them only in the Authorization header " +
+		"when you call the payments API. Never log tokens or write credentials to disk.\n")
+	for _, path := range []string{".cursor/rules/api.mdc", "docs/api.md"} {
+		findings, err := nlp.NewInjectionAnalyzer().Analyze(context.Background(), &scanner.Target{RelPath: path, Content: content})
+		require.NoError(t, err)
+		for _, f := range findings {
+			require.NotEqual(t, "NLP_HEADING_MISMATCH", f.RuleID, path)
+		}
+	}
+
+	sections := nlp.ParseMarkdown(content)
+	require.NotEmpty(t, sections)
+	require.Equal(t, nlp.SectionParagraph, sections[0].Type, "frontmatter parses as a paragraph")
+	require.Equal(t, 2, sections[0].Line)
+	require.Contains(t, sections[0].Text, "alwaysApply: false")
+	require.Equal(t, 6, sections[1].Line, "line numbers after the frontmatter are unchanged")
+
+	// A document that only starts with a thematic break keeps its structure.
+	plain := nlp.ParseMarkdown([]byte("---\n\n# Title\n\nBody\n"))
+	require.Equal(t, nlp.SectionHeading, plain[0].Type)
+	require.Equal(t, 3, plain[0].Line)
 }
 
 func TestClassifyCleanText(t *testing.T) {
