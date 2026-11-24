@@ -135,8 +135,35 @@ func TestGitChangedFilesKeepsSpecialNamesUnquoted(t *testing.T) {
 func TestGitChangedFilesNotARepo(t *testing.T) {
 	skipIfNoGit(t)
 
+	// Outside a work tree there is no change set; an empty result would
+	// read as "no changes" and let a --changed scan pass on nothing.
 	dir := t.TempDir()
 	files, err := scanner.GitChangedFiles(dir)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, scanner.ErrNotGitRepository)
 	require.Empty(t, files)
+}
+
+func TestGitChangedFilesRejectsFileRoot(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initGitRepo(t, map[string]string{"a.md": "ok"})
+	_, err := scanner.GitChangedFiles(filepath.Join(repo, "a.md"))
+	require.ErrorContains(t, err, "is not a directory")
+}
+
+// A repository without commits lists staged files from the index.
+func TestGitChangedFilesWithoutCommits(t *testing.T) {
+	skipIfNoGit(t)
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"add", "staged.md"}} {
+		if args[0] == "add" {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "staged.md"), []byte("new"), 0o644))
+		}
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	files, err := scanner.GitChangedFiles(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"staged.md"}, files)
 }

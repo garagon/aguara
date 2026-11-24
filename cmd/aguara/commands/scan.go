@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -72,7 +73,7 @@ func init() {
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
-	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files (staged, unstaged, untracked)")
+	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
 	scanCmd.Flags().BoolVar(&flagAuto, "auto", false, "Auto-discover and scan all MCP client configs")
@@ -524,7 +525,12 @@ func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*s
 func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
 	changedFiles, err := scanner.GitChangedFiles(targetPath)
 	if err != nil {
-		return nil, fmt.Errorf("getting changed files: %w", err)
+		// Without a change set there is nothing --changed can vouch for;
+		// reporting "0 files, no findings" would pass a CI gate on nothing.
+		if errors.Is(err, scanner.ErrNotGitRepository) {
+			return nil, fmt.Errorf("--changed needs a git work tree: %w; run from a git checkout, or drop --changed to scan every file", err)
+		}
+		return nil, fmt.Errorf("--changed: cannot list changed files: %w", err)
 	}
 	var targets []*scanner.Target
 	for _, relPath := range changedFiles {
