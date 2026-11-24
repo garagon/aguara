@@ -88,7 +88,7 @@ Lockfiles let Aguara check resolved dependencies without installing them. Covera
 | Ecosystem | Evidence read |
 |---|---|
 | npm | `node_modules`, pnpm store, `package-lock.json`, `pnpm-lock.yaml`, classic and Berry `yarn.lock`, text `bun.lock` |
-| PyPI | Installed `site-packages`, `.pth` files, supported cache locations |
+| PyPI | `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, `pylock.toml` and `pylock.<name>.toml`, `requirements*.txt` and `constraints*.txt`, the project's virtual environment; installed `site-packages`, `.pth` files, supported cache locations |
 | Go | `go.sum`, `go.mod` |
 | Rust | Public-registry entries in `Cargo.lock` |
 | PHP | `composer.lock` |
@@ -99,6 +99,12 @@ Lockfiles let Aguara check resolved dependencies without installing them. Covera
 Matching supports exact versions and advisories affecting every version of a package. Bounded version ranges are supported for npm semver, not arbitrary ranges in every ecosystem. This is malicious-package detection, not comprehensive CVE coverage.
 
 Unambiguous `npm:` aliases resolve to the real package in package-lock, pnpm, Yarn classic, Yarn Berry, and Bun. Classic Yarn uses the alias target name and the block's resolved version; conflicting descriptors and ambiguous non-registry identities are skipped rather than assigned a guessed package identity. Binary `bun.lockb` is not parsed; a repository with only that file returns an error asking for text `bun.lock`.
+
+Python dependency files are read in development builds after v0.29.0 (see [Unreleased](CHANGELOG.md#unreleased)); v0.29.0 reads installed environments only. Aguara does not run uv, Poetry, Pipenv, PDM or pip to read them. Only packages resolved from a package index are matched: Git, local path, direct URL, editable and workspace entries have no PyPI identity and are skipped. Names are compared after PEP 503 normalization and versions with PEP 440 equality, so `Foo_Bar 1.0` matches an advisory for `foo-bar 1.0.0`. Findings name the file and, for TOML lockfiles and requirements files, the line of the matching entry, and list every advisory ID that matched.
+
+In requirements and constraints files only `==` and `===` pins identify a version. Other requirements are counted as `unpinned` in the JSON `ecosystems` entry and can match only advisories that cover every version; Aguara does not guess a version for them. Environment markers are not evaluated, so a pin counts for every platform. `-r` and `-c` includes are followed only inside the checked directory, up to eight levels of nesting (deeper nesting is an error). URL includes, includes outside the directory and missing files are not read and are counted as `unresolved_includes`. Index options, hashes, editable installs and URL requirements are ignored. `pyproject.toml`, `Pipfile` and `requirements.in` declare ranges, not resolved versions, and are not read.
+
+For a directory, `check` and `audit` read the same evidence: the dependency files under it and the packages installed in its virtual environment (the directory itself, `.venv`, `venv`, or `VIRTUAL_ENV` when that points inside the directory). With no path argument, both also read the active `VIRTUAL_ENV` wherever it is; an explicit path never reads an unrelated environment. Virtual environments, `site-packages`, `dist-packages` and `__pypackages__` are not searched for nested dependency files. A project's virtual environment contributes installed package versions only. `.pth` inspection, persistence artifacts, credential files and caches remain part of the installed-environment check: `aguara check <site-packages>`, `--ecosystem python`, or `aguara check` with no path when the directory has no non-Python dependency files.
 
 Lockfile and dependency-manifest inputs must be regular files no larger than 50 MiB. Leaf symlinks, including dangling links, return an error rather than being followed or silently skipped. This read boundary does not confine parent directories or guarantee that file contents remain unchanged during a check. Installed-package scanning is a separate path.
 
