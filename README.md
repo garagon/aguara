@@ -202,7 +202,9 @@ The default SARIF upload needs `security-events: write`. See [`action.yml`](acti
 
 ## Outputs and Integrations
 
-`scan` offers terminal, JSON, SARIF, and Markdown output. `audit` offers a combined terminal or JSON report. Use SARIF from `scan` for GitHub Code Scanning; other SAST services may require a different schema.
+`scan` offers terminal, JSON, SARIF, and Markdown output. `audit` offers a combined terminal or JSON report, and `check` offers terminal or JSON. Use SARIF from `scan` for GitHub Code Scanning; other SAST services may require a different schema.
+
+In the development version, a `--format` value a command cannot render is rejected with exit code 2 instead of falling back to the terminal report, and `-o` writes the selected format, terminal included, to the file without color. Flags such as `--severity`, `--rules`, `--disable-rule` and `--workers` are accepted only by the commands they affect; `aguara <command> --help` lists them.
 
 JSON reports from `scan`, `check` and `audit` include a `coverage` block stating what was evaluated: files scanned, package evidence read per ecosystem and source, and `unsupported_evidence`, dependency files that were found but that Aguara cannot parse (for example `uv.lock`, `poetry.lock` or `requirements.txt`). No packages in those files were checked. Read the coverage before treating an empty result as clean.
 
