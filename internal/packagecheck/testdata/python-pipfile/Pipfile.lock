@@ -1,0 +1,60 @@
+{
+    "_meta": {
+        "hash": {
+            "sha256": "6dc0fa07780a5bb711603b5331d8b40c4862a36a752bf4f7092423b7980f6b15"
+        },
+        "pipfile-spec": 6,
+        "requires": {
+            "python_version": "3.11"
+        },
+        "sources": [
+            {
+                "name": "pypi",
+                "url": "https://pypi.org/simple",
+                "verify_ssl": true
+            }
+        ]
+    },
+    "default": {
+        "from-git": {
+            "git": "https://github.com/example/from-git.git",
+            "ref": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "local-lib": {
+            "editable": true,
+            "path": "."
+        },
+        "remote-archive": {
+            "file": "https://example.com/remote-archive-1.0.tar.gz"
+        },
+        "requests": {
+            "hashes": [
+                "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.7'",
+            "version": "==2.31.0"
+        }
+    },
+    "develop": {
+        "Evil_Pkg": {
+            "hashes": [
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            ],
+            "index": "pypi",
+            "version": "==1.0"
+        },
+        "loose": {
+            "version": "*"
+        }
+    },
+    "docs": {
+        "sphinx": {
+            "extras": [
+                "test"
+            ],
+            "index": "pypi",
+            "version": "==7.2.6"
+        }
+    }
+}

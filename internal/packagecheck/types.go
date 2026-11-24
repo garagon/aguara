@@ -39,6 +39,21 @@ type PackageRef struct {
 	// per-target EcosystemResult summary so monorepo output
 	// distinguishes services/api/go.sum from workers/scraper/go.sum.
 	Source string
+	// Line is the 1-based line of the entry in Path when the format
+	// has a meaningful one (requirements files, TOML lockfiles); 0
+	// otherwise.
+	Line int
+	// Group is the dependency group or category the file assigns to
+	// the entry ("dev", "develop", "constraint"); empty when the format
+	// does not record one per entry or the entry is a main dependency.
+	Group string
+	// Unpinned marks an entry that is present without one exact
+	// version (for example `requests>=2` in requirements.txt). Version
+	// is empty and Constraint keeps the declared specifier. The runner
+	// matches such entries only against advisories that cover every
+	// version of the package; it never guesses a version.
+	Unpinned   bool
+	Constraint string
 }
 
 // Target is one discovery anchor under the scanned root. Discovery
@@ -53,6 +68,10 @@ type Target struct {
 	Path string
 	// Source is the lockfile basename ("go.sum", "go.mod").
 	Source string
+	// Root is the project directory the discovery walk started from.
+	// Requirements-file includes (-r / -c) are followed only inside
+	// it. Empty means the directory that contains Path.
+	Root string
 }
 
 // EcosystemResult is the per-Target summary surfaced in
@@ -64,10 +83,19 @@ type Target struct {
 // (npm / PyPI) are NOT reflected in the per-target Ecosystems slice
 // during v0.17.x; the slice describes the packagecheck discovery
 // surface only.
+//
+// Unpinned and UnresolvedIncludes are additive and omitted when zero.
+// Unpinned counts entries (included in PackagesRead) that declare a
+// package without one exact version, so only advisories covering every
+// version could be matched for them. UnresolvedIncludes counts
+// requirements-file includes that were not read: a URL, a path outside
+// the project, or a missing file.
 type EcosystemResult struct {
-	Ecosystem     string `json:"ecosystem"`
-	Path          string `json:"path"`
-	Source        string `json:"source"`
-	PackagesRead  int    `json:"packages_read"`
-	FindingsCount int    `json:"findings_count"`
+	Ecosystem          string `json:"ecosystem"`
+	Path               string `json:"path"`
+	Source             string `json:"source"`
+	PackagesRead       int    `json:"packages_read"`
+	FindingsCount      int    `json:"findings_count"`
+	Unpinned           int    `json:"unpinned,omitempty"`
+	UnresolvedIncludes int    `json:"unresolved_includes,omitempty"`
 }

@@ -1,0 +1,92 @@
+version = 1
+revision = 3
+requires-python = ">=3.10"
+
+[manifest]
+members = [
+    "demo-app",
+    "helper",
+]
+
+[[package]]
+name = "demo-app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "evil-pkg" },
+    { name = "helper" },
+    { name = "six" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "iniconfig" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "evil-pkg", specifier = ">=1" },
+    { name = "helper", editable = "libs/helper" },
+    { name = "six", specifier = "==1.16.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "iniconfig", specifier = ">=2" }]
+
+[[package]]
+name = "direct"
+version = "5.0.0"
+source = { url = "https://example.com/direct-5.0.0.tar.gz" }
+sdist = { hash = "sha256:00" }
+
+[[package]]
+name = "evil-pkg"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/00/evil_pkg-1.0.tar.gz", hash = "sha256:00", size = 1, upload-time = "2026-01-01T00:00:00Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/00/evil_pkg-1.0-py3-none-any.whl", hash = "sha256:00", size = 1, upload-time = "2026-01-01T00:00:00Z" },
+]
+
+[[package]]
+name = "from-git"
+version = "2.0.0"
+source = { git = "https://github.com/example/from-git?rev=v2#0123456789abcdef0123456789abcdef01234567" }
+
+[[package]]
+name = "helper"
+version = "0.2.0"
+source = { editable = "libs/helper" }
+
+[[package]]
+name = "iniconfig"
+version = "2.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "local-wheel"
+version = "3.0.0"
+source = { path = "wheels/local_wheel-3.0.0-py3-none-any.whl" }
+
+[[package]]
+name = "mirror-pkg"
+version = "6.0.0"
+source = { registry = "https://mirror.example.com/simple" }
+
+[[package]]
+name = "six"
+version = "1.16.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/39/171f1c67cd00715f190ba0b100d606d440a28c93c7714febeca8b79af85e/six-1.16.0.tar.gz", hash = "sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926", size = 34041, upload-time = "2021-05-05T14:18:18.379Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/5a/e7c31adbe875f2abbb91bd84cf2dc52d792b5a01506781dbcf25c91daf11/six-1.16.0-py2.py3-none-any.whl", hash = "sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254", size = 11053, upload-time = "2021-05-05T14:18:17.237Z" },
+]
+
+[[package]]
+name = "vendored"
+version = "4.0.0"
+source = { directory = "vendor/vendored" }

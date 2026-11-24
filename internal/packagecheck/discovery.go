@@ -62,6 +62,81 @@ var lockfilePickers = []lockfilePicker{
 	{intel.EcosystemNPM, pickPackageLockTarget},
 	{intel.EcosystemNPM, pickYarnLockTarget},
 	{intel.EcosystemNPM, pickBunLockTarget},
+	{intel.EcosystemPyPI, pickPythonTargets},
+}
+
+// pythonInstallDirs hold installed distributions, not projects. The
+// walk never descends into them (an installed package may ship its own
+// lockfiles or requirements files as data), and Python pickers do not
+// fire beneath them when the scan root is inside one.
+var pythonInstallDirs = map[string]bool{
+	"site-packages":  true,
+	"dist-packages":  true,
+	"__pypackages__": true,
+}
+
+// isPythonEnvironmentDir reports a virtual environment or installed
+// tree the discovery walk must skip: the conventional .venv name, an
+// installed-package directory, or any directory holding a PEP 405
+// pyvenv.cfg marker (venv, virtualenv, uv and tox environments).
+func isPythonEnvironmentDir(path, name string) bool {
+	if name == ".venv" || pythonInstallDirs[name] {
+		return true
+	}
+	info, err := os.Lstat(filepath.Join(path, "pyvenv.cfg"))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// hasPythonInstallAncestor reports whether any segment of dir is an
+// installed-package directory such as site-packages.
+func hasPythonInstallAncestor(dir string) bool {
+	for d := filepath.Clean(dir); ; {
+		if pythonInstallDirs[filepath.Base(d)] {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+}
+
+// pythonLockfileNames are the fixed-name Python dependency files, in the
+// order their targets are emitted for one directory.
+var pythonLockfileNames = []string{"uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock"}
+
+// pickPythonTargets returns every Python dependency file in dir: uv.lock,
+// poetry.lock, Pipfile.lock, pdm.lock, PEP 751 pylock.toml and
+// pylock.<name>.toml, and pip requirements*.txt / constraints*.txt.
+// Each becomes its own target so a project carrying both a lockfile and
+// an exported requirements file shows both. Manifests without resolved
+// versions (pyproject.toml, Pipfile, requirements.in) are not targets.
+// Linked candidates are kept so parsing reports them as errors instead
+// of silently dropping a dependency file.
+func pickPythonTargets(dir string) []Target {
+	if hasPythonInstallAncestor(dir) {
+		return nil
+	}
+	var out []Target
+	for _, name := range pythonLockfileNames {
+		if manifestCandidate(filepath.Join(dir, name)) {
+			out = append(out, Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, name), Source: name})
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if name := e.Name(); isPylockName(name) || isRequirementsSource(name) {
+			out = append(out, Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, name), Source: name})
+		}
+	}
+	return out
 }
 
 // Discover walks root and returns one Target per lockfile / discovery
@@ -102,14 +177,17 @@ func Discover(root string, ecosystems []string) ([]Target, error) {
 		if !d.IsDir() {
 			return nil
 		}
-		if path != root && defaultSkipDirs[d.Name()] {
+		if path != root && (defaultSkipDirs[d.Name()] || isPythonEnvironmentDir(path, d.Name())) {
 			return fs.SkipDir
 		}
 		for _, p := range lockfilePickers {
 			if !want[p.ecosystem] {
 				continue
 			}
-			targets = append(targets, p.pick(path)...)
+			for _, t := range p.pick(path) {
+				t.Root = root
+				targets = append(targets, t)
+			}
 		}
 		return nil
 	})
