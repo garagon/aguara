@@ -90,6 +90,10 @@ func auditCoverage(check *incident.CheckResult, scan *scanner.ScanResult) AuditC
 // A nil coverage (callers that did not compute it) keeps the old line.
 func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
 	switch {
+	case c != nil && c.Evaluated() && noExactVersions(c):
+		// Read, but only advisories covering every version could be
+		// matched: not a clean result.
+		return st.SeverityIcon("MEDIUM") + " " + st.Yellow("No pinned versions were found, so no exact version was checked; only advisories covering every version were.")
 	case c == nil || c.Evaluated():
 		return st.OK("No known-compromised packages or persistence artifacts found.")
 	case len(c.UnsupportedEvidence) > 0:
@@ -105,6 +109,19 @@ func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
 	default:
 		return st.Dim("No dependency files found; no packages were checked.")
 	}
+}
+
+// noExactVersions reports evidence in which every package read is
+// unpinned (and at least one package was read).
+func noExactVersions(c *packagecheck.Coverage) bool {
+	read := 0
+	for _, e := range c.PackageEvidence {
+		if e.Unpinned < e.PackagesRead {
+			return false
+		}
+		read += e.PackagesRead
+	}
+	return read > 0
 }
 
 // splitUnsupported separates files Aguara cannot parse from files of

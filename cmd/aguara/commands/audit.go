@@ -12,6 +12,7 @@ import (
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/output"
+	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
@@ -583,6 +584,21 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 		return
 	}
 
+	// A dependency file in which no entry is pinned to one version was
+	// read, but nothing in it could be matched against an exact-version
+	// advisory: only advisories covering every version were checked, and
+	// an install resolves versions this audit never saw.
+	if files := unpinnedOnlyFiles(result.Check.Ecosystems, result.Target); files != "" {
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "unpinned_dependency_evidence",
+			Severity: "warning",
+			Message:  "No entry in " + files + " is pinned to one version, so only advisories covering every version of those packages were checked.",
+		})
+		escalateForCoverage(t,
+			"Some dependency files pin no exact versions, so the audit cannot clear dependency installation.",
+			"Pin exact versions in "+files+" (for example with pip-compile or uv pip compile) and audit again, or review those dependencies before installing them.")
+	}
+
 	cov := result.Check.Coverage
 	if cov == nil || len(cov.UnsupportedEvidence) == 0 {
 		// No dependency files at all keeps the package side as before.
@@ -609,6 +625,13 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 			Message:  "Dependency files were found but none could be evaluated: " + files + ". No package in them was checked against malicious-package intelligence.",
 		})
 	}
+	escalateForCoverage(t, summary, step)
+}
+
+// escalateForCoverage turns a proceed decision into review with the
+// coverage summary and next steps; a decision already at review or stop
+// keeps its summary and gains the step.
+func escalateForCoverage(t *AuditTriage, summary, step string) {
 	if t.Decision == "proceed" {
 		t.Decision = "review"
 		t.Summary = summary
@@ -621,12 +644,30 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 	t.RecommendedNextSteps = append(t.RecommendedNextSteps, step)
 }
 
+// unpinnedOnlyFiles names the dependency files that were read but pin no
+// entry to one version, or "" when there are none. A file with no entries
+// at all is not counted: there is nothing in it to install.
+func unpinnedOnlyFiles(results []packagecheck.EcosystemResult, root string) string {
+	var evidence []packagecheck.UnsupportedEvidence
+	for _, e := range results {
+		if e.PackagesRead > 0 && e.Unpinned == e.PackagesRead {
+			evidence = append(evidence, packagecheck.UnsupportedEvidence{Path: e.Path, Ecosystem: e.Ecosystem})
+		}
+	}
+	if len(evidence) == 0 {
+		return ""
+	}
+	return unsupportedEvidenceNames(evidence, root)
+}
+
 // auditCoverageIncomplete reports whether triage raised a coverage reason:
-// nothing was scanned, or some dependency files could not be evaluated.
+// nothing was scanned, some dependency files could not be evaluated, or
+// some pin no exact version.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
-		hasTriageReason(t.Reasons, "partial_dependency_coverage")
+		hasTriageReason(t.Reasons, "partial_dependency_coverage") ||
+		hasTriageReason(t.Reasons, "unpinned_dependency_evidence")
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
