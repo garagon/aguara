@@ -23,6 +23,21 @@ type CrossFileAccumulator interface {
 	Finalize() []Finding
 }
 
+// CrossFileFindingObserver is an optional extension of CrossFileAccumulator.
+// When the configured accumulator also implements it, the scanner passes each
+// file's findings to ObserveFindings after every registered per-file analyzer
+// has run on that file. The findings have already passed inline suppression
+// (when project policy is trusted) and the disabled-rule and tool-exemption
+// filters that apply before reporting.
+//
+// Findings returned by Finalize are never observed, so a cross-file finding
+// cannot feed back into the correlation that produced it. ObserveFindings can
+// be called concurrently from scanner workers; implementations must not
+// modify the slice or retain it after returning.
+type CrossFileFindingObserver interface {
+	ObserveFindings(relPath string, findings []Finding)
+}
+
 // StateSaver can persist state after a scan completes.
 type StateSaver interface {
 	Save() error
@@ -271,6 +286,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				if s.projectPolicyEnabled {
 					ignoreIndex = buildIgnoreIndex(parseIgnoreDirectives(target.Content))
 				}
+				var fileFindings []Finding
 				for _, analyzer := range s.analyzers {
 					if ctx.Err() != nil {
 						return
@@ -296,12 +312,14 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 							results = kept
 						}
 						if len(results) > 0 {
+							fileFindings = append(fileFindings, results...)
 							mu.Lock()
 							findings = append(findings, results...)
 							mu.Unlock()
 						}
 					}
 				}
+				s.observeFileFindings(target.RelPath, fileFindings)
 				if s.onProgress != nil {
 					n := int(processed.Add(1))
 					s.onProgress(n, total)
@@ -365,6 +383,28 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		ToolName:     s.toolName,
 		Duration:     time.Since(start),
 	}, nil
+}
+
+// observeFileFindings hands one file's per-file findings to an accumulator
+// that implements CrossFileFindingObserver. Disabled rules and tool
+// exemptions are applied first so a correlation never cites a finding the
+// caller has already removed from the report.
+func (s *Scanner) observeFileFindings(relPath string, fileFindings []Finding) {
+	observer, ok := s.crossFileAccumulator.(CrossFileFindingObserver)
+	if !ok || len(fileFindings) == 0 {
+		return
+	}
+	kept := make([]Finding, 0, len(fileFindings))
+	for _, f := range fileFindings {
+		if s.disabledRules[strings.ToUpper(f.RuleID)] {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	kept = applyToolExemptions(s.toolName, kept, s.toolScopedRules)
+	if len(kept) > 0 {
+		observer.ObserveFindings(relPath, kept)
+	}
 }
 
 // postProcess deduplicates, scores, correlates, filters, and sorts findings.

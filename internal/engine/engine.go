@@ -126,6 +126,16 @@ func (g crossFileGroup) Accumulate(relPath string, content string) {
 	}
 }
 
+// ObserveFindings forwards a file's per-file findings to every member that
+// implements scanner.CrossFileFindingObserver (currently skill-chain).
+func (g crossFileGroup) ObserveFindings(relPath string, findings []types.Finding) {
+	for _, analyzer := range g {
+		if observer, ok := analyzer.(scanner.CrossFileFindingObserver); ok {
+			observer.ObserveFindings(relPath, findings)
+		}
+	}
+}
+
 func (g crossFileGroup) Finalize() []types.Finding {
 	var findings []types.Finding
 	for _, analyzer := range g {
