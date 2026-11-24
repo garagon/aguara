@@ -1,23 +1,32 @@
 package aguara
 
+import (
+	"sort"
+
+	"github.com/garagon/aguara/internal/rulecatalog"
+)
+
 // scanConfig holds the resolved configuration for a scan.
 type scanConfig struct {
 	customRulesDirs []string
 	disabledRules   []string
-	ruleOverrides   map[string]RuleOverride
-	minSeverity     Severity
-	workers         int
-	ignorePatterns  []string
-	maxFileSize     int64
-	category        string // only for ListRules
-	toolName        string
-	scanProfile     ScanProfile
-	profileEnforced []string
-	deduplicateMode DeduplicateMode
-	stateDir        string
-	redact          bool // scrub matched text from credential-leak findings
-	targetPolicy    *bool
-	lenientConfig   bool // skip invalid rule configuration instead of failing
+	ruleOverrides   map[string]overrideEntry // keyed by canonical rule ID
+	// overrideConflicts holds entries whose key named the same rule as
+	// another key in the same WithRuleOverrides map; they are reported.
+	overrideConflicts []overrideEntry
+	minSeverity       Severity
+	workers           int
+	ignorePatterns    []string
+	maxFileSize       int64
+	category          string // only for ListRules
+	toolName          string
+	scanProfile       ScanProfile
+	profileEnforced   []string
+	deduplicateMode   DeduplicateMode
+	stateDir          string
+	redact            bool // scrub matched text from credential-leak findings
+	targetPolicy      *bool
+	lenientConfig     bool // skip invalid rule configuration instead of failing
 }
 
 // WithTrustedTargetPolicy allows files being scanned to suppress findings via
@@ -73,23 +82,49 @@ func WithDisabledRules(ids ...string) Option {
 // override replaces the severity of every finding of that rule (a finding
 // inside a Markdown code block is lowered one level from it, as with a
 // pattern rule's own severity). Keys are rule IDs (case-insensitive) and
-// must name a rule in the catalog. Severity must be one of critical, high, medium, low or
-// info, and ApplyToTools and ExemptTools are mutually exclusive. A problem
-// with an override is a ConfigError unless WithLenientConfig is set.
+// must name a rule in the catalog. Severity must be one of critical, high,
+// medium, low or info, and ApplyToTools and ExemptTools are mutually
+// exclusive. A problem with an override is a ConfigError unless
+// WithLenientConfig is set.
 //
-// Repeated use merges the maps; a later entry for the same key replaces an
-// earlier one. The map is copied, so changing it afterwards has no effect.
+// Repeated use merges the maps: a later entry for the same rule replaces an
+// earlier one, also when the keys differ only in letter case. Within one
+// map, two keys that name the same rule are a
+// ConfigProblemConflictingOverride; with WithLenientConfig the key that
+// sorts first is kept. The map is copied, so changing it afterwards has no
+// effect.
 func WithRuleOverrides(overrides map[string]RuleOverride) Option {
 	return func(c *scanConfig) {
 		if c.ruleOverrides == nil && len(overrides) > 0 {
-			c.ruleOverrides = make(map[string]RuleOverride, len(overrides))
+			c.ruleOverrides = make(map[string]overrideEntry, len(overrides))
 		}
-		for id, ovr := range overrides {
+		keys := make([]string, 0, len(overrides))
+		for key := range overrides {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		inThisCall := make(map[string]bool, len(keys))
+		for _, key := range keys {
+			ovr := overrides[key]
 			ovr.ApplyToTools = append([]string(nil), ovr.ApplyToTools...)
 			ovr.ExemptTools = append([]string(nil), ovr.ExemptTools...)
-			c.ruleOverrides[id] = ovr
+			entry := overrideEntry{key: key, override: ovr}
+			id := rulecatalog.CanonicalID(key)
+			if inThisCall[id] {
+				c.overrideConflicts = append(c.overrideConflicts, entry)
+				continue
+			}
+			inThisCall[id] = true
+			c.ruleOverrides[id] = entry
 		}
 	}
+}
+
+// overrideEntry is one WithRuleOverrides entry, keyed in scanConfig by its
+// canonical rule ID. key keeps the spelling the caller used, for problems.
+type overrideEntry struct {
+	key      string
+	override RuleOverride
 }
 
 // WithLenientConfig makes rule configuration problems non-fatal, as they

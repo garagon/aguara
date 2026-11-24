@@ -385,6 +385,49 @@ func TestToolScopedOverrideMatchesRuleIDCaseInsensitively(t *testing.T) {
 	}
 }
 
+// TestRuleOverrideKeysAreCanonical: overrides were stored under the key as
+// written, so a later WithRuleOverrides call whose key differed only in case
+// did not replace the earlier entry; both reached validation as a conflict
+// and the surviving entry depended on key sort order, not call order.
+func TestRuleOverrideKeysAreCanonical(t *testing.T) {
+	ctx := context.Background()
+	severityOf := func(t *testing.T, opts ...aguara.Option) aguara.Severity {
+		t.Helper()
+		result, err := aguara.ScanContent(ctx, promptInjection, "x.md", opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Findings) != 1 {
+			t.Fatalf("findings = %+v", result.Findings)
+		}
+		return result.Findings[0].Severity
+	}
+
+	// A later call replaces an earlier one, whatever the key's case.
+	for _, keys := range [][2]string{{"prompt_injection_001", "PROMPT_INJECTION_001"}, {"PROMPT_INJECTION_001", "Prompt_Injection_001"}} {
+		got := severityOf(t,
+			aguara.WithRuleOverrides(map[string]aguara.RuleOverride{keys[0]: {Severity: "low"}}),
+			aguara.WithRuleOverrides(map[string]aguara.RuleOverride{keys[1]: {Severity: "high"}}))
+		if got != aguara.SeverityHigh {
+			t.Fatalf("keys %v: severity = %s, want the later call's HIGH", keys, got)
+		}
+	}
+
+	// Two case-variant keys in one map stay a conflict; lenient mode keeps
+	// the key that sorts first, on every run.
+	conflict := aguara.WithRuleOverrides(map[string]aguara.RuleOverride{
+		"PROMPT_INJECTION_001": {Severity: "low"},
+		"prompt_injection_001": {Severity: "high"},
+	})
+	_, err := aguara.NewScanner(conflict)
+	requireProblem(t, err, aguara.ConfigProblemConflictingOverride, "prompt_injection_001", "WithRuleOverrides")
+	for run := 0; run < 20; run++ {
+		if got := severityOf(t, conflict, aguara.WithLenientConfig()); got != aguara.SeverityLow {
+			t.Fatalf("run %d: lenient severity = %s, want LOW from the first sorted key", run, got)
+		}
+	}
+}
+
 func TestExplainRuleErrors(t *testing.T) {
 	_, err := aguara.ExplainRule("DEFINITELY_NOT_A_RULE")
 	if !errors.Is(err, aguara.ErrRuleNotFound) || err.Error() != `rule "DEFINITELY_NOT_A_RULE" not found` {

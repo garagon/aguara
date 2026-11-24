@@ -528,8 +528,10 @@ func resolveConfig(cfg *scanConfig) (*rulecatalog.Resolution, error) {
 	return res, nil
 }
 
-// ruleInput describes the caller's rule options for validation. Override
-// keys are sorted so problems are reported in a stable order.
+// ruleInput describes the caller's rule options for validation. Overrides
+// are emitted in canonical-ID order, followed by the case-variant keys that
+// conflicted within one WithRuleOverrides map, so Resolve reports those
+// conflicts and keeps the earlier entry deterministically.
 func (c *scanConfig) ruleInput() rulecatalog.Input {
 	in := rulecatalog.Input{CustomRulesDirs: c.customRulesDirs}
 	for _, id := range c.disabledRules {
@@ -543,10 +545,15 @@ func (c *scanConfig) ruleInput() rulecatalog.Input {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	entries := make([]overrideEntry, 0, len(ids)+len(c.overrideConflicts))
 	for _, id := range ids {
-		ovr := c.ruleOverrides[id]
+		entries = append(entries, c.ruleOverrides[id])
+	}
+	entries = append(entries, c.overrideConflicts...)
+	for _, entry := range entries {
+		ovr := entry.override
 		in.Overrides = append(in.Overrides, rulecatalog.OverrideRef{
-			ID:     id,
+			ID:     entry.key,
 			Source: "WithRuleOverrides",
 			Override: rules.RuleOverride{
 				Severity:     ovr.Severity,

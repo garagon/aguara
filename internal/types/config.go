@@ -27,8 +27,8 @@ const (
 	// not one of critical, high, medium, low or info.
 	ConfigProblemInvalidSeverity ConfigProblemKind = "invalid_severity"
 	// ConfigProblemConflictingOverride means an override sets mutually
-	// exclusive fields (ApplyToTools and ExemptTools), two override keys
-	// name the same rule (they differ only in letter case), or a
+	// exclusive fields (ApplyToTools and ExemptTools), two override keys in
+	// one input name the same rule (they differ only in letter case), or a
 	// rule is both disabled (by a disable list or a Disabled override) and
 	// listed as enforced by the scan profile.
 	ConfigProblemConflictingOverride ConfigProblemKind = "conflicting_override"
