@@ -86,7 +86,8 @@ Important options:
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
 - `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
-- `WithCustomRules(dir)`: additional YAML rules.
+- `WithCustomRules(dirs...)`: additional YAML rules. Repeated use accumulates
+  directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
 - `WithRedaction(false)`: exposes raw sensitive evidence; do not use by default.
 

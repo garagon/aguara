@@ -290,7 +290,7 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 		flagFailOn = cfg.FailOn
 	}
 	if !cmd.Flags().Changed("rules") && cfg.Rules != "" {
-		flagRules = cfg.Rules
+		flagRules = []string{cfg.Rules}
 	}
 	return cfg
 }
@@ -339,18 +339,11 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 		return nil, fmt.Errorf("loading built-in rules: %w", err)
 	}
 
-	if flagRules != "" {
-		rulesDir, err := filepath.Abs(flagRules)
-		if err != nil {
-			return nil, fmt.Errorf("resolving rules path: %w", err)
-		}
-		info, err := os.Stat(rulesDir)
-		if err != nil {
-			return nil, fmt.Errorf("rules directory: %w", err)
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("--rules path is not a directory: %s", rulesDir)
-		}
+	rulesDirs, err := resolveRulesDirs(flagRules)
+	if err != nil {
+		return nil, err
+	}
+	for _, rulesDir := range rulesDirs {
 		customRules, err := rules.LoadFromDir(rulesDir)
 		if err != nil {
 			return nil, fmt.Errorf("loading custom rules from %s: %w", rulesDir, err)
@@ -389,6 +382,30 @@ func loadAndCompileRules(cfg config.Config) ([]*rules.CompiledRule, error) {
 	}
 
 	return compiled, nil
+}
+
+// resolveRulesDirs turns the --rules values into absolute directory paths,
+// in order, without repeats. Each value must name an existing directory.
+func resolveRulesDirs(values []string) ([]string, error) {
+	var dirs []string
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		rulesDir, err := filepath.Abs(value)
+		if err != nil {
+			return nil, fmt.Errorf("resolving rules path: %w", err)
+		}
+		info, err := os.Stat(rulesDir)
+		if err != nil {
+			return nil, fmt.Errorf("rules directory: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("--rules path is not a directory: %s", rulesDir)
+		}
+		dirs = append(dirs, rulesDir)
+	}
+	return rules.UniqueDirs(dirs), nil
 }
 
 // collectDisabledRules merges the config file's disable_rules with the

@@ -33,9 +33,9 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	// JS_DNS_TXT_EXFIL_001 or GHA_PWN_REQUEST_001 appeared in
 	// findings but could not be listed or explained.
 	cat, err := rulecatalog.Build(rulecatalog.Options{
-		CustomRulesDir: flagRules,
-		DisableRuleIDs: flagDisableRules,
-		Category:       flagCategory,
+		CustomRulesDirs: flagRules,
+		DisableRuleIDs:  flagDisableRules,
+		Category:        flagCategory,
 		Warn: func(format string, a ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
 		},

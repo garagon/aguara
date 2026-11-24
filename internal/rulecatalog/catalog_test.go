@@ -199,7 +199,7 @@ func TestFindByIDBuildErrorDistinctFromNotFound(t *testing.T) {
 	// explain.go's mapping (which only maps ErrRuleNotFound)
 	// surfaces the real error.
 	_, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: "/definitely/not/a/real/dir/" + t.Name(),
+		CustomRulesDirs: []string{"/definitely/not/a/real/dir/" + t.Name()},
 	}, "PROMPT_INJECTION_001")
 	require.Error(t, err)
 	require.False(t, errors.Is(err, rulecatalog.ErrRuleNotFound),

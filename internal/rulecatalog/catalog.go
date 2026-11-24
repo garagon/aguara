@@ -28,10 +28,10 @@ import (
 // Options controls Build. All fields are optional; the zero value
 // builds the full catalog (every YAML rule + every analyzer rule).
 type Options struct {
-	// CustomRulesDir, when non-empty, loads additional YAML rules
-	// from a directory and merges them in. Matches the --rules
-	// flag the CLI exposes.
-	CustomRulesDir string
+	// CustomRulesDirs loads additional YAML rules from each directory,
+	// in order, and merges them in. Matches the repeatable --rules flag
+	// and repeated aguara.WithCustomRules options.
+	CustomRulesDirs []string
 	// DisableRuleIDs filters by exact ID match before returning.
 	// Matches the --disable-rule CLI flag and the config-file
 	// disable_rules list.
@@ -82,11 +82,11 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 		return nil, fmt.Errorf("rulecatalog: load built-in rules: %w", err)
 	}
 
-	// 2. Custom rules dir, when configured.
-	if opts.CustomRulesDir != "" {
-		customRules, err := rules.LoadFromDir(opts.CustomRulesDir)
+	// 2. Custom rules dirs, when configured.
+	for _, dir := range rules.UniqueDirs(opts.CustomRulesDirs) {
+		customRules, err := rules.LoadFromDir(dir)
 		if err != nil {
-			return nil, fmt.Errorf("rulecatalog: load custom rules from %s: %w", opts.CustomRulesDir, err)
+			return nil, fmt.Errorf("rulecatalog: load custom rules from %s: %w", dir, err)
 		}
 		rawRules = append(rawRules, customRules...)
 	}
@@ -107,7 +107,7 @@ func Build(opts Options) ([]rulemeta.Rule, error) {
 // ListRules and ExplainRule methods include analyzer-owned rules without
 // loading and compiling the YAML catalog a second time.
 //
-// CustomRulesDir and Warn are ignored because loading and compilation have
+// CustomRulesDirs and Warn are ignored because loading and compilation have
 // already happened. DisableRuleIDs, Overrides, and Category are still applied
 // to the supplied rules and analyzer metadata.
 func FromCompiled(compiled []*rules.CompiledRule, opts Options) []rulemeta.Rule {

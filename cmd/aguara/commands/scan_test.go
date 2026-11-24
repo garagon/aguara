@@ -30,7 +30,7 @@ func resetFlags() {
 	flagFormat = "terminal"
 	flagOutput = ""
 	flagWorkers = 0
-	flagRules = ""
+	flagRules = nil
 	flagNoColor = false
 	flagDisableRules = nil
 	flagNoUpdateCheck = false

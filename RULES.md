@@ -447,4 +447,6 @@ Load custom rules with the `--rules` flag:
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
+Repeat `--rules` to load several directories (`--rules ./team-rules/ --rules ./my-rules/`).
+
 See the [Contributing Guide](CONTRIBUTING.md) for more details on rule structure and testing.

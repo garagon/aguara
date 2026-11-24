@@ -37,7 +37,7 @@ func runExplain(cmd *cobra.Command, args []string) error {
 	ruleID := strings.ToUpper(strings.TrimSpace(args[0]))
 
 	found, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: flagRules,
+		CustomRulesDirs: flagRules,
 		Warn: func(format string, a ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
 		},

@@ -217,10 +217,10 @@ func catalogOverridesFromCfg(in map[string]RuleOverride) map[string]rulecatalog.
 func ListRules(opts ...Option) []RuleInfo {
 	cfg := applyOpts(opts)
 	cat, err := rulecatalog.Build(rulecatalog.Options{
-		CustomRulesDir: cfg.customRulesDir,
-		Category:       cfg.category,
-		DisableRuleIDs: cfg.disabledRules,
-		Overrides:      catalogOverridesFromCfg(cfg.ruleOverrides),
+		CustomRulesDirs: cfg.customRulesDirs,
+		Category:        cfg.category,
+		DisableRuleIDs:  cfg.disabledRules,
+		Overrides:       catalogOverridesFromCfg(cfg.ruleOverrides),
 	})
 	if err != nil {
 		return nil
@@ -240,7 +240,7 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 	id = strings.ToUpper(strings.TrimSpace(id))
 	cfg := applyOpts(opts)
 	r, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: cfg.customRulesDir,
+		CustomRulesDirs: cfg.customRulesDirs,
 	}, id)
 	if err != nil {
 		return nil, fmt.Errorf("rule %q not found", id)
@@ -501,10 +501,10 @@ func loadAndCompile(cfg *scanConfig) (*compileResult, error) {
 		return nil, fmt.Errorf("loading built-in rules: %w", err)
 	}
 
-	if cfg.customRulesDir != "" {
-		custom, err := rules.LoadFromDir(cfg.customRulesDir)
+	for _, dir := range rules.UniqueDirs(cfg.customRulesDirs) {
+		custom, err := rules.LoadFromDir(dir)
 		if err != nil {
-			return nil, fmt.Errorf("loading custom rules from %s: %w", cfg.customRulesDir, err)
+			return nil, fmt.Errorf("loading custom rules from %s: %w", dir, err)
 		}
 		rawRules = append(rawRules, custom...)
 	}

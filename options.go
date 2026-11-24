@@ -2,7 +2,7 @@ package aguara
 
 // scanConfig holds the resolved configuration for a scan.
 type scanConfig struct {
-	customRulesDir  string
+	customRulesDirs []string
 	disabledRules   []string
 	ruleOverrides   map[string]RuleOverride
 	minSeverity     Severity
@@ -42,10 +42,17 @@ func WithUntrustedTarget() Option {
 // Option configures a scan operation.
 type Option func(*scanConfig)
 
-// WithCustomRules loads additional rules from a directory.
-func WithCustomRules(dir string) Option {
+// WithCustomRules loads additional YAML rules from one or more directories.
+// Repeated use accumulates: WithCustomRules(pack), WithCustomRules(userDir)
+// loads both, in that order. Empty strings are ignored, and a directory
+// listed more than once is loaded once.
+func WithCustomRules(dirs ...string) Option {
 	return func(c *scanConfig) {
-		c.customRulesDir = dir
+		for _, dir := range dirs {
+			if dir != "" {
+				c.customRulesDirs = append(c.customRulesDirs, dir)
+			}
+		}
 	}
 }
 

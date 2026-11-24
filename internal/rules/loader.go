@@ -69,6 +69,27 @@ func LoadFromDir(dir string) ([]RawRule, error) {
 	return all, err
 }
 
+// UniqueDirs returns dirs without empty entries and without repeats of a
+// directory already listed (compared after filepath.Clean), keeping the
+// order of first appearance. Loading the same directory twice would define
+// every rule in it twice.
+func UniqueDirs(dirs []string) []string {
+	var out []string
+	seen := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		key := filepath.Clean(dir)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, dir)
+	}
+	return out
+}
+
 // parseMultiDocYAML splits a YAML file on "---" boundaries and parses each document.
 func parseMultiDocYAML(data []byte) ([]RawRule, error) {
 	var rules []RawRule
