@@ -621,6 +621,14 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 	t.RecommendedNextSteps = append(t.RecommendedNextSteps, step)
 }
 
+// auditCoverageIncomplete reports whether triage raised a coverage reason:
+// nothing was scanned, or some dependency files could not be evaluated.
+func auditCoverageIncomplete(t AuditTriage) bool {
+	return hasTriageReason(t.Reasons, "nothing_scanned") ||
+		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
+		hasTriageReason(t.Reasons, "partial_dependency_coverage")
+}
+
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
 	for _, r := range reasons {
 		if r.Kind == kind {
@@ -849,6 +857,10 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
 	case result.Triage.Decision != "" && result.Triage.Decision != "proceed":
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
+		if auditCoverageIncomplete(result.Triage) {
+			// PASS only means no finding; say why triage still asks for review.
+			line += " " + st.Yellow("(coverage incomplete, see triage)")
+		}
 	default:
 		line = st.Green(st.Bold("✔ "+verdict)) + " " + counts
 	}
