@@ -4027,44 +4027,13 @@ func couldBeRegexStart(content []byte, i int) bool {
 	//     inspect the keyword before it. `if`, `while`, `for`,
 	//     `switch`, `catch` signal control-flow.
 	if c == ')' {
-		depth := 1
-		k := j - 1
-		for k >= 0 && depth > 0 {
-			switch content[k] {
-			case ')':
-				depth++
-			case '(':
-				depth--
-			}
-			k--
-		}
-		if depth != 0 {
+		// An unmatched `)` within the scan window reads as division, as an
+		// unbalanced one always has.
+		keyword, ok := parenHeaderKeyword(content, j)
+		if !ok {
 			return false
 		}
-		// k now points one before the matching `(`.
-		// Skip whitespace back to the preceding token.
-		for k >= 0 {
-			cc := content[k]
-			if cc == ' ' || cc == '\t' || cc == '\r' || cc == '\n' {
-				k--
-				continue
-			}
-			break
-		}
-		if k < 0 {
-			return false
-		}
-		end := k + 1
-		for k >= 0 {
-			cc := content[k]
-			if (cc >= 'a' && cc <= 'z') || (cc >= 'A' && cc <= 'Z') ||
-				cc == '_' || (cc >= '0' && cc <= '9') || cc == '$' {
-				k--
-				continue
-			}
-			break
-		}
-		switch string(content[k+1 : end]) {
+		switch keyword {
 		case "if", "while", "for", "switch", "catch":
 			return true
 		}
@@ -4073,26 +4042,83 @@ func couldBeRegexStart(content []byte, i int) bool {
 	// Identifier / keyword preceding the `/`. Walk back over
 	// identifier characters and check against a small list of
 	// keywords whose syntactic position can precede a regex literal.
-	if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
-		c != '_' && (c < '0' || c > '9') && c != '$' {
+	if !isJSIdentifierByte(c) {
 		return false
 	}
-	end := j + 1
-	for j >= 0 {
-		c := content[j]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			c == '_' || (c >= '0' && c <= '9') || c == '$' {
-			j--
-			continue
-		}
-		break
-	}
-	switch string(content[j+1 : end]) {
+	switch keywordEndingAt(content, j+1) {
 	case "return", "typeof", "instanceof", "in", "delete",
 		"void", "new", "throw", "yield", "await", "case", "do":
 		return true
 	}
 	return false
+}
+
+// maxLexerBackscan bounds how far the regex-versus-division classifier walks
+// back from a `)` to find its `(` and the keyword before it. Without a bound,
+// a crafted file of deeply nested parentheses makes every slash rescan the
+// file and the lexer quadratic. A header longer than this is treated like
+// an unmatched `)`: division after it, and no non-null assertion before a
+// `!`, which is the reading a `!` had before TypeScript support.
+const maxLexerBackscan = 1024
+
+// maxKeywordLen is the length of the longest keyword the classifier checks
+// ("instanceof"). An identifier longer than that is not a keyword, so the
+// walk back over it stops early.
+const maxKeywordLen = 10
+
+func isJSIdentifierByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '$'
+}
+
+// keywordEndingAt returns the identifier that ends right before end when it
+// is short enough to be a keyword, and "" otherwise.
+func keywordEndingAt(content []byte, end int) string {
+	k := end - 1
+	for k >= 0 && isJSIdentifierByte(content[k]) {
+		if end-k > maxKeywordLen {
+			return ""
+		}
+		k--
+	}
+	return string(content[k+1 : end])
+}
+
+// parenHeaderKeyword finds the `(` matching the `)` at closeParen and returns
+// the keyword-length identifier before it ("" when there is none). ok is
+// false when the matching `(` is not within maxLexerBackscan bytes.
+func parenHeaderKeyword(content []byte, closeParen int) (keyword string, ok bool) {
+	keyword, ok, _ = scanParenHeader(content, closeParen)
+	return keyword, ok
+}
+
+// scanParenHeader implements parenHeaderKeyword and also reports the lowest
+// offset it examined, so tests can assert the walk stays inside the window.
+func scanParenHeader(content []byte, closeParen int) (keyword string, ok bool, lowest int) {
+	lo := max(closeParen-maxLexerBackscan, 0)
+	depth := 1
+	k := closeParen - 1
+	for k >= lo && depth > 0 {
+		switch content[k] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+		}
+		k--
+	}
+	if depth != 0 {
+		return "", false, k + 1
+	}
+	// k now points one before the matching `(`. Skip whitespace back to the
+	// preceding token.
+	for k >= lo && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r' || content[k] == '\n') {
+		k--
+	}
+	if k < lo {
+		return "", k < 0, k + 1
+	}
+	keyword = keywordEndingAt(content, k+1)
+	return keyword, true, max(k+1-maxKeywordLen-1, 0)
 }
 
 // bangIsNonNullAssertion reports whether the `!` at position bang is a
@@ -4106,47 +4132,22 @@ func bangIsNonNullAssertion(content []byte, bang int) bool {
 	if bang == 0 {
 		return false
 	}
-	isJSIdentByte := func(b byte) bool {
-		return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '$'
-	}
-	k := bang - 1
-	c := content[k]
+	c := content[bang-1]
 	switch {
 	case c == ']':
 		return true
 	case c == ')':
-		depth := 1
-		k--
-		for k >= 0 && depth > 0 {
-			switch content[k] {
-			case ')':
-				depth++
-			case '(':
-				depth--
-			}
-			k--
-		}
-		if depth != 0 {
+		keyword, ok := parenHeaderKeyword(content, bang-1)
+		if !ok {
 			return false
 		}
-		for k >= 0 && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r' || content[k] == '\n') {
-			k--
-		}
-		end := k + 1
-		for k >= 0 && isJSIdentByte(content[k]) {
-			k--
-		}
-		switch string(content[k+1 : end]) {
+		switch keyword {
 		case "if", "while", "for", "switch", "catch", "with":
 			return false
 		}
 		return true
-	case isJSIdentByte(c):
-		end := k + 1
-		for k >= 0 && isJSIdentByte(content[k]) {
-			k--
-		}
-		switch string(content[k+1 : end]) {
+	case isJSIdentifierByte(c):
+		switch keywordEndingAt(content, bang) {
 		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
 			"throw", "yield", "await", "case", "do", "else":
 			return false
