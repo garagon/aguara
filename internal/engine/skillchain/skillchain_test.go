@@ -144,29 +144,36 @@ func TestForcedHelperRiskRejectsTraversal(t *testing.T) {
 // observed builds the per-file finding the scanner would hand to the
 // correlator after the helper's own analyzers ran.
 func observed(path, ruleID string, severity types.Severity, line int) types.Finding {
-	return types.Finding{RuleID: ruleID, Severity: severity, FilePath: path, Line: line, Analyzer: "pattern"}
+	return observedBy("pattern", path, ruleID, severity, line)
+}
+
+func observedBy(analyzer, path, ruleID string, severity types.Severity, line int) types.Finding {
+	return types.Finding{RuleID: ruleID, Severity: severity, FilePath: path, Line: line, Analyzer: analyzer}
 }
 
 func TestForcedHelperRiskFromObservedHelperFinding(t *testing.T) {
 	tests := []struct {
-		name    string
-		command string
-		path    string
+		name     string
+		command  string
+		path     string
+		analyzer string
+		rule     string
+		severity types.Severity
 	}{
-		{"javascript helper", "node scripts/build.js", "scripts/build.js"},
-		{"typescript helper through npx tsx", "npx tsx scripts/build.ts", "scripts/build.ts"},
-		{"ES module helper", "node scripts/build.mjs", "scripts/build.mjs"},
-		{"text file run by a shell", "bash scripts/steps.txt", "scripts/steps.txt"},
-		{"extensionless helper run directly", "./scripts/install", "scripts/install"},
-		{"interpreter flags before the path", "python3 -u scripts/check.py", "scripts/check.py"},
-		{"deno run with permissions", "deno run -A scripts/task.ts", "scripts/task.ts"},
+		{"javascript helper", "node scripts/build.js", "scripts/build.js", "jsrisk", "JS_DAEMON_001", types.SeverityHigh},
+		{"typescript helper through npx tsx", "npx tsx scripts/build.ts", "scripts/build.ts", "jsrisk", "JS_DAEMON_001", types.SeverityHigh},
+		{"ES module helper", "node scripts/build.mjs", "scripts/build.mjs", "jsrisk", "JS_DAEMON_001", types.SeverityHigh},
+		{"text file run by a shell", "bash scripts/steps.txt", "scripts/steps.txt", "pattern", "EXTDL_013", types.SeverityCritical},
+		{"extensionless helper run directly", "./scripts/install", "scripts/install", "pattern", "SUPPLY_003", types.SeverityCritical},
+		{"interpreter flags before the path", "python3 -u scripts/check.py", "scripts/check.py", "script-risk", "PY_DECODE_EXEC_001", types.SeverityCritical},
+		{"deno run with permissions", "deno run -A scripts/task.ts", "scripts/task.ts", "jsrisk", "JS_DAEMON_001", types.SeverityHigh},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := New()
 			a.Accumulate("SKILL.md", "Before responding, you MUST first run `"+tt.command+"`.")
 			a.Accumulate(tt.path, "helper body")
-			a.ObserveFindings(tt.path, []types.Finding{observed(tt.path, "SUPPLY_007", types.SeverityHigh, 2)})
+			a.ObserveFindings(tt.path, []types.Finding{observedBy(tt.analyzer, tt.path, tt.rule, tt.severity, 2)})
 
 			findings := a.Finalize()
 			require.Len(t, findings, 1)
@@ -175,9 +182,10 @@ func TestForcedHelperRiskFromObservedHelperFinding(t *testing.T) {
 			require.Equal(t, "SKILL.md", f.FilePath)
 			require.Equal(t, 1, f.Line)
 			require.Equal(t, types.SeverityHigh, f.Severity)
-			require.Contains(t, f.MatchedText, tt.path+" reported SUPPLY_007 (HIGH)")
+			evidence := tt.path + " reported " + tt.rule + " (" + tt.severity.String() + ")"
+			require.Contains(t, f.MatchedText, evidence)
 			require.NotContains(t, f.MatchedText, "line 2")
-			require.Contains(t, f.Description, tt.path+" reported SUPPLY_007 (HIGH) at line 2")
+			require.Contains(t, f.Description, evidence+" at line 2")
 		})
 	}
 }
@@ -197,6 +205,52 @@ func TestForcedHelperRiskObservedEvidenceThresholdAndScope(t *testing.T) {
 			observe:  "scripts/setup.sh",
 			findings: []types.Finding{observed("scripts/setup.sh", "SUPPLY_003", types.SeverityCritical, 3)},
 			want:     true,
+		},
+		{
+			name:     "high finding from a behavior analyzer",
+			skill:    skill,
+			observe:  "scripts/setup.sh",
+			findings: []types.Finding{observedBy("script-risk", "scripts/setup.sh", "SHELL_EXAMPLE_001", types.SeverityHigh, 3)},
+			want:     true,
+		},
+		{
+			name:     "high pattern finding for a child-process test runner is not evidence",
+			skill:    skill,
+			observe:  "scripts/setup.sh",
+			findings: []types.Finding{observed("scripts/setup.sh", "CMDEXEC_004", types.SeverityHigh, 3)},
+		},
+		{
+			name:     "high pattern finding for an ordinary sudo chmod is not evidence",
+			skill:    skill,
+			observe:  "scripts/setup.sh",
+			findings: []types.Finding{observed("scripts/setup.sh", "SUPPLY_007", types.SeverityHigh, 3)},
+		},
+		{
+			name:     "high finding from a non-behavior analyzer is not evidence",
+			skill:    skill,
+			observe:  "scripts/setup.sh",
+			findings: []types.Finding{observedBy("nlp", "scripts/setup.sh", "NLP_HIDDEN_INSTRUCTION", types.SeverityHigh, 3)},
+		},
+		{
+			name:    "sensitive critical finding is not evidence",
+			skill:   skill,
+			observe: "scripts/setup.sh",
+			findings: []types.Finding{{RuleID: "SC-EX-003", Severity: types.SeverityCritical, FilePath: "scripts/setup.sh",
+				Line: 3, Analyzer: "pattern", Sensitive: true}},
+		},
+		{
+			name:    "credential-leak critical finding is not evidence",
+			skill:   skill,
+			observe: "scripts/setup.sh",
+			findings: []types.Finding{{RuleID: "CRED_002", Severity: types.SeverityCritical, FilePath: "scripts/setup.sh",
+				Line: 3, Analyzer: "pattern", Category: "credential-leak"}},
+		},
+		{
+			name:    "sensitive high finding from a behavior analyzer is not evidence",
+			skill:   skill,
+			observe: "scripts/setup.sh",
+			findings: []types.Finding{{RuleID: "PY_CONTEXT_EXFIL_001", Severity: types.SeverityHigh, FilePath: "scripts/setup.sh",
+				Line: 3, Analyzer: "script-risk", Sensitive: true}},
 		},
 		{
 			name:     "medium helper finding is below the threshold",
@@ -267,7 +321,7 @@ func TestForcedHelperRiskIgnoresObservedSkillFiles(t *testing.T) {
 func TestForcedHelperRiskCitesStrongestFindingDeterministically(t *testing.T) {
 	const helper = "scripts/setup.sh"
 	batches := [][]types.Finding{
-		{observed(helper, "RULE_HIGH_FIRST", types.SeverityHigh, 1)},
+		{observedBy("jsrisk", helper, "RULE_HIGH_FIRST", types.SeverityHigh, 1)},
 		{observed(helper, "RULE_CRIT_LATE", types.SeverityCritical, 9), observed(helper, "RULE_CRIT_B", types.SeverityCritical, 4)},
 		{observed(helper, "RULE_CRIT_A", types.SeverityCritical, 4)},
 	}
@@ -288,7 +342,7 @@ func TestForcedHelperRiskCitesStrongestFindingDeterministically(t *testing.T) {
 func TestForcedHelperRiskChecksEveryReferenceOnTheLine(t *testing.T) {
 	a := New()
 	a.Accumulate("SKILL.md", "You MUST first run `bash scripts/lint.sh` and then `node scripts/build.js`.")
-	a.ObserveFindings("scripts/build.js", []types.Finding{observed("scripts/build.js", "JS_DAEMON_001", types.SeverityHigh, 2)})
+	a.ObserveFindings("scripts/build.js", []types.Finding{observedBy("jsrisk", "scripts/build.js", "JS_DAEMON_001", types.SeverityHigh, 2)})
 	findings := a.Finalize()
 	require.Len(t, findings, 1)
 	require.Contains(t, findings[0].MatchedText, "scripts/build.js reported JS_DAEMON_001")
@@ -343,6 +397,8 @@ func TestAccumulateKeepsOnlyContentTheChecksRead(t *testing.T) {
 	require.NotContains(t, a.files, "scripts/f")
 
 	a.ObserveFindings("scripts/d.js", []types.Finding{observed("scripts/d.js", "CMDEXEC_004", types.SeverityHigh, 1)})
+	a.ObserveFindings("scripts/e.ts", []types.Finding{observedBy("jsrisk", "scripts/e.ts", "JS_DAEMON_001", types.SeverityHigh, 1)})
 	a.ObserveFindings("docs/README.md", []types.Finding{observed("docs/README.md", "CMDEXEC_005", types.SeverityMedium, 1)})
 	require.Len(t, a.evidence, 1)
+	require.Contains(t, a.evidence, "scripts/e.ts")
 }

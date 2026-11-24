@@ -6,8 +6,9 @@
 // invocation (`./scripts/setup`) on a line of SKILL.md that makes running it
 // mandatory. The path is resolved inside the skill directory whatever its
 // extension. The helper is risky when either its own per-file scan reported a
-// HIGH or CRITICAL finding (received through ObserveFindings), or, for Python
-// and shell helpers, a small set of content checks below matches.
+// finding that qualifies as chain evidence (received through ObserveFindings;
+// see isChainEvidence), or, for Python and shell helpers, a small set of
+// content checks below matches.
 package skillchain
 
 import (
@@ -58,7 +59,7 @@ type helperEvidence struct {
 // Analyzer is the skill-chain cross-file accumulator. Memory is bounded by
 // the scan itself: content is kept only for SKILL.md files and for Python or
 // shell helpers that the content checks read, and evidence holds at most one
-// small record per file that reported a HIGH or CRITICAL finding.
+// small record per file that reported a chain-evidence finding.
 type Analyzer struct {
 	mu       sync.Mutex
 	files    map[string]string
@@ -82,10 +83,11 @@ func (a *Analyzer) Accumulate(relPath string, content string) {
 	a.mu.Unlock()
 }
 
-// ObserveFindings records the strongest HIGH or CRITICAL finding the
-// per-file analyzers reported for a non-skill file. It implements
-// scanner.CrossFileFindingObserver. Findings of this correlator are ignored
-// so a chain finding can never become evidence for another chain finding.
+// ObserveFindings records the strongest finding the per-file analyzers
+// reported for a non-skill file that qualifies as chain evidence (see
+// isChainEvidence). It implements scanner.CrossFileFindingObserver. Findings
+// of this correlator are ignored so a chain finding can never become
+// evidence for another chain finding.
 func (a *Analyzer) ObserveFindings(relPath string, findings []types.Finding) {
 	relPath = normalizePath(relPath)
 	if isSkillFile(relPath) {
@@ -102,12 +104,48 @@ func (a *Analyzer) ObserveFindings(relPath string, findings []types.Finding) {
 	a.mu.Unlock()
 }
 
+// behaviorAnalyzers are the per-file analyzers that report what helper code
+// does (a bound flow, a payload shape, a persistence write) rather than
+// which capability it uses. Their HIGH findings are chain evidence; a HIGH
+// pattern finding is not, because ordinary helpers trip capability rules
+// (a test runner through a child process, a sudo chmod in an installer).
+var behaviorAnalyzers = map[string]bool{
+	rulemeta.AnalyzerJSRisk:     true,
+	rulemeta.AnalyzerPyRisk:     true,
+	rulemeta.AnalyzerRSBuild:    true,
+	rulemeta.AnalyzerScriptRisk: true,
+}
+
+// isChainEvidence decides whether one helper finding makes a mandatory
+// helper a hidden high-risk behavior:
+//   - a sensitive or credential-leak finding never is: it reports exposed
+//     material, not behavior, and it is the class teams most often baseline;
+//   - a CRITICAL finding from any analyzer is;
+//   - a HIGH finding is only when a behavior analyzer reported it.
+//
+// The correlator's own findings are never evidence.
+func isChainEvidence(f types.Finding) bool {
+	if f.RuleID == "" || f.RuleID == RuleForcedHelperRisk || f.Analyzer == AnalyzerName {
+		return false
+	}
+	if f.Sensitive || f.Category == "credential-leak" {
+		return false
+	}
+	switch {
+	case f.Severity >= types.SeverityCritical:
+		return true
+	case f.Severity == types.SeverityHigh:
+		return behaviorAnalyzers[f.Analyzer]
+	default:
+		return false
+	}
+}
+
 func strongestFinding(relPath string, findings []types.Finding) (helperEvidence, bool) {
 	var best helperEvidence
 	found := false
 	for _, f := range findings {
-		if f.Severity < types.SeverityHigh || f.RuleID == "" ||
-			f.RuleID == RuleForcedHelperRisk || f.Analyzer == AnalyzerName {
+		if !isChainEvidence(f) {
 			continue
 		}
 		if f.FilePath != "" && normalizePath(f.FilePath) != relPath {

@@ -30,7 +30,7 @@ func FuzzCorrelate(f *testing.F) {
 		a.Accumulate("scripts/x.py", helper)
 		a.Accumulate("scripts/install", helper)
 		a.ObserveFindings("scripts/build.js", []types.Finding{{
-			RuleID: "JS_DAEMON_001", Severity: types.SeverityHigh, FilePath: "scripts/build.js", Line: 1,
+			RuleID: "JS_DAEMON_001", Severity: types.SeverityHigh, FilePath: "scripts/build.js", Line: 1, Analyzer: "jsrisk",
 		}})
 
 		findings := a.Finalize()
