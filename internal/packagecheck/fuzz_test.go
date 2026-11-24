@@ -181,8 +181,15 @@ func FuzzParseRequirements(f *testing.F) {
 		"-r other.txt\n-c other.txt\npkg[a,b]==1.0 ; python_version < \"3.9\" \\\n    --hash=sha256:00\n",
 		"# c \\\nx>=1,<2\n-e .\ngit+https://x/y.git#egg=z\nname @ https://x/y.zip\n--index-url https://x\n",
 		"-r ../escape.txt\n-r ${HOME}/x\n-rfile:///etc/hosts\n",
+		"# coding: utf-7\nsix==1.16.0 # +AAo-x+AD0APQ-1\n",
+		utf8BOM + "# coding: utf-7\nx==1\r\n",
 	} {
 		f.Add([]byte(s))
+	}
+	// Every separator Python's str.splitlines() honours, after a comment,
+	// an option value, a hash and a continuation backslash.
+	for _, sep := range []string{"\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e", "\u0085", " ", " "} {
+		f.Add([]byte("# c" + sep + "x==1" + sep + "--index-url https://x" + sep + "y==2 --hash=sha256:00" + sep + "z==\\" + sep + "3" + sep + "-r other.txt"))
 	}
 	addTestdataSeeds(f, "requirements.txt")
 	addTestdataSeeds(f, "constraints.txt")

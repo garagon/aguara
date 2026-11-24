@@ -1,8 +1,7 @@
 package packagecheck
 
 import (
-	"bufio"
-	"errors"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,18 +213,98 @@ func hasURLScheme(s string) bool {
 	return len(m) > 2
 }
 
+// pipCodingDeclaration is pip's PEP263_ENCODING_RE on bytes; Python's
+// bytes \s is [ \t\n\r\f\v] and \w is [A-Za-z0-9_].
+var pipCodingDeclaration = regexp.MustCompile(`coding[:=][ \t\n\r\f\v]*([-A-Za-z0-9_.]+)`)
+
+// utf8CodingNames are the declared encodings that decode a requirements
+// file exactly as UTF-8 does (ASCII is a subset; pip rejects non-ASCII
+// bytes under it, which is never a way to hide an entry). Names are
+// compared after lower-casing and mapping "-" to "_", as Python's codec
+// lookup does.
+var utf8CodingNames = map[string]bool{"utf_8": true, "utf8": true, "utf_8_sig": true, "ascii": true, "us_ascii": true}
+
+// decodeRequirements mirrors how pip decodes a requirements file: a
+// UTF-8 byte-order mark is stripped; otherwise a PEP 263 declaration in
+// either of the first two "\n"-delimited lines, when that line starts
+// with '#', selects the codec. A declared codec other than UTF-8 or
+// ASCII is an error, not a guess: pip would decode the file differently
+// (UTF-7, for example, can spell a newline as "+AAo-") and could install
+// a requirement this parser never sees. Content that is not valid UTF-8
+// is an error too; pip would fall back to the locale encoding.
+func decodeRequirements(data []byte) (string, error) {
+	if bytes.HasPrefix(data, []byte(utf8BOM)) {
+		data = data[len(utf8BOM):]
+	} else {
+		lines := bytes.SplitN(data, []byte{'\n'}, 3)
+		for i := 0; i < len(lines) && i < 2; i++ {
+			if !bytes.HasPrefix(lines[i], []byte{'#'}) {
+				continue
+			}
+			if m := pipCodingDeclaration.FindSubmatch(lines[i]); m != nil {
+				name := strings.ReplaceAll(strings.ToLower(string(m[1])), "-", "_")
+				if !utf8CodingNames[name] {
+					return "", fmt.Errorf("line %d declares encoding %q; only UTF-8 requirements files are supported", i+1, m[1])
+				}
+				break
+			}
+		}
+	}
+	if !utf8.Valid(data) {
+		return "", fmt.Errorf("not valid UTF-8")
+	}
+	return string(data), nil
+}
+
+// forEachPythonLine calls fn for each line of s split the way Python's
+// str.splitlines() splits it, which is how pip reads a requirements
+// file: "\r\n", "\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", U+0085,
+// U+2028 and U+2029 all end a line, and a trailing separator does not
+// start an empty final line. s must be valid UTF-8. Line numbers are
+// 1-based and count every separator, as pip's diagnostics do.
+func forEachPythonLine(s string, fn func(line int, text string) error) error {
+	lineNo, start := 0, 0
+	for i := 0; i < len(s); {
+		width := 0
+		switch c := s[i]; {
+		case c == '\r' && i+1 < len(s) && s[i+1] == '\n':
+			width = 2
+		case c == '\n' || c == '\r' || c == '\v' || c == '\f' || c == 0x1c || c == 0x1d || c == 0x1e:
+			width = 1
+		case c == 0xc2 && i+1 < len(s) && s[i+1] == 0x85:
+			width = 2 // U+0085
+		case c == 0xe2 && i+2 < len(s) && s[i+1] == 0x80 && (s[i+2] == 0xa8 || s[i+2] == 0xa9):
+			width = 3 // U+2028, U+2029
+		}
+		if width == 0 {
+			i++
+			continue
+		}
+		lineNo++
+		if err := fn(lineNo, s[start:i]); err != nil {
+			return err
+		}
+		i += width
+		start = i
+	}
+	if start < len(s) {
+		return fn(lineNo+1, s[start:])
+	}
+	return nil
+}
+
 func parseRequirementsFile(path string) (*requirementsFile, error) {
-	f, err := openManifest(path, "requirements")
+	data, err := readManifest(path, "requirements")
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "requirements"))
-	scanner.Buffer(make([]byte, 0, 64<<10), maxRequirementsLineBytes)
+	content, err := decodeRequirements(data)
+	if err != nil {
+		return nil, err
+	}
 	out := &requirementsFile{}
 	var pending strings.Builder
 	pendingLine := 0
-	lineNo := 0
 	emit := func(line int, text string) error {
 		text = strings.TrimSpace(pipCommentRe.ReplaceAllString(text, ""))
 		if text == "" {
@@ -241,16 +320,10 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 		out.items = append(out.items, items...)
 		return nil
 	}
-	for scanner.Scan() {
-		lineNo++
-		text := scanner.Text()
-		if lineNo == 1 {
-			text = strings.TrimPrefix(text, utf8BOM)
+	err = forEachPythonLine(content, func(lineNo int, text string) error {
+		if len(text) > maxRequirementsLineBytes {
+			return fmt.Errorf("line %d exceeds %d bytes", lineNo, maxRequirementsLineBytes)
 		}
-		if !utf8.ValidString(text) {
-			return nil, fmt.Errorf("line %d: not valid UTF-8", lineNo)
-		}
-		text = strings.TrimSuffix(text, "\r")
 		// pip joins a line ending in a backslash with the next one,
 		// unless the line is a comment.
 		if strings.HasSuffix(text, `\`) && !pipCommentLine.MatchString(text) {
@@ -258,30 +331,23 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 				pendingLine = lineNo
 			}
 			if pending.Len()+len(text) > maxRequirementsLineBytes {
-				return nil, fmt.Errorf("line %d: continued line exceeds %d bytes", pendingLine, maxRequirementsLineBytes)
+				return fmt.Errorf("line %d: continued line exceeds %d bytes", pendingLine, maxRequirementsLineBytes)
 			}
 			pending.WriteString(strings.Trim(text, `\`))
-			continue
+			return nil
 		}
 		if pending.Len() > 0 {
 			if pipCommentLine.MatchString(text) {
 				text = " " + text
 			}
 			pending.WriteString(text)
-			if err := emit(pendingLine, pending.String()); err != nil {
-				return nil, err
-			}
+			joined := pending.String()
 			pending.Reset()
-			continue
+			return emit(pendingLine, joined)
 		}
-		if err := emit(lineNo, text); err != nil {
-			return nil, err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		if errors.Is(err, bufio.ErrTooLong) {
-			return nil, fmt.Errorf("a line exceeds %d bytes", maxRequirementsLineBytes)
-		}
+		return emit(lineNo, text)
+	})
+	if err != nil {
 		return nil, err
 	}
 	if pending.Len() > 0 {
