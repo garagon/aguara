@@ -24,6 +24,12 @@ ignore:
   # tests skip when it is absent.
   - testdata/**
 
+  # Gitignored local working directories (see .gitignore). Not part of a
+  # clone; excluded so a working-tree self-scan matches a clean checkout.
+  - sandbox/**
+  - scripts/**
+  - DOCS/**
+
   # Release notes and rule docs quote attack patterns when describing what
   # each fix or rule detects.
   - CHANGELOG.md

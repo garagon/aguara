@@ -1,6 +1,6 @@
 # Aguara Rule Catalog
 
-The v0.29.0 catalog contains **259 detections**: **191 built-in pattern rules** defined in 13 YAML files, one per pattern category, and **68 analyzer-emitted detections** from ci-trust, mcp-capability, kube-policy, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and the rug-pull detector. Run `aguara list-rules` for the installed binary's catalog and `aguara explain <RULE_ID>` for a rule's description, scope and remediation.
+The v0.29.0 catalog contains **259 detections**: **191 built-in pattern rules** defined in 13 YAML files named after the pattern categories, and **68 analyzer-emitted detections** from ci-trust, mcp-capability, kube-policy, pkgmeta, jsrisk, pyrisk, script-risk, skill-policy, skill-chain, rsbuild, npm-policy, pnpm-policy, agent-policy, NLP, toxicflow, and the rug-pull detector. Run `aguara list-rules` for the installed binary's catalog and `aguara explain <RULE_ID>` for a rule's description, scope and remediation.
 
 `K8S_IDENTITY_CAPABILITIES_001` is a LOW `container-security` observation with
 `context` impact. It identifies explicit `SETUID`/`SETGID` additions at recognized

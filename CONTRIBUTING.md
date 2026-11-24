@@ -133,7 +133,7 @@ go test -race -count=1 -v ./internal/engine/pattern/...
 
 Aguara is a scanner whose own source intentionally contains attack patterns: rule YAML `examples.true_positive` blocks (used by the rule self-test suite), attack payloads used as fixtures in Go tests, parser fixtures under `internal/*/testdata/`, and documentation that cites example attacks when explaining detections. Without exclusions, `aguara scan .` on a checkout is dominated by that by-design content, mostly the rule YAMLs and, after `make build`, the `aguara` binary, which embeds every rule.
 
-The repo ships a `.aguara.yml` at the root that excludes the rule definitions, an optional root `testdata/` directory, `CHANGELOG.md`, `RULES.md`, `README.md` and compiled binaries. Do not copy this file into consumer projects; it is specific to scanner development.
+The repo ships a `.aguara.yml` at the root that excludes the rule definitions, an optional root `testdata/` directory and gitignored local working directories, `CHANGELOG.md`, `RULES.md`, `README.md` and compiled binaries. Do not copy this file into consumer projects; it is specific to scanner development.
 
 After `make build`, a self-scan of a clean checkout still reports findings:
 
@@ -146,7 +146,7 @@ These are expected. They come from:
 - `*_test.go` files that embed attack payloads as test fixtures (most of the findings).
 - Analyzer and rule-support code under `internal/` (for example `internal/engine/`, `internal/kubeconfig/` and `internal/incident/`), which contains the commands, paths and indicators it looks for.
 - Committed parser fixtures under `internal/packagecheck/testdata/`.
-- A few lines in contributor docs, `action.yml` and `.github/workflows/` that show an install command or request an OIDC token for signing.
+- A few lines in contributor docs, `action.yml` and `.github/workflows/` that quote a rule example, mention a privilege capability, show an install command or request an OIDC token for signing.
 
 Investigate findings in files outside those groups, and findings that a change adds without introducing matching content. Saving a JSON report (`--format json -o <file>`) before and after a change makes new findings easy to spot.
 
