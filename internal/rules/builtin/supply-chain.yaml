@@ -138,15 +138,17 @@ match_mode: any
 patterns:
   - type: regex
     value: "(?i)\\bsudo\\s+(chmod|chown|rm\\s+-rf|bash|sh)\\b"
+  # chmod granting setuid/setgid. The first alternative is the original bare
+  # +s form. The second adds a symbolic mode with a who-prefix (u+s, g+s,
+  # ug=rws, u+x,g+s) and a four-digit octal mode whose special-bits digit sets
+  # setuid or setgid (2xxx-7xxx, optional leading 0; 1xxx is the sticky bit
+  # only), applied to a path-like operand: one starting with / ~ $ or ., or a
+  # name followed by / or by a dot and a name character. Prose such as
+  # "chmod u+s to ..." or a sentence ending "chmod 4755 binaries." does not
+  # match. Both forms share one pattern so the rule's per-pattern confidence
+  # is unchanged.
   - type: regex
-    value: "(?i)chmod\\s+[+]?[0-7]*s[0-7]*\\s"
-  # Setuid/setgid modes the pattern above misses: a symbolic mode with a
-  # who-prefix (u+s, g+s, ug=rws, u+x,g+s) and a four-digit octal mode whose
-  # special-bits digit sets setuid or setgid (2xxx-7xxx, optional leading 0;
-  # 1xxx is the sticky bit only). The mode must be applied to a path-like
-  # operand so prose such as "chmod u+s to ..." does not match.
-  - type: regex
-    value: "(?i)\\bchmod\\s+(?:-[a-z]+\\s+)*(?:(?:[ugoa]*[-+=][rwxXst]*,)*[ugoa]+[+=][rwxXt]*s[rwxXst]*(?:,[ugoa]*[-+=][rwxXst]*)*|0?[2-7][0-7]{3})\\s+[\"']?(?:[/~$.]|[a-z0-9_-]+[/.])"
+    value: "(?i)chmod\\s+[+]?[0-7]*s[0-7]*\\s|\\bchmod\\s+(?:-[a-z]+\\s+)*(?:(?:[ugoa]*[-+=][rwxXst]*,)*[ugoa]+[+=][rwxXt]*s[rwxXst]*(?:,[ugoa]*[-+=][rwxXst]*)*|0?[2-7][0-7]{3})\\s+[\"']?(?:[/~$.]|[a-z0-9_-]+(?:/|\\.[a-z0-9_]))"
   - type: regex
     value: "(?i)chown\\s+(root|0)[:.]"
   - type: regex
@@ -176,6 +178,7 @@ examples:
     - "chmod g-s /srv/shared"
     - "chmod 1777 /tmp/scratch"
     - "chmod u+s to keep the original owner"
+    - "Never use chmod 4755 binaries."
 ---
 id: SUPPLY_008
 name: "Reverse shell pattern"
