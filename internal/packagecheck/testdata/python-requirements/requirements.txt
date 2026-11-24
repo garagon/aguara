@@ -1,0 +1,21 @@
+# Runtime dependencies
+-r requirements/base.txt
+-c constraints.txt
+--index-url https://pypi.org/simple
+--extra-index-url=https://mirror.example.com/simple
+requests[socks]==2.31.0 ; python_version >= "3.8" \
+    --hash=sha256:3333333333333333333333333333333333333333333333333333333333333333 \
+    --hash=sha256:4444444444444444444444444444444444444444444444444444444444444444
+    # via demo-app
+Evil_Pkg == 1.0 # pinned by mistake
+loose>=1.0,<2
+bare-name
+wild==1.*
+-e ./local-lib
+./wheels/local_wheel-3.0.0-py3-none-any.whl
+from-git @ git+https://github.com/example/from-git.git@v1
+git+https://github.com/example/other.git#egg=other
+https://example.com/archive-1.0.tar.gz
+-r https://example.com/remote-requirements.txt
+-r ../outside.txt
+-r requirements/missing.txt
