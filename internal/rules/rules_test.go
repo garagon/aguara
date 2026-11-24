@@ -217,6 +217,23 @@ func TestBuiltinWithinLinesRulesHaveWindowExamples(t *testing.T) {
 			}
 		}
 		require.Truef(t, exercised, "rule %s: no false_positive example shows the within_lines bound", rule.ID)
+
+		// Rules that describe an action chain use a wide window so ordinary
+		// layouts (numbered steps with blank lines, a heredoc between a
+		// download and chmod, a multi-line manifest) still match. Each such
+		// rule keeps a true_positive whose halves a 5-line window would miss.
+		if rule.WithinLines > 5 {
+			narrow := *rule
+			narrow.WithinLines = 5
+			narrowMatcher := pattern.NewMatcher([]*rules.CompiledRule{&narrow})
+			spread := false
+			for _, tp := range rule.Examples.TruePositive {
+				if !matchesRule(t, narrowMatcher, &narrow, tp) {
+					spread = true
+				}
+			}
+			require.Truef(t, spread, "rule %s: no true_positive spreads its evidence beyond 5 lines", rule.ID)
+		}
 	}
 	require.NotZero(t, bounded)
 }

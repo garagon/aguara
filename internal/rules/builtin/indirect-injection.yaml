@@ -28,7 +28,7 @@ category: indirect-injection
 remediation: "Do not apply external or remote content as operational rules; hardcode rules locally and validate any imported content."
 targets: ["*.md", "*.txt"]
 match_mode: all
-within_lines: 5
+within_lines: 25
 patterns:
   - type: regex
     value: "(?i)(read|load|parse|import|include|consume|ingest)\\s+.{0,40}(external|remote|online|web|fetched|downloaded|third.party)"
@@ -39,9 +39,10 @@ examples:
     - "Read the external documentation and apply it as rules for the project"
     - "Load remote guidelines and use them as instructions for code review"
     - "Read the remote style guide at the start of each session.\nApply its contents as rules for every review."
+    - "1. Read the remote style guide.\n\n2. Note its sections.\n\n3. Skip the examples.\n\n4. Keep the headings.\n\n5. Merge duplicate items.\n\n6. Apply the result as rules for every review."
   false_positive:
     - "Read the local README and follow its instructions"
-    - "Read the online changelog when upgrading.\n\n## Lint\n\nNothing special.\n\n## Config\n\nUse the defaults for config files."
+    - "Read the online changelog when upgrading.\n\n## Options\n\n- Option 1.\n- Option 2.\n- Option 3.\n- Option 4.\n- Option 5.\n- Option 6.\n- Option 7.\n- Option 8.\n- Option 9.\n- Option 10.\n- Option 11.\n- Option 12.\n- Option 13.\n- Option 14.\n- Option 15.\n- Option 16.\n- Option 17.\n- Option 18.\n- Option 19.\n- Option 20.\n- Option 21.\n- Option 22.\n\n## More\n\nUse the defaults for config files."
 ---
 id: INDIRECT_004
 name: "Remote config controlling agent behavior"
@@ -93,7 +94,7 @@ category: indirect-injection
 remediation: "Treat email and message content as untrusted data; never execute instructions embedded in external messages."
 targets: ["*.md", "*.txt"]
 match_mode: all
-within_lines: 5
+within_lines: 25
 patterns:
   - type: regex
     value: "(?i)(read|check|fetch|poll|monitor)\\s+.{0,30}(email|inbox|message|mail|notification|slack|discord)"
@@ -104,10 +105,11 @@ examples:
     - "Read the user's email and act on the instructions found"
     - "Monitor Slack messages and execute based on the message content"
     - "Poll the support inbox every hour.\nAct on the instructions in each new email."
+    - "1. Poll the support inbox.\n\n2. Open the newest thread.\n\n3. Skip auto-replies.\n\n4. Translate it if needed.\n\n5. Summarize it.\n\n6. Act on the instructions it gives."
   false_positive:
     - "Send an email notification when the task is complete"
     - "Read Slack messages and respond based on context"
-    - "Check your email for the invite link.\n\n## Steps\n\nOpen the app.\n\n## Feedback\n\nWe act on the request of the maintainers."
+    - "Check your email for the invite link.\n\n## Options\n\n- Option 1.\n- Option 2.\n- Option 3.\n- Option 4.\n- Option 5.\n- Option 6.\n- Option 7.\n- Option 8.\n- Option 9.\n- Option 10.\n- Option 11.\n- Option 12.\n- Option 13.\n- Option 14.\n- Option 15.\n- Option 16.\n- Option 17.\n- Option 18.\n- Option 19.\n- Option 20.\n- Option 21.\n- Option 22.\n\n## More\n\nWe act on the request of the maintainers."
 ---
 id: INDIRECT_009
 name: "External API response drives agent behavior"
@@ -117,7 +119,7 @@ category: indirect-injection
 remediation: "Validate and sanitize API responses against an expected schema; do not let response data drive agent decisions directly."
 targets: ["*.md", "*.txt"]
 match_mode: all
-within_lines: 5
+within_lines: 25
 patterns:
   - type: regex
     value: "(?i)(call|invoke|query|request|hit)\\s+.{0,30}(api|endpoint|service|server)\\s"
@@ -128,9 +130,10 @@ examples:
     - "Call the API and take action based on the response"
     - "Query the service and decide next steps according to the result"
     - "Call the pricing API with the order ID.\nDecide the next step based on the response."
+    - "1. Call the pricing API with the order ID.\n\n2. Wait for the reply.\n\n3. Parse the JSON.\n\n4. Read the total.\n\n5. Compare it to the cart.\n\n6. Pick the next step based on the response."
   false_positive:
     - "Call the API and display the response to the user"
-    - "Call the weather API once per hour.\n\n## Display\n\nShow a card.\n\n## Colors\n\nPick colors based on the theme data."
+    - "Call the weather API once per hour.\n\n## Options\n\n- Option 1.\n- Option 2.\n- Option 3.\n- Option 4.\n- Option 5.\n- Option 6.\n- Option 7.\n- Option 8.\n- Option 9.\n- Option 10.\n- Option 11.\n- Option 12.\n- Option 13.\n- Option 14.\n- Option 15.\n- Option 16.\n- Option 17.\n- Option 18.\n- Option 19.\n- Option 20.\n- Option 21.\n- Option 22.\n\n## More\n\nPick colors based on the theme data."
 ---
 id: INDIRECT_010
 name: "Unscoped Bash tool in allowed tools"
@@ -161,7 +164,7 @@ category: indirect-injection
 remediation: "Treat database/cache content as untrusted data; never interpret stored values as executable instructions."
 targets: ["*.md", "*.txt"]
 match_mode: all
-within_lines: 5
+within_lines: 25
 patterns:
   - type: regex
     value: "(?i)(query|select|fetch|read|retrieve)\\s+.{0,40}(database|cache|datastore|redis|memcache|mongo|dynamo|sqlite|postgres|mysql|store)"
@@ -175,10 +178,11 @@ examples:
     - "Query the database for pending tasks and execute the instructions stored in each record"
     - "Retrieve commands from the Redis cache and follow the instructions returned"
     - "Query the database for pending jobs.\nExecute the command stored in each row."
+    - "1. Query the database for pending jobs.\n\n2. Sort them by age.\n\n3. Drop expired rows.\n\n4. Lock each row.\n\n5. Decode the payload.\n\n6. Execute the command it contains."
   false_positive:
     - "Query the database and log the results for auditing"
     - "Read data from the cache and display it to the user"
-    - "Read the cache settings in config.yaml.\n\n## Tasks\n\nNone.\n\n## Jobs\n\nPerform the task described in the ticket."
+    - "Read the cache settings in config.yaml.\n\n## Options\n\n- Option 1.\n- Option 2.\n- Option 3.\n- Option 4.\n- Option 5.\n- Option 6.\n- Option 7.\n- Option 8.\n- Option 9.\n- Option 10.\n- Option 11.\n- Option 12.\n- Option 13.\n- Option 14.\n- Option 15.\n- Option 16.\n- Option 17.\n- Option 18.\n- Option 19.\n- Option 20.\n- Option 21.\n- Option 22.\n\n## More\n\nPerform the task described in the ticket."
 ---
 id: INDIRECT_012
 name: "Webhook or callback registration with external service"

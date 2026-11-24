@@ -130,7 +130,7 @@ When project policy is ignored, `.aguara.yml` is not loaded at all. Caller-suppl
 - `match_mode`: `any` (OR, default) or `all` (AND)
 - `remediation`: actionable fix guidance (all 191 built-in rules have this)
 - `examples.true_positive` and `examples.false_positive` - **self-tested automatically by `make test`**
-- Optional: `targets` (file globs), `exclude_patterns` (suppression; each entry's `scope` is `line`, the default, or `context` for section headings), `within_lines` (`match_mode: all` only: all patterns within N consecutive lines; 18 built-in rules use 5)
+- Optional: `targets` (file globs), `exclude_patterns` (suppression; each entry's `scope` is `line`, the default, or `context` for section headings), `within_lines` (`match_mode: all` only: all patterns within N consecutive lines; 14 built-in action-chain rules use 25 and 4 rules whose second pattern is a common word use 5)
 - Examples may span several lines (`\n`); the self-test runs them through the production matcher
 
 When a detection moves from YAML into an analyzer, keep the rule ID (as with `PY_IMPORTTIME_REMOTE_JS_001`, `RS_BUILD_WALLET_EXFIL_001`, `SC-EX-007` and `MCP_009`) and update `RULES.md` and the counts in `README.md`, `CONTRIBUTING.md` and this file.

@@ -448,7 +448,7 @@ examples:
     - "# https://internal.mycompany.com is the old host"
 ```
 
-`exclude_patterns` entries suppress a match when they match the line or lines the match spans (`scope: line`, the default). Add `scope: context` to an entry only when it identifies a documentation section, such as an `## Installation` heading; a context-scoped exclude also checks the 3 lines before the match. With `match_mode: all`, a rule fires when every pattern matches somewhere in the file; add `within_lines: N` to require all of them inside N consecutive lines (the built-in rules that describe one instruction or a short read-then-send chain use 5). Examples may span several lines and are checked with the same matcher a scan uses.
+`exclude_patterns` entries suppress a match when they match the line or lines the match spans (`scope: line`, the default). Add `scope: context` to an entry only when it identifies a documentation section, such as an `## Installation` heading; a context-scoped exclude also checks the 3 lines before the match. With `match_mode: all`, a rule fires when every pattern matches somewhere in the file; add `within_lines: N` to require all of them inside N consecutive lines. Built-in rules that describe an action chain, such as reading a secret and then sending it, use 25 so that numbered steps, a heredoc or a multi-line manifest between the two halves still match; CRED_019, CRED_021, THIRDPARTY_001 and THIRDPARTY_004, whose second pattern is a single common word, use 5. Examples may span several lines and are checked with the same matcher a scan uses.
 
 Load custom rules with the `--rules` flag:
 

@@ -91,7 +91,7 @@ severity: HIGH             # CRITICAL, HIGH, MEDIUM, LOW, INFO
 category: exfiltration     # Must match an existing category
 targets: ["*.md", "*.txt", "*.json"]
 match_mode: any            # "any" = OR, "all" = AND across patterns
-within_lines: 5            # Optional, match_mode: all only: all patterns within 5 consecutive lines
+within_lines: 25           # Optional, match_mode: all only: all patterns within 25 consecutive lines
 remediation: "How to fix the issue found by this rule."
 patterns:
   - type: regex            # "regex" or "contains"
@@ -120,7 +120,7 @@ Every line is evaluated on its own, so `^` and `$` in an exclude regex anchor to
 
 ### Proximity for `match_mode: all`
 
-Without `within_lines`, a `match_mode: all` rule fires when each pattern matches anywhere in the file. Set `within_lines: N` when the rule describes one statement or a short chain (read a secret, then send it), so that all patterns must match inside a window of N consecutive lines; every line a multi-line match spans counts toward the window. The finding is reported at the first pattern's hit in the earliest such window. Leave it unset only when the evidence can legitimately be spread across a file, for example a source file whose data flow runs through several functions. `within_lines` is rejected on `match_mode: any` rules. Give such a rule a `false_positive` example whose patterns are farther apart than the window.
+Without `within_lines`, a `match_mode: all` rule fires when each pattern matches anywhere in the file. Set `within_lines: N` when the rule describes one statement or a short chain (read a secret, then send it), so that all patterns must match inside a window of N consecutive lines; every line a multi-line match spans counts toward the window. The finding is reported at the first pattern's hit in the earliest such window. Choose N so that ordinary layouts still match: an action chain written as numbered steps with blank lines, step headings, a heredoc between a download and `chmod`, or a multi-line tool manifest easily puts 10 or more lines between the halves, and a window that small text can step out of is an evasion. The built-in chain rules use 25. Use a small window such as 5 only when a pattern is a single common word that a wider window would pair with unrelated text. Leave it unset when the evidence can legitimately be spread across a file, for example a source file whose data flow runs through several functions. `within_lines` is rejected on `match_mode: any` rules. Give such a rule a `false_positive` example whose patterns are farther apart than the window, and for a wide window a `true_positive` whose halves are more than 5 lines apart.
 
 ### Self-testing
 

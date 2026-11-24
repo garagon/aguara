@@ -265,7 +265,7 @@ severity: MEDIUM
 category: supply-chain
 targets: ["*.md", "*.txt"]
 match_mode: all
-within_lines: 5
+within_lines: 25
 remediation: "Pin the clone to a specific commit SHA or tag. Audit cloned code before executing it."
 patterns:
   - type: regex
@@ -279,11 +279,12 @@ examples:
     - "git clone https://github.com/org/repo && cd repo && make install"
     - "git clone https://github.com/org/repo && cd /tmp/tool && python setup.py install"
     - "git clone https://github.com/org/tool\ncd tool\nmake install"
+    - "1. git clone https://example.com/tool.git\n\n2. Read the README.\n\n3. Check the license.\n\n4. Install the compiler.\n\n5. Set PREFIX.\n\n6. cd tool && make install"
   false_positive:
     - "git clone https://github.com/org/repo for more info"
     - "git clone --branch v1.2.3 https://github.com/org/repo"
     - "git clone https://github.com/org/repo to review the code. Then run npm install."
-    - "git clone https://github.com/org/tool to read the code.\n\n## Build\n\nUse the release binaries.\n\n## Maintainers\n\nThey run make install on the build host."
+    - "git clone https://github.com/org/tool to read the code.\n\n## Options\n\n- Option 1.\n- Option 2.\n- Option 3.\n- Option 4.\n- Option 5.\n- Option 6.\n- Option 7.\n- Option 8.\n- Option 9.\n- Option 10.\n- Option 11.\n- Option 12.\n- Option 13.\n- Option 14.\n- Option 15.\n- Option 16.\n- Option 17.\n- Option 18.\n- Option 19.\n- Option 20.\n- Option 21.\n- Option 22.\n\n## More\n\nThey run make install on the build host."
 ---
 id: SUPPLY_013
 name: "Unpinned GitHub Actions"
