@@ -46,7 +46,7 @@ func TestDecodeAndRescanCodeBlockSeverity(t *testing.T) {
 		ID: "TEST_DECODE_CB", Name: "Decode", Severity: "HIGH", Category: "test",
 		Patterns: []rules.RawPattern{{Type: rules.PatternRegex, Value: `(?i)ignore\s+all\s+previous`}},
 	})
-	lines := []string{"Setup:", "```", "echo " + encoded + " | base64 -d | sh", "```"}
+	lines := []string{"Setup:", "```", "token: " + encoded, "```"}
 	content := []byte(lines[0] + "\n" + lines[1] + "\n" + lines[2] + "\n" + lines[3] + "\n")
 	cbMap := pattern.BuildCodeBlockMap(append(lines, ""))
 	for path, want := range map[string]types.Severity{"SKILL.md": types.SeverityHigh, "README.md": types.SeverityMedium} {

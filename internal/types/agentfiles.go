@@ -15,40 +15,55 @@ import (
 // runs its Markdown pipeline on them, and confidence scoring weights their
 // findings up rather than down.
 //
-// Matching is case-insensitive and works on a slash- or
-// backslash-separated path. A file is recognised by its base name, by its
-// .mdc extension, or by a directory convention; directory conventions
-// match anywhere in the path so nested projects (monorepo packages,
-// vendored skills) are covered. A single-file scan only carries the base
-// name, so there only the base-name and extension forms apply.
+// path may use slash or backslash separators. A file qualifies when:
 //
-// The list is limited to locations each tool's own documentation
+//   - its base name is a documented instruction file name in the
+//     documented spelling (AGENTS.md, CLAUDE.md, .cursorrules, ...),
+//     anywhere in the tree; tools also read nested copies of these;
+//   - its base name is one of those names in another letter case and the
+//     file sits at the scan root or directly inside a config directory
+//     the tools read it from (.claude/, .junie/). On case-insensitive file
+//     systems the tool loads it there, while elsewhere lowercase names
+//     such as docs/agent.md or docs/providers/gemini.md are ordinary
+//     documentation pages;
+//   - it has the .mdc extension, Cursor's rule file format; or
+//   - it sits in a documented tool directory (.cursor/rules/,
+//     .github/instructions/, .claude/commands/, ...). These dot-directories
+//     cannot be mistaken for documentation pages, so they match in any
+//     letter case and anywhere in the path (monorepo packages, vendored
+//     projects).
+//
+// A single-file scan only carries the base name, which counts as the scan
+// root. The list is limited to locations each tool's own documentation
 // describes; the source for every entry is noted next to it.
 func IsAgentInstructionFile(path string) bool {
-	p := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
-	base := p
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		base = p[i+1:]
+	slashed := strings.ReplaceAll(path, "\\", "/")
+	dir, base := "", slashed
+	if i := strings.LastIndexByte(slashed, '/'); i >= 0 {
+		dir, base = slashed[:i], slashed[i+1:]
 	}
-	if instructionBaseNames[base] {
+	if instructionBaseNames[base] || strings.HasPrefix(base, ".roorules-") {
 		return true
 	}
-	// Roo Code mode-specific rule files: .roorules-{modeSlug}.
-	// https://roocodeinc.github.io/Roo-Code/features/custom-instructions
-	if strings.HasPrefix(base, ".roorules-") {
+	p := strings.ToLower(slashed)
+	lowerBase := strings.ToLower(base)
+	if dir == "" && (foldedBaseNames[lowerBase] || strings.HasPrefix(lowerBase, ".roorules-")) {
 		return true
 	}
-	// Cursor project rules use the .mdc extension, which is Cursor's rule
-	// file format; recognising the extension alone also covers a
-	// single-file scan of .cursor/rules/x.mdc.
+	if parent := strings.ToLower(dir[strings.LastIndexByte(dir, '/')+1:]); configDirNames[parent][lowerBase] {
+		return true
+	}
+	// Cursor project rules "must use the .mdc extension"; the extension is
+	// Cursor's rule format, which also covers a single-file scan of
+	// .cursor/rules/x.mdc.
 	// https://cursor.com/docs/rules
-	if filepath.Ext(base) == ".mdc" {
+	if filepath.Ext(lowerBase) == ".mdc" {
 		return true
 	}
 	dirs := strings.Split(p, "/")
 	dirs = dirs[:len(dirs)-1]
 	for _, c := range instructionDirs {
-		if c.matches(dirs, base) {
+		if c.matches(dirs, lowerBase) {
 			return true
 		}
 	}
@@ -59,9 +74,10 @@ func IsAgentInstructionFile(path string) bool {
 // blocks included, is something an agent is told to act on: a skill
 // definition (SKILL.md) or an agent instruction file. In ordinary
 // documentation a fenced block is an example for a human reader, so
-// scanners treat matches there as less severe; in these files the fenced
-// `curl ... | bash` under "Setup" is the command the agent will run, so
-// code blocks must not lower severity or confidence.
+// scanners treat matches there as less severe; in these files a fenced
+// install command under "Setup" is what the agent will run, so code
+// blocks must not lower severity or confidence. SKILL.md is matched in
+// any case, as the skill-policy and skill-chain analyzers do.
 func IsAgentDirectiveFile(path string) bool {
 	base := path
 	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
@@ -70,33 +86,38 @@ func IsAgentDirectiveFile(path string) bool {
 	return strings.EqualFold(base, "SKILL.md") || IsAgentInstructionFile(path)
 }
 
-// instructionBaseNames are instruction files recognised by name alone.
+// instructionBaseNames are instruction file names in their documented
+// spelling. They are recognised anywhere in the tree.
 var instructionBaseNames = map[string]bool{
 	// Cross-tool convention read by Codex, Cursor, GitHub Copilot, Devin
-	// Desktop (Windsurf), Cline, Roo Code, Kiro, Goose, Zed, JetBrains AI
-	// Assistant and Junie, and by Claude Code when no CLAUDE.md exists.
+	// (Windsurf), Cline, Roo Code, Kiro, Goose, Zed, JetBrains AI Assistant
+	// and Junie, and by Claude Code (also as .claude/AGENTS.md) when no
+	// CLAUDE.md exists.
 	// https://developers.openai.com/codex/guides/agents-md
 	// https://cursor.com/docs/rules
 	// https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
-	"agents.md": true,
+	// https://code.claude.com/docs/en/memory
+	"AGENTS.md": true,
 	// Codex reads AGENTS.override.md in place of AGENTS.md.
 	// https://developers.openai.com/codex/guides/agents-md
-	"agents.override.md": true,
-	// Zed and Roo Code fall back to AGENT.md.
+	"AGENTS.override.md": true,
+	// Devin loads AGENTS.local.md (personal rules) like AGENTS.md.
+	// https://docs.devin.ai/cli/extensibility/rules
+	"AGENTS.local.md": true,
+	// Zed, Roo Code and Devin fall back to AGENT.md.
 	// https://zed.dev/docs/ai/instructions
 	// https://roocodeinc.github.io/Roo-Code/features/custom-instructions
-	"agent.md": true,
+	// https://docs.devin.ai/cli/extensibility/rules
+	"AGENT.md": true,
 	// Claude Code project memory (also ./.claude/CLAUDE.md) and personal
-	// project memory; GitHub Copilot, Cursor and Zed read CLAUDE.md too.
+	// project memory; GitHub Copilot, Cursor, Devin and Zed read CLAUDE.md
+	// too.
 	// https://code.claude.com/docs/en/memory
-	"claude.md":       true,
-	"claude.local.md": true,
+	"CLAUDE.md":       true,
+	"CLAUDE.local.md": true,
 	// Gemini CLI context file; GitHub Copilot and Zed read it too.
 	// https://geminicli.com/docs/cli/gemini-md/
-	"gemini.md": true,
-	// GitHub Copilot repository instructions (.github/copilot-instructions.md).
-	// https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
-	"copilot-instructions.md": true,
+	"GEMINI.md": true,
 	// Zed project rules, and the single-file rule formats Zed reads as
 	// fallbacks (Cursor's legacy .cursorrules, Windsurf's legacy
 	// .windsurfrules, Cline's .clinerules).
@@ -107,12 +128,35 @@ var instructionBaseNames = map[string]bool{
 	".cursorrules":   true,
 	".windsurfrules": true,
 	".clinerules":    true,
-	// Roo Code single-file workspace rules.
+	// Roo Code single-file workspace rules; .roorules-{modeSlug} is
+	// matched by prefix.
 	// https://roocodeinc.github.io/Roo-Code/features/custom-instructions
 	".roorules": true,
 	// Goose project hints.
 	// https://goose-docs.ai/docs/guides/context-engineering/using-goosehints
 	".goosehints": true,
+}
+
+// foldedBaseNames holds instructionBaseNames lowercased, for the
+// case-insensitive match at the scan root.
+var foldedBaseNames = func() map[string]bool {
+	m := make(map[string]bool, len(instructionBaseNames))
+	for name := range instructionBaseNames {
+		m[strings.ToLower(name)] = true
+	}
+	return m
+}()
+
+// configDirNames are the instruction files a tool reads from inside its
+// own config directory, lowercased: matched in any case directly in that
+// directory.
+var configDirNames = map[string]map[string]bool{
+	// ./.claude/CLAUDE.md and .claude/AGENTS.md.
+	// https://code.claude.com/docs/en/memory
+	".claude": {"claude.md": true, "agents.md": true},
+	// .junie/AGENTS.md.
+	// https://junie.jetbrains.com/docs/guidelines-and-memory.html
+	".junie": {"agents.md": true},
 }
 
 // instructionDir is a directory convention: files inside dir (a sequence of
@@ -134,12 +178,13 @@ var (
 
 // instructionDirs are instruction files recognised by their directory.
 var instructionDirs = []instructionDir{
-	// Cursor project rules (.mdc, also caught by extension) and the .md
-	// files Devin Desktop imports from the same directory; Cursor subagents.
+	// Cursor ignores plain .md files in .cursor/rules (its rules are .mdc,
+	// matched by extension above), but Devin "reads from
+	// .cursor/rules/*.md and .cursor/rules/*.mdc". Cursor subagents.
 	// https://cursor.com/docs/rules
-	// https://docs.devin.ai/cli/reference/configuration/read-config-from
+	// https://docs.devin.ai/cli/extensibility/rules
 	// https://cursor.com/docs/subagents
-	{dir: []string{".cursor", "rules"}, recursive: true, suffixes: mdOnly},
+	{dir: []string{".cursor", "rules"}, suffixes: mdOnly},
 	{dir: []string{".cursor", "agents"}, suffixes: mdOnly},
 	// Windsurf / Devin Desktop workspace rules and global rules.
 	// https://docs.devin.ai/desktop/devin-local/customizations
@@ -162,11 +207,14 @@ var instructionDirs = []instructionDir{
 	// https://kiro.dev/docs/custom-agents/creating/
 	{dir: []string{".kiro", "steering"}, suffixes: mdOnly},
 	{dir: []string{".kiro", "agents"}, suffixes: mdOnly},
-	// GitHub Copilot path-specific instructions, prompt files and custom
-	// agents.
+	// GitHub Copilot repository-wide and path-specific instructions, prompt
+	// files and custom agents. Zed also reads
+	// .github/copilot-instructions.md.
 	// https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
+	// https://zed.dev/docs/ai/instructions
 	// https://code.visualstudio.com/docs/agent-customization/prompt-files
 	// https://code.visualstudio.com/docs/agents/reference/custom-agent-file-reference
+	{dir: []string{".github"}, names: []string{"copilot-instructions.md"}},
 	{dir: []string{".github", "instructions"}, recursive: true, suffixes: []string{".instructions.md"}},
 	{dir: []string{".github", "prompts"}, suffixes: []string{".prompt.md"}},
 	{dir: []string{".github", "agents"}, suffixes: mdOnly},
