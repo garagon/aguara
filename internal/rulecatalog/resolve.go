@@ -219,6 +219,15 @@ func Resolve(in Input) (*Resolution, error) {
 			addProblem(types.ConfigProblemUnknownRuleID, ref.ID, ref.Source, "unknown rule ID %q", ref.ID)
 			continue
 		}
+		// A disabled rule never produces a finding, so enforcing it would
+		// silently enforce nothing. A caller that forwards a user-supplied
+		// disable list must not let it switch off an enforced rule without
+		// a signal. The rule stays disabled and the entry is not enforced.
+		if disabled[id] {
+			addProblem(types.ConfigProblemConflictingOverride, ref.ID, ref.Source,
+				"rule %s is both disabled and enforced by the scan profile", id)
+			continue
+		}
 		if !enforced[id] {
 			enforced[id] = true
 			res.Enforced = append(res.Enforced, id)

@@ -595,6 +595,63 @@ patterns:
 	requireProblem(t, err, aguara.ConfigProblemUnknownRuleID, "TC-001", "WithProfileEnforcedRules")
 }
 
+// TestDisabledAndEnforcedRuleIsConfigError: a rule that was both disabled
+// and enforced silently resolved to disabled, so a forwarded user disable
+// list could switch off an integrator's enforced rule (a CRITICAL match
+// then gave verdict clean under content-aware) with no signal.
+func TestDisabledAndEnforcedRuleIsConfigError(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "enforced.yaml"), `id: CONSUMER_TC_002
+name: Consumer-defined critical rule
+severity: CRITICAL
+category: custom
+targets: ["*.md"]
+patterns:
+  - type: contains
+    value: "consumer-critical-marker"
+`)
+	base := []aguara.Option{
+		aguara.WithCustomRules(dir),
+		aguara.WithScanProfile(aguara.ProfileContentAware),
+		aguara.WithProfileEnforcedRules("CONSUMER_TC_002"),
+	}
+	cases := map[string]aguara.Option{
+		"disable list":      aguara.WithDisabledRules("consumer_tc_002"),
+		"disabled override": aguara.WithRuleOverrides(map[string]aguara.RuleOverride{"CONSUMER_TC_002": {Disabled: true}}),
+	}
+	for name, disable := range cases {
+		t.Run(name, func(t *testing.T) {
+			opts := append(append([]aguara.Option(nil), base...), disable)
+			_, err := aguara.NewScanner(opts...)
+			requireProblem(t, err, aguara.ConfigProblemConflictingOverride, "CONSUMER_TC_002", "WithProfileEnforcedRules")
+			if !strings.Contains(err.Error(), "both disabled and enforced") {
+				t.Fatalf("message = %v", err)
+			}
+			_, err = aguara.ScanContent(ctx, "consumer-critical-marker", "x.md", opts...)
+			requireProblem(t, err, aguara.ConfigProblemConflictingOverride, "CONSUMER_TC_002", "WithProfileEnforcedRules")
+
+			// Lenient: the rule stays disabled, the entry is not enforced,
+			// and the conflict is recorded rather than dropped.
+			sc, err := aguara.NewScanner(append(opts, aguara.WithLenientConfig())...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := sc.ConfigProblems()
+			if len(problems) != 1 || problems[0].Kind != aguara.ConfigProblemConflictingOverride {
+				t.Fatalf("ConfigProblems = %+v", problems)
+			}
+			result, err := sc.ScanContent(ctx, "consumer-critical-marker", "x.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Findings) != 0 {
+				t.Fatalf("disabled rule must not report: %+v", result.Findings)
+			}
+		})
+	}
+}
+
 // TestBuiltinToolExemptionsIgnoreToolNameCase: built-in exemptions compared
 // tool names exactly while tool-scoped overrides ignored case.
 func TestBuiltinToolExemptionsIgnoreToolNameCase(t *testing.T) {
