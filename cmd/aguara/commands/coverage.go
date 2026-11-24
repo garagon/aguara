@@ -121,6 +121,22 @@ func unsupportedEvidenceLine(c *packagecheck.Coverage, root string) string {
 		plural(len(c.UnsupportedEvidence), "it", "them"))
 }
 
+// unsupportedEvidenceNames names unsupported files for triage messages.
+// Long lists are cut after a few names; the full list stays in
+// coverage.unsupported_evidence.
+func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root string) string {
+	const maxNamed = 5
+	names := make([]string, 0, maxNamed+1)
+	for i, u := range evidence {
+		if i == maxNamed {
+			names = append(names, fmt.Sprintf("and %d more listed in coverage.unsupported_evidence", len(evidence)-maxNamed))
+			break
+		}
+		names = append(names, displayPath(root, u.Path))
+	}
+	return strings.Join(names, ", ")
+}
+
 // displayPath shortens path to be relative to root when it lies inside.
 func displayPath(root, path string) string {
 	if root == "" {

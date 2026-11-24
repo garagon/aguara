@@ -563,22 +563,59 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 // files were scanned. handoff and action_plan derive from the decision,
 // so a coverage review also withholds install and execution there.
 func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
-	if result.Scan.FilesScanned != 0 {
+	if result.Scan.FilesScanned == 0 {
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "nothing_scanned",
+			Severity: "warning",
+			Message:  "No files were scanned under the target, so the audit evaluated nothing.",
+		})
+		if t.Decision == "proceed" {
+			t.Decision = "review"
+			t.Summary = "Nothing was scanned: the audit evaluated no files, so it cannot clear this target."
+			t.RecommendedNextSteps = []string{
+				"Check that the audit path points at the project you meant to audit.",
+				"Do not treat this result as a clean audit.",
+			}
+		}
 		return
 	}
+
+	cov := result.Check.Coverage
+	if cov == nil || len(cov.UnsupportedEvidence) == 0 {
+		// No dependency files at all keeps the package side as before.
+		return
+	}
+	files := unsupportedEvidenceNames(cov.UnsupportedEvidence, result.Target)
+	if cov.Evaluated() {
+		// Some evidence was checked; say what was not, without
+		// overriding the decision the evaluated evidence supports.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "partial_dependency_coverage",
+			Severity: "info",
+			Message:  "These dependency files could not be evaluated and their packages were not checked: " + files + ".",
+		})
+		t.RecommendedNextSteps = append(t.RecommendedNextSteps,
+			"Review the dependencies pinned in "+files+" separately; this audit did not check them.")
+		return
+	}
+	// Dependency evidence exists but none of it could be evaluated: an
+	// install would pull packages this audit never checked.
 	t.Reasons = append(t.Reasons, AuditTriageReason{
-		Kind:     "nothing_scanned",
+		Kind:     "dependency_evidence_not_evaluated",
 		Severity: "warning",
-		Message:  "No files were scanned under the target, so the audit evaluated nothing.",
+		Message:  "Dependency files were found but none could be evaluated: " + files + ". No package in them was checked against malicious-package intelligence.",
 	})
+	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
 	if t.Decision == "proceed" {
 		t.Decision = "review"
-		t.Summary = "Nothing was scanned: the audit evaluated no files, so it cannot clear this target."
+		t.Summary = "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
 		t.RecommendedNextSteps = []string{
-			"Check that the audit path points at the project you meant to audit.",
-			"Do not treat this result as a clean audit.",
+			step,
+			"Do not install dependencies on the strength of this audit.",
 		}
+		return
 	}
+	t.RecommendedNextSteps = append(t.RecommendedNextSteps, step)
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
@@ -615,9 +652,15 @@ func computeAuditAgentHandoff(triage AuditTriage) AuditAgentHandoff {
 			},
 		}
 	case "review":
+		summary := "Limit agent work to inspection and remediation until findings are reviewed."
+		if triage.ReviewFindings == 0 {
+			// Coverage-driven review: nothing was found, but not
+			// everything was evaluated (see triage.reasons).
+			summary = "Limit agent work to inspection until what this audit could not evaluate is reviewed."
+		}
 		return AuditAgentHandoff{
 			Status:  "review_only",
-			Summary: "Limit agent work to inspection and remediation until findings are reviewed.",
+			Summary: summary,
 			AllowedActions: []string{
 				"Inspect source, lockfiles, configs, and findings.",
 				"Explain risk and propose patches.",
