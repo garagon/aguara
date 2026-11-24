@@ -73,6 +73,10 @@ type RawRule struct {
 	Category    string   `yaml:"category"`
 	Targets     []string `yaml:"targets"`
 	MatchMode   string   `yaml:"match_mode"`
+	// WithinLines, for match_mode: all, requires every pattern to match
+	// within a window of that many consecutive lines. Zero (the default)
+	// keeps whole-file co-occurrence.
+	WithinLines int `yaml:"within_lines"`
 	// Sensitive marks rules whose match captures a real secret value
 	// (credential read combined with a transmission sink, cross-tool
 	// data leak, exfil chain). The scanner copies this flag onto every
@@ -111,8 +115,11 @@ type CompiledRule struct {
 	// YAML as `!`-prefixed entries in `targets` (e.g. "!package.json").
 	// Lets a broadly-scoped rule (targets: *.json) carve out a file that
 	// a more specific rule owns, without per-file content heuristics.
-	ExcludeTargets  []string
-	MatchMode       MatchMode
+	ExcludeTargets []string
+	MatchMode      MatchMode
+	// WithinLines > 0 bounds a match_mode: all rule to hits that fit in a
+	// window of that many consecutive lines; 0 means anywhere in the file.
+	WithinLines     int
 	Sensitive       bool
 	Patterns        []CompiledPattern
 	ExcludePatterns []CompiledExclude

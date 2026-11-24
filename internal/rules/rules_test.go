@@ -152,6 +152,75 @@ patterns:
 	require.Error(t, err)
 }
 
+func TestCompileWithinLines(t *testing.T) {
+	raw := func(mode string, within int) rules.RawRule {
+		return rules.RawRule{
+			ID: "TEST_WITHIN", Name: "Within", Severity: "LOW", Category: "test", MatchMode: mode, WithinLines: within,
+			Patterns: []rules.RawPattern{{Type: rules.PatternContains, Value: "a"}, {Type: rules.PatternContains, Value: "b"}},
+		}
+	}
+	compiled, err := rules.Compile(raw("all", 5))
+	require.NoError(t, err)
+	require.Equal(t, 5, compiled.WithinLines)
+
+	compiled, err = rules.Compile(raw("all", 0))
+	require.NoError(t, err)
+	require.Zero(t, compiled.WithinLines)
+
+	_, err = rules.Compile(raw("any", 5))
+	require.ErrorContains(t, err, "within_lines requires match_mode: all")
+	_, err = rules.Compile(raw("", 5))
+	require.ErrorContains(t, err, "within_lines requires match_mode: all")
+	_, err = rules.Compile(raw("all", -1))
+	require.ErrorContains(t, err, "within_lines must be positive")
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "r.yaml"), []byte(`id: TEST_YAML_WITHIN
+name: Within
+severity: LOW
+category: test
+match_mode: all
+within_lines: 4
+patterns:
+  - type: contains
+    value: a
+  - type: contains
+    value: b
+`), 0o600))
+	raws, err := rules.LoadFromDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 4, raws[0].WithinLines)
+}
+
+// Every built-in within_lines rule uses match_mode: all (Compile enforces
+// it) and carries a false_positive whose patterns are farther apart than
+// the window, so the bound stays exercised by the self-test.
+func TestBuiltinWithinLinesRulesHaveWindowExamples(t *testing.T) {
+	rawRules, err := rules.LoadFromFS(builtin.FS())
+	require.NoError(t, err)
+	compiled, errs := rules.CompileAll(rawRules)
+	require.Empty(t, errs)
+	matcher := pattern.NewMatcher(compiled)
+	bounded := 0
+	for _, rule := range compiled {
+		if rule.WithinLines == 0 {
+			continue
+		}
+		bounded++
+		whole := *rule
+		whole.WithinLines = 0
+		wholeMatcher := pattern.NewMatcher([]*rules.CompiledRule{&whole})
+		exercised := false
+		for _, fp := range rule.Examples.FalsePositive {
+			if matchesRule(t, wholeMatcher, &whole, fp) && !matchesRule(t, matcher, rule, fp) {
+				exercised = true
+			}
+		}
+		require.Truef(t, exercised, "rule %s: no false_positive example shows the within_lines bound", rule.ID)
+	}
+	require.NotZero(t, bounded)
+}
+
 func TestCompileInvalidRegex(t *testing.T) {
 	raw := rules.RawRule{
 		ID:       "TEST_003",
@@ -217,8 +286,8 @@ func TestLoadBuiltinRules(t *testing.T) {
 
 // TestRuleSelfTest runs every built-in rule's examples through the
 // production pattern matcher, so an example is judged exactly as a scanned
-// file would be: per-line exclude scopes, match_mode and target dispatch
-// all apply. An example may span several lines (YAML
+// file would be: per-line exclude scopes, match_mode, within_lines windows
+// and target dispatch all apply. An example may span several lines (YAML
 // "\n" escapes or a block scalar); its line numbers are those of the
 // example text, which lets a rule pin down, for instance, that a comment
 // line above a match does not suppress it.

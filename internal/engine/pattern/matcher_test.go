@@ -635,6 +635,66 @@ func TestMatcherInstructionFilesGetMarkdownRules(t *testing.T) {
 	require.Empty(t, findings)
 }
 
+// within_lines bounds match_mode: all to hits that fit in a window of N
+// consecutive lines. The finding is reported at the first pattern's hit
+// inside the earliest such window.
+func TestMatcherWithinLines(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "WITHIN", Name: "Within", Severity: "HIGH", Category: "test", MatchMode: "all", WithinLines: 3,
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: ".env"},
+			{Type: rules.PatternRegex, Value: `(?i)\bemail\b`},
+		},
+	})
+	for _, tc := range []struct {
+		name    string
+		content string
+		line    int // 0 = no finding
+		matched string
+	}{
+		{"same line", "Email the .env file\n", 1, ".env + Email"},
+		{"two lines apart", "Open .env\n\nemail it\n", 1, ".env + email"},
+		{"outside window", "Open .env\n\n\nemail it\n", 0, ""},
+		{"reported shape: Email far above .env", "# Fields\n\n- Name\n- Email\n- Phone\n\n\n\n\n\nStore keys in a .env file.\n", 0, ""},
+		{"second pattern first, anchor stays on first pattern", "Email us\nthe .env file\n", 2, ".env + Email"},
+		{"earliest window wins", ".env here\n\n\n\n\nEmail one\n.env two\n\n\nEmail three .env four\n", 7, ".env + Email"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := analyzeLines(t, rule, "x.md", tc.content)
+			if tc.line == 0 {
+				require.Empty(t, findings)
+				return
+			}
+			require.Len(t, findings, 1)
+			require.Equal(t, tc.line, findings[0].Line)
+			require.Equal(t, tc.matched, findings[0].MatchedText)
+		})
+	}
+
+	// Without within_lines the same rule keeps whole-file co-occurrence.
+	wholeRule := compileTestRule(t, rules.RawRule{
+		ID: "WHOLE", Name: "Whole", Severity: "HIGH", Category: "test", MatchMode: "all",
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternContains, Value: ".env"},
+			{Type: rules.PatternRegex, Value: `(?i)\bemail\b`},
+		},
+	})
+	require.Equal(t, []int{4}, findingLines(analyzeLines(t, wholeRule, "x.md", "Email\n\n\nOpen .env\n")))
+}
+
+// A multi-line hit counts every line it spans toward the window.
+func TestMatcherWithinLinesCountsMultilineHits(t *testing.T) {
+	rule := compileTestRule(t, rules.RawRule{
+		ID: "WITHIN_SPAN", Name: "Span", Severity: "HIGH", Category: "test", MatchMode: "all", WithinLines: 3,
+		Patterns: []rules.RawPattern{
+			{Type: rules.PatternRegex, Value: `git clone \S+`},
+			{Type: rules.PatternRegex, Value: `cd \S+\n\s*make install`},
+		},
+	})
+	require.Equal(t, []int{1}, findingLines(analyzeLines(t, rule, "x.md", "git clone https://x/y\ncd y\nmake install\n")))
+	require.Empty(t, analyzeLines(t, rule, "x.md", "git clone https://x/y\n\ncd y\nmake install\n"))
+}
+
 func TestConfidence_SinglePatternMatch(t *testing.T) {
 	rule := compileTestRule(t, rules.RawRule{
 		ID:        "CONF_001",

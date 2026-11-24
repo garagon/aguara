@@ -330,11 +330,24 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 		}
 		allHits = append(allHits, hits)
 	}
-	// Use the first hit of the first pattern as the finding location
-	firstHit := allHits[0][0]
-	var matchedParts []string
-	for _, hits := range allHits {
-		matchedParts = append(matchedParts, hits[0].text)
+	// One contributing hit per pattern: the first hit of each pattern for
+	// whole-file rules, or the earliest window of within_lines lines that
+	// holds a hit of every pattern. The first pattern's hit is the
+	// finding location.
+	chosen := make([]matchHit, len(allHits))
+	if rule.WithinLines > 0 {
+		if !windowHits(allHits, rule.WithinLines, chosen) {
+			return nil
+		}
+	} else {
+		for i, hits := range allHits {
+			chosen[i] = hits[0]
+		}
+	}
+	firstHit := chosen[0]
+	matchedParts := make([]string, 0, len(chosen))
+	for _, hit := range chosen {
+		matchedParts = append(matchedParts, hit.text)
 	}
 	sev := rule.Severity
 	inCB := isInCodeBlock(cbMap, firstHit.line)
@@ -357,11 +370,47 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 		Sensitive:   rule.Sensitive,
 		Confidence:  0.95,
 	}
-	for _, hits := range allHits {
-		hit := hits[0]
+	for _, hit := range chosen {
 		finding.AddEvidenceRange(hit.line, hit.endLine)
 	}
 	return []scanner.Finding{finding}
+}
+
+// windowHits looks for the earliest window of at most within consecutive
+// lines that contains one hit of every pattern, counting every line a hit
+// spans. On success it stores the chosen hit of pattern i in chosen[i] and
+// returns true.
+//
+// Each pattern's hits are ordered and non-overlapping, so their end lines
+// increase with their start lines. The sweep keeps one cursor per pattern
+// and advances the cursor holding the earliest start until the cursors
+// fit in the window or a pattern runs out of hits. When a cursor moves,
+// its hit has the earliest start and every other cursor sits on that
+// pattern's first hit not passed so far; any window using the passed hit
+// would need hits at those cursors or later, which end no earlier, so it
+// cannot fit either. No valid window is skipped. O(total hits x patterns).
+func windowHits(allHits [][]matchHit, within int, chosen []matchHit) bool {
+	cursor := make([]int, len(allHits))
+	for {
+		minIdx, start, end := 0, 0, 0
+		for i, hits := range allHits {
+			h := hits[cursor[i]]
+			if i == 0 || h.line < start {
+				minIdx, start = i, h.line
+			}
+			end = max(end, h.endLine)
+		}
+		if end-start+1 <= within {
+			for i, hits := range allHits {
+				chosen[i] = hits[cursor[i]]
+			}
+			return true
+		}
+		cursor[minIdx]++
+		if cursor[minIdx] == len(allHits[minIdx]) {
+			return false
+		}
+	}
 }
 
 // matchHit is one pattern match. line and endLine are the 1-based first and

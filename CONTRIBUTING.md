@@ -91,6 +91,7 @@ severity: HIGH             # CRITICAL, HIGH, MEDIUM, LOW, INFO
 category: exfiltration     # Must match an existing category
 targets: ["*.md", "*.txt", "*.json"]
 match_mode: any            # "any" = OR, "all" = AND across patterns
+within_lines: 5            # Optional, match_mode: all only: all patterns within 5 consecutive lines
 remediation: "How to fix the issue found by this rule."
 patterns:
   - type: regex            # "regex" or "contains"
@@ -117,6 +118,10 @@ Each `exclude_patterns` entry has an optional `scope`:
 
 Every line is evaluated on its own, so `^` and `$` in an exclude regex anchor to that line. In `match_mode: all` rules, excludes apply to each pattern's hits: a hit that an exclude suppresses does not count toward the rule.
 
+### Proximity for `match_mode: all`
+
+Without `within_lines`, a `match_mode: all` rule fires when each pattern matches anywhere in the file. Set `within_lines: N` when the rule describes one statement or a short chain (read a secret, then send it), so that all patterns must match inside a window of N consecutive lines; every line a multi-line match spans counts toward the window. The finding is reported at the first pattern's hit in the earliest such window. Leave it unset only when the evidence can legitimately be spread across a file, for example a source file whose data flow runs through several functions. `within_lines` is rejected on `match_mode: any` rules. Give such a rule a `false_positive` example whose patterns are farther apart than the window.
+
 ### Self-testing
 
 Every rule must include `true_positive` and `false_positive` examples. The test suite validates these automatically:
@@ -125,7 +130,7 @@ Every rule must include `true_positive` and `false_positive` examples. The test 
 make test
 ```
 
-Each example is scanned with the production pattern matcher as a file the rule targets, so exclude scopes and `match_mode` apply exactly as in a real scan. An example can span several lines (use `\n` inside a double-quoted YAML string); line numbers are those of the example text. Multi-line examples are how a rule pins down behaviour that depends on neighbouring lines, for example that a comment line above a credential read does not suppress it:
+Each example is scanned with the production pattern matcher as a file the rule targets, so exclude scopes, `match_mode` and `within_lines` apply exactly as in a real scan. An example can span several lines (use `\n` inside a double-quoted YAML string); line numbers are those of the example text. Multi-line examples are how a rule pins down behaviour that depends on neighbouring lines, for example that a comment line above a credential read does not suppress it:
 
 ```yaml
 examples:

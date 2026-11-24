@@ -32,6 +32,12 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 	if strings.ToLower(raw.MatchMode) == "all" {
 		mode = MatchAll
 	}
+	if raw.WithinLines < 0 {
+		return nil, fmt.Errorf("rule %s: within_lines must be positive, got %d", raw.ID, raw.WithinLines)
+	}
+	if raw.WithinLines > 0 && mode != MatchAll {
+		return nil, fmt.Errorf("rule %s: within_lines requires match_mode: all", raw.ID)
+	}
 
 	// Split `targets` into positive globs and `!`-prefixed exclusions.
 	// Positive globs drive ext-indexing in the matcher; exclusions are
@@ -57,6 +63,7 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		Targets:        targets,
 		ExcludeTargets: excludeTargets,
 		MatchMode:      mode,
+		WithinLines:    raw.WithinLines,
 		Sensitive:      raw.Sensitive,
 		Remediation:    raw.Remediation,
 		Examples:       raw.Examples,

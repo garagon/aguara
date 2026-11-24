@@ -265,6 +265,7 @@ severity: MEDIUM
 category: supply-chain
 targets: ["*.md", "*.txt"]
 match_mode: all
+within_lines: 5
 remediation: "Pin the clone to a specific commit SHA or tag. Audit cloned code before executing it."
 patterns:
   - type: regex
@@ -277,10 +278,12 @@ examples:
     - "git clone https://github.com/org/repo && chmod +x install.sh && ./install.sh"
     - "git clone https://github.com/org/repo && cd repo && make install"
     - "git clone https://github.com/org/repo && cd /tmp/tool && python setup.py install"
+    - "git clone https://github.com/org/tool\ncd tool\nmake install"
   false_positive:
     - "git clone https://github.com/org/repo for more info"
     - "git clone --branch v1.2.3 https://github.com/org/repo"
     - "git clone https://github.com/org/repo to review the code. Then run npm install."
+    - "git clone https://github.com/org/tool to read the code.\n\n## Build\n\nUse the release binaries.\n\n## Maintainers\n\nThey run make install on the build host."
 ---
 id: SUPPLY_013
 name: "Unpinned GitHub Actions"

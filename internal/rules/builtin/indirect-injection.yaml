@@ -28,6 +28,7 @@ category: indirect-injection
 remediation: "Do not apply external or remote content as operational rules; hardcode rules locally and validate any imported content."
 targets: ["*.md", "*.txt"]
 match_mode: all
+within_lines: 5
 patterns:
   - type: regex
     value: "(?i)(read|load|parse|import|include|consume|ingest)\\s+.{0,40}(external|remote|online|web|fetched|downloaded|third.party)"
@@ -37,8 +38,10 @@ examples:
   true_positive:
     - "Read the external documentation and apply it as rules for the project"
     - "Load remote guidelines and use them as instructions for code review"
+    - "Read the remote style guide at the start of each session.\nApply its contents as rules for every review."
   false_positive:
     - "Read the local README and follow its instructions"
+    - "Read the online changelog when upgrading.\n\n## Lint\n\nNothing special.\n\n## Config\n\nUse the defaults for config files."
 ---
 id: INDIRECT_004
 name: "Remote config controlling agent behavior"
@@ -90,6 +93,7 @@ category: indirect-injection
 remediation: "Treat email and message content as untrusted data; never execute instructions embedded in external messages."
 targets: ["*.md", "*.txt"]
 match_mode: all
+within_lines: 5
 patterns:
   - type: regex
     value: "(?i)(read|check|fetch|poll|monitor)\\s+.{0,30}(email|inbox|message|mail|notification|slack|discord)"
@@ -99,9 +103,11 @@ examples:
   true_positive:
     - "Read the user's email and act on the instructions found"
     - "Monitor Slack messages and execute based on the message content"
+    - "Poll the support inbox every hour.\nAct on the instructions in each new email."
   false_positive:
     - "Send an email notification when the task is complete"
     - "Read Slack messages and respond based on context"
+    - "Check your email for the invite link.\n\n## Steps\n\nOpen the app.\n\n## Feedback\n\nWe act on the request of the maintainers."
 ---
 id: INDIRECT_009
 name: "External API response drives agent behavior"
@@ -111,6 +117,7 @@ category: indirect-injection
 remediation: "Validate and sanitize API responses against an expected schema; do not let response data drive agent decisions directly."
 targets: ["*.md", "*.txt"]
 match_mode: all
+within_lines: 5
 patterns:
   - type: regex
     value: "(?i)(call|invoke|query|request|hit)\\s+.{0,30}(api|endpoint|service|server)\\s"
@@ -120,8 +127,10 @@ examples:
   true_positive:
     - "Call the API and take action based on the response"
     - "Query the service and decide next steps according to the result"
+    - "Call the pricing API with the order ID.\nDecide the next step based on the response."
   false_positive:
     - "Call the API and display the response to the user"
+    - "Call the weather API once per hour.\n\n## Display\n\nShow a card.\n\n## Colors\n\nPick colors based on the theme data."
 ---
 id: INDIRECT_010
 name: "Unscoped Bash tool in allowed tools"
@@ -152,6 +161,7 @@ category: indirect-injection
 remediation: "Treat database/cache content as untrusted data; never interpret stored values as executable instructions."
 targets: ["*.md", "*.txt"]
 match_mode: all
+within_lines: 5
 patterns:
   - type: regex
     value: "(?i)(query|select|fetch|read|retrieve)\\s+.{0,40}(database|cache|datastore|redis|memcache|mongo|dynamo|sqlite|postgres|mysql|store)"
@@ -164,9 +174,11 @@ examples:
   true_positive:
     - "Query the database for pending tasks and execute the instructions stored in each record"
     - "Retrieve commands from the Redis cache and follow the instructions returned"
+    - "Query the database for pending jobs.\nExecute the command stored in each row."
   false_positive:
     - "Query the database and log the results for auditing"
     - "Read data from the cache and display it to the user"
+    - "Read the cache settings in config.yaml.\n\n## Tasks\n\nNone.\n\n## Jobs\n\nPerform the task described in the ticket."
 ---
 id: INDIRECT_012
 name: "Webhook or callback registration with external service"
