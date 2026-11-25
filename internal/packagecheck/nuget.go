@@ -145,6 +145,7 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 			} else if msbuildIsPropertyPlaceholder(version) {
 				continue
 			}
+			version = nugetExactRange(version)
 			key := name + "@" + version
 			if seen[key] {
 				continue
@@ -186,6 +187,22 @@ type csPackageRef struct {
 	Update       string `xml:"Update,attr"`
 	VersionAttr  string `xml:"Version,attr"`
 	VersionChild string `xml:"Version"`
+}
+
+// nugetExactRange returns the version inside NuGet's exact-match range
+// notation, "[1.0]" meaning x == 1.0 (NuGet "Package versioning",
+// version ranges), and any other version string unchanged. A plain
+// "1.0" is a minimum version that restore resolves to the lowest
+// applicable release, which the parser already reads as that version.
+func nugetExactRange(v string) string {
+	if len(v) < 3 || v[0] != '[' || v[len(v)-1] != ']' {
+		return v
+	}
+	inner := strings.TrimSpace(v[1 : len(v)-1])
+	if inner == "" || strings.ContainsAny(inner, ",[]()") {
+		return v
+	}
+	return inner
 }
 
 // msbuildIsPropertyPlaceholder reports whether the version string

@@ -116,6 +116,31 @@ func TestParseNuGet_CsprojSkipsUnresolvedProperty(t *testing.T) {
 	}
 }
 
+func TestParseNuGet_CsprojExactRangeReadsTheVersion(t *testing.T) {
+	// "[1.2.3]" is NuGet's exact-match notation; ranges and floating
+	// versions keep their literal spelling and match nothing.
+	path := filepath.Join(t.TempDir(), "App.csproj")
+	writeFile(t, path, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>
+<PackageReference Include="Exact.Pkg" Version="[1.2.3]" />
+<PackageReference Include="Spaced.Pkg" Version="[ 2.0.0 ]" />
+<PackageReference Include="Range.Pkg" Version="[1.0,2.0)" />
+<PackageReference Include="Open.Pkg" Version="[1.0,]" />
+</ItemGroup></Project>`)
+	refs, err := ParseNuGet(Target{Ecosystem: intel.EcosystemNuGet, Path: path, Source: "csproj"})
+	if err != nil {
+		t.Fatalf("ParseNuGet: %v", err)
+	}
+	want := map[string]string{"Exact.Pkg": "1.2.3", "Spaced.Pkg": "2.0.0", "Range.Pkg": "[1.0,2.0)", "Open.Pkg": "[1.0,]"}
+	if len(refs) != len(want) {
+		t.Fatalf("refs = %+v, want %d", refs, len(want))
+	}
+	for _, r := range refs {
+		if want[r.Name] != r.Version {
+			t.Errorf("%s: version = %q, want %q", r.Name, r.Version, want[r.Name])
+		}
+	}
+}
+
 func TestParseNuGet_FsprojAndVbprojShareParser(t *testing.T) {
 	for _, c := range []struct{ dir, file, source, name, version string }{
 		{"nuget-fsproj", "FsApp.fsproj", "fsproj", "FSharp.Core", "8.0.100"},
