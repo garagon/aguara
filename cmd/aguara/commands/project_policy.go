@@ -155,6 +155,7 @@ func projectIgnoreFile(dir string) (string, bool) {
 // the defaults `aguara init` scaffolds) are not named, and nothing is
 // printed when no policy applied.
 func noteProjectPolicy(cmd *cobra.Command, cfg config.Config, res *rulecatalog.Resolution, result *scanner.ScanResult) {
+	noteIgnorePatterns(cmd, cfg, result)
 	var applied []string
 	if cfg.Source != "" {
 		keys := projectConfigSettings(cmd, cfg)
@@ -185,6 +186,40 @@ func noteProjectPolicy(cmd *cobra.Command, cfg config.Config, res *rulecatalog.R
 	}
 	fmt.Fprintf(os.Stderr, "notice: applied policy owned by the scanned project: %s (pass --project-policy ignore to scan without it)\n",
 		output.TerminalText(strings.Join(applied, "; ")))
+}
+
+// noteIgnorePatterns reports ignore patterns that cannot take effect. A
+// pattern that is not supported (a "!" negation) is a warning on every
+// run, because it silently does nothing. With --verbose, patterns that
+// matched no file or directory in this scan are listed too, with a hint
+// when a bare name spells a directory that was scanned; normal runs stay
+// quiet about them, since a pattern for files that are not present yet is
+// not a mistake.
+func noteIgnorePatterns(cmd *cobra.Command, cfg config.Config, result *scanner.ScanResult) {
+	verbose := flagVerbose
+	if cmd != nil && cmd.Name() == "audit" {
+		verbose = flagAuditVerbose
+	}
+	for _, u := range result.TargetPolicy.IgnorePatterns {
+		source := ".aguara.yml ignore"
+		if cfg.Source != "" {
+			source = cfg.Source + " ignore"
+		}
+		if u.File != "" {
+			source = fmt.Sprintf("%s:%d", u.File, u.Line)
+		}
+		switch {
+		case u.Unsupported != "":
+			fmt.Fprintf(os.Stderr, "warning: %s: ignore pattern %q: %s\n",
+				output.TerminalText(source), output.TerminalText(u.Pattern), u.Unsupported)
+		case verbose && u.Matched == 0:
+			msg := fmt.Sprintf("notice: %s: ignore pattern %q matched nothing in this scan", source, u.Pattern)
+			if u.Hint != "" {
+				msg += "; " + u.Hint
+			}
+			fmt.Fprintln(os.Stderr, output.TerminalText(msg))
+		}
+	}
 }
 
 // flagDisabled reports whether --disable-rule names the canonical id.

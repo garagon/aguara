@@ -98,7 +98,7 @@ func init() {
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
-	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
+	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings, and list ignore patterns that matched nothing")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")

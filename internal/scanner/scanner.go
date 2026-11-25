@@ -95,9 +95,10 @@ func (s *Scanner) SetRedaction(enabled bool) {
 	s.redact = enabled
 }
 
-// SetIgnorePatterns sets additional file ignore patterns from config.
+// SetIgnorePatterns sets additional file ignore patterns from config. The
+// slice is copied, so later changes by the caller have no effect.
 func (s *Scanner) SetIgnorePatterns(patterns []string) {
-	s.ignorePatterns = patterns
+	s.ignorePatterns = append([]string(nil), patterns...)
 }
 
 // SetProjectPolicyEnabled controls whether files being scanned may suppress
@@ -279,6 +280,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
 	return result, nil
 }
 

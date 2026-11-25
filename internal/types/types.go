@@ -351,7 +351,8 @@ type ScanResult struct {
 
 // TargetPolicyUse records which exclusion and suppression policy changed
 // this result, so a caller can tell the user that a project's own files
-// changed what was reported. A source that changed nothing is not listed.
+// changed what was reported. A source that changed nothing is not listed,
+// except in IgnorePatterns, which lists every evaluated pattern.
 type TargetPolicyUse struct {
 	// IgnoreFile is the target's .aguaraignore when it excluded at least
 	// one entry.
@@ -362,6 +363,28 @@ type TargetPolicyUse struct {
 	// InlineSuppressed lists files whose aguara-ignore directives
 	// removed at least one finding, sorted.
 	InlineSuppressed []string
+	// IgnorePatterns lists every ignore pattern a directory walk
+	// evaluated, caller patterns first and then the .aguaraignore lines,
+	// including patterns that matched nothing, so a caller can point out
+	// an exclusion that did not take effect.
+	IgnorePatterns []IgnorePatternUse
+}
+
+// IgnorePatternUse describes one ignore pattern evaluated by a directory
+// walk.
+type IgnorePatternUse struct {
+	Pattern string // as written
+	File    string // the .aguaraignore it came from; "" for caller patterns
+	Line    int    // line in File; 0 for caller patterns
+	// Matched counts the files and directories the pattern matched. A
+	// directory excluded whole counts once.
+	Matched int
+	// Unsupported says why the pattern can never match (for example a
+	// "!" negation); it is "" for supported patterns.
+	Unsupported string
+	// Hint suggests a fix for a pattern that matched nothing, for example
+	// a bare name that names a scanned directory.
+	Hint string
 }
 
 // Scan coverage scopes: which files a scan was asked to evaluate.

@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/garagon/aguara/internal/types"
 )
 
 // DefaultMaxFileSize is the default maximum file size (50 MiB) read from disk.
@@ -122,29 +124,73 @@ type TargetDiscovery struct {
 
 	// Discover counts the entries each pattern source excluded: the
 	// caller's IgnorePatterns and the patterns read from .aguaraignore.
-	// A source that excluded nothing did not change the result.
+	// A source that excluded nothing did not change the result. A
+	// directory excluded whole counts as one entry.
 	ExcludedByCallerPatterns int
 	ExcludedByIgnoreFile     int
 
-	callerPatterns int // IgnorePatterns[:callerPatterns] are the caller's
+	rules     []*ignoreRule // compiled caller patterns, then file patterns
+	bareNames map[string][]*ignoreRule
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
 func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
-	td.callerPatterns = len(td.IgnorePatterns)
+	if err := td.prepare(root); err != nil {
+		return nil, err
+	}
+	var targets []*Target
+	if err := filepath.Walk(root, td.walkFunc(root, &targets)); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+// prepare compiles the caller's patterns and, unless IgnoreProjectFile is
+// set, the patterns of root's .aguaraignore, and resets the counters.
+func (td *TargetDiscovery) prepare(root string) error {
+	td.ExcludedByCallerPatterns, td.ExcludedByIgnoreFile = 0, 0
+	td.rules, td.bareNames = nil, nil
+	for _, p := range td.IgnorePatterns {
+		td.addRule(p, "", 0)
+	}
 	if !td.IgnoreProjectFile {
 		if err := td.loadIgnoreFile(root); err != nil {
-			return nil, IncompleteScanError("read ignore policy", filepath.Join(root, ".aguaraignore"), "", err)
+			return IncompleteScanError("read ignore policy", filepath.Join(root, ".aguaraignore"), "", err)
 		}
 	}
+	return nil
+}
 
+func (td *TargetDiscovery) addRule(pattern, file string, line int) {
+	r := compileIgnoreRule(pattern)
+	r.file, r.line, r.caller = file, line, file == ""
+	td.rules = append(td.rules, r)
+	if r.bareName {
+		if td.bareNames == nil {
+			td.bareNames = make(map[string][]*ignoreRule)
+		}
+		td.bareNames[r.glob] = append(td.bareNames[r.glob], r)
+	}
+}
+
+// ensureRules compiles the caller's patterns for callers that match
+// without running Discover first.
+func (td *TargetDiscovery) ensureRules() {
+	if td.rules == nil && len(td.IgnorePatterns) > 0 {
+		for _, p := range td.IgnorePatterns {
+			td.addRule(p, "", 0)
+		}
+	}
+}
+
+// walkFunc returns the filepath.Walk callback that appends the targets it
+// finds to targets, with RelPath relative to root.
+func (td *TargetDiscovery) walkFunc(root string, targets *[]*Target) filepath.WalkFunc {
 	limit := td.MaxFileSize
 	if limit <= 0 {
 		limit = DefaultMaxFileSize
 	}
-
-	var targets []*Target
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	return func(path string, info os.FileInfo, err error) error {
 		if info != nil && info.IsDir() {
 			base := info.Name()
 			if base == ".git" || base == "node_modules" || base == ".aguara" {
@@ -152,6 +198,11 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			}
 		}
 		relPath, _ := filepath.Rel(root, path)
+		// A directory pattern excludes the directory and everything in it,
+		// so its contents are never read.
+		if info != nil && info.IsDir() && td.prunes(relPath) {
+			return filepath.SkipDir
+		}
 		if err != nil {
 			if td.isIgnoredSubtree(relPath) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
 				return nil
@@ -159,6 +210,7 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			return IncompleteScanError("discover target", relPath, "", err)
 		}
 		if info.IsDir() {
+			td.noteDir(relPath)
 			return nil
 		}
 		// skip symlinks to prevent path traversal
@@ -175,21 +227,18 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		if info.Size() > limit {
 			return IncompleteScanError("discover target", relPath, "", &fileSizeError{limit: limit})
 		}
-		targets = append(targets, &Target{
+		*targets = append(*targets, &Target{
 			Path:        path,
 			RelPath:     relPath,
 			MaxFileSize: td.MaxFileSize,
 		})
 		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return targets, nil
 }
 
 func (td *TargetDiscovery) loadIgnoreFile(root string) error {
-	f, err := os.Open(filepath.Join(root, ".aguaraignore"))
+	path := filepath.Join(root, ".aguaraignore")
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -198,49 +247,117 @@ func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 	}
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
+	for n := 1; scanner.Scan(); n++ {
 		line := strings.TrimSpace(scanner.Text())
 		if line != "" && !strings.HasPrefix(line, "#") {
-			td.IgnorePatterns = append(td.IgnorePatterns, line)
+			td.addRule(line, path, n)
 		}
 	}
 	return scanner.Err()
 }
 
+// isIgnored reports whether a pattern excludes the file at relPath. Every
+// matching pattern is counted as used; the exclusion is attributed to the
+// first one.
 func (td *TargetDiscovery) isIgnored(relPath string) bool {
-	for i, pattern := range td.IgnorePatterns {
-		if matchGlob(pattern, relPath) {
-			td.recordExclusion(i)
-			return true
+	td.ensureRules()
+	var first *ignoreRule
+	for _, r := range td.rules {
+		if r.matchFile(relPath) {
+			r.matched++
+			if first == nil {
+				first = r
+			}
 		}
 	}
-	return false
+	if first == nil {
+		return false
+	}
+	td.recordExclusion(first)
+	return true
 }
 
-// recordExclusion attributes an exclusion to the source of pattern i.
-func (td *TargetDiscovery) recordExclusion(i int) {
-	if i < td.callerPatterns {
+// prunes reports whether a directory pattern excludes the directory at
+// relPath, counting every matching pattern as used.
+func (td *TargetDiscovery) prunes(relPath string) bool {
+	dir := filepath.ToSlash(relPath)
+	var first *ignoreRule
+	for _, r := range td.rules {
+		if r.directoryForm() && r.matchDir(dir) {
+			r.matched++
+			if first == nil {
+				first = r
+			}
+		}
+	}
+	if first == nil {
+		return false
+	}
+	td.recordExclusion(first)
+	return true
+}
+
+// noteDir records a scanned directory whose name a bare-name pattern
+// spells, so an unmatched pattern can suggest the directory form.
+func (td *TargetDiscovery) noteDir(relPath string) {
+	if len(td.bareNames) == 0 || relPath == "." {
+		return
+	}
+	for _, r := range td.bareNames[filepath.Base(relPath)] {
+		r.dirSeen = true
+	}
+}
+
+// recordExclusion attributes an exclusion to the source of r.
+func (td *TargetDiscovery) recordExclusion(r *ignoreRule) {
+	if r.caller {
 		td.ExcludedByCallerPatterns++
 	} else {
 		td.ExcludedByIgnoreFile++
 	}
 }
 
+// PatternUses describes every pattern the last Discover
+// evaluated, caller patterns first, then the lines of the .aguaraignore in
+// root (the directory the caller passed, used for the File field).
+func (td *TargetDiscovery) PatternUses(root string) []types.IgnorePatternUse {
+	if len(td.rules) == 0 {
+		return nil
+	}
+	uses := make([]types.IgnorePatternUse, 0, len(td.rules))
+	for _, r := range td.rules {
+		u := types.IgnorePatternUse{Pattern: r.pattern, Line: r.line, Matched: r.matched, Unsupported: r.unsupported}
+		if !r.caller {
+			u.File = filepath.Join(root, ".aguaraignore")
+		}
+		if r.matched == 0 && r.dirSeen {
+			u.Hint = fmt.Sprintf("a directory named %s was scanned; a bare name matches files only, write %s/ to exclude directories with that name", r.glob, r.glob)
+		}
+		uses = append(uses, u)
+	}
+	return uses
+}
+
 // Only skip an unreadable subtree when every descendant is excluded. A file
 // glob matching the directory's name alone says nothing about its contents.
 func (td *TargetDiscovery) isIgnoredSubtree(relPath string) bool {
+	td.ensureRules()
 	relPath = filepath.ToSlash(relPath)
 	if relPath == "." {
 		return false
 	}
-	for i, pattern := range td.IgnorePatterns {
-		if pattern == "*" || pattern == "**" {
-			td.recordExclusion(i)
-			return true
+	for _, r := range td.rules {
+		if r.unsupported != "" {
+			continue
 		}
-		prefix, recursive := strings.CutSuffix(pattern, "/**")
-		if recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
-			td.recordExclusion(i)
+		pattern := r.pattern
+		excluded := pattern == "*" || pattern == "**" || (r.directoryForm() && r.matchDir(relPath))
+		if prefix, recursive := strings.CutSuffix(pattern, "/**"); recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
+			excluded = true
+		}
+		if excluded {
+			r.matched++
+			td.recordExclusion(r)
 			return true
 		}
 	}
