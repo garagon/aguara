@@ -188,7 +188,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {
-		noteProjectPolicy(cmd, cfg, result)
+		noteProjectPolicy(cmd, cfg, res, result)
 	}
 
 	if store != nil {
@@ -344,7 +344,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	stopSpinner(sp)
 	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
 	if trustProjectPolicy {
-		noteProjectPolicy(cmd, cfg, aggregate)
+		noteProjectPolicy(cmd, cfg, res, aggregate)
 	}
 
 	if store != nil {

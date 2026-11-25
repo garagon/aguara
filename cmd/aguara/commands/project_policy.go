@@ -11,6 +11,7 @@ import (
 
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/output"
+	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/scanner"
 )
 
@@ -153,13 +154,17 @@ func projectIgnoreFile(dir string) (string, bool) {
 // that honored them says so. Files that changed nothing (for example
 // the defaults `aguara init` scaffolds) are not named, and nothing is
 // printed when no policy applied.
-func noteProjectPolicy(cmd *cobra.Command, cfg config.Config, result *scanner.ScanResult) {
+func noteProjectPolicy(cmd *cobra.Command, cfg config.Config, res *rulecatalog.Resolution, result *scanner.ScanResult) {
 	var applied []string
 	if cfg.Source != "" {
 		keys := projectConfigSettings(cmd, cfg)
 		if result.TargetPolicy.IgnorePatternExclusions == 0 {
 			keys = slices.DeleteFunc(keys, func(k string) bool { return k == "ignore" })
 		}
+		keys = slices.DeleteFunc(keys, func(k string) bool {
+			return (k == "disable_rules" && !fileDisablesApply(cfg, res)) ||
+				(k == "rule_overrides" && !fileOverridesApply(cfg, res))
+		})
 		if len(keys) > 0 {
 			applied = append(applied, fmt.Sprintf("%s (%s)", cfg.Source, strings.Join(keys, ", ")))
 		}
@@ -180,4 +185,41 @@ func noteProjectPolicy(cmd *cobra.Command, cfg config.Config, result *scanner.Sc
 	}
 	fmt.Fprintf(os.Stderr, "notice: applied policy owned by the scanned project: %s (pass --project-policy ignore to scan without it)\n",
 		output.TerminalText(strings.Join(applied, "; ")))
+}
+
+// flagDisabled reports whether --disable-rule names the canonical id.
+func flagDisabled(id string) bool {
+	return slices.ContainsFunc(flagDisableRules, func(v string) bool { return rulecatalog.CanonicalID(v) == id })
+}
+
+// fileDisablesApply reports whether a disable_rules entry of cfg took
+// effect. resolveCLIRules warns about and drops an entry naming an
+// unknown rule, so only known IDs reach res.Disabled; an entry that
+// --disable-rule already covers changes nothing.
+func fileDisablesApply(cfg config.Config, res *rulecatalog.Resolution) bool {
+	for _, entry := range cfg.DisableRules {
+		id := rulecatalog.CanonicalID(entry)
+		if id != "" && slices.Contains(res.Disabled, id) && !flagDisabled(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// fileOverridesApply reports whether a rule_overrides entry of cfg took
+// effect. An entry naming an unknown rule is dropped, an invalid
+// severity is cleared, and an override of a rule that --disable-rule
+// removes changes nothing.
+func fileOverridesApply(cfg config.Config, res *rulecatalog.Resolution) bool {
+	for entry := range cfg.RuleOverrides {
+		id := rulecatalog.CanonicalID(entry)
+		ovr, ok := res.Overrides[id]
+		if !ok || flagDisabled(id) {
+			continue
+		}
+		if ovr.Severity != "" || ovr.Disabled || len(ovr.ApplyToTools) > 0 || len(ovr.ExemptTools) > 0 {
+			return true
+		}
+	}
+	return false
 }

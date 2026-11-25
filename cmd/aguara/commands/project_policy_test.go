@@ -163,6 +163,49 @@ func TestProjectPolicyNoticeSkipsPolicyThatChangedNothing(t *testing.T) {
 		"the config's identical pattern matched first, so the .aguaraignore changed nothing")
 }
 
+// Rule entries in .aguara.yml that fail validation are warned about and
+// dropped, so they change nothing and the notice must not claim them.
+// An entry the caller already applied by flag changes nothing either.
+func TestProjectPolicyNoticeSkipsDroppedRuleEntries(t *testing.T) {
+	for name, tc := range map[string]struct {
+		config string
+		args   []string
+		want   string // "" means no notice
+	}{
+		"unknown disable_rules ID": {config: "disable_rules:\n  - TYPO_001\n"},
+		"unknown override ID":      {config: "rule_overrides:\n  NOPE_002:\n    disabled: true\n"},
+		"override with only an invalid severity": {
+			config: "rule_overrides:\n  CRED_002:\n    severity: SEVERE\n",
+		},
+		"entry the flag already disables": {
+			config: "disable_rules:\n  - prompt_injection_001\n",
+			args:   []string{"--disable-rule", "PROMPT_INJECTION_001"},
+		},
+		"valid disable_rules ID": {
+			config: "disable_rules:\n  - TYPO_001\n  - CRED_001\n",
+			want:   "(disable_rules)",
+		},
+		"valid override": {
+			config: "rule_overrides:\n  CRED_002:\n    severity: low\n",
+			want:   "(rule_overrides)",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearCIEnv(t)
+			dir := projectWith(t, map[string]string{".aguara.yml": tc.config, "notes.md": "# notes\n"})
+			stderr := captureStderrBytes(t, func() {
+				_, err := runScanJSONWithError(t, dir, tc.args...)
+				require.NoError(t, err)
+			})
+			if tc.want == "" {
+				require.NotContains(t, string(stderr), "notice: applied policy")
+				return
+			}
+			require.Contains(t, string(stderr), filepath.Join(dir, ".aguara.yml")+" "+tc.want)
+		})
+	}
+}
+
 // Trusted runs with nothing to apply stay quiet.
 func TestNoProjectPolicyNoticeWithoutPolicy(t *testing.T) {
 	clearCIEnv(t)
