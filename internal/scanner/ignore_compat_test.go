@@ -105,7 +105,7 @@ func newMatches(pattern string, files []string) []string {
 	r := compileIgnoreRule(pattern)
 	var out []string
 	for _, f := range files {
-		if r.matchFile(filepath.FromSlash(f)) {
+		if r.matchFile(filepath.FromSlash(f), true) {
 			out = append(out, f)
 		}
 	}

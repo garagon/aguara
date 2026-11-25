@@ -327,7 +327,7 @@ func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target
 		if !info.Mode().IsRegular() {
 			return nil, IncompleteScanError("inspect target (not a regular file or directory)", p, "", errNotRegularFile)
 		}
-		if seen[rel] || isBinaryExt(full) || td.isOutput(full) || td.isIgnored(rel) {
+		if seen[rel] || isBinaryExt(full) || td.isOutput(full) || td.isIgnoredNamed(rel) {
 			continue
 		}
 		if info.Size() > limit {
@@ -400,14 +400,25 @@ func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 	return scanner.Err()
 }
 
-// isIgnored reports whether a pattern excludes the file at relPath. Every
-// matching pattern is counted as used; the exclusion is attributed to the
-// first one.
+// isIgnored reports whether a pattern excludes the file at relPath, which
+// a walk reached, so its parent directories were already checked (pruned).
+// Every matching pattern is counted as used; the exclusion is attributed
+// to the first one.
 func (td *TargetDiscovery) isIgnored(relPath string) bool {
+	return td.isIgnoredFile(relPath, false)
+}
+
+// isIgnoredNamed is isIgnored for a file named directly, whose parent
+// directories no walk has checked.
+func (td *TargetDiscovery) isIgnoredNamed(relPath string) bool {
+	return td.isIgnoredFile(relPath, true)
+}
+
+func (td *TargetDiscovery) isIgnoredFile(relPath string, parents bool) bool {
 	td.ensureRules()
 	var first *ignoreRule
 	for _, r := range td.rules {
-		if r.matchFile(relPath) {
+		if r.matchFile(relPath, parents) {
 			r.matched++
 			if first == nil {
 				first = r

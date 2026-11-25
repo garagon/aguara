@@ -93,8 +93,11 @@ func (r *ignoreRule) directoryForm() bool {
 
 // matchFile reports whether the rule excludes the file at rel, a path
 // relative to the scan root in the native separator. Directory forms
-// match when the file itself or one of its parent directories matches.
-func (r *ignoreRule) matchFile(rel string) bool {
+// match when the file itself or, with parents, one of its parent
+// directories matches. A walk prunes the directories these rules match
+// before it reaches their files, so it passes parents=false; a file named
+// directly has had no such check and passes true.
+func (r *ignoreRule) matchFile(rel string, parents bool) bool {
 	if r.unsupported != "" {
 		return false
 	}
@@ -110,6 +113,9 @@ func (r *ignoreRule) matchFile(rel string) bool {
 	slashRel := filepath.ToSlash(rel)
 	if r.anchored && !r.dirOnly && matchSegments(r.glob, slashRel) {
 		return true
+	}
+	if !parents {
+		return false
 	}
 	for i := 0; i < len(slashRel); i++ {
 		if slashRel[i] == '/' && r.matchDir(slashRel[:i]) {
