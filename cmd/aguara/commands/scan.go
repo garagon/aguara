@@ -42,6 +42,11 @@ var (
 	flagWriteBaseline string
 	flagProjectPolicy string
 	flagFailOnEmpty   bool
+	// flagFailOnSource names the project file whose fail_on set
+	// flagFailOn when no --fail-on was passed, for the gate message.
+	flagFailOnSource string
+	// flagSARIFCategory is --sarif-category (scan, check, audit).
+	flagSARIFCategory string
 )
 
 // errNothingScanned fails a --fail-on-empty scan that evaluated no files.
@@ -71,7 +76,11 @@ default --project-policy auto:
     CI variable and what was and was not applied.
 
 Pass --project-policy trust to apply all of it in CI, or --project-policy
-ignore to apply none of it (fail_on included) for unfamiliar content.`,
+ignore to apply none of it (fail_on included) for unfamiliar content.
+
+--fail-on, --ci and fail_on accept critical, high, medium, low or info
+(warning is an alias of high). The run fails when any finding is at or
+above the threshold; baselined findings do not count.` + exitCodesHelp("1  A --fail-on threshold, --ci or an applied fail_on was reached."),
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
@@ -95,7 +104,8 @@ func init() {
 	addWorkersFlag(scanCmd)
 	addRulesFlag(scanCmd)
 	addDisableRuleFlag(scanCmd)
-	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
+	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity: critical, high, medium, low, info (warning = high)")
+	addSARIFCategoryFlag(scanCmd)
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
@@ -200,7 +210,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// An empty scan under --fail-on-empty still writes its report (which
 	// says nothing was scanned) but never establishes a baseline.
 	if flagFailOnEmpty && result.FilesScanned == 0 {
-		if err := writeOutput(result); err != nil {
+		if err := writeOutput(result, scanReport{res: res, target: targetPath, runErr: errNothingScanned}); err != nil {
 			return err
 		}
 		return errNothingScanned
@@ -230,15 +240,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 		result.Baseline = &summary
 	}
 
-	if err := writeOutput(result); err != nil {
+	// Writing a baseline establishes accepted state; it never gates. The
+	// gate is decided before the report is written so SARIF can record
+	// the exit code; deciding it has no side effects.
+	var gateErr error
+	if flagWriteBaseline == "" {
+		baselined := 0
+		if result.Baseline != nil {
+			baselined = result.Baseline.Baselined
+		}
+		gateErr = scanGate(gateFindings, baselined, scanFailOnSource(cmd.Flags().Changed("fail-on")))
+	}
+	if err := writeOutput(result, scanReport{res: res, target: targetPath, runErr: gateErr, threshold: flagFailOn}); err != nil {
 		return err
 	}
-
-	// Writing a baseline establishes accepted state; it never gates.
-	if flagWriteBaseline != "" {
-		return nil
-	}
-	return checkFailOnThresholdFindings(gateFindings)
+	return gateErr
 }
 
 // validateBaselineFlags enforces the baseline flag contract before any
@@ -359,18 +375,22 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 	}
 
-	if err := writeOutput(aggregate); err != nil {
+	var runErr error
+	switch {
+	case flagFailOnEmpty && aggregate.FilesScanned == 0 && len(paths) == 0:
+		// --auto takes no path, so point at discovery instead.
+		runErr = errors.New("no files were scanned and --fail-on-empty is set; no MCP client configurations were found")
+	case flagFailOnEmpty && aggregate.FilesScanned == 0:
+		runErr = errors.New("no files were scanned and --fail-on-empty is set; none of the discovered MCP client configurations could be read")
+	default:
+		runErr = scanGate(aggregate.Findings, 0, scanFailOnSource(cmd.Flags().Changed("fail-on")))
+	}
+	// --auto findings come from configuration files across the machine,
+	// not one directory, so SARIF URIs keep the reported paths.
+	if err := writeOutput(aggregate, scanReport{res: res, runErr: runErr, threshold: flagFailOn}); err != nil {
 		return err
 	}
-	if flagFailOnEmpty && aggregate.FilesScanned == 0 {
-		// --auto takes no path, so point at discovery instead.
-		if len(paths) == 0 {
-			return errors.New("no files were scanned and --fail-on-empty is set; no MCP client configurations were found")
-		}
-		return errors.New("no files were scanned and --fail-on-empty is set; none of the discovered MCP client configurations could be read")
-	}
-
-	return checkFailOnThreshold(aggregate)
+	return runErr
 }
 
 // loadScanConfig reads the target's .aguara.yml and applies its defaults
@@ -401,6 +421,7 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) (config.Config, error
 	}
 	if !cmd.Flags().Changed("fail-on") && cfg.FailOn != "" {
 		flagFailOn = cfg.FailOn
+		flagFailOnSource = cfg.Source + " fail_on"
 	}
 	if !cmd.Flags().Changed("rules") && cfg.Rules != "" {
 		flagRules = []string{cfg.Rules}
@@ -576,28 +597,46 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 	return result, nil
 }
 
-func writeOutput(result *scanner.ScanResult) error {
+// writeOutput writes a scan report in the selected format. The optional
+// scanReport supplies the rule configuration, target and exit outcome; a
+// report written without it carries no catalog identity, rule
+// documentation from the catalog or repository-relative SARIF paths.
+func writeOutput(result *scanner.ScanResult, report ...scanReport) error {
 	output.ToolVersion = Version
+	var rep scanReport
+	if len(report) > 0 {
+		rep = report[0]
+	}
 
 	return writeReport(func(w io.Writer) error {
 		var formatter output.Formatter
 		switch strings.ToLower(flagFormat) {
 		case "json":
-			formatter = &output.JSONFormatter{}
+			formatter = &output.JSONFormatter{Header: reportHeader(rep.res)}
 		case "sarif":
-			formatter = &output.SARIFFormatter{}
+			formatter = &output.SARIFFormatter{Options: sarifOptions(rep)}
 		case "markdown", "md":
-			formatter = &output.MarkdownFormatter{}
+			formatter = &output.MarkdownFormatter{Detections: detections(rep.res)}
 		default:
 			formatter = &output.TerminalFormatter{
-				NoColor: flagNoColor,
-				Verbose: flagVerbose,
-				Width:   output.DetectWidth(w),
+				NoColor:    flagNoColor,
+				Verbose:    flagVerbose,
+				Width:      output.DetectWidth(w),
+				Detections: detections(rep.res),
 			}
 		}
 
 		return formatter.Format(w, result)
 	})
+}
+
+// detections is the number of rules in the effective catalog, or 0 when
+// unknown.
+func detections(res *rulecatalog.Resolution) int {
+	if res == nil {
+		return 0
+	}
+	return len(res.Catalog(""))
 }
 
 func isTerminalFormat() bool {
@@ -688,7 +727,9 @@ func parseProfileFlag() (scanner.ScanProfile, error) {
 	}
 }
 
-// ErrThresholdExceeded is returned when findings meet or exceed the --fail-on severity.
+// ErrThresholdExceeded is returned when findings meet or exceed the --fail-on
+// severity. Gate errors wrap it with a message naming what tripped the gate;
+// match it with errors.Is.
 var ErrThresholdExceeded = fmt.Errorf("findings exceed severity threshold")
 
 func checkFailOnThreshold(result *scanner.ScanResult) error {
@@ -700,17 +741,5 @@ func checkFailOnThreshold(result *scanner.ScanResult) error {
 // finding list still goes to output (3A: output shows everything, the
 // baseline affects the gate only).
 func checkFailOnThresholdFindings(findings []scanner.Finding) error {
-	if flagFailOn == "" {
-		return nil
-	}
-	threshold, err := scanner.ParseSeverity(flagFailOn)
-	if err != nil {
-		return fmt.Errorf("invalid --fail-on: %w", err)
-	}
-	for _, f := range findings {
-		if f.Severity >= threshold {
-			return ErrThresholdExceeded
-		}
-	}
-	return nil
+	return scanGate(findings, 0, scanFailOnSource(false))
 }

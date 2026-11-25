@@ -248,7 +248,8 @@ func TestPythonReportsHonorOutputAndFormat(t *testing.T) {
 			text := string(data)
 			require.NotContains(t, text, "\x1b[")
 			require.Contains(t, text, "litellm 1.82.7 is a known compromised PyPI package")
-			require.Contains(t, text, filepath.Join(dir, "uv.lock")+":", "findings carry their file:line location")
+			require.Contains(t, text, " uv.lock:4", "findings carry their file:line location, relative to the target like content findings")
+			require.NotContains(t, text, filepath.Join(dir, "uv.lock"), "terminal paths are relative; JSON keeps the full path")
 			require.Contains(t, text, "requirements.txt includes missing.txt, which was not checked")
 			require.Contains(t, text, "1 Python dependency is not pinned to one version")
 

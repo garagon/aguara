@@ -48,7 +48,8 @@ func TestFlagsRejectedWhereTheyHaveNoEffect(t *testing.T) {
 	}{
 		{[]string{"status", "--format", "json"}, "--format", "aguara scan"},
 		{[]string{"status", "-o", "status.txt"}, "--output", "aguara scan"},
-		{[]string{"version", "--format", "json"}, "--format", "aguara scan"},
+		{[]string{"version", "-o", "version.json"}, "--output", "aguara scan"},
+		{[]string{"version", "--severity", "high"}, "--severity", "aguara scan"},
 		{[]string{"init", dir, "--format", "json"}, "--format", "aguara scan"},
 		{[]string{"list-rules", "--severity", "critical"}, "--severity", "aguara scan"},
 		{[]string{"audit", dir, "--severity", "critical"}, "--severity", "aguara scan"},

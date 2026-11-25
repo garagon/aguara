@@ -1,0 +1,1021 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/garagon/aguara/main/schema/audit-report.schema.json",
+  "title": "Aguara audit JSON report",
+  "description": "Output of `aguara audit --format json`, schema_version 1.x. `check` and `scan` hold the two halves; verdict, triage, agent_handoff and action_plan are the combined decision. The schema is open: consumers must ignore properties they do not know, because minor versions add properties.",
+  "allOf": [
+    {
+      "$ref": "#/definitions/reportHeader"
+    },
+    {
+      "$ref": "#/definitions/auditResult"
+    }
+  ],
+  "definitions": {
+    "reportHeader": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tool",
+        "catalog"
+      ],
+      "properties": {
+        "schema_version": {
+          "description": "Report contract version, major.minor. Additive changes bump the minor version; removals, renames and type changes bump the major version.",
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "tool": {
+          "$ref": "#/definitions/toolInfo"
+        },
+        "catalog": {
+          "$ref": "#/definitions/catalogInfo"
+        }
+      }
+    },
+    "toolInfo": {
+      "description": "The build that produced the report.",
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "aguara"
+          ]
+        },
+        "version": {
+          "description": "Release version such as v0.29.0, or dev for an unversioned build.",
+          "type": "string"
+        },
+        "commit": {
+          "description": "Source commit, when known.",
+          "type": "string"
+        }
+      }
+    },
+    "catalogInfo": {
+      "description": "The rule catalog the report used.",
+      "type": "object",
+      "required": [
+        "detections",
+        "pattern_rules",
+        "analyzer_rules",
+        "digest"
+      ],
+      "properties": {
+        "detections": {
+          "description": "Rules in the effective catalog: pattern plus analyzer rules, after disabled rules are removed.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pattern_rules": {
+          "description": "Compiled YAML pattern rules (rules_loaded).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "analyzer_rules": {
+          "description": "Analyzer-emitted rules.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "description": "SHA-256 of the canonical effective catalog; changes when any rule is added, removed, disabled, re-rated or edited.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "severity": {
+      "description": "0 INFO, 1 LOW, 2 MEDIUM, 3 HIGH, 4 CRITICAL.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4
+    },
+    "severityLabel": {
+      "type": "string",
+      "enum": [
+        "INFO",
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ]
+    },
+    "contextLine": {
+      "type": "object",
+      "required": [
+        "line",
+        "content",
+        "is_match"
+      ],
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "content": {
+          "description": "May be [REDACTED].",
+          "type": "string"
+        },
+        "is_match": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mergedFinding": {
+      "description": "A finding deduplication merged into the reported one on the same file and line. Never carries matched text.",
+      "type": "object",
+      "required": [
+        "rule_id",
+        "severity",
+        "severity_label",
+        "category"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/severity"
+        },
+        "severity_label": {
+          "$ref": "#/definitions/severityLabel"
+        },
+        "category": {
+          "type": "string"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "rule_name",
+        "severity",
+        "severity_label",
+        "category",
+        "file_path",
+        "line",
+        "matched_text",
+        "analyzer"
+      ],
+      "properties": {
+        "rule_id": {
+          "description": "Catalog rule ID; `aguara explain <rule_id>` documents it.",
+          "type": "string"
+        },
+        "rule_name": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/severity"
+        },
+        "severity_label": {
+          "$ref": "#/definitions/severityLabel"
+        },
+        "category": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Path relative to the scan target (the base name for a single-file scan).",
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "description": "1-based column, present only when the analyzer knows it.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "matched_text": {
+          "description": "May be [REDACTED]; not a stable identifier.",
+          "type": "string"
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/contextLine"
+          }
+        },
+        "score": {
+          "description": "0-100, rounded to 2 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "confidence": {
+          "description": "0-1, rounded to 4 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "decision_impact": {
+          "type": "string",
+          "enum": [
+            "context",
+            "review"
+          ]
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "analyzer": {
+          "type": "string"
+        },
+        "in_code_block": {
+          "type": "boolean"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "also_matched": {
+          "description": "Findings merged into this one by deduplication, by severity (highest first) then rule ID.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/mergedFinding"
+          }
+        },
+        "baseline_state": {
+          "description": "Present when a baseline was applied.",
+          "type": "string",
+          "enum": [
+            "new",
+            "baselined",
+            "non_baselineable"
+          ]
+        },
+        "fingerprint": {
+          "description": "The value baseline files and SARIF partialFingerprints (aguara/v1) use. Absent for findings whose matched text is redacted.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "baselineSummary": {
+      "type": "object",
+      "required": [
+        "applied",
+        "total",
+        "new",
+        "baselined",
+        "non_baselineable",
+        "gate_count"
+      ],
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "baselined": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "non_baselineable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gate_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scanCoverage": {
+      "type": "object",
+      "required": [
+        "files_scanned",
+        "scope"
+      ],
+      "properties": {
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scope": {
+          "description": "path, changed or auto; new scopes may be added.",
+          "type": "string"
+        }
+      }
+    },
+    "suppressionSummary": {
+      "description": "Findings matched but not reported on their own, by the step that removed them (each counted once), plus files excluded by ignore patterns.",
+      "type": "object",
+      "required": [
+        "deduplicated",
+        "below_min_severity",
+        "disabled_rules",
+        "tool_exemptions",
+        "inline_directives",
+        "excluded_files"
+      ],
+      "properties": {
+        "deduplicated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "below_min_severity": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disabled_rules": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_exemptions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inline_directives": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_files": {
+          "description": "Counts files, not findings.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scanResult": {
+      "type": "object",
+      "required": [
+        "findings",
+        "files_scanned",
+        "rules_loaded",
+        "verdict",
+        "verdict_label",
+        "risk_score",
+        "duration_ms"
+      ],
+      "properties": {
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/finding"
+          }
+        },
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rules_loaded": {
+          "description": "Compiled pattern rules, not the whole catalog.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "verdict": {
+          "description": "0 clean, 1 flag, 2 block.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "verdict_label": {
+          "type": "string",
+          "enum": [
+            "clean",
+            "flag",
+            "block"
+          ]
+        },
+        "risk_score": {
+          "description": "0-100, rounded to 2 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "baseline": {
+          "$ref": "#/definitions/baselineSummary"
+        },
+        "coverage": {
+          "$ref": "#/definitions/scanCoverage"
+        },
+        "suppressed": {
+          "$ref": "#/definitions/suppressionSummary"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "packageFinding": {
+      "type": "object",
+      "required": [
+        "severity",
+        "title",
+        "detail"
+      ],
+      "properties": {
+        "severity": {
+          "description": "CRITICAL, WARNING or INFO. For --fail-on, CRITICAL is critical, WARNING is high and INFO is info.",
+          "type": "string",
+          "enum": [
+            "CRITICAL",
+            "WARNING",
+            "INFO"
+          ]
+        },
+        "kind": {
+          "description": "Finding class: compromised_package, cached_package, cached_artifact, pth_executable, pth_oversized, persistence_artifact or unresolved_include; new classes may be added. SARIF rule IDs are CHECK_ and the upper-cased kind.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "path": {
+          "description": "File or directory the finding is about, as discovered (absolute or relative to the working directory).",
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based line of the matching entry, for dependency files that have one.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "advisory_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ecosystem": {
+          "description": "OSV ecosystem of a package finding (npm, PyPI, Go, crates.io, Packagist, RubyGems, Maven, NuGet).",
+          "type": "string"
+        },
+        "package": {
+          "description": "Package name as recorded.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Version as recorded; absent for an unpinned requirement.",
+          "type": "string"
+        }
+      }
+    },
+    "credentialFile": {
+      "type": "object",
+      "required": [
+        "path",
+        "exists",
+        "guidance"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "guidance": {
+          "type": "string"
+        }
+      }
+    },
+    "intelSummary": {
+      "type": "object",
+      "required": [
+        "mode",
+        "snapshot",
+        "generated_at",
+        "age_days",
+        "sources",
+        "stale"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "offline",
+            "online"
+          ]
+        },
+        "snapshot": {
+          "description": "embedded, local, local-verified, remote-fresh or remote-unverified.",
+          "type": "string"
+        },
+        "generated_at": {
+          "type": "string"
+        },
+        "age_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stale": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ecosystemResult": {
+      "type": "object",
+      "required": [
+        "ecosystem",
+        "path",
+        "source",
+        "packages_read",
+        "findings_count"
+      ],
+      "properties": {
+        "ecosystem": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "packages_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "findings_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unpinned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_includes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "evidenceSummary": {
+      "type": "object",
+      "required": [
+        "ecosystem",
+        "source",
+        "targets",
+        "packages_read"
+      ],
+      "properties": {
+        "ecosystem": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "targets": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "packages_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unpinned": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "unsupportedEvidence": {
+      "type": "object",
+      "required": [
+        "path",
+        "kind",
+        "ecosystem"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "ecosystem": {
+          "type": "string"
+        }
+      }
+    },
+    "unresolvedInclude": {
+      "type": "object",
+      "required": [
+        "path",
+        "line",
+        "argument",
+        "reason"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "argument": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "packageCoverage": {
+      "type": "object",
+      "required": [
+        "package_evidence",
+        "unsupported_evidence",
+        "unresolved_includes"
+      ],
+      "properties": {
+        "package_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/evidenceSummary"
+          }
+        },
+        "unsupported_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/unsupportedEvidence"
+          }
+        },
+        "unresolved_includes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/unresolvedInclude"
+          }
+        }
+      }
+    },
+    "checkResult": {
+      "type": "object",
+      "required": [
+        "environment",
+        "findings",
+        "credentials",
+        "packages_read",
+        "pth_scanned",
+        "intel",
+        "ecosystems"
+      ],
+      "properties": {
+        "environment": {
+          "type": "string"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/packageFinding"
+          }
+        },
+        "credentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/credentialFile"
+          }
+        },
+        "packages_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pth_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "intel": {
+          "$ref": "#/definitions/intelSummary"
+        },
+        "ecosystems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ecosystemResult"
+          }
+        },
+        "coverage": {
+          "$ref": "#/definitions/packageCoverage"
+        }
+      }
+    },
+    "auditVerdict": {
+      "type": "object",
+      "required": [
+        "status",
+        "check_criticals",
+        "check_warnings",
+        "check_infos",
+        "scan_criticals",
+        "scan_highs",
+        "scan_mediums",
+        "scan_lows",
+        "scan_infos",
+        "threshold_exceeded",
+        "decision_gate_exceeded"
+      ],
+      "properties": {
+        "status": {
+          "description": "pass (no findings), findings (findings, no gate crossed) or fail (a --fail-on or --fail-on-decision gate crossed).",
+          "type": "string",
+          "enum": [
+            "pass",
+            "findings",
+            "fail"
+          ]
+        },
+        "check_criticals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_warnings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_infos": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scan_criticals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scan_highs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scan_mediums": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scan_lows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scan_infos": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "threshold_exceeded": {
+          "type": "boolean"
+        },
+        "decision_gate_exceeded": {
+          "type": "boolean"
+        }
+      }
+    },
+    "triageReason": {
+      "type": "object",
+      "required": [
+        "kind",
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Reason class; new kinds may be added.",
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "auditTriage": {
+      "type": "object",
+      "required": [
+        "decision",
+        "summary",
+        "context_observations",
+        "review_findings",
+        "reasons",
+        "recommended_next_steps"
+      ],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "proceed",
+            "review",
+            "stop"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "context_observations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "review_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/triageReason"
+          }
+        },
+        "recommended_next_steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agentHandoff": {
+      "type": "object",
+      "required": [
+        "status",
+        "summary",
+        "allowed_actions",
+        "blocked_actions"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "review_only",
+            "blocked"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "allowed_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocked_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "actionPlan": {
+      "type": "object",
+      "required": [
+        "trust_state",
+        "can_install_dependencies",
+        "can_execute_project_code",
+        "can_run_ci",
+        "can_use_repo_agent_config",
+        "can_edit_files",
+        "can_explain_findings",
+        "priority",
+        "next_commands"
+      ],
+      "properties": {
+        "trust_state": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "review_only",
+            "blocked"
+          ]
+        },
+        "can_install_dependencies": {
+          "type": "boolean"
+        },
+        "can_execute_project_code": {
+          "type": "boolean"
+        },
+        "can_run_ci": {
+          "type": "boolean"
+        },
+        "can_use_repo_agent_config": {
+          "type": "boolean"
+        },
+        "can_edit_files": {
+          "type": "boolean"
+        },
+        "can_explain_findings": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "auditCoverage": {
+      "type": "object",
+      "required": [
+        "files_scanned",
+        "package_evidence",
+        "unsupported_evidence",
+        "unresolved_includes"
+      ],
+      "properties": {
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "package_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/evidenceSummary"
+          }
+        },
+        "unsupported_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/unsupportedEvidence"
+          }
+        },
+        "unresolved_includes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/unresolvedInclude"
+          }
+        }
+      }
+    },
+    "auditResult": {
+      "type": "object",
+      "required": [
+        "target",
+        "check",
+        "scan",
+        "verdict",
+        "triage",
+        "agent_handoff",
+        "action_plan",
+        "intel",
+        "coverage"
+      ],
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "check": {
+          "$ref": "#/definitions/checkResult"
+        },
+        "scan": {
+          "$ref": "#/definitions/scanResult"
+        },
+        "verdict": {
+          "$ref": "#/definitions/auditVerdict"
+        },
+        "triage": {
+          "$ref": "#/definitions/auditTriage"
+        },
+        "agent_handoff": {
+          "$ref": "#/definitions/agentHandoff"
+        },
+        "action_plan": {
+          "$ref": "#/definitions/actionPlan"
+        },
+        "intel": {
+          "$ref": "#/definitions/intelSummary"
+        },
+        "coverage": {
+          "$ref": "#/definitions/auditCoverage"
+        }
+      }
+    }
+  }
+}

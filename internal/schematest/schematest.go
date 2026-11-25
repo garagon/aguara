@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/go-openapi/spec"
@@ -14,9 +15,27 @@ import (
 	"github.com/go-openapi/validate"
 )
 
+var (
+	cacheMu sync.Mutex
+	cache   = map[string]*spec.Schema{}
+)
+
 // Load reads and expands a JSON Schema file. Local "#/definitions/..."
-// references are resolved; the schema's own id is not fetched.
+// references are resolved; the schema's own id is not fetched. Expanded
+// schemas are cached per path for the life of the test binary.
 func Load(t testing.TB, path string) *spec.Schema {
+	t.Helper()
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if s, ok := cache[path]; ok {
+		return s
+	}
+	s := load(t, path)
+	cache[path] = s
+	return s
+}
+
+func load(t testing.TB, path string) *spec.Schema {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {

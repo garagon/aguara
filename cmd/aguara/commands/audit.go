@@ -13,6 +13,7 @@ import (
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
+	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
@@ -20,16 +21,17 @@ import (
 )
 
 var (
-	flagAuditPath          string
-	flagAuditCI            bool
-	flagAuditFailOn        string
-	flagAuditFresh         bool
-	flagAuditAllowStale    bool
-	flagAuditBaseline      string
-	flagAuditWriteBaseline string
-	flagAuditInsecure      bool
-	flagAuditVerbose       bool
-	flagAuditProjectPolicy string
+	flagAuditPath           string
+	flagAuditCI             bool
+	flagAuditFailOn         string
+	flagAuditFresh          bool
+	flagAuditAllowStale     bool
+	flagAuditBaseline       string
+	flagAuditWriteBaseline  string
+	flagAuditInsecure       bool
+	flagAuditVerbose        bool
+	flagAuditProjectPolicy  string
+	flagAuditFailOnDecision string
 )
 
 var auditCmd = &cobra.Command{
@@ -38,6 +40,8 @@ var auditCmd = &cobra.Command{
 	Short:   "Run scan + check together and produce a single verdict",
 	Example: `  aguara audit .               Package check + content scan, one verdict
   aguara audit . --ci          CI gate: exit 1 on critical, no color
+  aguara audit . --fail-on-decision review   Exit 1 unless triage says proceed
+  aguara audit . --format sarif -o audit.sarif   For GitHub code scanning
   aguara audit . --verbose     List every content finding (no cap)
   aguara audit . --fresh       Refresh threat intel first (network opt-in)`,
 	Long: `Audit a project: run the supply-chain check (compromised packages /
@@ -48,26 +52,35 @@ single combined verdict.
 Default audits stay offline -- they use the same embedded threat intel
 the standalone 'aguara check' uses. Pass --fresh to refresh from Aguara's
 signed advisory bundle (verified before use) before the audit. Pass --ci
-to fail-on critical with no color (the default for unattended CI runs).`,
+to fail-on critical with no color (the default for unattended CI runs).
+
+--fail-on takes critical, high, medium, low or info and applies to both
+sides: content findings at or above the level, and package findings whose
+severity maps at or above it (CRITICAL is critical, WARNING is high, INFO
+is info). warning remains an alias of high. --fail-on-decision review or
+stop exits 1 when the triage decision is at least that restrictive; it can
+be combined with --fail-on.` + exitCodesHelp("1  A --fail-on threshold, --ci or --fail-on-decision was reached."),
 	Args: cobra.MaximumNArgs(1),
 	RunE: runAudit,
 }
 
 func init() {
-	addFormatFlag(auditCmd, "terminal", "json")
+	addFormatFlag(auditCmd, "terminal", "json", "sarif", "markdown")
 	addOutputFlag(auditCmd)
+	addSARIFCategoryFlag(auditCmd)
 	addWorkersFlag(auditCmd)
 	addRulesFlag(auditCmd)
 	addDisableRuleFlag(auditCmd)
 	auditCmd.Flags().StringVar(&flagAuditPath, "path", "", "Path to audit (also accepted as a positional argument; defaults to '.')")
 	auditCmd.Flags().BoolVar(&flagAuditCI, "ci", false, "CI mode: --fail-on critical, no color")
-	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
+	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity: critical, high, medium, low, info (warning = high; package WARNING findings count as high)")
+	auditCmd.Flags().StringVar(&flagAuditFailOnDecision, "fail-on-decision", "", "Exit code 1 when the triage decision is at least this restrictive: review or stop")
 	auditCmd.Flags().BoolVar(&flagAuditFresh, "fresh", false, "Refresh threat intel from Aguara's signed advisory bundle before the audit (network opt-in)")
 	auditCmd.Flags().BoolVar(&flagAuditInsecure, "insecure-intel", false, "Skip advisory-bundle signature verification (also requires AGUARA_INSECURE_INTEL=1; mirrors / air-gapped / tests only; manifest + blob digests are still checked)")
 	auditCmd.Flags().BoolVar(&flagAuditAllowStale, "allow-stale", false, "If --fresh fails, fall back to previously verified local intel (errors if none is cached)")
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
-	auditCmd.Flags().BoolVar(&flagAuditVerbose, "verbose", false, "List every content finding instead of capping at 10")
+	auditCmd.Flags().BoolVarP(&flagAuditVerbose, "verbose", "v", false, "List every content finding instead of capping at 10")
 	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (ignore), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
@@ -98,6 +111,8 @@ type AuditResult struct {
 
 	scanGate    []types.Finding
 	scanGateSet bool
+	// rules is the content scan's rule configuration, for reports.
+	rules *rulecatalog.Resolution
 }
 
 // AuditVerdict is the single-line summary the CLI prints under
@@ -113,6 +128,9 @@ type AuditVerdict struct {
 	ScanLows          int    `json:"scan_lows"`
 	ScanInfos         int    `json:"scan_infos"`
 	ThresholdExceeded bool   `json:"threshold_exceeded"`
+	// DecisionGateExceeded is true when --fail-on-decision was set and
+	// the triage decision reached it; Status is then "fail".
+	DecisionGateExceeded bool `json:"decision_gate_exceeded"`
 }
 
 // AuditTriage translates the raw findings and CI gate into a product-level
@@ -166,6 +184,10 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	if _, err := resolveProjectPolicy(flagAuditProjectPolicy, false); err != nil {
 		return err
 	}
+	decisionThreshold, err := parseFailOnDecision(flagAuditFailOnDecision)
+	if err != nil {
+		return err
+	}
 	applyAuditCIDefaults()
 
 	target := flagAuditPath
@@ -209,7 +231,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	applyIntelFreshness(&checkResult.Intel, time.Now().UTC())
 
 	// 2. Run the content scan.
-	scanResult, err := auditRunScan(cmd, target)
+	scanResult, scanRules, err := auditRunScan(cmd, target)
 	if err != nil {
 		return fmt.Errorf("audit: scan phase: %w", err)
 	}
@@ -221,6 +243,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		Scan:     scanResult,
 		Intel:    checkResult.Intel,
 		Coverage: auditCoverage(checkResult, scanResult),
+		rules:    scanRules,
 	}
 
 	// Baseline applies to the SCAN side only; package (check) findings
@@ -272,21 +295,67 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	result.Handoff = computeAuditAgentHandoff(result.Triage)
 	result.Plan = computeAuditActionPlan(result)
 
-	// 4. Emit.
-	if flagFormat == "json" {
-		if err := writeAuditJSON(result); err != nil {
-			return err
-		}
-	} else {
-		if err := writeAuditTerminal(result); err != nil {
-			return err
-		}
-	}
-
+	// The gates are decided before the report is written so it can say
+	// how the run ends (SARIF records the exit code).
+	var thresholdErr error
 	if result.Verdict.ThresholdExceeded {
-		return ErrThresholdExceeded
+		thresholdErr = auditThresholdError(result, flagAuditFailOn, ciFailOnSource(cmd.Flags().Changed("fail-on"), flagAuditCI))
 	}
-	return nil
+	decisionErr := decisionGate(result.Triage, decisionThreshold)
+	if decisionErr != nil {
+		result.Verdict.DecisionGateExceeded = true
+		result.Verdict.Status = "fail"
+	}
+	gateErr := joinGateErrors(thresholdErr, decisionErr)
+
+	// 4. Emit.
+	var writeErr error
+	switch flagFormat {
+	case "json":
+		writeErr = writeAuditJSON(result)
+	case "sarif":
+		writeErr = writeAuditSARIF(result, gateErr)
+	case "markdown":
+		writeErr = writeAuditMarkdown(result)
+	default:
+		writeErr = writeAuditTerminal(result)
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	return gateErr
+}
+
+// auditThresholdError says which findings tripped the audit's --fail-on
+// gate, on each side, and where the threshold came from.
+func auditThresholdError(result *AuditResult, threshold, source string) error {
+	thr, err := parseFailOn(threshold)
+	if err != nil {
+		return err
+	}
+	var parts []string
+	if n, counts := packageGateCounts(result.Check.Findings, thr); n > 0 {
+		parts = append(parts, fmt.Sprintf("%s (%s)", pluralize(n, "package finding", "package findings"), counts))
+	}
+	counts := map[types.Severity]int{}
+	n := 0
+	for _, f := range auditScanGateFindings(result) {
+		if f.Severity >= thr {
+			counts[f.Severity]++
+			n++
+		}
+	}
+	if n > 0 {
+		parts = append(parts, fmt.Sprintf("%s (%s)", pluralize(n, "content finding", "content findings"), severityCounts(counts)))
+	}
+	baselined := 0
+	if b := result.Scan.Baseline; b != nil {
+		baselined = b.Baselined
+	}
+	return thresholdTrip{
+		threshold: thr, value: threshold, source: source,
+		what: strings.Join(parts, " and "), baselined: baselined,
+	}.err()
 }
 
 // applyAuditCIDefaults mirrors check / scan: --ci implies
@@ -314,15 +383,18 @@ func applyAuditCIDefaults() {
 // gate, so it always runs with SeverityInfo and lets the verdict /
 // --fail-on threshold decide what matters. Passing --severity to audit
 // is rejected at parse time rather than silently ignored.
-func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
+//
+// It also returns the rule configuration the scan ran with, for the
+// report's catalog identity and rule documentation.
+func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, *rulecatalog.Resolution, error) {
 	trustProjectPolicy, err := resolveProjectPolicy(flagAuditProjectPolicy, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cfg := config.Config{}
 	if trustProjectPolicy {
 		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -334,7 +406,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 
 	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	s, store := buildScanner(res, cfg, scanner.SeverityInfo, trustProjectPolicy)
@@ -346,7 +418,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	result, err := executeScan(ctx, s, targetPath)
 	stopSpinner(sp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
@@ -361,22 +433,21 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 		}
 	}
 
-	return result, nil
+	return result, res, nil
 }
 
 // computeAuditVerdict tallies per-section severities and decides
-// whether the --fail-on threshold trips. The threshold mapping
-// between audit's vocabulary (critical / warning / info) and
-// scan's numeric Severity is intentionally simple:
+// whether the --fail-on threshold trips. The threshold uses scan's five
+// levels; package severities map onto them (packageSeverity):
 //
-//	critical -> check critical, scan critical
-//	warning  -> check warning,  scan high
-//	info     -> check info,     scan info
+//	critical -> check CRITICAL,          scan CRITICAL
+//	high     -> check WARNING and above, scan HIGH and above
+//	medium   -> check WARNING and above, scan MEDIUM and above
+//	low      -> check WARNING and above, scan LOW and above
+//	info     -> any finding on either side
 //
-// A finer-grained mapping (e.g. warning matches medium) would
-// surprise users who expect "warning" to mean "the loudest of the
-// non-critical buckets" in both vocabularies. The simple mapping
-// also means a single --fail-on flag is unambiguous in CI logs.
+// warning is an alias of high, so the values audit accepted before keep
+// their exact meaning.
 func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, error) {
 	v := AuditVerdict{Status: "pass"}
 
@@ -432,29 +503,24 @@ func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, e
 	if threshold == "" {
 		return v, nil
 	}
-	switch strings.ToUpper(strings.TrimSpace(threshold)) {
-	case "CRITICAL":
-		if v.CheckCriticals > 0 || v.ScanCriticals > 0 {
+	// The five-level vocabulary applies to both sides. Package severities
+	// map onto it with packageSeverity (WARNING is HIGH), which keeps the
+	// earlier values exact: critical trips on CRITICAL on either side,
+	// warning (an alias of high) on check WARNING or scan HIGH and above,
+	// and info on any finding at all, INFO included.
+	thr, err := parseFailOn(threshold)
+	if err != nil {
+		return v, err
+	}
+	for _, f := range result.Check.Findings {
+		if sev, ok := packageSeverity(f.Severity); ok && sev >= thr {
 			v.ThresholdExceeded = true
 		}
-	case "WARNING":
-		if v.CheckCriticals > 0 || v.CheckWarnings > 0 ||
-			v.ScanCriticals > 0 || v.ScanHighs > 0 {
+	}
+	for _, f := range result.Scan.Findings {
+		if f.Severity >= thr {
 			v.ThresholdExceeded = true
 		}
-	case "INFO":
-		// Any finding at all trips the gate, including INFO
-		// on either side. The earlier shape silently dropped
-		// INFO findings, so a custom INFO-only rule could
-		// have passed `--fail-on info` cleanly. That broke the
-		// "lowest threshold" contract; the explicit InfoCount
-		// fields above feed this gate now.
-		if v.CheckCriticals+v.CheckWarnings+v.CheckInfos > 0 ||
-			v.ScanCriticals+v.ScanHighs+v.ScanMediums+v.ScanLows+v.ScanInfos > 0 {
-			v.ThresholdExceeded = true
-		}
-	default:
-		return v, fmt.Errorf("invalid --fail-on %q: choose critical, warning, or info", threshold)
 	}
 	if v.ThresholdExceeded {
 		v.Status = "fail"
@@ -810,11 +876,77 @@ func auditActionNextCommands(result *AuditResult) []string {
 	return nil
 }
 
+// MarshalJSON keeps the triage arrays as [] rather than null when empty.
+func (t AuditTriage) MarshalJSON() ([]byte, error) {
+	if t.Reasons == nil {
+		t.Reasons = []AuditTriageReason{}
+	}
+	if t.RecommendedNextSteps == nil {
+		t.RecommendedNextSteps = []string{}
+	}
+	type alias AuditTriage
+	return json.Marshal(alias(t))
+}
+
+// MarshalJSON keeps the action lists as [] rather than null when empty.
+func (h AuditAgentHandoff) MarshalJSON() ([]byte, error) {
+	if h.AllowedActions == nil {
+		h.AllowedActions = []string{}
+	}
+	if h.BlockedActions == nil {
+		h.BlockedActions = []string{}
+	}
+	type alias AuditAgentHandoff
+	return json.Marshal(alias(h))
+}
+
+// MarshalJSON keeps priority and next_commands as [] rather than null.
+func (p AuditActionPlan) MarshalJSON() ([]byte, error) {
+	if p.Priority == nil {
+		p.Priority = []string{}
+	}
+	if p.NextCommands == nil {
+		p.NextCommands = []string{}
+	}
+	type alias AuditActionPlan
+	return json.Marshal(alias(p))
+}
+
 func writeAuditJSON(result *AuditResult) error {
 	return writeReport(func(w io.Writer) error {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return output.EncodeJSONReport(w, reportHeader(result.rules), result)
+	})
+}
+
+// writeAuditSARIF writes one SARIF run with the package findings and the
+// content findings, and the audit verdict and triage as run properties.
+func writeAuditSARIF(result *AuditResult, runErr error) error {
+	output.ToolVersion = Version
+	base, _ := sarifSourceRoot(result.Target)
+	external, notes := packageSARIFResults(result.Check.Findings, base)
+	opts := sarifOptions(scanReport{res: result.rules, target: result.Target, runErr: runErr, threshold: flagAuditFailOn, notes: notes})
+	opts.Properties = map[string]any{
+		"audit": map[string]any{
+			"verdict":       result.Verdict,
+			"triage":        result.Triage,
+			"agent_handoff": map[string]any{"status": result.Handoff.Status},
+			"action_plan":   result.Plan,
+		},
+		"packages_read": result.Check.PackagesRead,
+		"intel":         result.Intel,
+		"coverage":      result.Coverage,
+	}
+	return writeReport(func(w io.Writer) error {
+		return output.WriteSARIF(w, result.Scan, external, opts)
+	})
+}
+
+// writeAuditMarkdown writes the audit report for job summaries and PR
+// comments: verdict and triage, package findings, content findings.
+func writeAuditMarkdown(result *AuditResult) error {
+	return writeReport(func(w io.Writer) error {
+		renderAuditMarkdown(w, result)
+		return nil
 	})
 }
 
@@ -849,7 +981,7 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 			label := output.TerminalText(string(f.Severity))
 			fmt.Fprintf(w, "\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 			if f.Path != "" {
-				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Location())))
+				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(displayLocation(result.Target, f))))
 			}
 		}
 	default:
@@ -875,16 +1007,14 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 		const maxList = 10
 		shown := 0
 		fmt.Fprintln(w)
+		// Same columns as the scan report: rule IDs are never cut and long
+		// names wrap at the terminal width instead of being truncated.
+		lines := &output.TerminalFormatter{NoColor: st.NoColor, Width: width}
 		for _, f := range result.Scan.Findings {
 			if !flagAuditVerbose && shown >= maxList {
 				break
 			}
-			label := f.Severity.String()
-			fmt.Fprintf(w, "  %s %s %s %s\n",
-				st.SeverityIcon(label),
-				st.Bold(st.Cell(output.TerminalText(f.RuleID), 24)),
-				st.Cell(output.TerminalText(f.RuleName), 36),
-				st.Cyan(fmt.Sprintf("%s:%d", output.TerminalText(f.FilePath), f.Line)))
+			lines.WriteFindingLine(w, f, "  ")
 			shown++
 		}
 		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
@@ -912,7 +1042,7 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 		result.Verdict.ScanCriticals, result.Verdict.ScanHighs)
 	var line string
 	switch {
-	case result.Verdict.ThresholdExceeded:
+	case result.Verdict.ThresholdExceeded || result.Verdict.DecisionGateExceeded:
 		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts
 	case result.Verdict.Status == "findings":
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
