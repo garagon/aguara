@@ -30,7 +30,7 @@ func redactEnv(env map[string]string) map[string]string {
 			}
 		}
 		if !masked {
-			redacted[k] = v
+			redacted[k] = redactValue(v)
 		}
 	}
 	return redacted
@@ -42,6 +42,13 @@ type MCPServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env,omitempty"`
+	// Transport and URL describe a remote server: the transport the
+	// config names ("sse", "http", "streamable-http", ...), or "remote"
+	// when it gives only a URL. Both are empty for a local (stdio)
+	// server, and Command is usually empty for a remote one.
+	Transport string            `json:"transport,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
 }
 
 // ClientResult holds the discovered MCP servers for a single client.
@@ -76,14 +83,24 @@ func (r *Result) TotalClients() int {
 	return n
 }
 
-// Redacted returns a copy of the result with sensitive env values masked.
+// Redacted returns a copy of the result without secrets: environment
+// values whose names suggest a secret are masked as before, and secret
+// values anywhere else (a --token=... argument, the value after
+// --api-key, an Authorization header, URL credentials or a sensitive
+// query parameter, and token formats such as ghp_... or sk-...) are
+// replaced with [REDACTED]. FormatTree and the CLI's JSON output always
+// print the redacted copy.
 func (r *Result) Redacted() *Result {
 	out := &Result{Clients: make([]ClientResult, len(r.Clients))}
 	for i, c := range r.Clients {
 		servers := make([]MCPServer, len(c.Servers))
 		for j, s := range c.Servers {
 			servers[j] = s
+			servers[j].Command = redactValue(s.Command)
+			servers[j].Args = redactArgs(s.Args)
 			servers[j].Env = redactEnv(s.Env)
+			servers[j].URL = redactValue(s.URL)
+			servers[j].Headers = redactHeaders(s.Headers)
 		}
 		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
 	}
@@ -154,6 +171,8 @@ func Scan() (*Result, error) {
 }
 
 // FormatTree returns a human-readable tree of discovered MCP servers.
+// Secrets are redacted as Result.Redacted does, and a remote server shows
+// its transport and URL.
 func FormatTree(result *Result) string {
 	if len(result.Clients) == 0 {
 		return "No MCP configurations found.\n\nChecked paths for: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, " +
@@ -161,6 +180,7 @@ func FormatTree(result *Result) string {
 	}
 
 	var b strings.Builder
+	result = result.Redacted()
 
 	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", result.TotalClients())
 
@@ -174,6 +194,14 @@ func FormatTree(result *Result) string {
 			cmdStr := srv.Command
 			if len(srv.Args) > 0 {
 				cmdStr += " " + strings.Join(srv.Args, " ")
+			}
+			if srv.URL != "" {
+				remote := strings.TrimSpace(srv.Transport + " " + srv.URL)
+				if cmdStr == "" {
+					cmdStr = remote
+				} else {
+					cmdStr += " (" + remote + ")"
+				}
 			}
 			fmt.Fprintf(&b, "    %s %-20s %s\n", prefix, output.TerminalText(srv.Name), output.TerminalText(cmdStr))
 		}

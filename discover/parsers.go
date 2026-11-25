@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 )
 
 // mcpConfigJSON represents the common structure of MCP client config files.
@@ -15,6 +16,81 @@ type mcpServerJSON struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env,omitempty"`
+
+	// Remote servers. Raw values, so an unexpected type in one of these
+	// fields does not make the whole server map fail to parse, which
+	// would also hide the configuration from scan --auto.
+	Type      json.RawMessage `json:"type,omitempty"`
+	Transport json.RawMessage `json:"transport,omitempty"`
+	URL       json.RawMessage `json:"url,omitempty"`
+	ServerURL json.RawMessage `json:"serverUrl,omitempty"`
+	HTTPURL   json.RawMessage `json:"httpUrl,omitempty"`
+	Headers   json.RawMessage `json:"headers,omitempty"`
+}
+
+// server converts a parsed entry, filling Transport and URL for a remote
+// server.
+func (srv mcpServerJSON) server(name string) MCPServer {
+	s := MCPServer{Name: name, Command: srv.Command, Args: srv.Args, Env: srv.Env, Headers: jsonStringMap(srv.Headers)}
+	s.Transport = firstString(srv.Type, srv.Transport)
+	s.URL = firstString(srv.URL, srv.ServerURL, srv.HTTPURL)
+	switch {
+	case s.Transport == "stdio":
+		s.Transport = ""
+	case s.Transport == "" && s.URL != "":
+		s.Transport = "remote"
+		if jsonString(srv.HTTPURL) != "" {
+			s.Transport = "http"
+		}
+	}
+	return s
+}
+
+// jsonString returns raw as a string when it is a JSON string, else "".
+func jsonString(raw json.RawMessage) string {
+	var v string
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	return v
+}
+
+func firstString(raws ...json.RawMessage) string {
+	for _, raw := range raws {
+		if v := jsonString(raw); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// jsonStringMap returns the string-valued members of a JSON object.
+func jsonStringMap(raw json.RawMessage) map[string]string {
+	var obj map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &obj) != nil || len(obj) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(obj))
+	for k, v := range obj {
+		if s := jsonString(v); s != "" {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// sortedKeys returns the keys of m in order, so servers are listed the
+// same way on every run.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // parseConfigWithKey parses a config file using the specified JSON key for the server map.
@@ -57,13 +133,8 @@ func extractServersFromKey(raw map[string]json.RawMessage, key string) []MCPServ
 	}
 
 	var servers []MCPServer
-	for name, srv := range serverMap {
-		servers = append(servers, MCPServer{
-			Name:    name,
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-		})
+	for _, name := range sortedKeys(serverMap) {
+		servers = append(servers, serverMap[name].server(name))
 	}
 	return servers
 }
@@ -71,6 +142,9 @@ func extractServersFromKey(raw map[string]json.RawMessage, key string) []MCPServ
 type openCodeServer struct {
 	Command     []string          `json:"command"`
 	Environment map[string]string `json:"environment"`
+	Type        json.RawMessage   `json:"type,omitempty"`
+	URL         json.RawMessage   `json:"url,omitempty"`
+	Headers     json.RawMessage   `json:"headers,omitempty"`
 }
 
 // parseOpenCodeConfig parses OpenCode's config format where servers are under "mcp"
@@ -97,12 +171,20 @@ func parseOpenCodeConfig(path string) ([]MCPServer, error) {
 	}
 
 	var servers []MCPServer
-	for name, srv := range mcpMap {
-		s := MCPServer{Name: name, Env: srv.Environment}
+	for _, name := range sortedKeys(mcpMap) {
+		srv := mcpMap[name]
+		s := MCPServer{Name: name, Env: srv.Environment, Headers: jsonStringMap(srv.Headers)}
 		if len(srv.Command) > 0 {
 			s.Command = srv.Command[0]
 			if len(srv.Command) > 1 {
 				s.Args = srv.Command[1:]
+			}
+		}
+		// OpenCode spells a remote server "type": "remote" with a url.
+		if s.URL = jsonString(srv.URL); s.URL != "" {
+			s.Transport = jsonString(srv.Type)
+			if s.Transport == "" || s.Transport == "local" {
+				s.Transport = "remote"
 			}
 		}
 		servers = append(servers, s)
@@ -135,9 +217,9 @@ func parseClaudeCodeConfig(path string) ([]MCPServer, error) {
 	if projectsRaw, ok := raw["projects"]; ok {
 		var projects map[string]json.RawMessage
 		if json.Unmarshal(projectsRaw, &projects) == nil {
-			for _, projRaw := range projects {
+			for _, key := range sortedKeys(projects) {
 				var proj map[string]json.RawMessage
-				if json.Unmarshal(projRaw, &proj) == nil {
+				if json.Unmarshal(projects[key], &proj) == nil {
 					if mcpRaw, ok := proj["mcpServers"]; ok {
 						servers = append(servers, extractUniqueServers(mcpRaw, seen)...)
 					}
@@ -156,17 +238,12 @@ func extractUniqueServers(raw json.RawMessage, seen map[string]bool) []MCPServer
 	}
 
 	var servers []MCPServer
-	for name, srv := range serverMap {
+	for _, name := range sortedKeys(serverMap) {
 		if seen[name] {
 			continue
 		}
 		seen[name] = true
-		servers = append(servers, MCPServer{
-			Name:    name,
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-		})
+		servers = append(servers, serverMap[name].server(name))
 	}
 	return servers
 }
