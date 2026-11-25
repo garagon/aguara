@@ -82,6 +82,38 @@ func TestCINoticeNamesSkippedProjectPolicy(t *testing.T) {
 	require.Contains(t, string(report), "AGUARA SCAN")
 }
 
+// A project .aguara.yml that is not applied is not validated either:
+// unknown keys, unknown rule IDs, invalid override severities and a
+// missing rules directory produce no warning and no error in CI, because
+// nothing from those settings runs. Only fail_on is read, and the notice
+// lists the rest as not applied. audit, which ignores the file by
+// default, is just as quiet.
+func TestCIIgnoredProjectConfigIsNotValidated(t *testing.T) {
+	broken := "fail_on: critical\n" +
+		"disabled_rules:\n  - PROMPT_INJECTION_001\n" +
+		"rules: ./missing-rules\n" +
+		"disable_rules:\n  - TYPO_001\n" +
+		"rule_overrides:\n  NOPE_002:\n    disabled: true\n  CRED_002:\n    severity: SEVERE\n    severty: low\n"
+	dir := projectWith(t, map[string]string{".aguara.yml": broken, "payload.md": injectionPayload})
+
+	data, stderr, err := runScanInCI(t, "GITHUB_ACTIONS", "true", dir)
+	require.ErrorIs(t, err, ErrThresholdExceeded, "fail_on: critical still gates the CRITICAL finding")
+	require.Contains(t, string(data), `"rule_id": "PROMPT_INJECTION_001"`)
+	require.NotContains(t, stderr, "warning:")
+	require.NotContains(t, stderr, "Error")
+	require.Contains(t, stderr, filepath.Join(dir, ".aguara.yml")+" (disable_rules, rule_overrides, rules)")
+	require.Contains(t, stderr, "applying fail_on: critical")
+
+	t.Setenv("HOME", t.TempDir())
+	out := filepath.Join(t.TempDir(), "audit.json")
+	stderrBytes := captureStderrBytes(t, func() {
+		_ = runCLI(t, "audit", dir, "--format", "json", "-o", out)
+	})
+	require.NotContains(t, string(stderrBytes), "warning:")
+	_, statErr := os.Stat(out)
+	require.NoError(t, statErr, "audit writes its report")
+}
+
 // The notice names the variable that matched.
 func TestCINoticeNamesDetectedVariable(t *testing.T) {
 	dir := projectWith(t, selfSuppressingProjects["aguaraignore"])
