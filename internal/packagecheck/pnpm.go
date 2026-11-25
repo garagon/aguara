@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
-	"gopkg.in/yaml.v3"
 )
 
 // exactNpmVersionRe matches an exact, fully-resolved npm version: three
@@ -50,17 +49,18 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open pnpm-lock.yaml: %w", err)
 	}
-	var lock struct {
-		Packages map[string]any `yaml:"packages"`
+	if err := checkYAMLNodeBudget(data, "pnpm-lock.yaml"); err != nil {
+		return nil, err
 	}
-	if err := yaml.Unmarshal(data, &lock); err != nil {
+	packageKeys, err := pnpmPackageKeys(data)
+	if err != nil {
 		return nil, fmt.Errorf("parse pnpm-lock.yaml: %w", err)
 	}
 
 	// Pre-allocate enough capacity for the common case; YAML maps
 	// in Go have non-deterministic iteration order so callers that
 	// depend on ordering should sort afterwards. The Runner doesn't.
-	refs := make([]PackageRef, 0, len(lock.Packages))
+	refs := make([]PackageRef, 0, len(packageKeys))
 
 	// Dedup on cleaned (name, version). pnpm encodes resolved
 	// peer-dep relationships into the package key, so the same
@@ -71,7 +71,7 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	// Without dedup here the runner would emit one Hit per
 	// peer-variant and inflate both packages_read and
 	// findings_count for compromised packages.
-	seen := make(map[string]bool, len(lock.Packages))
+	seen := make(map[string]bool, len(packageKeys))
 	// Sort keys before iterating so the emitted refs land in
 	// deterministic order. Go's map iteration is randomized; the
 	// runner preserves the input order into Hits and the CLI
@@ -81,8 +81,8 @@ func ParsePNPMLock(target Target) ([]PackageRef, error) {
 	// runs. Aguara advertises deterministic scans; the other
 	// packagecheck parsers read line-by-line and are deterministic
 	// for free.
-	keys := make([]string, 0, len(lock.Packages))
-	for k := range lock.Packages {
+	keys := make([]string, 0, len(packageKeys))
+	for k := range packageKeys {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

@@ -94,6 +94,9 @@ func ParseRuby(target Target) ([]PackageRef, error) {
 		if strings.ContainsAny(version, "<>=~") {
 			continue
 		}
+		if err := checkEntryLimit(len(refs), "Gemfile.lock"); err != nil {
+			return nil, err
+		}
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemRubyGems,
 			// RubyGems registry IDs are usually lowercase

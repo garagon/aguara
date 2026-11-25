@@ -73,6 +73,9 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 		if seen[k] {
 			continue
 		}
+		if err := checkEntryLimit(len(refs), "go.sum"); err != nil {
+			return nil, err
+		}
 		seen[k] = true
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemGo,
@@ -138,6 +141,9 @@ func parseGoMod(target Target) ([]PackageRef, error) {
 				continue
 			case strings.HasPrefix(line, "require "):
 				if ref, ok := parseRequireLine(strings.TrimPrefix(line, "require "), target.Path); ok {
+					if err := checkEntryLimit(len(refs), "go.mod"); err != nil {
+						return nil, err
+					}
 					refs = append(refs, ref)
 				}
 				continue
@@ -152,6 +158,9 @@ func parseGoMod(target Target) ([]PackageRef, error) {
 			continue
 		}
 		if ref, ok := parseRequireLine(line, target.Path); ok {
+			if err := checkEntryLimit(len(refs), "go.mod"); err != nil {
+				return nil, err
+			}
 			refs = append(refs, ref)
 		}
 	}

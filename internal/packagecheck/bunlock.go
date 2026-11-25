@@ -60,6 +60,9 @@ func ParseBunLock(target Target) ([]PackageRef, error) {
 		return nil, fmt.Errorf("open bun.lock: %w", err)
 	}
 
+	if err := checkJSONNodeBudget(data, "bun.lock"); err != nil {
+		return nil, err
+	}
 	strict := bunTrailingCommaRe.ReplaceAll(data, []byte("$1"))
 	var lock struct {
 		Packages map[string][]json.RawMessage `json:"packages"`

@@ -53,6 +53,9 @@ func parseNuGetLockfile(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open packages.lock.json: %w", err)
 	}
+	if err := checkJSONNodeBudget(data, "packages.lock.json"); err != nil {
+		return nil, err
+	}
 	var lock nugetLockfile
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("parse packages.lock.json: %w", err)
@@ -109,6 +112,9 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", target.Source, err)
+	}
+	if err := checkXMLBudget(data, target.Source); err != nil {
+		return nil, err
 	}
 	var proj csProject
 	if err := xml.Unmarshal(data, &proj); err != nil {

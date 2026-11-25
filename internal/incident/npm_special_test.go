@@ -3,6 +3,7 @@ package incident_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,5 +29,26 @@ func TestCheckNPM_OversizedManifestFails(t *testing.T) {
 	_, err = incident.CheckNPM(incident.CheckOptions{Path: nm})
 	if err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("oversized manifest accepted: %v", err)
+	}
+}
+
+// Padding with millions of keys under the size limit fails the same way.
+func TestCheckNPM_ManifestOverStructureBudgetFails(t *testing.T) {
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	writeNPMPackage(t, nm, "event-stream", "3.3.6")
+	var b strings.Builder
+	b.WriteString(`{"name":"event-stream","version":"3.3.6"`)
+	for i := range 2_000_001 {
+		b.WriteString(`,"`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":0`)
+	}
+	b.WriteString("}")
+	if err := os.WriteFile(filepath.Join(nm, "event-stream", "package.json"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
+	if err == nil || !strings.Contains(err.Error(), "node limit") {
+		t.Fatalf("padded manifest accepted: %v", err)
 	}
 }

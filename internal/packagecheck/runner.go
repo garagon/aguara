@@ -231,10 +231,22 @@ func parseTargetDetail(t Target, cache *requirementsCache) (parsedTarget, error)
 	return parsedTarget{refs: refs}, err
 }
 
-// parseTarget dispatches by ecosystem to the right parser. Add new
+// parseTarget parses one dependency file. A file that yields more than
+// maxLockfileEntries package references is an error for every format;
+// the streaming parsers stop at the limit, the others are bounded by a
+// structure budget before they decode.
+func parseTarget(t Target) ([]PackageRef, error) {
+	refs, err := parseTargetRefs(t)
+	if err == nil && len(refs) > maxLockfileEntries {
+		return nil, errEntryLimit(t.Source)
+	}
+	return refs, err
+}
+
+// parseTargetRefs dispatches by ecosystem to the right parser. Add new
 // parsers by extending this switch; Discover already supports
 // emitting Targets for ecosystems beyond Go once their parser lands.
-func parseTarget(t Target) ([]PackageRef, error) {
+func parseTargetRefs(t Target) ([]PackageRef, error) {
 	switch t.Ecosystem {
 	case intel.EcosystemGo:
 		return ParseGo(t)

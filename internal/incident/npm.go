@@ -293,6 +293,12 @@ func readNPMPackage(path string) (NPMPackage, error) {
 	if readErr != nil {
 		return pkg, nil // unreadable or not a regular file: left out, as before
 	}
+	// Millions of padding keys would cost gigabytes to decode; like an
+	// oversized manifest, that fails the check instead of hiding the
+	// package.
+	if err := packagecheck.CheckJSONNodeBudget(data, "package.json"); err != nil {
+		return pkg, fmt.Errorf("npm check: %s: %w", path, err)
+	}
 	var manifest struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`

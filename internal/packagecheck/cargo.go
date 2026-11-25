@@ -23,18 +23,30 @@ func ParseCargo(target Target) ([]PackageRef, error) {
 // metadata. The general TOML decoder's duplicate-key tracker searches all prior
 // siblings; using it on untrusted metadata can turn a bounded file into quadratic
 // work. Only Cargo's [[package]] identity fields need semantic interpretation.
+//
+// The streaming parser still keeps every node of one expression in an
+// arena, so a single huge array (a 48 MiB file peaked at 3.4 GiB) is
+// rejected first by the same lexical node budget the Python TOML
+// lockfiles use, and the refs are bounded by maxLockfileEntries.
 func parseCargoBytes(data []byte, path string) ([]PackageRef, error) {
+	if err := checkTOMLNodeBudget(data, "Cargo.lock"); err != nil {
+		return nil, err
+	}
 	var parser unstable.Parser
 	parser.Reset(data)
 	var refs []PackageRef
 	var fields map[string]string
+	var limitErr error
 	flush := func() {
 		if isCratesIORegistrySource(fields["source"]) && fields["name"] != "" && fields["version"] != "" {
+			if limitErr = checkEntryLimit(len(refs), "Cargo.lock"); limitErr != nil {
+				return
+			}
 			refs = append(refs, PackageRef{Ecosystem: intel.EcosystemCargo, Name: fields["name"], Version: fields["version"], Path: path, Source: "Cargo.lock"})
 		}
 	}
 	atRoot := true
-	for parser.NextExpression() {
+	for limitErr == nil && parser.NextExpression() {
 		expr := parser.Expression()
 		keys := expr.Key()
 		var first, second string
@@ -79,11 +91,17 @@ func parseCargoBytes(data []byte, path string) ([]PackageRef, error) {
 			fields[first] = string(expr.Value().Data)
 		}
 	}
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	if parser.Error() != nil {
 		// Parser diagnostics may quote credential-bearing input.
 		return nil, fmt.Errorf("parse Cargo.lock: invalid TOML syntax")
 	}
 	flush()
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	return refs, nil
 }
 

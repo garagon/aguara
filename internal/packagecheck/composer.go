@@ -29,6 +29,9 @@ func ParseComposer(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open composer.lock: %w", err)
 	}
+	if err := checkJSONNodeBudget(data, "composer.lock"); err != nil {
+		return nil, err
+	}
 
 	var lock composerLockfile
 	if err := json.Unmarshal(data, &lock); err != nil {
