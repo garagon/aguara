@@ -82,13 +82,26 @@ context. A single inline scan does not inspect neighboring files.
 
 Important options:
 
-- `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog controls.
+- `WithDisabledRules(ids...)` and `WithRuleOverrides(...)`: caller-owned catalog
+  controls for pattern and analyzer rules alike. IDs must exist in the loaded
+  catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
 - `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
-- `WithCustomRules(dir)`: additional YAML rules.
+- `WithCustomRules(dirs...)`: additional YAML rules. Repeated use accumulates
+  directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
 - `WithRedaction(false)`: exposes raw sensitive evidence; do not use by default.
+- `WithLenientConfig()`: skip invalid rule configuration instead of failing;
+  the skipped problems are returned by `Scanner.ConfigProblems()`.
+
+Invalid rule configuration (a custom rule that does not compile or reuses an
+existing rule ID, an unknown rule ID in a disable list or override, an invalid
+override severity, conflicting tool scopes) makes `NewScanner`, the scan
+functions and `ListRulesE` return a `*ConfigError`; use `errors.As` to read its
+problems. `ListRules` returns nil in that case. `ExplainRule` reports an unknown
+ID with an error matching `errors.Is(err, ErrRuleNotFound)` and reports rule
+loading problems as themselves.
 
 Consumers must bound inline inputs and execution resources themselves. A context
 does not guarantee immediate interruption of every parser or regular expression.
@@ -102,6 +115,19 @@ exported through public aliases, rather than copying a partial struct.
 - Severity is numeric in JSON: INFO=0, LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4.
 - `decision_impact` distinguishes `context` and `review`; it is not a downstream
   application's allow/block policy.
+- `verdict` (clean=0, flag=1, block=2) depends on the scan profile. A finding
+  from a rule named in `WithProfileEnforcedRules` blocks under every profile
+  except `minimal`. Otherwise the default `strict` profile blocks on any HIGH or
+  CRITICAL finding, `content-aware` flags HIGH or CRITICAL findings, and
+  `minimal` never blocks and flags enforced-rule and HIGH or CRITICAL findings.
+  No profile reports `clean` while a HIGH or CRITICAL finding remains. Findings
+  are reported in every profile.
+- The CLI (`--profile`) and the WASM build have no enforcement list, so there
+  `content-aware` and `minimal` behave the same: HIGH or CRITICAL findings flag
+  and nothing blocks.
+- The verdict is computed from the findings that remain after disabled rules,
+  tool exemptions (built-in or tool-scoped overrides) and the minimum-severity
+  filter. These can remove an enforced rule's finding before the verdict sees it.
 - `matched_text`, description and context may be redacted. Do not parse them as
   stable identifiers or expect raw secrets.
 - Go results have `Duration time.Duration`; JSON exposes `duration_ms`.

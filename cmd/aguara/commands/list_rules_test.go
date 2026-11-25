@@ -16,7 +16,7 @@ func TestListRulesTable(t *testing.T) {
 	flagCategory = ""
 	flagFormat = "terminal"
 	flagDisableRules = nil
-	flagRules = ""
+	flagRules = nil
 
 	rootCmd.SetOut(buf)
 	rootCmd.SetArgs([]string{"list-rules"})
@@ -38,7 +38,7 @@ func TestListRulesJSON(t *testing.T) {
 	flagCategory = ""
 	flagFormat = "terminal" // will be overridden by --format flag
 	flagDisableRules = nil
-	flagRules = ""
+	flagRules = nil
 
 	rootCmd.SetOut(buf)
 	rootCmd.SetArgs([]string{"list-rules", "--format", "json"})
@@ -68,7 +68,7 @@ func TestListRulesCategoryFilter(t *testing.T) {
 	buf := new(bytes.Buffer)
 	flagFormat = "terminal"
 	flagDisableRules = nil
-	flagRules = ""
+	flagRules = nil
 
 	rootCmd.SetOut(buf)
 	rootCmd.SetArgs([]string{"list-rules", "--category", "prompt-injection"})

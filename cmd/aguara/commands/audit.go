@@ -182,7 +182,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 	// so a Go / Rust / .NET monorepo audit reports the same
 	// `check.ecosystems` slice as a standalone `aguara check`
 	// against the same path.
-	plan, err := buildCheckPlan(nil, target)
+	plan, err := buildCheckPlanFor(nil, target, flagAuditPath == "" && len(args) == 0)
 	if err != nil {
 		return err
 	}
@@ -319,12 +319,12 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 		flagAuditBaseline = cfg.Baseline
 	}
 
-	compiled, err := loadAndCompileRules(cfg)
+	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
 		return nil, err
 	}
 
-	s, store := buildScanner(compiled, cfg, scanner.SeverityInfo, trustProjectPolicy)
+	s, store := buildScanner(res, cfg, scanner.SeverityInfo, trustProjectPolicy)
 	sp := startSpinnerIfTerminal(s, "Auditing content...")
 
 	ctx, cancel := contextWithInterrupt()
@@ -335,7 +335,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	if err != nil {
 		return nil, err
 	}
-	result.RulesLoaded = len(compiled)
+	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
 
 	if store != nil {
@@ -687,9 +687,12 @@ func writeAuditTerminal(result *AuditResult) error {
 			label := output.TerminalText(string(f.Severity))
 			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 			if f.Path != "" {
-				fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Path)))
+				fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Location())))
 			}
 		}
+	}
+	if note := unpinnedNote(result.Check); note != "" {
+		fmt.Printf("\n  %s\n", st.Yellow(note))
 	}
 
 	fmt.Printf("\n%s\n", st.SectionHeader("CONTENT SCAN", width))

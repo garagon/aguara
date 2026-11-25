@@ -5,6 +5,7 @@ package toxicflow
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/garagon/aguara/internal/types"
@@ -111,15 +112,25 @@ func (c *CrossFileAnalyzer) Finalize() []types.Finding {
 
 	var findings []types.Finding
 
-	for dir, caps := range c.byDir {
+	// Files are accumulated by concurrent workers, so the per-capability
+	// match lists arrive in scheduling order. Visit directories and matches
+	// in path order so the reported pair does not change between runs.
+	dirs := make([]string, 0, len(c.byDir))
+	for dir := range c.byDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	for _, dir := range dirs {
+		caps := c.byDir[dir]
 		// Skip directories with many files - likely a flat registry of
 		// independent skills rather than a single MCP server.
 		if c.dirFiles[dir] > maxFilesPerDir {
 			continue
 		}
 		for _, tp := range crossFileToxicPairs {
-			matchesA := caps[tp.a]
-			matchesB := caps[tp.b]
+			matchesA := sortedMatches(caps[tp.a])
+			matchesB := sortedMatches(caps[tp.b])
 			if len(matchesA) == 0 || len(matchesB) == 0 {
 				continue
 			}
@@ -159,4 +170,16 @@ func (c *CrossFileAnalyzer) Finalize() []types.Finding {
 	}
 
 	return findings
+}
+
+// sortedMatches returns a copy of matches ordered by file path and line.
+func sortedMatches(matches []capFileMatch) []capFileMatch {
+	out := append([]capFileMatch(nil), matches...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].filePath != out[j].filePath {
+			return out[i].filePath < out[j].filePath
+		}
+		return out[i].line < out[j].line
+	})
+	return out
 }

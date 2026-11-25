@@ -80,8 +80,10 @@ func RegisterDefaults(s *scanner.Scanner, overrides ...map[string]rules.RuleOver
 		if a.Name() == rulemeta.AnalyzerMCPCapability && s.IsRuleDisabled(mcpcapability.RuleCapabilityEscalation) {
 			continue
 		}
-		// MCP_009 migrated from a pattern rule without dropping its existing
-		// per-rule override contract. Do not change other analyzers' policy.
+		// MCP_009 migrated from a pattern rule and applies its override
+		// inside the analyzer. Other analyzers' overrides are applied to
+		// their findings by the scanner (SetSeverityOverrides and the
+		// disabled-rule filter); the result for MCP_009 is the same.
 		if a.Name() == rulemeta.AnalyzerMCPCapability && len(overrides) > 0 && overrides[0] != nil {
 			a = mcpcapability.NewWithOverride(overrides[0][mcpcapability.RuleCapabilityEscalation])
 		}

@@ -196,20 +196,30 @@ func TestKubePolicyPublicContract(t *testing.T) {
 	require.Equal(t, "container-security", detail.Category)
 	require.Equal(t, "kube-policy", detail.Analyzer)
 
-	// Analyzer rules other than the MCP_009 compatibility exception do not
-	// support RuleOverride; their catalog must not pretend otherwise.
+	// RuleOverride applies to analyzer rules as it does to pattern rules,
+	// in findings and in the scanner catalog alike.
 	sc, err := aguara.NewScanner(aguara.WithWorkers(1), aguara.WithRuleOverrides(map[string]aguara.RuleOverride{
-		kubeIdentityRule: {Disabled: true, Severity: "HIGH"},
+		kubeIdentityRule: {Severity: "HIGH"},
 	}))
 	require.NoError(t, err)
 	result, err := sc.ScanContent(context.Background(), content, "pod.json")
 	require.NoError(t, err)
 	fs := kubeFindings(result, kubeIdentityRule)
 	require.Len(t, fs, 1)
-	require.Equal(t, aguara.SeverityLow, fs[0].Severity)
+	require.Equal(t, aguara.SeverityHigh, fs[0].Severity)
 	detail, err = sc.ExplainRule(kubeIdentityRule)
 	require.NoError(t, err)
-	require.Equal(t, "LOW", detail.Severity)
+	require.Equal(t, "HIGH", detail.Severity)
+
+	sc, err = aguara.NewScanner(aguara.WithWorkers(1), aguara.WithRuleOverrides(map[string]aguara.RuleOverride{
+		kubeIdentityRule: {Disabled: true, Severity: "HIGH"},
+	}))
+	require.NoError(t, err)
+	result, err = sc.ScanContent(context.Background(), content, "pod.json")
+	require.NoError(t, err)
+	require.Empty(t, kubeFindings(result, kubeIdentityRule))
+	_, err = sc.ExplainRule(kubeIdentityRule)
+	require.ErrorIs(t, err, aguara.ErrRuleNotFound)
 
 	path := filepath.Join(t.TempDir(), "pod.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))

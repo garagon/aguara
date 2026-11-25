@@ -14,6 +14,11 @@ import (
 type Hit struct {
 	Ref    PackageRef
 	Record intel.Record
+	// AdvisoryIDs lists every distinct advisory ID that matched the
+	// selected version, in matcher order; AdvisoryIDs[0] == Record.ID.
+	// A tuple covered by both an OSV record and a GHSA alias, for
+	// example, keeps both identifiers visible to the caller.
+	AdvisoryIDs []string
 }
 
 // RunResult is the output of Runner.Run. Ecosystems is the
@@ -23,6 +28,9 @@ type Hit struct {
 type RunResult struct {
 	Ecosystems []EcosystemResult
 	Hits       []Hit
+	// UnresolvedIncludes lists each requirements include that was not
+	// read, once even when several targets reach the same directive.
+	UnresolvedIncludes []UnresolvedInclude
 }
 
 // Runner orchestrates per-target parsing + matching. The Matcher
@@ -51,13 +59,26 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 	if r == nil || r.Matcher == nil {
 		return nil, fmt.Errorf("packagecheck: Runner.Matcher is required")
 	}
+	// Requirements files can include each other, so one file may be
+	// reached from several discovered targets. The cache parses each
+	// file once per run, and the seen set reports a PyPI entry (file,
+	// line, package) once even when several targets include it. Other
+	// ecosystems never share an entry between targets.
+	cache := newRequirementsCache()
+	seen := map[hitKey]bool{}
+	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
-		refs, err := parseTarget(t)
+		parsed, err := parseTargetDetail(t, cache)
 		if err != nil {
 			return nil, fmt.Errorf("packagecheck: %s: %w", t.Path, err)
 		}
+		refs := parsed.refs
 		findings := 0
+		unpinned := 0
 		for _, ref := range refs {
+			if ref.Unpinned {
+				unpinned++
+			}
 			// One Hit per (ecosystem, name, version, path) tuple,
 			// even when multiple advisories cover the same
 			// exposure. Two reasons:
@@ -85,35 +106,93 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// EmbeddedSnapshots() returns manual first and OSV
 			// second, so matches[0] picks the manual advisory
 			// ID when both are present.
-			var selected *intel.Match
+			//
+			// An unpinned ref is looked up with an empty version, which
+			// the matcher answers only from all-versions entries: every
+			// release of such a package is malicious, so no version has
+			// to be guessed.
+			var matches []intel.Match
 			for _, v := range versionAliases(ref.Ecosystem, ref.Version) {
-				matches := r.Matcher.MatchPackage(intel.MatchInput{
+				matches = r.Matcher.MatchPackage(intel.MatchInput{
 					Ecosystem: ref.Ecosystem,
 					Name:      ref.Name,
 					Version:   v,
 					Path:      ref.Path,
 				})
-				if len(matches) == 0 {
+				if len(matches) > 0 {
+					break
+				}
+			}
+			if len(matches) == 0 {
+				continue
+			}
+			if ref.Ecosystem == intel.EcosystemPyPI {
+				key := hitKey{name: ref.Name, version: ref.Version, constraint: ref.Constraint, path: ref.Path, line: ref.Line}
+				if seen[key] {
 					continue
 				}
-				m := matches[0]
-				selected = &m
-				break
+				seen[key] = true
 			}
-			if selected != nil {
-				out.Hits = append(out.Hits, Hit{Ref: ref, Record: selected.Record})
-				findings++
-			}
+			out.Hits = append(out.Hits, Hit{Ref: ref, Record: matches[0].Record, AdvisoryIDs: advisoryIDs(matches)})
+			findings++
 		}
 		out.Ecosystems = append(out.Ecosystems, EcosystemResult{
-			Ecosystem:     t.Ecosystem,
-			Path:          t.Path,
-			Source:        t.Source,
-			PackagesRead:  len(refs),
-			FindingsCount: findings,
+			Ecosystem:          t.Ecosystem,
+			Path:               t.Path,
+			Source:             t.Source,
+			PackagesRead:       len(refs),
+			FindingsCount:      findings,
+			Unpinned:           unpinned,
+			UnresolvedIncludes: len(parsed.unresolved),
 		})
+		for _, u := range parsed.unresolved {
+			key := hitKey{name: u.Argument, path: u.Path, line: u.Line}
+			if seenInclude[key] {
+				continue
+			}
+			seenInclude[key] = true
+			out.UnresolvedIncludes = append(out.UnresolvedIncludes, u)
+		}
 	}
 	return out, nil
+}
+
+// hitKey identifies one reported PyPI entry. Path and Line keep
+// distinct files (and distinct lines of one requirements file)
+// separate; only the same entry reached twice collapses.
+type hitKey struct {
+	name, version, constraint, path string
+	line                            int
+}
+
+func advisoryIDs(matches []intel.Match) []string {
+	ids := make([]string, 0, len(matches))
+	seen := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		if m.Record.ID == "" || seen[m.Record.ID] {
+			continue
+		}
+		seen[m.Record.ID] = true
+		ids = append(ids, m.Record.ID)
+	}
+	return ids
+}
+
+// parsedTarget is a parser's result plus the bookkeeping the
+// EcosystemResult reports beyond the refs themselves.
+type parsedTarget struct {
+	refs       []PackageRef
+	unresolved []UnresolvedInclude
+}
+
+// parseTargetDetail dispatches like parseTarget but keeps the
+// requirements-include bookkeeping and shares the per-run include cache.
+func parseTargetDetail(t Target, cache *requirementsCache) (parsedTarget, error) {
+	if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) {
+		return parseRequirementsTarget(t, cache)
+	}
+	refs, err := parseTarget(t)
+	return parsedTarget{refs: refs}, err
 }
 
 // parseTarget dispatches by ecosystem to the right parser. Add new
@@ -133,6 +212,25 @@ func parseTarget(t Target) ([]PackageRef, error) {
 		return ParseMaven(t)
 	case intel.EcosystemNuGet:
 		return ParseNuGet(t)
+	case intel.EcosystemPyPI:
+		// Python dependency files. Installed environments
+		// (site-packages) are read by the incident package, not here.
+		switch {
+		case t.Source == "uv.lock":
+			return ParseUVLock(t)
+		case t.Source == "poetry.lock":
+			return ParsePoetryLock(t)
+		case t.Source == "Pipfile.lock":
+			return ParsePipfileLock(t)
+		case t.Source == "pdm.lock":
+			return ParsePDMLock(t)
+		case isPylockName(t.Source):
+			return ParsePylock(t)
+		case isRequirementsSource(t.Source):
+			return ParseRequirements(t)
+		default:
+			return nil, fmt.Errorf("packagecheck: no PyPI parser for source %q", t.Source)
+		}
 	case intel.EcosystemNPM:
 		// npm is unique in that the packagecheck path handles
 		// lockfile-style sources only (pnpm-lock.yaml today;

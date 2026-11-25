@@ -76,7 +76,7 @@ var checkCmd = &cobra.Command{
   aguara check --fresh               Refresh threat intel first (network opt-in)
   aguara check --ci                  CI gate: exit 1 on critical findings`,
 	Long: `Run from a project root. Aguara discovers installed npm /
-Python environments at the path AND lockfiles for Go, Rust,
+Python environments at the path AND lockfiles for Python, Go, Rust,
 PHP/Composer, Ruby/Bundler, Java/Maven/Gradle, and .NET/NuGet
 recursively under the path, then matches every declared package
 against the embedded threat-intel snapshot.
@@ -235,6 +235,7 @@ type checkPlan struct {
 	runNPM              bool
 	npmPath             string
 	packagecheckTargets []packagecheck.Target
+	pythonEnvs          []pythonEnvironment // see discoverPythonEnvironments
 	// requestedEcosystems carries the OSV bucket IDs the user
 	// asked for via --ecosystem, even when the discovery walk
 	// found zero matching lockfiles. intelEcosystems() unions
@@ -279,7 +280,7 @@ func (p checkPlan) intelEcosystems() []string {
 	for _, id := range p.requestedEcosystems {
 		add(id)
 	}
-	if p.runPython {
+	if p.runPython || len(p.pythonEnvs) > 0 {
 		add(intel.EcosystemPyPI)
 	}
 	if p.runNPM {
@@ -306,6 +307,9 @@ func (p checkPlan) isMulti() bool {
 		pipelines++
 	}
 	if len(p.packagecheckTargets) > 0 {
+		pipelines++
+	}
+	if len(p.pythonEnvs) > 0 {
 		pipelines++
 	}
 	if pipelines > 1 {
@@ -351,6 +355,9 @@ func (p checkPlan) singleEcoToken() string {
 		if p.packagecheckTargets[0].Ecosystem == intel.EcosystemNPM {
 			return ecoNPM
 		}
+		if p.packagecheckTargets[0].Ecosystem == intel.EcosystemPyPI {
+			return ecoPythonLock
+		}
 		return osvIDToEcoToken[p.packagecheckTargets[0].Ecosystem]
 	}
 	// Explicit empty-discovery case: a single --ecosystem
@@ -388,6 +395,14 @@ func (p checkPlan) singleEcoToken() string {
 // behaviour of `aguara check` (no flags) on a host with a global
 // site-packages keeps working.
 func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
+	return buildCheckPlanFor(ecoFlags, path, path == "")
+}
+
+// buildCheckPlanFor is buildCheckPlan with the implicit-target signal
+// passed explicitly: audit defaults an absent path to "." but must still
+// evaluate the active VIRTUAL_ENV the way `aguara check` does with no
+// path (see discoverPythonEnvironments).
+func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan, error) {
 	if err := validateExplicitCheckPath(path); err != nil {
 		return checkPlan{}, err
 	}
@@ -415,6 +430,7 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 		// CI config would refuse to run on any repo or subproject
 		// without an npm surface, which is a functional regression.
 		otherEcosystemRequested := false
+		pythonRequested := false
 		for _, raw := range ecoFlags {
 			token, err := canonicaliseCheckEcosystem(raw)
 			if err != nil {
@@ -426,6 +442,12 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				plan.pythonPath = path
 				plan.requestedEcosystems = append(plan.requestedEcosystems, intel.EcosystemPyPI)
 				otherEcosystemRequested = true
+				// Also read Python dependency files and virtual
+				// environments, unless the path is an installed tree.
+				if wantsPythonDependencyFiles(path) {
+					pythonRequested = true
+					packagecheckIDs = append(packagecheckIDs, intel.EcosystemPyPI)
+				}
 			case ecoNPM:
 				explicitNPMRequested = true
 				// Explicit `--ecosystem npm` now covers two surfaces:
@@ -548,6 +570,13 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 				)
 			}
 		}
+		if pythonRequested {
+			root := path
+			if root == "" {
+				root = "."
+			}
+			addPythonEnvironments(&plan, root, implicit)
+		}
 		return plan, nil
 	}
 
@@ -595,9 +624,18 @@ func buildCheckPlan(ecoFlags []string, path string) (checkPlan, error) {
 	// the historical site-packages autodiscovery so the
 	// no-flag invocation on a host with global Python keeps
 	// working.
-	if path == "" && !plan.runNPM && len(plan.packagecheckTargets) == 0 && !plan.runPython {
+	// Python dependency files do not suppress it: before they were read,
+	// a Python project fell through to this check, and it still does.
+	if path == "" && !plan.runNPM && !hasNonPythonTargets(plan.packagecheckTargets) && !plan.runPython {
 		plan.runPython = true
 		plan.pythonPath = ""
+	}
+
+	// Project virtual environments (and the active one for an implicit
+	// target). An installed tree passed as the path is already the
+	// Python check above.
+	if path == "" || !looksLikePythonSitePackages(resolved) {
+		addPythonEnvironments(&plan, resolved, implicit)
 	}
 
 	return plan, nil
@@ -692,6 +730,8 @@ func singleEcoEnvLabel(token string) string {
 	switch token {
 	case ecoPython:
 		return "Python environment"
+	case ecoPythonLock:
+		return "Python dependencies"
 	case ecoNPM:
 		// Neutral label so both surfaces match: incident.CheckNPM
 		// scans node_modules + the pnpm .pnpm store; packagecheck
@@ -789,6 +829,13 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		}
 		parts = append(parts, r)
 	}
+	if len(plan.pythonEnvs) > 0 {
+		envParts, err := runPythonEnvironments(plan, override)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, envParts...)
+	}
 
 	if len(parts) == 0 {
 		// Explicit --path with no signals. Return the canonical
@@ -849,14 +896,22 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 		if ecoToken == "" && hit.Ref.Ecosystem == intel.EcosystemNPM {
 			ecoToken = ecoNPM
 		}
+		if hit.Ref.Ecosystem == intel.EcosystemPyPI {
+			ecoToken = ecoPythonLock
+		}
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
 			Title:       title,
 			Detail:      hit.Record.Summary,
 			Path:        hit.Ref.Path,
+			Line:        hit.Ref.Line,
 			Remediation: remediation,
+			AdvisoryIDs: hit.AdvisoryIDs,
 		})
+	}
+	for _, u := range runRes.UnresolvedIncludes {
+		result.Findings = append(result.Findings, unresolvedIncludeFinding(u))
 	}
 	return result, nil
 }
@@ -909,6 +964,8 @@ func mergeCheckResults(parts []*incident.CheckResult, rootPath string) *incident
 func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remediation string) {
 	name, version, id := hit.Ref.Name, hit.Ref.Version, hit.Record.ID
 	switch ecoToken {
+	case ecoPythonLock:
+		return pythonLockFindingText(hit)
 	case ecoGo:
 		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id),
 			fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
@@ -977,7 +1034,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	case ecosystem == ecoNPM:
 		meta = fmt.Sprintf("%d packages", result.PackagesRead)
 	case ecosystem == ecoGo, ecosystem == ecoCargo, ecosystem == ecoComposer,
-		ecosystem == ecoRuby, ecosystem == ecoMaven, ecosystem == ecoNuGet:
+		ecosystem == ecoRuby, ecosystem == ecoMaven, ecosystem == ecoNuGet, ecosystem == ecoPythonLock:
 		meta = fmt.Sprintf("%d packages · %d lockfiles", result.PackagesRead, len(result.Ecosystems))
 	default:
 		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
@@ -989,6 +1046,9 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	// Suppressed under --ci to keep stdout to findings (a stale local
 	// cache still earns a stderr note inside printIntelFreshness).
 	printIntelFreshness(result.Intel, flagCheckCI)
+	if note := unpinnedNote(result); note != "" {
+		fmt.Printf("  %s\n\n", st.Yellow(note))
+	}
 
 	if len(result.Findings) == 0 {
 		fmt.Printf("  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
@@ -999,7 +1059,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		label := output.TerminalText(string(f.Severity))
 		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 		if f.Path != "" {
-			fmt.Printf("             %s\n", st.Dim("Path: "+output.TerminalText(f.Path)))
+			fmt.Printf("             %s\n", st.Dim("Path: "+output.TerminalText(f.Location())))
 		}
 		if f.Detail != "" {
 			fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Detail)))

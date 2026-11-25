@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/garagon/aguara/internal/scanner"
@@ -149,7 +150,10 @@ func (a *InjectionAnalyzer) analyzeExtractedStrings(ctx context.Context, strs []
 	return findings, nil
 }
 
-// extractJSONStrings walks a JSON value and returns all string values >= minStringLen.
+// extractJSONStrings walks a JSON value and returns string values >= minStringLen,
+// at most maxStringsPerFile of them. Object members are visited in sorted key
+// order and array elements in document order, so the same input always yields
+// the same strings.
 func extractJSONStrings(content []byte) []extractedString {
 	var raw any
 	if err := json.Unmarshal(content, &raw); err != nil {
@@ -172,8 +176,15 @@ func extractJSONStrings(content []byte) []extractedString {
 				result = append(result, extractedString{text: val, line: line})
 			}
 		case map[string]any:
-			for _, child := range val {
-				walk(child)
+			// Go map iteration is randomized. Walk keys in sorted order
+			// so the maxStringsPerFile cap always keeps the same strings.
+			keys := make([]string, 0, len(val))
+			for k := range val {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				walk(val[k])
 			}
 		case []any:
 			for _, child := range val {

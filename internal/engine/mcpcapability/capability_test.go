@@ -150,12 +150,23 @@ func TestCapabilityEvidenceAndLimits(t *testing.T) {
 	})
 	t.Run("fenced snippets preserve locations and downgrade", func(t *testing.T) {
 		content := "# Example\n\n```yaml\ncapabilities:\n  add: [ALL]\n```\n"
-		findings, err := New().Analyze(context.Background(), &scanner.Target{RelPath: "skill.md", Content: []byte(content)})
+		findings, err := New().Analyze(context.Background(), &scanner.Target{RelPath: "README.md", Content: []byte(content)})
 		require.NoError(t, err)
 		require.Len(t, findings, 1)
 		require.Equal(t, 5, findings[0].Line)
 		require.Equal(t, types.SeverityMedium, findings[0].Severity)
 		require.True(t, findings[0].InCodeBlock)
+	})
+	t.Run("fenced snippets in skills and instruction files keep severity", func(t *testing.T) {
+		content := "# Setup\n\n```yaml\ncapabilities:\n  add: [ALL]\n```\n"
+		for _, path := range []string{"skill.md", "skills/x/SKILL.md", "AGENTS.md", ".claude/agents/ops.md"} {
+			findings, err := New().Analyze(context.Background(), &scanner.Target{RelPath: path, Content: []byte(content)})
+			require.NoError(t, err)
+			require.Len(t, findings, 1, path)
+			require.Equal(t, 5, findings[0].Line, path)
+			require.Equal(t, types.SeverityHigh, findings[0].Severity, path)
+			require.True(t, findings[0].InCodeBlock, path)
+		}
 	})
 	t.Run("evidence excludes unrelated secrets", func(t *testing.T) {
 		content := `{"capabilities":["all"],"token":"unrelated-secret"}`
