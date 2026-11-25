@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/garagon/aguara/internal/engine/pattern"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/types"
 )
@@ -256,15 +257,19 @@ func (c *correlation) helperSignal(path string) (signal, detail string) {
 
 func (c *correlation) analyzeSkill(skillPath, content string) []types.Finding {
 	lines := strings.Split(content, "\n")
-	inFence := false
+	// Lines inside a fenced block are examples, not instructions. The fence
+	// map is the pattern matcher's (CommonMark: a block closes only with a
+	// run of the same character at least as long as the opening one), so a
+	// line counts as fenced here exactly when the matcher treats it as code.
+	// The opening fence line itself is skipped too.
+	fenced := pattern.BuildCodeBlockMap(lines)
 	considered := make(map[string]bool)
 	for i, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			inFence = !inFence
+		if fenced[i] || i+1 < len(lines) && fenced[i+1] {
 			continue
 		}
-		if inFence || line == "" || explicitOptInRe.MatchString(line) || !forcedActionRe.MatchString(line) {
+		if line == "" || explicitOptInRe.MatchString(line) || !forcedActionRe.MatchString(line) {
 			continue
 		}
 		for _, ref := range helperReferences(line) {
