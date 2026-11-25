@@ -108,8 +108,8 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// A constraint (from a constraints file or a -c include)
 			// installs nothing, so a range there leaves no dependency
 			// unchecked: only requirements count as unpinned.
-			if ref.Unpinned && ref.Group != constraintGroup &&
-				!(ref.Ecosystem == intel.EcosystemPyPI && pinnedPyPI[intel.PEP503Normalize(ref.Name)]) {
+			pinnedElsewhere := ref.Ecosystem == intel.EcosystemPyPI && pinnedPyPI[intel.PEP503Normalize(ref.Name)]
+			if ref.Unpinned && ref.Group != constraintGroup && !pinnedElsewhere {
 				unpinned++
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,
