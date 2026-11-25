@@ -73,7 +73,7 @@ func TestDiscoverOutputNeverContainsSecrets(t *testing.T) {
 		"--token=[REDACTED]",
 		"Authorization: [REDACTED]",
 		"--password [REDACTED] --port 5432 --secret=[REDACTED]",
-		"remote https://[REDACTED]@mcp.example.com/sse?api_key=[REDACTED]&region=eu",
+		"remote https://[REDACTED]@mcp.example.com/sse?api_key=[REDACTED]&region=[REDACTED]",
 		"http https://api.example.com/mcp",
 		"http https://gemini.example.com/mcp",
 		"remote https://windsurf.example.com/sse",
@@ -140,9 +140,10 @@ func TestDiscoverServersAreSorted(t *testing.T) {
 func TestRedactValue(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain value":                        "plain value",
-		"https://example.com/path?q=1":       "https://example.com/path?q=1",
+		"https://example.com/path?q=1":       "https://example.com/path?q=[REDACTED]",
 		"https://u:p@example.com":            "https://[REDACTED]@example.com",
-		"https://example.com/?token=abc&x=1": "https://example.com/?token=[REDACTED]&x=1",
+		"https://example.com/?token=abc&x=1": "https://example.com/?token=[REDACTED]&x=[REDACTED]",
+		"see docs/?token=abc&x=1":            "see docs/?token=[REDACTED]&x=1",
 		"Bearer abc.def-123":                 "Bearer [REDACTED]",
 		"key AKIAABCDEFGHIJKLMNOP":           "key [REDACTED]",
 		"sk-ant-api03-abcdefghijklmnopqrstu": "[REDACTED]",

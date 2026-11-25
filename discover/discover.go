@@ -13,23 +13,18 @@ var sensitiveEnvKeys = []string{
 	"AUTH", "PRIVATE", "API_KEY", "APIKEY",
 }
 
-// redactEnv returns a copy of the env map with sensitive values masked.
+// redactEnv returns a copy of the env map with the values of sensitive
+// names (sensitiveName) masked and secret-shaped parts of the other values
+// redacted.
 func redactEnv(env map[string]string) map[string]string {
 	if len(env) == 0 {
 		return env
 	}
 	redacted := make(map[string]string, len(env))
 	for k, v := range env {
-		upper := strings.ToUpper(k)
-		masked := false
-		for _, sensitive := range sensitiveEnvKeys {
-			if strings.Contains(upper, sensitive) {
-				redacted[k] = "***REDACTED***"
-				masked = true
-				break
-			}
-		}
-		if !masked {
+		if sensitiveName(k) {
+			redacted[k] = "***REDACTED***"
+		} else {
 			redacted[k] = redactValue(v)
 		}
 	}
