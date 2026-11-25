@@ -87,8 +87,22 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 	if len(target.Content) == 0 {
 		return nil, nil
 	}
-	m := computeMetrics(target.Content)
+	lx := &jsLexer{typescript: isTypeScriptTarget(target)}
+	m := computeMetricsWith(lx, target.Content)
 	return detect(target.RelPath, m, target.Content), nil
+}
+
+// isTypeScriptTarget reports a .ts / .mts / .cts target. Only TypeScript
+// reads a `!` right after an operand as a postfix non-null assertion; in
+// JavaScript it stays logical negation (see regexContext).
+func isTypeScriptTarget(t *scanner.Target) bool {
+	for _, p := range []string{t.Path, t.RelPath} {
+		switch strings.ToLower(filepath.Ext(filepath.ToSlash(p))) {
+		case ".ts", ".mts", ".cts":
+			return true
+		}
+	}
+	return false
 }
 
 // --- target gating ---
@@ -102,7 +116,8 @@ func (a *Analyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.F
 // template literal types contain no quote, comment or regex-literal starts
 // that plain JavaScript lacks. The two TypeScript-only forms that would
 // mislead the scanner are handled explicitly: a postfix non-null assertion
-// before a division (`total! / n`, see bangIsNonNullAssertion) and the
+// before a division (`total! / n`, see bangIsNonNullAssertion, applied to
+// TypeScript targets only) and the
 // `import x = require('m')` binding form, which the module alias patterns
 // accept next to const/let/var.
 //
@@ -164,6 +179,10 @@ var stdioIgnoredRe = regexp.MustCompile(`(?i)` + propertyBoundary + `["']?stdio[
 // fields record the 1-based line of the first occurrence so findings
 // can anchor at the relevant source location.
 type metrics struct {
+	// lexer is the file's lexical-pass state (dialect and reusable paren
+	// stack); detectors build their views through it.
+	lexer *jsLexer
+
 	SizeBytes  int
 	LineCount  int
 	MaxLineLen int
@@ -245,7 +264,11 @@ type metrics struct {
 // content; line numbers come from a single scan that splits on '\n'.
 // Total work is O(N) in content length plus a handful of regex passes.
 func computeMetrics(content []byte) *metrics {
-	m := &metrics{SizeBytes: len(content)}
+	return computeMetricsWith(&jsLexer{}, content)
+}
+
+func computeMetricsWith(lx *jsLexer, content []byte) *metrics {
+	m := &metrics{SizeBytes: len(content), lexer: lx}
 
 	// One pass to find max line length and total line count.
 	curLen := 0
@@ -275,7 +298,7 @@ func computeMetrics(content []byte) *metrics {
 	// or regex-literal occurrence never counts; code-token signals also
 	// skip matches inside string literals (a call keyword or env read in a
 	// string is data, not code). Computed once.
-	view := newJSLexicalView(content)
+	view := lx.view(content)
 	code := view.Code
 
 	// Obfuscator signals. Counted over masked code; identifiers/calls that
@@ -311,9 +334,9 @@ func computeMetrics(content []byte) *metrics {
 	// Child_process call sites and execa matches are computed once and
 	// reused by the child_process flag, Bun execution, and (only when
 	// needed) host-needle binding.
-	cpCalls := collectChildProcessCalls(code)
+	cpCalls := collectChildProcessCalls(lx, code)
 	execaMatches := execaCallRe.FindAllIndex(code, -1)
-	shelljsCalls := collectShelljsExecCalls(code)
+	shelljsCalls := collectShelljsExecCalls(lx, code)
 
 	// Network sink: the fetch()/http.request() CALL keyword must be real
 	// code, not inside a string ("fetch('x')") or a regex (/fetch\(/).
@@ -538,7 +561,7 @@ func computeMetrics(content []byte) *metrics {
 	// stdio:ignore, .unref()) are tied to a real child_process call,
 	// not satisfied by any object literal elsewhere in the file. Runs on
 	// masked code so a commented example does not satisfy it.
-	if line, ok := findDaemonChain(code); ok {
+	if line, ok := findDaemonChain(lx, code); ok {
 		m.HasDaemonChain = true
 		m.LineDaemon = line
 	}
@@ -583,7 +606,7 @@ func computeMetrics(content []byte) *metrics {
 	// DNS TXT exfil signals. The detector requires a real resolveTxt
 	// invocation; it already strips comments and gates on string interiors
 	// internally, so masked code passes through unchanged.
-	if line := findDNSTXTSink(code); line > 0 {
+	if line := findDNSTXTSink(lx, code); line > 0 {
 		m.HasDNSTXTSink = true
 		m.LineDNSTXT = line
 	}
@@ -644,12 +667,12 @@ type cpCallSite struct {
 // module alias) plus bare calls whose name was destructured from
 // child_process. Unrelated `.spawn(...)` calls and bare calls whose
 // name was never imported from the module are excluded.
-func collectChildProcessCalls(content []byte) []cpCallSite {
+func collectChildProcessCalls(lx *jsLexer, content []byte) []cpCallSite {
 	var sites []cpCallSite
 	// A binding or call written inside a STRING literal (a doc/snippet that
 	// quotes `require('child_process')`) is text, not a real import; skip
 	// those so an unrelated object's `.exec(...)` is not misclassified.
-	sr := jsStringInteriors(content)
+	sr := lx.interiors(content)
 
 	// Inline require chain: require('child_process').spawn(...)
 	for _, loc := range inlineRequireReceiverRe.FindAllIndex(content, -1) {
@@ -1740,8 +1763,8 @@ func isDomainLabelByte(c byte) bool {
 // wiper-tripwire detectors.
 func collectBoundShellCommands(view jsLexicalView, stringRanges [][2]int) (scripts [][]byte, starts []int) {
 	code := view.Code
-	cpCalls := collectChildProcessCalls(code)
-	shelljsCalls := collectShelljsExecCalls(code)
+	cpCalls := collectChildProcessCalls(view.lexer, code)
+	shelljsCalls := collectShelljsExecCalls(view.lexer, code)
 	execaMatches := execaCallRe.FindAllIndex(code, -1)
 	add := func(start, argsStart int) {
 		if start < 0 || view.InString(start) {
@@ -1825,7 +1848,7 @@ func collectBoundShellCommands(view jsLexicalView, stringRanges [][2]int) (scrip
 // self-contained like detectDNSTXTExfil: it recomputes the lexical view and
 // call sites from content and reads only the partner booleans off m.
 func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
-	view := newJSLexicalView(content)
+	view := m.lexer.view(content)
 	code := view.Code
 	stringRanges := view.StringRanges
 	fsCalls := collectFSWriteCalls(code, stringRanges)
@@ -2087,12 +2110,12 @@ var optionIdentifierRe = regexp.MustCompile(`^[A-Za-z_$][\w$]*$`)
 // `recursive: true` at the TOP level of the options object. A nested
 // `recursive: true` (`{ recursive: false, retry: { recursive: true } }`) does
 // not enable Node's recursive removal, so it must not grant the capability.
-func optsHaveTopLevelRecursiveTrue(opts []byte) bool {
+func optsHaveTopLevelRecursiveTrue(lx *jsLexer, opts []byte) bool {
 	opts = bytes.TrimSpace(opts)
 	if len(opts) < 2 || opts[0] != '{' {
 		return false
 	}
-	view := newJSLexicalView(opts)
+	view := lx.view(opts)
 	code := view.Code
 	recursive := false
 	member := func(raw []byte) {
@@ -2132,7 +2155,7 @@ func optsHaveTopLevelRecursiveTrue(opts []byte) bool {
 					return false
 				}
 				member(code[start:i])
-				return recursive && staticObjectFallback(code[i+1:])
+				return recursive && staticObjectFallback(lx, code[i+1:])
 			}
 			open := stack[len(stack)-1]
 			if open == '{' && code[i] != '}' || open == '[' && code[i] != ']' || open == '(' && code[i] != ')' {
@@ -2151,7 +2174,7 @@ func optsHaveTopLevelRecursiveTrue(opts []byte) bool {
 
 // A literal object is truthy and non-null. Only accept a single inert fallback
 // operand; a surrounding conditional could select a different options object.
-func staticObjectFallback(tail []byte) bool {
+func staticObjectFallback(lx *jsLexer, tail []byte) bool {
 	tail = bytes.TrimSpace(tail)
 	if len(tail) == 0 {
 		return true
@@ -2166,7 +2189,7 @@ func staticObjectFallback(tail []byte) bool {
 	if len(rhs) < 2 || rhs[0] != '{' || rhs[len(rhs)-1] != '}' {
 		return false
 	}
-	view := newJSLexicalView(rhs)
+	view := lx.view(rhs)
 	depth := 0
 	for i, b := range view.Code {
 		if view.InString(i) {
@@ -2280,7 +2303,7 @@ func isBroadHomePathArg(parg []byte, osBindings moduleBindings) bool {
 // fs-extra rm/rmdir/unlink/remove/emptyDir on a verified fs binding, plus
 // rimraf bound from the rimraf module. Returns the first-argument (path)
 // ranges; the path token / os.homedir() target is read from there.
-func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall {
+func collectFSDeleteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) []fsDeleteCall {
 	fsBindings := collectModuleBindings(stripped, stringRanges,
 		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
 	fsExtraBindings := collectModuleBindings(stripped, stringRanges,
@@ -2336,7 +2359,7 @@ func collectFSDeleteCalls(stripped []byte, stringRanges [][2]int) []fsDeleteCall
 		// options argument; remove/emptyDir/rimraf are always recursive. A
 		// literal { recursive: false } leaves recursion off.
 		opts := fsDataArg(stripped, argEnd, stringRanges)
-		optRecursive := optsHaveTopLevelRecursiveTrue(opts)
+		optRecursive := optsHaveTopLevelRecursiveTrue(lx, opts)
 		dirFinal, recursive := deleteModeCaps(mode, optRecursive)
 		calls = append(calls, fsDeleteCall{openParen + 1, argEnd, dirFinal, recursive})
 	}
@@ -3000,7 +3023,7 @@ func wiperStrongPartner(m *metrics) bool {
 //     excludes. (A nested `sh -c` payload, the common shape here, is already
 //     unmatched per the prior limit.)
 func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding {
-	view := newJSLexicalView(content)
+	view := m.lexer.view(content)
 	code := view.Code
 	stringRanges := view.StringRanges
 
@@ -3062,7 +3085,7 @@ func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding
 	// 1. fs / fs-extra / rimraf delete calls.
 	osBindings := collectModuleBindings(code, stringRanges,
 		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
-	for _, c := range collectFSDeleteCalls(code, stringRanges) {
+	for _, c := range collectFSDeleteCalls(m.lexer, code, stringRanges) {
 		// A broad home wipe targets a populated directory tree; only a
 		// recursive method (rm/fs.rm with recursive, fs-extra remove, rimraf)
 		// can perform it -- not unlink and not a non-recursive rm.
@@ -3137,11 +3160,11 @@ func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding
 // invocations: an inline require('shelljs').exec(...) or an alias bound to
 // shelljs. Used both to detect a Bun command run via shelljs and to bind
 // host data indicators (a publish/exfil URL inside sh.exec('...')).
-func collectShelljsExecCalls(code []byte) []cpCallSite {
+func collectShelljsExecCalls(lx *jsLexer, code []byte) []cpCallSite {
 	var sites []cpCallSite
 	// A shelljs binding or call quoted inside a string literal is text, not a
 	// real import; skip those (mirrors collectChildProcessCalls).
-	sr := jsStringInteriors(code)
+	sr := lx.interiors(code)
 	for _, loc := range shelljsInlineExecRe.FindAllIndex(code, -1) {
 		if insideStringInterior(sr, loc[0]) {
 			continue
@@ -3244,8 +3267,8 @@ func extractCallArgs(content []byte, argsStart int) []byte {
 // ties the options to the call that owns them, so daemon-shape
 // options belonging to an unrelated nearby spawn (or a different
 // trailing object literal) do not satisfy the chain.
-func findDaemonChain(content []byte) (int, bool) {
-	for _, site := range collectChildProcessCalls(content) {
+func findDaemonChain(lx *jsLexer, content []byte) (int, bool) {
+	for _, site := range collectChildProcessCalls(lx, content) {
 		args := extractCallArgs(content, site.ArgsStart)
 		if !detachedTrueRe.Match(args) {
 			continue
@@ -4024,17 +4047,24 @@ func couldBeRegexStart(content []byte, i int) bool {
 // size limit, comparable to the per-byte copies the lexer already makes,
 // and released when the pass ends. There is no depth cap: a cap would
 // change which '(' matches a ')' and with it the regex reading.
+//
+// typescript enables the postfix non-null reading (bangIsNonNullAssertion).
+// It is off for JavaScript targets, where a `!` is always logical negation,
+// so a JavaScript file gets exactly the reading it had before TypeScript
+// support.
 type regexContext struct {
-	buf    []byte
-	cursor int     // next byte not yet consumed by the paren stack
-	open32 []int32 // unmatched '(' offsets, used when buf fits in int32
-	open   []int   // unmatched '(' offsets, used for larger buffers
+	buf        []byte
+	typescript bool
+	cursor     int     // next byte not yet consumed by the paren stack
+	open32     []int32 // unmatched '(' offsets, used when buf fits in int32
+	open       []int   // unmatched '(' offsets, used for larger buffers
 
 	// The last ')' asked about. A walker can ask about the same ')' again
 	// after blanking a regex literal behind it; the answer is reused.
 	memoClose   int
 	memoMatched bool
 	memoKeyword string
+	memoStart   int
 
 	restarts int // times a question went backwards and the stack was rebuilt
 }
@@ -4058,7 +4088,7 @@ func (r *regexContext) regexStartsAt(i int) bool {
 		return true
 	}
 	c := content[j]
-	if c == '!' && r.bangIsNonNullAssertion(j) {
+	if c == '!' && r.typescript && r.bangIsNonNullAssertion(j) {
 		return false
 	}
 	if jsRegexLiteralStartingChars[c] {
@@ -4071,7 +4101,7 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	//     keyword before it. `if`, `while`, `for`, `switch`, `catch`
 	//     signal control-flow. An unmatched `)` reads as division.
 	if c == ')' {
-		keyword, matched := r.parenHeader(j)
+		keyword, _, matched := r.parenHeader(j)
 		if !matched {
 			return false
 		}
@@ -4097,11 +4127,15 @@ func (r *regexContext) regexStartsAt(i int) bool {
 
 // bangIsNonNullAssertion reports whether the `!` at position bang is a
 // TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
-// `f()! / 2`), after which a `/` is division. The `!` must touch the end of
-// an operand: an identifier that is not an expression keyword, a `]`, or a
-// `)` that does not close a control-flow header. In JavaScript the prefix
-// `!` never directly follows an operand, so `!/re/.test(s)`,
-// `return!/re/.test(s)` and `if(x)!/re/.test(s)` keep their regex reading.
+// `f()! / 2`), after which a `/` is division. It is consulted for
+// TypeScript targets only. The `!` must touch the end of an operand: an
+// identifier that is not a keyword after which an expression starts, a
+// `]`, or a `)` that does not close a statement header. Everything else
+// keeps the logical-negation reading, so a regex literal after it stays a
+// regex literal: `return!/re/`, `export default!/re/`, `if (x)!/re/`,
+// `for await (const x of y)!/re/`, `=> !/re/`, `label: !/re/`, an operator
+// or a comma before the `!`, and a `!` separated from the operand by a
+// space or a line break.
 func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
 	if bang == 0 {
 		return false
@@ -4111,19 +4145,24 @@ func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
 	case c == ']':
 		return true
 	case c == ')':
-		keyword, matched := r.parenHeader(bang - 1)
+		keyword, start, matched := r.parenHeader(bang - 1)
 		if !matched {
 			return false
 		}
 		switch keyword {
 		case "if", "while", "for", "switch", "catch", "with":
 			return false
+		case "await":
+			// `for await (...)` is a loop header; `await (p)!` is an operand.
+			if keywordBefore(r.buf, start) == "for" {
+				return false
+			}
 		}
 		return true
 	case isJSIdentifierByte(c):
 		switch keywordEndingAt(r.buf, bang) {
 		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
-			"throw", "yield", "await", "case", "do", "else":
+			"throw", "yield", "await", "case", "default", "do", "else":
 			return false
 		}
 		return true
@@ -4131,14 +4170,28 @@ func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
 	return false
 }
 
+// keywordBefore returns the keyword-length identifier ending before offset
+// end, skipping whitespace, or "".
+func keywordBefore(content []byte, end int) string {
+	k := end - 1
+	for k >= 0 && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r' || content[k] == '\n') {
+		k--
+	}
+	if k < 0 {
+		return ""
+	}
+	return keywordEndingAt(content, k+1)
+}
+
 // parenHeader returns the keyword-length identifier before the `(` that
-// matches the `)` at closeParen ("" when there is none), and whether a
-// matching `(` exists.
-func (r *regexContext) parenHeader(closeParen int) (keyword string, matched bool) {
+// matches the `)` at closeParen ("" when there is none), the offset where
+// that identifier starts, and whether a matching `(` exists.
+func (r *regexContext) parenHeader(closeParen int) (keyword string, start int, matched bool) {
 	if closeParen == r.memoClose {
-		return r.memoKeyword, r.memoMatched
+		return r.memoKeyword, r.memoStart, r.memoMatched
 	}
 	open := r.matchingOpen(closeParen)
+	start = open
 	if open >= 0 {
 		matched = true
 		// Skip whitespace back to the token before the `(`.
@@ -4148,10 +4201,11 @@ func (r *regexContext) parenHeader(closeParen int) (keyword string, matched bool
 		}
 		if k >= 0 {
 			keyword = keywordEndingAt(r.buf, k+1)
+			start = k + 1 - len(keyword)
 		}
 	}
-	r.memoClose, r.memoMatched, r.memoKeyword = closeParen, matched, keyword
-	return keyword, matched
+	r.memoClose, r.memoMatched, r.memoKeyword, r.memoStart = closeParen, matched, keyword, start
+	return keyword, start, matched
 }
 
 // matchingOpen returns the offset of the `(` matching the `)` at
@@ -4867,11 +4921,52 @@ func insideStringInterior(ranges [][2]int, idx int) bool {
 type jsLexicalView struct {
 	Code         []byte
 	StringRanges [][2]int
+	lexer        *jsLexer // the passes that built the view, for derived views
 }
 
+// newJSLexicalView builds a JavaScript view of content with a fresh lexer.
 func newJSLexicalView(content []byte) jsLexicalView {
-	code := stripJSCommentsPreservingOffsets(content)
-	return jsLexicalView{Code: code, StringRanges: jsStringInteriors(code)}
+	return (&jsLexer{}).view(content)
+}
+
+// jsLexer holds what the lexical passes over one file share: whether the
+// file is TypeScript, which enables the postfix non-null reading. A jsLexer
+// belongs to one Analyze call.
+type jsLexer struct {
+	typescript bool
+}
+
+func (lx *jsLexer) context(buf []byte) *regexContext {
+	rc := newRegexContext(buf)
+	rc.typescript = lx.typescript
+	return rc
+}
+
+func (lx *jsLexer) release(*regexContext) {}
+
+func (lx *jsLexer) strip(content []byte) []byte {
+	var rc *regexContext
+	out := stripJSCommentsWith(content, func(buf []byte) regexClassifier {
+		rc = lx.context(buf)
+		return rc
+	})
+	lx.release(rc)
+	return out
+}
+
+func (lx *jsLexer) interiors(content []byte) [][2]int {
+	var rc *regexContext
+	out := jsStringInteriorsWith(content, func(buf []byte) regexClassifier {
+		rc = lx.context(buf)
+		return rc
+	})
+	lx.release(rc)
+	return out
+}
+
+func (lx *jsLexer) view(content []byte) jsLexicalView {
+	code := lx.strip(content)
+	return jsLexicalView{Code: code, StringRanges: lx.interiors(code), lexer: lx}
 }
 
 // InString reports whether the byte offset falls inside a string interior
@@ -5217,9 +5312,9 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 // of resolveTxt does not satisfy the signal. Comments are masked
 // before pattern matching so commented documentation examples never
 // register as sinks.
-func findDNSTXTSink(rawContent []byte) int {
-	content := stripJSCommentsPreservingOffsets(rawContent)
-	stringRanges := jsStringInteriors(rawContent)
+func findDNSTXTSink(lx *jsLexer, rawContent []byte) int {
+	content := lx.strip(rawContent)
+	stringRanges := lx.interiors(rawContent)
 	_ = stringRanges // referenced below via insideStringInterior
 	// Inline-require chain: require('dns').resolveTxt(...)
 	for _, mt := range dnsInlineRequireResolveTxtRe.FindAllSubmatchIndex(content, -1) {
@@ -5724,8 +5819,8 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// jsrisk rules continue to read the raw-content metrics; the
 	// stricter check applies here because this rule fires on a
 	// single partner.
-	stripped := stripJSCommentsPreservingOffsets(content)
-	stringRanges := jsStringInteriors(content)
+	stripped := m.lexer.strip(content)
+	stringRanges := m.lexer.interiors(content)
 	hasSecret := false
 	// Collect positions of `process.env.NAME = ...` / `process.env
 	// ['NAME'] = ...` assignment LHS so envReadRe matches at those
@@ -5920,12 +6015,12 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// as before; that rule's single-signal scope keeps its
 	// existing behavior.
 	hasDaemon := false
-	for _, site := range collectChildProcessCalls(stripped) {
+	for _, site := range collectChildProcessCalls(m.lexer, stripped) {
 		if insideStringInterior(stringRanges, site.Start) {
 			continue
 		}
 		args := extractCallArgs(stripped, site.ArgsStart)
-		argRanges := jsStringInteriors(args)
+		argRanges := m.lexer.interiors(args)
 		foundDetached := false
 		for _, loc := range detachedTrueRe.FindAllIndex(args, -1) {
 			if !insideStringInterior(argRanges, loc[0]) {

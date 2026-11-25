@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -17,9 +16,11 @@ import (
 // references, kept here only to prove the answers are unchanged:
 //
 //   - mainCouldBeRegexStart is the classifier as it was before TypeScript
-//     support, copied verbatim;
+//     support, copied verbatim. JavaScript targets must read every input
+//     exactly like it;
 //   - backwardCouldBeRegexStart is the same plus the TypeScript non-null
 //     check (backwardBangIsNonNull), both scanning backwards without bound.
+//     TypeScript targets must read every input exactly like it.
 
 func mainCouldBeRegexStart(content []byte, i int) bool {
 	j := i - 1
@@ -245,6 +246,18 @@ func backwardBangIsNonNull(content []byte, bang int) bool {
 		switch string(content[k+1 : end]) {
 		case "if", "while", "for", "switch", "catch", "with":
 			return false
+		case "await":
+			j := k
+			for j >= 0 && (content[j] == ' ' || content[j] == '\t' || content[j] == '\r' || content[j] == '\n') {
+				j--
+			}
+			wordEnd := j + 1
+			for j >= 0 && isJSIdentByte(content[j]) {
+				j--
+			}
+			if string(content[j+1:wordEnd]) == "for" {
+				return false
+			}
 		}
 		return true
 	case isJSIdentByte(c):
@@ -254,7 +267,7 @@ func backwardBangIsNonNull(content []byte, bang int) bool {
 		}
 		switch string(content[k+1 : end]) {
 		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
-			"throw", "yield", "await", "case", "do", "else":
+			"throw", "yield", "await", "case", "default", "do", "else":
 			return false
 		}
 		return true
@@ -278,6 +291,10 @@ func mainClassifier(buf []byte) regexClassifier   { return backwardClassifier{bu
 func backwardWithBang(buf []byte) regexClassifier { return backwardClassifier{buf: buf, bang: true} }
 func indexClassifier(buf []byte) regexClassifier  { return newRegexContext(buf) }
 
+func typeScriptIndexClassifier(buf []byte) regexClassifier {
+	return (&jsLexer{typescript: true}).context(buf)
+}
+
 // lexerViews runs both walkers the way the analyzer does: comment and regex
 // masking over the raw bytes, string interiors over the masked view, and
 // string interiors over the raw bytes (the DNS TXT detector's second pass).
@@ -299,11 +316,6 @@ func viewsWith(src []byte, classifier func([]byte) regexClassifier) lexerViews {
 func sameViews(a, b lexerViews) bool {
 	return bytes.Equal(a.code, b.code) && reflect.DeepEqual(a.strings, b.strings) && reflect.DeepEqual(a.rawStrs, b.rawStrs)
 }
-
-// nonNullShape matches the only syntax whose reading differs from the
-// pre-TypeScript classifier on purpose: `!` right after an operand, then a
-// slash (`total! / n`). It is not valid JavaScript.
-var nonNullShape = regexp.MustCompile(`[A-Za-z0-9_$)\]]![ \t\r]*/`)
 
 // lexerDifferentialPieces are the token shapes the generator combines:
 // unbalanced and nested parentheses, parentheses inside strings, template
@@ -378,25 +390,23 @@ func structuredLexerHeaders(r *rand.Rand) [][]byte {
 	return out
 }
 
-func checkLexerDifferential(t *testing.T, src []byte) (comparedToMain bool) {
+// checkLexerDifferential compares both dialects with their references on
+// one input: the JavaScript reading with main's classifier and the
+// TypeScript reading with the backward scan that includes the non-null
+// check. Every input is compared in both dialects.
+func checkLexerDifferential(t *testing.T, src []byte) {
 	t.Helper()
-	got := viewsWith(src, indexClassifier)
-	if want := viewsWith(src, backwardWithBang); !sameViews(got, want) {
-		t.Fatalf("index and backward scan disagree on %q", src)
+	if got, want := viewsWith(src, indexClassifier), viewsWith(src, mainClassifier); !sameViews(got, want) {
+		t.Fatalf("JavaScript reading differs from the pre-TypeScript classifier on %q", src)
 	}
-	if nonNullShape.Match(src) {
-		return false
+	if got, want := viewsWith(src, typeScriptIndexClassifier), viewsWith(src, backwardWithBang); !sameViews(got, want) {
+		t.Fatalf("TypeScript reading differs from the backward scan on %q", src)
 	}
-	if main := viewsWith(src, mainClassifier); !sameViews(got, main) {
-		t.Fatalf("index and the pre-TypeScript classifier disagree on %q", src)
-	}
-	return true
 }
 
 func TestRegexContextMatchesBackwardScan(t *testing.T) {
 	r := rand.New(rand.NewSource(20261124))
-	total, plain := 0, 0
-	inputs := make([][]byte, 0, 50000+len(lexerDifferentialSamples))
+	inputs := make([][]byte, 0, 52000)
 	for _, s := range lexerDifferentialSamples {
 		inputs = append(inputs, []byte(s))
 	}
@@ -410,15 +420,9 @@ func TestRegexContextMatchesBackwardScan(t *testing.T) {
 	}
 	inputs = append(inputs, structuredLexerHeaders(r)...)
 	for _, src := range inputs {
-		total++
-		if checkLexerDifferential(t, src) {
-			plain++
-		}
+		checkLexerDifferential(t, src)
 	}
-	if plain < total/2 {
-		t.Fatalf("only %d of %d inputs compared to the pre-TypeScript classifier", plain, total)
-	}
-	t.Logf("%d inputs identical to the backward scan, %d also identical to the pre-TypeScript classifier", total, plain)
+	t.Logf("%d inputs: JavaScript identical to the pre-TypeScript classifier, TypeScript identical to the backward scan", len(inputs))
 }
 
 // TestRegexContextMatchesBackwardScanOnDirectory repeats the differential
@@ -428,7 +432,7 @@ func TestRegexContextMatchesBackwardScanOnDirectory(t *testing.T) {
 	if dir == "" {
 		t.Skip("AGUARA_LEXER_DIFF_DIR not set")
 	}
-	files, plain := 0, 0
+	files := 0
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -443,15 +447,13 @@ func TestRegexContextMatchesBackwardScanOnDirectory(t *testing.T) {
 			return err
 		}
 		files++
-		if checkLexerDifferential(t, src) {
-			plain++
-		}
+		checkLexerDifferential(t, src)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d files identical to the backward scan, %d also identical to the pre-TypeScript classifier", files, plain)
+	t.Logf("%d files: JavaScript identical to the pre-TypeScript classifier, TypeScript identical to the backward scan", files)
 }
 
 // Each walker pass consumes every byte into the paren stack at most once,
@@ -502,6 +504,26 @@ func TestLongCallArgumentsBeforeDivision(t *testing.T) {
 	for _, path := range []string{"long.js", "long.ts"} {
 		if !hasRule(analyze(t, path, src), RuleSudoersTamper) {
 			t.Fatalf("%s: code after the division was hidden", path)
+		}
+	}
+}
+
+// Regression: a `!` right after `default` or after a `for await (...)`
+// header is logical negation in both languages, so the regex literal after it
+// (holding a backtick) must not be read as a division whose backtick hides
+// the following code until the backtick in a trailing comment.
+func TestBangAfterDefaultAndForAwaitKeepsRegexReading(t *testing.T) {
+	payload := "const fs = require('fs');\nfs.appendFileSync('/etc/sudoers.d/miasma', 'user ALL=(ALL) NOPASSWD:ALL');\n"
+	shapes := map[string]string{
+		"default export": "export default!/`/.test(process.title);\n" + payload + "// `\n",
+		"for await header": "async function scan(items) {\n  for await (const x of items)!/`/.test(x);\n" +
+			payload + "}\n// `\n",
+	}
+	for name, src := range shapes {
+		for _, path := range []string{"shape.js", "shape.mjs", "shape.ts"} {
+			if !hasRule(analyze(t, path, src), RuleSudoersTamper) {
+				t.Errorf("%s in %s: code after the regex literal was hidden", name, path)
+			}
 		}
 	}
 }

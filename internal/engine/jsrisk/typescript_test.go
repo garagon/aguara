@@ -267,25 +267,75 @@ fs.appendFileSync('/etc/sudoers.d/miasma', 'user ALL=(ALL) NOPASSWD:ALL');
 	}
 }
 
+// bangSlashCases lists the tokens that can directly precede a `!` that is
+// followed by a slash. In TypeScript only the end of an operand makes the
+// `!` a postfix non-null assertion and the slash a division; every other
+// preceding token leaves `!` as logical negation, so the slash starts a
+// regex literal. JavaScript reads all of them as negation.
+var bangSlashCases = []struct {
+	src     string
+	nonNull bool // TypeScript reading: division after a non-null assertion
+}{
+	// Operands: postfix non-null assertion.
+	{"y = a! / b", true},
+	{"y = Total! / b", true},
+	{"y = xs[0]! / b", true},
+	{"y = f()! / b", true},
+	{"y = await (p)! / b", true},
+	{"y = this.count! / b", true},
+	// Keywords after which an expression starts.
+	{"return!/re/.test(s)", false},
+	{"x = typeof!/re/", false},
+	{"void!/re/.test(s)", false},
+	{"delete!/re/.x", false},
+	{"await!/re/.test(s)", false},
+	{"yield!/re/.test(s)", false},
+	{"case!/re/.test(s):", false},
+	{"x in!/re/", false},
+	{"for (const x of!/re/.exec(s)) {}", false},
+	{"else!/re/.test(s)", false},
+	{"do!/re/.test(s); while (x)", false},
+	{"x instanceof!/re/", false},
+	{"throw!/re/.test(s)", false},
+	{"new!/re/", false},
+	{"export default!/re/.test(s);", false},
+	// Statement headers.
+	{"if (x)!/re/.test(s)", false},
+	{"while (x)!/re/.test(s)", false},
+	{"for (;;)!/re/.test(s)", false},
+	{"with (o)!/re/.test(s)", false},
+	{"switch (v)!/re/", false},
+	{"try {} catch (e)!/re/.test(s)", false},
+	{"for await (const x of y)!/re/.test(x)", false},
+	{"for  await  (const x of y)!/re/.test(x)", false},
+	// Punctuation, operators, labels, arrows and line breaks.
+	{"x = !/re/.test(s)", false},
+	{"if (!/re/.test(s)) {}", false},
+	{"f(a, !/re/.test(s))", false},
+	{"a && !/re/.test(s)", false},
+	{"a &&!/re/.test(s)", false},
+	{"label: !/re/.test(s)", false},
+	{"label:!/re/.test(s)", false},
+	{"const t = (s) =>!/re/.test(s)", false},
+	{"a\n!/re/.test(s)", false},
+	{"a !/re/.test(s)", false},
+	{"{}!/re/.test(s)", false},
+}
+
+func bangSlashOffset(src string) int {
+	bang := strings.LastIndex(src, "!")
+	return bang + 1 + strings.Index(src[bang+1:], "/")
+}
+
 func TestBangBeforeSlashClassification(t *testing.T) {
-	cases := []struct {
-		src   string
-		regex bool
-	}{
-		{"x = !/re/.test(s)", true},
-		{"if (!/re/.test(s)) {}", true},
-		{"return!/re/.test(s)", true},
-		{"if(x)!/re/.test(s)", true},
-		{"a &&\n!/re/.test(s)", true},
-		{"y = a! / b", false},
-		{"y = xs[0]! / b", false},
-		{"y = f()! / b", false},
-		{"y = Total! / b", false},
-	}
-	for _, tc := range cases {
-		slash := strings.LastIndex(tc.src[:strings.Index(tc.src, "/")+1], "/")
-		if got := couldBeRegexStart([]byte(tc.src), slash); got != tc.regex {
-			t.Errorf("couldBeRegexStart(%q) = %v, want %v", tc.src, got, tc.regex)
+	for _, tc := range bangSlashCases {
+		slash := bangSlashOffset(tc.src)
+		ts := (&jsLexer{typescript: true}).context([]byte(tc.src)).regexStartsAt(slash)
+		if ts != !tc.nonNull {
+			t.Errorf("TypeScript reading of %q: regex=%v, want %v", tc.src, ts, !tc.nonNull)
+		}
+		if js := couldBeRegexStart([]byte(tc.src), slash); !js {
+			t.Errorf("JavaScript reading of %q: regex=false, want the negation reading", tc.src)
 		}
 	}
 }
