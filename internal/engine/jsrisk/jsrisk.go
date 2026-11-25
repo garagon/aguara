@@ -3996,7 +3996,7 @@ var archiveTmpBareCallRe = regexp.MustCompile(
 var archiveTokenRe = regexp.MustCompile(`tar\.gz|\.gzip\b|\bnt-`)
 
 // Comment masking is implemented as a string-and-regex-aware byte
-// walker in stripJSCommentsPreservingOffsets rather than naive regex
+// walker in stripJSCommentsWith rather than naive regex
 // passes. Regex-based strips blank the `//` inside ordinary URL
 // literals such as `https://example.com` (preserved by string state
 // tracking) and also inside JS regex literals such as `/https?:\/\//`
@@ -4686,7 +4686,14 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 	}
 }
 
-// jsStringInteriors returns sorted, non-overlapping byte ranges
+// regexClassifier answers whether the `/` at an offset of the buffer it was
+// built for starts a regex literal. The walkers ask in increasing offset
+// order and never change bytes behind the offset they ask about.
+type regexClassifier interface {
+	regexStartsAt(i int) bool
+}
+
+// jsStringInteriorsWith returns sorted, non-overlapping byte ranges
 // (half-open: [start, end)) covering the INTERIOR of every JS string
 // literal in content. The quote characters themselves are NOT included
 // in the ranges so a literal `'dns'` exposes its `dns` bytes only at
@@ -4700,21 +4707,10 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 // handling so a `//` or `/* */` inside a string literal is preserved
 // (the comment-masking pass below is the one that actually blanks
 // comment bytes; this helper only reports string ranges).
-func jsStringInteriors(content []byte) [][2]int {
-	return jsStringInteriorsWith(content, newRegexClassifier)
-}
-
-// regexClassifier answers whether the `/` at an offset of the buffer it was
-// built for starts a regex literal. The walkers ask in increasing offset
-// order and never change bytes behind the offset they ask about.
-type regexClassifier interface {
-	regexStartsAt(i int) bool
-}
-
-func newRegexClassifier(buf []byte) regexClassifier { return newRegexContext(buf) }
-
-// jsStringInteriorsWith is jsStringInteriors with the regex classifier
-// supplied by the caller (tests compare classifiers through it).
+//
+// The regex classifier is supplied by the caller: jsLexer passes one with
+// the file's dialect, and tests pass reference classifiers to compare them.
+// Callers normally use jsLexer.interiors.
 func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifier) [][2]int {
 	regex := classifier(content)
 	var out [][2]int
@@ -4904,7 +4900,7 @@ func insideStringInterior(ranges [][2]int, idx int) bool {
 // literal, or example string does not raise a finding.
 //
 //   - Code is content with comments AND regex-literal bodies masked to
-//     spaces (via stripJSCommentsPreservingOffsets). Offsets and line
+//     spaces (via stripJSCommentsWith). Offsets and line
 //     numbers match the original, so lineOf(view.Code, idx) is correct.
 //   - StringRanges are the string interiors of Code (sorted, from
 //     jsStringInteriors), with `${...}` template expressions treated as
@@ -5129,7 +5125,7 @@ func hasCodeToken(view jsLexicalView, lowerCode []byte, literal string) bool {
 	return false
 }
 
-// stripJSCommentsPreservingOffsets returns a copy of content with
+// stripJSCommentsWith returns a copy of content with
 // `// ...` line comments and `/* ... */` block comments overwritten
 // by spaces. Newlines are kept so byte offsets and lineOf() results
 // match the original content exactly. This lets sink detection ignore
@@ -5145,13 +5141,10 @@ func hasCodeToken(view jsLexicalView, lowerCode []byte, literal string) bool {
 // recursively scanned; a resolveTxt call buried inside an
 // interpolated expression is rare and the conservative false-negative
 // is acceptable.
-func stripJSCommentsPreservingOffsets(content []byte) []byte {
-	return stripJSCommentsWith(content, newRegexClassifier)
-}
-
-// stripJSCommentsWith is stripJSCommentsPreservingOffsets with the regex
-// classifier supplied by the caller. The classifier reads the copy being
-// blanked; bytes behind the walker are final when it asks.
+//
+// The regex classifier is supplied by the caller (jsLexer.strip passes one
+// with the file's dialect) and reads the copy being blanked; bytes behind
+// the walker are final when it asks.
 func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier) []byte {
 	out := make([]byte, len(content))
 	copy(out, content)
