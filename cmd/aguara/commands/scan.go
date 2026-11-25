@@ -262,6 +262,25 @@ func runAutoScan(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+
+	// Validate the caller's flags and rule configuration before discovery
+	// prints anything, so an invalid --severity, --rules or --disable-rule
+	// fails alone instead of after "nothing to scan".
+	applyCIDefaults()
+
+	minSev, err := parseSeverityFlag()
+	if err != nil {
+		return err
+	}
+
+	// Use empty config for auto mode (no per-target .aguara.yml)
+	cfg := config.Config{}
+
+	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
+	if err != nil {
+		return err
+	}
+
 	discovered, err := discover.Scan()
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
@@ -287,21 +306,6 @@ func runAutoScan(cmd *cobra.Command) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
 			len(paths), discovered.TotalClients())
-	}
-
-	applyCIDefaults()
-
-	minSev, err := parseSeverityFlag()
-	if err != nil {
-		return err
-	}
-
-	// Use empty config for auto mode (no per-target .aguara.yml)
-	cfg := config.Config{}
-
-	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
-	if err != nil {
-		return err
 	}
 
 	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)

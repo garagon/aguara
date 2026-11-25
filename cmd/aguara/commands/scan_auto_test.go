@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/garagon/aguara/internal/types"
 )
 
 type autoScanReport struct {
@@ -111,6 +113,33 @@ func TestAutoScanSortsAggregateFindings(t *testing.T) {
 	}
 	require.Len(t, files, 2, "fixture must produce findings in both configurations: %+v", report.Findings)
 	require.Equal(t, 4, report.Findings[0].Severity)
+}
+
+// TestAutoScanRejectsRuleConfigBeforeDiscovery: invalid caller rule
+// configuration fails the run before discovery says anything, so the
+// output does not read as "nothing to scan" followed by an error, and no
+// report is written.
+func TestAutoScanRejectsRuleConfigBeforeDiscovery(t *testing.T) {
+	resetFlags()
+	t.Cleanup(resetFlags)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(t.TempDir())
+	out := filepath.Join(t.TempDir(), "report.json")
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs([]string{"scan", "--auto", "--format", "json", "-o", out, "--disable-rule", "TYPO_001", "--no-update-check"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+
+	var err error
+	stderr := captureStderrBytes(t, func() { err = rootCmd.Execute() })
+	var cfgErr *types.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	require.NotContains(t, string(stderr), "No MCP configurations found")
+	require.NotContains(t, string(stderr), "Discovered")
+	_, statErr := os.Stat(out)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 // TestAutoScanWithoutConfigurationsKeepsStdoutClean: with no discovered
