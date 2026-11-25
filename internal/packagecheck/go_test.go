@@ -139,6 +139,44 @@ func TestParseGoMod_StripsInlineComments(t *testing.T) {
 	}
 }
 
+func TestParseGoMod_QuotedModulePathAndVersion(t *testing.T) {
+	// go.mod may write a module path or version as a Go string literal.
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\nrequire (\n\t\"example.com/quoted\" v1.0.0\n\texample.com/raw `v2.0.0+incompatible`\n)\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	if len(refs) != 2 || refs[0].Name != "example.com/quoted" || refs[0].Version != "v1.0.0" ||
+		refs[1].Name != "example.com/raw" || refs[1].Version != "v2.0.0+incompatible" {
+		t.Errorf("refs = %+v, want example.com/quoted v1.0.0 and example.com/raw v2.0.0+incompatible", refs)
+	}
+}
+
+func TestRunner_GoSumMatchesAdvisoryWithoutLeadingV(t *testing.T) {
+	// OSV Go records list "0.69.4"; go.sum writes "v0.69.4", including on
+	// the /go.mod hash line. The pair is one finding.
+	tmp := t.TempDir()
+	sumPath := filepath.Join(tmp, "go.sum")
+	writeFile(t, sumPath, "github.com/example/scanner v0.69.4 h1:AAAA=\ngithub.com/example/scanner v0.69.4/go.mod h1:BBBB=\n"+
+		"github.com/example/scanner v0.69.40 h1:CCCC=\n")
+	runner := &Runner{Matcher: intel.NewMatcher(intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID: "GHSA-GO-BARE", Ecosystem: intel.EcosystemGo, Name: "github.com/example/scanner",
+			Kind: intel.KindMalicious, Versions: []string{"0.69.4"},
+		}},
+	})}
+	res, err := runner.Run([]Target{{Ecosystem: intel.EcosystemGo, Path: sumPath, Source: "go.sum"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Ref.Version != "v0.69.4" {
+		t.Fatalf("hits = %+v, want one hit on v0.69.4", res.Hits)
+	}
+}
+
 func TestParseGo_RejectsUnknownSource(t *testing.T) {
 	_, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: "/dev/null", Source: "Cargo.lock"})
 	if err == nil {

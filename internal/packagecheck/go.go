@@ -3,6 +3,7 @@ package packagecheck
 import (
 	"bufio"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -172,8 +173,10 @@ func parseRequireLine(body, path string) (PackageRef, bool) {
 	if len(fields) < 2 {
 		return PackageRef{}, false
 	}
-	name := fields[0]
-	version := fields[1]
+	// go.mod may quote a module path or version as a Go string literal
+	// (Go Modules Reference, "go.mod files: Lexical elements").
+	name := unquoteGoModToken(fields[0])
+	version := unquoteGoModToken(fields[1])
 	if name == "" || version == "" {
 		return PackageRef{}, false
 	}
@@ -184,4 +187,19 @@ func parseRequireLine(body, path string) (PackageRef, bool) {
 		Path:      path,
 		Source:    "go.mod",
 	}, true
+}
+
+// unquoteGoModToken returns an interpreted ("...") or raw (`...`) Go
+// string token without its quotes, and any other token unchanged. A
+// token that does not unquote cleanly is returned as written, so it
+// simply matches nothing.
+func unquoteGoModToken(tok string) string {
+	if len(tok) < 2 || (tok[0] != '"' && tok[0] != '`') {
+		return tok
+	}
+	s, err := strconv.Unquote(tok)
+	if err != nil {
+		return tok
+	}
+	return s
 }

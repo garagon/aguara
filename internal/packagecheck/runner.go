@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
 )
@@ -114,22 +113,14 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,
 			// even when multiple advisories cover the same
-			// exposure. Two reasons:
-			//
-			//   1. Some ecosystems (Composer especially) ship
-			//      version strings with a leading `v` while OSV
-			//      records carry the bare form, so we have to
-			//      query every alias the per-ecosystem helper
-			//      returns. The first alias that hits wins; we
-			//      do not walk the rest.
-			//   2. Once manual intel and OSV both cover a tuple
-			//      (e.g. a hand-curated SOCKET-* advisory plus
-			//      the upstream MAL-* record after OSV catches
-			//      up), the matcher returns both records. The
-			//      user is exposed once, not twice; collapsing
-			//      to a single Hit keeps the user-facing count
-			//      stable across `aguara check` and `aguara
-			//      check --fresh`.
+			// exposure. Once manual intel and OSV both cover a
+			// tuple (e.g. a hand-curated SOCKET-* advisory plus
+			// the upstream MAL-* record after OSV catches up), the
+			// matcher returns both records. The user is exposed
+			// once, not twice; collapsing to a single Hit keeps the
+			// user-facing count stable across `aguara check` and
+			// `aguara check --fresh`. Version spellings (a Go "v",
+			// a Composer tag prefix) are reconciled by the matcher.
 			//
 			// The matcher itself keeps returning every record so
 			// correlation layers (intel.Matcher consumers,
@@ -144,18 +135,12 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// the matcher answers only from all-versions entries: every
 			// release of such a package is malicious, so no version has
 			// to be guessed.
-			var matches []intel.Match
-			for _, v := range versionAliases(ref.Ecosystem, ref.Version) {
-				matches = r.Matcher.MatchPackage(intel.MatchInput{
-					Ecosystem: ref.Ecosystem,
-					Name:      ref.Name,
-					Version:   v,
-					Path:      ref.Path,
-				})
-				if len(matches) > 0 {
-					break
-				}
-			}
+			matches := r.Matcher.MatchPackage(intel.MatchInput{
+				Ecosystem: ref.Ecosystem,
+				Name:      ref.Name,
+				Version:   ref.Version,
+				Path:      ref.Path,
+			})
 			if len(matches) == 0 {
 				continue
 			}
@@ -294,29 +279,4 @@ func parseTarget(t Target) ([]PackageRef, error) {
 	default:
 		return nil, fmt.Errorf("no parser for ecosystem %q", t.Ecosystem)
 	}
-}
-
-// versionAliases returns the version strings the runner should
-// query the matcher with for a given (ecosystem, raw version)
-// pair. The first entry is always the raw version; per-ecosystem
-// conventions add aliases.
-//
-// Composer is the only ecosystem that needs an alias today:
-// composer.lock often ships `v1.2.3` while OSV Packagist records
-// publish the bare form `1.2.3`. Stripping the `v` prefix as an
-// alias matches either side without requiring the parser to pick
-// one canonical form (which would lose information when the
-// lockfile literally uses the prefixed form).
-//
-// Adding a new ecosystem alias rule is one case-arm here; the
-// per-ecosystem normalisation in intel/ecosystem.go stays focused
-// on name canonicalisation.
-func versionAliases(ecosystem, version string) []string {
-	out := []string{version}
-	if ecosystem == intel.EcosystemPackagist {
-		if alias := strings.TrimPrefix(version, "v"); alias != version && alias != "" {
-			out = append(out, alias)
-		}
-	}
-	return out
 }
