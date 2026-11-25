@@ -138,10 +138,14 @@ exported through public aliases, rather than copying a partial struct.
 - Empty scan findings serialize as `[]`, not `null`.
 - CLI JSON from `scan`, `check` and `audit` carries a `coverage` block: files
   scanned, package evidence read (with `unpinned` counts),
-  `unsupported_evidence` (dependency files found but not evaluated) and
-  `unresolved_includes` (requirements includes not read). Zero files, zero
-  evaluated evidence, unsupported files or any unpinned requirement is not a
-  clean result. Library `ScanResult` values leave `coverage` unset.
+  `unsupported_evidence` (dependency files found but not evaluated, each with
+  a `reason`, including manifests such as `package.json` or `pyproject.toml`
+  that declare dependencies without a lockfile, `manifest_without_lockfile`)
+  and `unresolved_includes` (requirements includes not read). Zero files,
+  zero evaluated evidence, unsupported files, a manifest without a lockfile or
+  any unpinned requirement is not a clean result. Only the exact pins of
+  unsupported files are matched (`exact_pins_checked`). Library `ScanResult`
+  values leave `coverage` unset.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a
