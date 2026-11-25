@@ -284,6 +284,39 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	return result, nil
 }
 
+// ScanPaths scans several files and directories as one scan rooted at
+// root, a directory that contains all of them. Paths are relative to the
+// working directory, as typed; findings report paths relative to root.
+// Ignore patterns, including root's .aguaraignore when project policy is
+// enabled, apply to every path, files named directly included. Cross-file
+// correlation sees only the files of this scan, grouped by their directory
+// relative to root. It also returns the symbolic links it was given, which
+// are not followed.
+func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*ScanResult, []string, error) {
+	discovery := &TargetDiscovery{
+		IgnorePatterns:    s.ignorePatterns,
+		MaxFileSize:       s.maxFileSize,
+		IgnoreProjectFile: !s.projectPolicyEnabled,
+	}
+	targets, err := discovery.DiscoverPaths(root, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, target := range targets {
+		target.Path = filepath.Join(root, target.RelPath)
+	}
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if discovery.ExcludedByIgnoreFile > 0 {
+		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
+	}
+	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+	return result, discovery.SkippedLinks, nil
+}
+
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
 func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResult, error) {
 	start := time.Now()

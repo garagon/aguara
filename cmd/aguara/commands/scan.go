@@ -50,7 +50,7 @@ var (
 var errNothingScanned = errors.New("no files were scanned and --fail-on-empty is set; check that the path points at the files you meant to scan")
 
 var scanCmd = &cobra.Command{
-	Use:     "scan [path]",
+	Use:     "scan [path...]",
 	GroupID: groupScan,
 	Short:   "Scan a directory for security issues",
 	Long: `Scan files for prompt injection, credential leaks, risky agent and MCP
@@ -71,11 +71,19 @@ default --project-policy auto:
     CI variable and what was and was not applied.
 
 Pass --project-policy trust to apply all of it in CI, or --project-policy
-ignore to apply none of it (fail_on included) for unfamiliar content.`,
+ignore to apply none of it (fail_on included) for unfamiliar content.
+
+Several paths (files or directories) are scanned as one scan with one
+report, rooted at the current directory or at --root: policy files are read
+from the root, ignore patterns apply to every path, named files included,
+and findings report paths relative to the root. Every path must be inside
+the root; symbolic links named on the command line are not followed.
+Cross-file checks see only the files of this scan, grouped by directory.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
-  aguara scan . --format sarif -o scan.sarif   For GitHub code scanning`,
+  aguara scan . --format sarif -o scan.sarif   For GitHub code scanning
+  aguara scan SKILL.md scripts/ mcp.json      Several paths, one report`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if flagAuto {
 			if len(args) > 0 {
@@ -83,7 +91,7 @@ ignore to apply none of it (fail_on included) for unfamiliar content.`,
 			}
 			return nil
 		}
-		return cobra.ExactArgs(1)(cmd, args)
+		return cobra.MinimumNArgs(1)(cmd, args)
 	},
 	RunE: runScan,
 }
@@ -99,6 +107,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings, and list ignore patterns that matched nothing")
+	scanCmd.Flags().StringVar(&flagScanRoot, "root", "", "Scan root for path arguments: policy files are read from it and paths are reported relative to it (default for several paths: the current directory)")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
@@ -129,7 +138,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return runAutoScan(cmd)
 	}
 
-	targetPath := args[0]
+	in, err := parseScanInput(cmd, args)
+	if err != nil {
+		return err
+	}
+	targetPath := in.policyPath()
 
 	applyCIDefaults()
 	// auto applies the project's own policy only to local runs. In CI the
@@ -179,13 +192,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
-	result, err := executeScan(ctx, s, targetPath)
+	result, err := in.execute(ctx, s)
 	stopSpinner(sp)
 	if err != nil {
 		return err
 	}
 	result.RulesLoaded = len(res.Compiled)
-	result.Target = targetPath
+	result.Target = in.target()
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, result)

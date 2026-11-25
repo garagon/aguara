@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -129,6 +130,10 @@ type TargetDiscovery struct {
 	ExcludedByCallerPatterns int
 	ExcludedByIgnoreFile     int
 
+	// SkippedLinks lists the symbolic links DiscoverPaths was given and
+	// did not follow.
+	SkippedLinks []string
+
 	rules     []*ignoreRule // compiled caller patterns, then file patterns
 	bareNames map[string][]*ignoreRule
 }
@@ -236,6 +241,121 @@ func (td *TargetDiscovery) walkFunc(root string, targets *[]*Target) filepath.Wa
 	}
 }
 
+// DiscoverPaths returns the targets for several files and directories
+// scanned as one scan rooted at root, which must be a directory containing
+// every path. RelPath is relative to root, and the caller's patterns and
+// root's .aguaraignore apply to every path, files named directly included,
+// as they would in a Discover of root; a directory is walked the way
+// Discover walks root. A path reached more than once is returned once.
+//
+// A symbolic link named in paths is not followed and is listed in
+// SkippedLinks, as a walk skips the links it finds. A path that does not
+// exist, is not a regular file or a directory, or resolves outside root is
+// an error.
+func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target, error) {
+	td.SkippedLinks = nil
+	realRoot, err := filepath.Abs(root)
+	if err == nil {
+		realRoot, err = filepath.EvalSymlinks(realRoot)
+	}
+	if err != nil {
+		return nil, IncompleteScanError("resolve root", root, "", err)
+	}
+	if err := td.prepare(realRoot); err != nil {
+		return nil, err
+	}
+	limit := td.MaxFileSize
+	if limit <= 0 {
+		limit = DefaultMaxFileSize
+	}
+
+	var targets []*Target
+	seen := make(map[string]bool)
+	var walked []string
+	for _, p := range paths {
+		full, rel, info, err := resolveInRoot(realRoot, root, p)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			td.SkippedLinks = append(td.SkippedLinks, p)
+			continue
+		}
+		if info.IsDir() {
+			if coveredBy(walked, rel) || td.excludedDir(rel) {
+				continue
+			}
+			walked = append(walked, rel)
+			start := len(targets)
+			if err := filepath.Walk(full, td.walkFunc(realRoot, &targets)); err != nil {
+				return nil, err
+			}
+			kept := targets[:start]
+			for _, t := range targets[start:] {
+				if !seen[t.RelPath] {
+					seen[t.RelPath] = true
+					kept = append(kept, t)
+				}
+			}
+			targets = kept
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			return nil, IncompleteScanError("inspect target (not a regular file or directory)", p, "", errNotRegularFile)
+		}
+		if seen[rel] || isBinaryExt(full) || td.isIgnored(rel) {
+			continue
+		}
+		if info.Size() > limit {
+			return nil, IncompleteScanError("discover target", rel, "", &fileSizeError{limit: limit})
+		}
+		seen[rel] = true
+		targets = append(targets, &Target{Path: full, RelPath: rel, MaxFileSize: td.MaxFileSize})
+	}
+	return targets, nil
+}
+
+var errNotRegularFile = errors.New("not a regular file or directory")
+
+// resolveInRoot locates p (as the user typed it, relative to the working
+// directory) inside realRoot, the resolved scan root. p itself is not
+// followed when it is a symbolic link (the caller skips it); otherwise the
+// path is resolved, so it cannot reach outside root through a linked
+// parent directory. It returns the resolved path, the path relative to
+// realRoot and p's own file information.
+func resolveInRoot(realRoot, root, p string) (string, string, os.FileInfo, error) {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return "", "", nil, IncompleteScanError("inspect target", p, "", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", "", info, nil
+	}
+	abs, err := filepath.Abs(p)
+	if err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
+	}
+	if err != nil {
+		return "", "", nil, IncompleteScanError("inspect target", p, "", err)
+	}
+	full := abs
+	rel, err := filepath.Rel(realRoot, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", nil, fmt.Errorf("%s is outside the scan root %s", p, root)
+	}
+	return full, rel, info, nil
+}
+
+// coveredBy reports whether rel is one of dirs or inside one of them.
+func coveredBy(dirs []string, rel string) bool {
+	for _, d := range dirs {
+		if d == "." || rel == d || strings.HasPrefix(rel, d+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (td *TargetDiscovery) loadIgnoreFile(root string) error {
 	path := filepath.Join(root, ".aguaraignore")
 	f, err := os.Open(path)
@@ -297,6 +417,19 @@ func (td *TargetDiscovery) prunes(relPath string) bool {
 	return true
 }
 
+// excludedDir reports whether a directory pattern excludes relPath or one
+// of its parent directories, for a directory named directly instead of
+// reached by a walk from the root.
+func (td *TargetDiscovery) excludedDir(relPath string) bool {
+	dir := filepath.ToSlash(relPath)
+	for i := 0; i <= len(dir); i++ {
+		if (i == len(dir) || dir[i] == '/') && td.prunes(dir[:i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // noteDir records a scanned directory whose name a bare-name pattern
 // spells, so an unmatched pattern can suggest the directory form.
 func (td *TargetDiscovery) noteDir(relPath string) {
@@ -317,7 +450,7 @@ func (td *TargetDiscovery) recordExclusion(r *ignoreRule) {
 	}
 }
 
-// PatternUses describes every pattern the last Discover
+// PatternUses describes every pattern the last Discover or DiscoverPaths
 // evaluated, caller patterns first, then the lines of the .aguaraignore in
 // root (the directory the caller passed, used for the File field).
 func (td *TargetDiscovery) PatternUses(root string) []types.IgnorePatternUse {
