@@ -39,7 +39,7 @@ type ignoreRule struct {
 	dirOnly     bool   // trailing slash
 	anchored    bool   // leading slash or "./"
 	literalPath bool   // no glob characters and a slash in the middle
-	matchAll    bool   // "**", "/**" or "**/"
+	matchAll    bool   // "**" or "/**"
 	bareName    bool   // literal name without any slash (for the hint)
 	unsupported string
 
@@ -73,7 +73,9 @@ func compileIgnoreRule(pattern string) *ignoreRule {
 		return r
 	}
 	r.glob = g
-	if g == "**" {
+	if g == "**" && !r.dirOnly {
+		// "**" and "/**" match everything. "**/" names every directory,
+		// so it leaves the files at the scan root, as in gitignore.
 		r.matchAll = true
 		return r
 	}

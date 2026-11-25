@@ -99,6 +99,17 @@ func TestIgnoreDoubleStarAlone(t *testing.T) {
 	require.Empty(t, discovered(t, td, dir))
 }
 
+// "**/" names every directory, so it excludes everything below the root
+// but not the files at the root, as in gitignore; "/**" excludes all.
+func TestIgnoreDoubleStarDirectoryForms(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, "a.md", "b/c.md", "b/d/e.md")
+	td := &scanner.TargetDiscovery{IgnorePatterns: []string{"**/"}}
+	require.Equal(t, []string{"a.md"}, discovered(t, td, dir))
+	td = &scanner.TargetDiscovery{IgnorePatterns: []string{"/**"}}
+	require.Empty(t, discovered(t, td, dir))
+}
+
 // A bare name without a slash keeps matching file names only. Treating it
 // as a directory too would make an entry such as "aguara" (a build
 // output) also exclude source directories such as cmd/aguara/.
