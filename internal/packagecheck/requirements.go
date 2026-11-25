@@ -88,7 +88,9 @@ type requirementsItem struct {
 // environment markers are accepted; markers are not evaluated, so a pin
 // counts whatever environment it targets. Editable installs, local
 // paths, archive files, VCS links and direct URL references have no
-// PyPI identity and are skipped. Index options and per-requirement
+// PyPI identity and are skipped, except a URL of a wheel or sdist on
+// files.pythonhosted.org, which is pinned to the PyPI release its file
+// name names. Index options and per-requirement
 // options such as --hash are read and ignored.
 //
 // -r and -c includes are followed relative to the including file, only
@@ -517,13 +519,19 @@ func checkPerRequirementOptions(text string) error {
 
 // parseNamedRequirement parses one requirement specifier. It returns
 // nil without error for direct references (`name @ url`), local paths,
-// archives and URLs, which have no registry identity.
+// archives and URLs, which have no registry identity, except a URL of a
+// wheel or source distribution on files.pythonhosted.org: that file is a
+// PyPI release, named by its file name (see pythonHostedIdentity).
 func parseNamedRequirement(s string) (*PackageRef, error) {
 	if s == "" {
 		return nil, nil
 	}
 	if looksLikeRequirementPath(s) {
-		return nil, nil
+		first := s
+		if i := strings.IndexAny(s, " \t;"); i >= 0 {
+			first = s[:i]
+		}
+		return pythonHostedRef("", first), nil
 	}
 	spec, marker, hasMarker := strings.Cut(s, ";")
 	if hasMarker && strings.TrimSpace(marker) == "" {
@@ -552,7 +560,9 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		rest = strings.TrimSpace(rest[closeIdx+1:])
 	}
 	if strings.HasPrefix(rest, "@") {
-		return nil, nil // direct URL reference
+		// Direct URL reference: no registry identity unless it names a
+		// file uploaded to PyPI.
+		return pythonHostedRef(name, strings.TrimSpace(rest[1:])), nil
 	}
 	ref := &PackageRef{Ecosystem: intel.EcosystemPyPI, Name: name}
 	if strings.Contains(rest, "${") {
