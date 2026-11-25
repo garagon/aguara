@@ -939,12 +939,16 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
+			Kind:        incident.KindCompromisedPackage,
 			Title:       title,
 			Detail:      hit.Record.Summary,
 			Path:        hit.Ref.Path,
 			Line:        hit.Ref.Line,
 			Remediation: remediation,
 			AdvisoryIDs: hit.AdvisoryIDs,
+			Ecosystem:   hit.Ref.Ecosystem,
+			Package:     hit.Ref.Name,
+			Version:     hit.Ref.Version,
 		})
 	}
 	for _, u := range runRes.UnresolvedIncludes {

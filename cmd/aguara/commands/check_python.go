@@ -233,6 +233,7 @@ func unresolvedIncludeFinding(u packagecheck.UnresolvedInclude) incident.Finding
 	}
 	return incident.Finding{
 		Severity:    incident.SevWarning,
+		Kind:        incident.KindUnresolvedInclude,
 		Title:       fmt.Sprintf("%s includes %s, which was not checked: %s", filepath.Base(u.Path), u.Argument, why),
 		Detail:      "pip installs the requirements of included files; a compromised pin there would not be reported.",
 		Path:        u.Path,
