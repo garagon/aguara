@@ -31,6 +31,7 @@ package jsrisk
 import (
 	"bytes"
 	"context"
+	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -4000,7 +4001,50 @@ var jsRegexLiteralStartingChars = map[byte]bool{
 // against the punctuation set above; otherwise it walks the trailing
 // identifier and checks the set of keywords that can precede a
 // regex literal (`return`, `typeof`, etc.).
+//
+// This form builds a fresh regexContext for one question and is meant
+// for tests and one-off callers. The lexer walkers keep one regexContext
+// per pass so paren matching stays linear over the whole file.
 func couldBeRegexStart(content []byte, i int) bool {
+	return newRegexContext(content).regexStartsAt(i)
+}
+
+// regexContext answers couldBeRegexStart questions for one walker pass
+// over buf. The walker asks about slashes in increasing order and never
+// changes bytes behind its current position, so the context can match
+// parentheses incrementally: it consumes buf forward with a stack of
+// unmatched '(' offsets instead of walking back from every ')'. The
+// matching is the same byte-level count the backward scan performed
+// (parentheses inside strings count; an unmatched ')' is ignored), so
+// every answer is identical to it, in time linear in the file.
+//
+// Memory: the stack holds one offset per currently unmatched '(' byte,
+// at most one per byte of buf. Offsets are 32-bit when buf fits, so the
+// stack is at most 4 bytes per input byte, bounded by the scanner's file
+// size limit, comparable to the per-byte copies the lexer already makes,
+// and released when the pass ends. There is no depth cap: a cap would
+// change which '(' matches a ')' and with it the regex reading.
+type regexContext struct {
+	buf    []byte
+	cursor int     // next byte not yet consumed by the paren stack
+	open32 []int32 // unmatched '(' offsets, used when buf fits in int32
+	open   []int   // unmatched '(' offsets, used for larger buffers
+
+	// The last ')' asked about. A walker can ask about the same ')' again
+	// after blanking a regex literal behind it; the answer is reused.
+	memoClose   int
+	memoMatched bool
+	memoKeyword string
+
+	restarts int // times a question went backwards and the stack was rebuilt
+}
+
+func newRegexContext(buf []byte) *regexContext {
+	return &regexContext{buf: buf, memoClose: -1}
+}
+
+func (r *regexContext) regexStartsAt(i int) bool {
+	content := r.buf
 	j := i - 1
 	for j >= 0 {
 		c := content[j]
@@ -4014,7 +4058,7 @@ func couldBeRegexStart(content []byte, i int) bool {
 		return true
 	}
 	c := content[j]
-	if c == '!' && bangIsNonNullAssertion(content, j) {
+	if c == '!' && r.bangIsNonNullAssertion(j) {
 		return false
 	}
 	if jsRegexLiteralStartingChars[c] {
@@ -4023,14 +4067,12 @@ func couldBeRegexStart(content []byte, i int) bool {
 	// `)` preceding the `/` can be either:
 	//   - the closing of a function call: `f() / x` is division;
 	//   - the closing of a control-flow header: `if (x) /regex/`
-	//     is a regex literal. Walk back to the matching `(` and
-	//     inspect the keyword before it. `if`, `while`, `for`,
-	//     `switch`, `catch` signal control-flow.
+	//     is a regex literal. Find the matching `(` and inspect the
+	//     keyword before it. `if`, `while`, `for`, `switch`, `catch`
+	//     signal control-flow. An unmatched `)` reads as division.
 	if c == ')' {
-		// An unmatched `)` within the scan window reads as division, as an
-		// unbalanced one always has.
-		keyword, ok := parenHeaderKeyword(content, j)
-		if !ok {
+		keyword, matched := r.parenHeader(j)
+		if !matched {
 			return false
 		}
 		switch keyword {
@@ -4053,17 +4095,105 @@ func couldBeRegexStart(content []byte, i int) bool {
 	return false
 }
 
-// maxLexerBackscan bounds how far the regex-versus-division classifier walks
-// back from a `)` to find its `(` and the keyword before it. Without a bound,
-// a crafted file of deeply nested parentheses makes every slash rescan the
-// file and the lexer quadratic. A header longer than this is treated like
-// an unmatched `)`: division after it, and no non-null assertion before a
-// `!`, which is the reading a `!` had before TypeScript support.
-const maxLexerBackscan = 1024
+// bangIsNonNullAssertion reports whether the `!` at position bang is a
+// TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
+// `f()! / 2`), after which a `/` is division. The `!` must touch the end of
+// an operand: an identifier that is not an expression keyword, a `]`, or a
+// `)` that does not close a control-flow header. In JavaScript the prefix
+// `!` never directly follows an operand, so `!/re/.test(s)`,
+// `return!/re/.test(s)` and `if(x)!/re/.test(s)` keep their regex reading.
+func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
+	if bang == 0 {
+		return false
+	}
+	c := r.buf[bang-1]
+	switch {
+	case c == ']':
+		return true
+	case c == ')':
+		keyword, matched := r.parenHeader(bang - 1)
+		if !matched {
+			return false
+		}
+		switch keyword {
+		case "if", "while", "for", "switch", "catch", "with":
+			return false
+		}
+		return true
+	case isJSIdentifierByte(c):
+		switch keywordEndingAt(r.buf, bang) {
+		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
+			"throw", "yield", "await", "case", "do", "else":
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// parenHeader returns the keyword-length identifier before the `(` that
+// matches the `)` at closeParen ("" when there is none), and whether a
+// matching `(` exists.
+func (r *regexContext) parenHeader(closeParen int) (keyword string, matched bool) {
+	if closeParen == r.memoClose {
+		return r.memoKeyword, r.memoMatched
+	}
+	open := r.matchingOpen(closeParen)
+	if open >= 0 {
+		matched = true
+		// Skip whitespace back to the token before the `(`.
+		k := open - 1
+		for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r' || r.buf[k] == '\n') {
+			k--
+		}
+		if k >= 0 {
+			keyword = keywordEndingAt(r.buf, k+1)
+		}
+	}
+	r.memoClose, r.memoMatched, r.memoKeyword = closeParen, matched, keyword
+	return keyword, matched
+}
+
+// matchingOpen returns the offset of the `(` matching the `)` at
+// closeParen, or -1. It consumes buf up to closeParen, so the bytes before
+// closeParen must be final.
+func (r *regexContext) matchingOpen(closeParen int) int {
+	if closeParen < r.cursor {
+		// Not reached by the walkers, which ask in increasing order. Start
+		// over so the answer stays exact.
+		r.cursor, r.open32, r.open = 0, r.open32[:0], r.open[:0]
+		r.restarts++
+	}
+	small := len(r.buf) <= math.MaxInt32
+	for ; r.cursor < closeParen; r.cursor++ {
+		switch r.buf[r.cursor] {
+		case '(':
+			if small {
+				r.open32 = append(r.open32, int32(r.cursor))
+			} else {
+				r.open = append(r.open, r.cursor)
+			}
+		case ')':
+			if small && len(r.open32) > 0 {
+				r.open32 = r.open32[:len(r.open32)-1]
+			} else if !small && len(r.open) > 0 {
+				r.open = r.open[:len(r.open)-1]
+			}
+		}
+	}
+	switch {
+	case small && len(r.open32) > 0:
+		return int(r.open32[len(r.open32)-1])
+	case !small && len(r.open) > 0:
+		return r.open[len(r.open)-1]
+	default:
+		return -1
+	}
+}
 
 // maxKeywordLen is the length of the longest keyword the classifier checks
 // ("instanceof"). An identifier longer than that is not a keyword, so the
-// walk back over it stops early.
+// walk back over it stops early without changing any answer.
 const maxKeywordLen = 10
 
 func isJSIdentifierByte(b byte) bool {
@@ -4081,80 +4211,6 @@ func keywordEndingAt(content []byte, end int) string {
 		k--
 	}
 	return string(content[k+1 : end])
-}
-
-// parenHeaderKeyword finds the `(` matching the `)` at closeParen and returns
-// the keyword-length identifier before it ("" when there is none). ok is
-// false when the matching `(` is not within maxLexerBackscan bytes.
-func parenHeaderKeyword(content []byte, closeParen int) (keyword string, ok bool) {
-	keyword, ok, _ = scanParenHeader(content, closeParen)
-	return keyword, ok
-}
-
-// scanParenHeader implements parenHeaderKeyword and also reports the lowest
-// offset it examined, so tests can assert the walk stays inside the window.
-func scanParenHeader(content []byte, closeParen int) (keyword string, ok bool, lowest int) {
-	lo := max(closeParen-maxLexerBackscan, 0)
-	depth := 1
-	k := closeParen - 1
-	for k >= lo && depth > 0 {
-		switch content[k] {
-		case ')':
-			depth++
-		case '(':
-			depth--
-		}
-		k--
-	}
-	if depth != 0 {
-		return "", false, k + 1
-	}
-	// k now points one before the matching `(`. Skip whitespace back to the
-	// preceding token.
-	for k >= lo && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r' || content[k] == '\n') {
-		k--
-	}
-	if k < lo {
-		return "", k < 0, k + 1
-	}
-	keyword = keywordEndingAt(content, k+1)
-	return keyword, true, max(k+1-maxKeywordLen-1, 0)
-}
-
-// bangIsNonNullAssertion reports whether the `!` at position bang is a
-// TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
-// `f()! / 2`), after which a `/` is division. The `!` must touch the end of
-// an operand: an identifier that is not an expression keyword, a `]`, or a
-// `)` that does not close a control-flow header. In JavaScript the prefix
-// `!` never directly follows an operand, so `!/re/.test(s)`,
-// `return!/re/.test(s)` and `if(x)!/re/.test(s)` keep their regex reading.
-func bangIsNonNullAssertion(content []byte, bang int) bool {
-	if bang == 0 {
-		return false
-	}
-	c := content[bang-1]
-	switch {
-	case c == ']':
-		return true
-	case c == ')':
-		keyword, ok := parenHeaderKeyword(content, bang-1)
-		if !ok {
-			return false
-		}
-		switch keyword {
-		case "if", "while", "for", "switch", "catch", "with":
-			return false
-		}
-		return true
-	case isJSIdentifierByte(c):
-		switch keywordEndingAt(content, bang) {
-		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
-			"throw", "yield", "await", "case", "do", "else":
-			return false
-		}
-		return true
-	}
-	return false
 }
 
 // envsTxtTokenRe matches an `envs.txt` filename reference. The
@@ -4591,6 +4647,22 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 // (the comment-masking pass below is the one that actually blanks
 // comment bytes; this helper only reports string ranges).
 func jsStringInteriors(content []byte) [][2]int {
+	return jsStringInteriorsWith(content, newRegexClassifier)
+}
+
+// regexClassifier answers whether the `/` at an offset of the buffer it was
+// built for starts a regex literal. The walkers ask in increasing offset
+// order and never change bytes behind the offset they ask about.
+type regexClassifier interface {
+	regexStartsAt(i int) bool
+}
+
+func newRegexClassifier(buf []byte) regexClassifier { return newRegexContext(buf) }
+
+// jsStringInteriorsWith is jsStringInteriors with the regex classifier
+// supplied by the caller (tests compare classifiers through it).
+func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifier) [][2]int {
+	regex := classifier(content)
 	var out [][2]int
 	const (
 		stCode = iota
@@ -4620,7 +4692,7 @@ func jsStringInteriors(content []byte) [][2]int {
 					i++
 					continue
 				}
-				if couldBeRegexStart(content, i) {
+				if regex.regexStartsAt(i) {
 					state = stRegex
 					continue
 				}
@@ -4970,8 +5042,16 @@ func hasCodeToken(view jsLexicalView, lowerCode []byte, literal string) bool {
 // interpolated expression is rare and the conservative false-negative
 // is acceptable.
 func stripJSCommentsPreservingOffsets(content []byte) []byte {
+	return stripJSCommentsWith(content, newRegexClassifier)
+}
+
+// stripJSCommentsWith is stripJSCommentsPreservingOffsets with the regex
+// classifier supplied by the caller. The classifier reads the copy being
+// blanked; bytes behind the walker are final when it asks.
+func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier) []byte {
 	out := make([]byte, len(content))
 	copy(out, content)
+	regex := classifier(out)
 	const (
 		stCode = iota
 		stStringSingle
@@ -5003,7 +5083,7 @@ func stripJSCommentsPreservingOffsets(content []byte) []byte {
 					i++
 					continue
 				}
-				if couldBeRegexStart(out, i) {
+				if regex.regexStartsAt(i) {
 					state = stRegex
 					out[i] = ' '
 					continue
