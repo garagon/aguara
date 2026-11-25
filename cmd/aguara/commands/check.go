@@ -1138,30 +1138,6 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 		fmt.Fprintln(w)
 	}
 
-	// Action guidance is ecosystem-specific because `aguara clean`
-	// only knows how to remove the Python compromise artifacts.
-	// Maven / NuGet / Go / Rust / PHP / Ruby / npm get
-	// generic "update / remove / rebuild lockfile / rotate
-	// credentials" guidance; the Python path keeps the
-	// `aguara clean` recommendation since it owns the
-	// persistence-artifact cleanup.
-	fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
-	switch ecosystem {
-	case ecoPython:
-		fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
-		fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
-		fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
-	default:
-		// Single packagecheck ecosystem, or single npm, or
-		// multi-ecosystem: same guidance shape (the
-		// per-ecosystem package-manager commands live in each
-		// Finding.Remediation, not in this summary).
-		fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
-		fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
-		fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
-	}
-
-	// Build summary line
 	critCount := 0
 	warnCount := 0
 	for _, f := range result.Findings {
@@ -1172,6 +1148,49 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 			warnCount++
 		}
 	}
+
+	if critCount > 0 {
+		// A compromised package or artifact was found. Action
+		// guidance is ecosystem-specific because `aguara clean`
+		// only knows how to remove the Python compromise artifacts.
+		// Maven / NuGet / Go / Rust / PHP / Ruby / npm get
+		// generic "update / remove / rebuild lockfile / rotate
+		// credentials" guidance; the Python path keeps the
+		// `aguara clean` recommendation since it owns the
+		// persistence-artifact cleanup.
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
+		switch ecosystem {
+		case ecoPython:
+			fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
+			fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
+			fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+		default:
+			// Single packagecheck ecosystem, or single npm, or
+			// multi-ecosystem: same guidance shape (the
+			// per-ecosystem package-manager commands live in each
+			// Finding.Remediation, not in this summary).
+			fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
+			fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
+			fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
+		}
+	} else if warnCount > 0 {
+		// Warnings only: something needs a look (an include that was
+		// not read, an artifact to inspect), but no critical finding
+		// calls for the compromise response and credential rotation.
+		// Each warning's own remediation says what to do.
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("REVIEW", width))
+		fmt.Fprintln(w, "  Review the files listed above:")
+		seen := map[string]bool{}
+		for _, f := range result.Findings {
+			if f.Severity != incident.SevWarning || f.Remediation == "" || seen[f.Remediation] {
+				continue
+			}
+			seen[f.Remediation] = true
+			fmt.Fprintf(w, "  - %s\n", output.TerminalText(f.Remediation))
+		}
+	}
+
+	// Build summary line
 	var parts []string
 	if critCount > 0 {
 		parts = append(parts, st.RedBold(fmt.Sprintf("%d critical", critCount)))
