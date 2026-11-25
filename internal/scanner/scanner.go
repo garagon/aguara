@@ -63,6 +63,7 @@ type Scanner struct {
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
 	projectPolicyEnabled bool
+	outputFiles          []string
 	redact               bool
 }
 
@@ -107,6 +108,14 @@ func (s *Scanner) SetIgnorePatterns(patterns []string) {
 // inspect untrusted repositories or content should disable it.
 func (s *Scanner) SetProjectPolicyEnabled(enabled bool) {
 	s.projectPolicyEnabled = enabled
+}
+
+// SetOutputFiles names files this scan writes, such as its report or
+// baseline. A directory walk or path list never scans them, so a report an
+// earlier run of the same command left in the target cannot change the
+// result. Files named directly to Scan are scanned as before.
+func (s *Scanner) SetOutputFiles(paths []string) {
+	s.outputFiles = append([]string(nil), paths...)
 }
 
 // SetMaxFileSize sets the maximum file size for scanning.
@@ -261,6 +270,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		IgnorePatterns:    s.ignorePatterns,
 		MaxFileSize:       s.maxFileSize,
 		IgnoreProjectFile: !s.projectPolicyEnabled,
+		OutputFiles:       s.outputFiles,
 	}
 	targets, err := discovery.Discover(resolvedRoot)
 	if err != nil {
@@ -281,6 +291,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
 	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+	result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
 	return result, nil
 }
 
@@ -297,6 +308,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*
 		IgnorePatterns:    s.ignorePatterns,
 		MaxFileSize:       s.maxFileSize,
 		IgnoreProjectFile: !s.projectPolicyEnabled,
+		OutputFiles:       s.outputFiles,
 	}
 	targets, err := discovery.DiscoverPaths(root, paths)
 	if err != nil {
@@ -314,6 +326,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
 	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+	result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
 	return result, discovery.SkippedLinks, nil
 }
 

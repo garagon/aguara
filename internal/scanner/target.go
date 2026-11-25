@@ -134,8 +134,19 @@ type TargetDiscovery struct {
 	// did not follow.
 	SkippedLinks []string
 
-	rules     []*ignoreRule // compiled caller patterns, then file patterns
-	bareNames map[string][]*ignoreRule
+	// OutputFiles are files the current invocation writes, such as its
+	// report or baseline. Discovery never returns them, so a report left
+	// in the scanned directory by an earlier run of the same command is
+	// not scanned and cannot change the result. Other files, including
+	// other reports, are scanned as usual. SkippedOutputs lists the ones
+	// that were present and skipped.
+	OutputFiles    []string
+	SkippedOutputs []string
+
+	rules       []*ignoreRule // compiled caller patterns, then file patterns
+	bareNames   map[string][]*ignoreRule
+	outputs     map[string]bool // resolved OutputFiles
+	outputBases map[string]bool // their base names, a cheap first check
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
@@ -155,8 +166,18 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 func (td *TargetDiscovery) prepare(root string) error {
 	td.ExcludedByCallerPatterns, td.ExcludedByIgnoreFile = 0, 0
 	td.rules, td.bareNames = nil, nil
+	td.SkippedOutputs, td.outputs, td.outputBases = nil, nil, nil
 	for _, p := range td.IgnorePatterns {
 		td.addRule(p, "", 0)
+	}
+	for _, p := range td.OutputFiles {
+		if resolved, ok := resolveOutputFile(p); ok {
+			if td.outputs == nil {
+				td.outputs, td.outputBases = make(map[string]bool), make(map[string]bool)
+			}
+			td.outputs[resolved] = true
+			td.outputBases[filepath.Base(resolved)] = true
+		}
 	}
 	if !td.IgnoreProjectFile {
 		if err := td.loadIgnoreFile(root); err != nil {
@@ -224,6 +245,9 @@ func (td *TargetDiscovery) walkFunc(root string, targets *[]*Target) filepath.Wa
 		}
 		// Explicit exclusions take precedence over the file-size boundary.
 		if isBinaryExt(path) {
+			return nil
+		}
+		if td.isOutput(path) {
 			return nil
 		}
 		if td.isIgnored(relPath) {
@@ -303,7 +327,7 @@ func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target
 		if !info.Mode().IsRegular() {
 			return nil, IncompleteScanError("inspect target (not a regular file or directory)", p, "", errNotRegularFile)
 		}
-		if seen[rel] || isBinaryExt(full) || td.isIgnored(rel) {
+		if seen[rel] || isBinaryExt(full) || td.isOutput(full) || td.isIgnored(rel) {
 			continue
 		}
 		if info.Size() > limit {
@@ -428,6 +452,35 @@ func (td *TargetDiscovery) excludedDir(relPath string) bool {
 		}
 	}
 	return false
+}
+
+// resolveOutputFile returns the absolute path of an output file with its
+// directory resolved, the form discovery compares against. The file need
+// not exist yet; its directory must.
+func resolveOutputFile(p string) (string, bool) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", false
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", false
+	}
+	return filepath.Join(dir, filepath.Base(abs)), true
+}
+
+// isOutput reports whether path is one of the files this invocation
+// writes, and records it.
+func (td *TargetDiscovery) isOutput(path string) bool {
+	if len(td.outputs) == 0 || !td.outputBases[filepath.Base(path)] {
+		return false
+	}
+	resolved, ok := resolveOutputFile(path)
+	if !ok || !td.outputs[resolved] {
+		return false
+	}
+	td.SkippedOutputs = append(td.SkippedOutputs, path)
+	return true
 }
 
 // noteDir records a scanned directory whose name a bare-name pattern

@@ -489,6 +489,7 @@ func buildScanner(res *rulecatalog.Resolution, cfg config.Config, minSev scanner
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
+	s.SetOutputFiles(outputFilesOfThisRun())
 
 	if maxSize, err := parseMaxFileSize(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -558,6 +559,7 @@ func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*s
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
+	noteSkippedOutputs(result)
 	return result, nil
 }
 

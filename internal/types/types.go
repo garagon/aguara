@@ -368,6 +368,9 @@ type TargetPolicyUse struct {
 	// including patterns that matched nothing, so a caller can point out
 	// an exclusion that did not take effect.
 	IgnorePatterns []IgnorePatternUse
+	// SkippedOutputFiles lists files the scan itself writes (its report
+	// or baseline) that a walk found in the target and did not scan.
+	SkippedOutputFiles []string
 }
 
 // IgnorePatternUse describes one ignore pattern evaluated by a directory

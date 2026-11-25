@@ -153,9 +153,30 @@ func (in scanInput) execute(ctx context.Context, s *scanner.Scanner, cfg config.
 		for _, link := range links {
 			fmt.Fprintf(os.Stderr, "notice: %s is a symbolic link and was not scanned (directory walks skip links too)\n", output.TerminalText(link))
 		}
+		noteSkippedOutputs(result)
 		return result, nil
 	}
 	return executeScan(ctx, s, in.args[0])
+}
+
+// outputFilesOfThisRun lists the files this invocation writes: the -o
+// report and a baseline being written. Discovery does not scan them.
+func outputFilesOfThisRun() []string {
+	var files []string
+	for _, p := range []string{flagOutput, flagWriteBaseline, flagAuditWriteBaseline} {
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files
+}
+
+// noteSkippedOutputs says when a walk found and skipped a file this run
+// writes, typically the report of an earlier run left in the target.
+func noteSkippedOutputs(result *scanner.ScanResult) {
+	for _, p := range result.TargetPolicy.SkippedOutputFiles {
+		fmt.Fprintf(os.Stderr, "notice: %s is the report this run writes and was not scanned\n", output.TerminalText(p))
+	}
 }
 
 // scanStdin reads standard input up to the file-size limit and scans it as
