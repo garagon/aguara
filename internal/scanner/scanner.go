@@ -472,14 +472,22 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	}
 
 	// Dedup and correlation iterate maps, so the slice arrives in a
-	// different order on every run. The comparator below is a total order
-	// on post-dedup findings, which makes the result independent of that
+	// different order on every run. The comparator is a total order on
+	// post-dedup findings, which makes the result independent of that
 	// order (and of worker scheduling).
+	SortFindings(findings)
+
+	return findings
+}
+
+// SortFindings orders findings the way every scan result is ordered: by
+// severity (highest first), then file, line, column, rule ID and analyzer.
+// Callers that merge several results (such as scan --auto) use it to keep
+// the same order.
+func SortFindings(findings []Finding) {
 	sort.SliceStable(findings, func(i, j int) bool {
 		return findingLess(findings[i], findings[j])
 	})
-
-	return findings
 }
 
 // findingLess orders findings by severity (highest first), then file, line,

@@ -203,7 +203,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	}
 
 	if discovered.TotalClients() == 0 {
-		fmt.Println("No MCP configurations found — nothing to scan.")
+		fmt.Fprintln(os.Stderr, "No MCP configurations found; nothing to scan.")
 		return nil
 	}
 
@@ -267,6 +267,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
 	}
 	aggregate.Duration = time.Since(start)
+	scanner.SortFindings(aggregate.Findings)
 	stopSpinner(sp)
 
 	if store != nil {
