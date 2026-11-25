@@ -51,10 +51,14 @@ func TestParsePackageJSONManifest(t *testing.T) {
 	}`))
 	require.NoError(t, err)
 	require.True(t, info.workspace)
-	require.Equal(t, 11, info.deps, "registry dependencies, peers excluded")
-	require.Equal(t, []string{"@scope/real 5.0.0", "exact-eq 2.0.0", "exact-v 3.0.0-rc.1", "jest 29.7.0", "left-pad 1.3.0", "with-build 1.0.0"}, pinSummary(info.pins))
+	require.Equal(t, 12, info.deps, "registry dependencies, peers included")
+	require.Equal(t, []string{"@scope/real 5.0.0", "exact-eq 2.0.0", "exact-v 3.0.0-rc.1", "jest 29.7.0", "left-pad 1.3.0", "react 18.2.0", "with-build 1.0.0"}, pinSummary(info.pins))
 
 	info, err = parsePackageJSONManifest([]byte(`{"name":"x","version":"1.0.0","peerDependencies":{"react":"18.2.0"},"dependencies":{}}`))
+	require.NoError(t, err)
+	require.True(t, info.declares(), "npm 7+ and pnpm install peer dependencies")
+
+	info, err = parsePackageJSONManifest([]byte(`{"name":"x","version":"1.0.0","dependencies":{},"scripts":{"t":"x"}}`))
 	require.NoError(t, err)
 	require.False(t, info.declares(), "no installed dependency")
 
@@ -346,6 +350,70 @@ func TestParseRequirementsInManifest(t *testing.T) {
 	require.True(t, isRequirementsInName("base.in", filepath.Join("x", "requirements")))
 	require.False(t, isRequirementsInName("MANIFEST.in", "x"))
 	require.False(t, isRequirementsInName(".in", "requirements"))
+}
+
+// Spellings npm and the other tools read as declaring dependencies, which
+// a narrower reading would miss.
+func TestManifestReadersCoverLooserForms(t *testing.T) {
+	// npm loose mode: leading zeros and a pre-release without a hyphen
+	// are one exact version; peers are installed by npm 7+ and pnpm.
+	info, err := parsePackageJSONManifest([]byte(`{"peerDependencies":{"event-stream":"03.3.6","x":"1.2.3beta","r":"^18"}}`))
+	require.NoError(t, err)
+	require.Equal(t, 3, info.deps)
+	require.Equal(t, []string{"event-stream 3.3.6", "x 1.2.3-beta"}, pinSummary(info.pins))
+
+	// Inline tables are read like the tables they stand for.
+	info, err = parsePyprojectManifest([]byte(`dependency-groups = { dev = ["pytest==8.2.0"] }
+[project]
+name = "x"
+optional-dependencies = { docs = ["sphinx==7.2.6"] }
+[tool.poetry]
+dependencies = { python = "^3.11", requests = "2.32.3", local = { path = "../l" } }
+[tool.poetry.group.dev]
+dependencies = { mypy = { version = "1.10.0" } }
+[tool.hatch.envs.test]
+dependencies = ["coverage==7.5.1"]
+extra-dependencies = ["hypothesis"]
+`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"coverage 7.5.1", "mypy 1.10.0", "pytest 8.2.0", "requests 2.32.3", "sphinx 7.2.6"}, pinSummary(info.pins))
+	require.Equal(t, 6, info.deps)
+	require.Equal(t, []string{"requests"}, info.defaultNames)
+
+	// Gemfile: eval_gemfile and computed gem names declare dependencies
+	// the text cannot name; gems in git and path blocks are not registry
+	// pins.
+	for _, doc := range []string{"eval_gemfile \"Gemfile.common\"\n", "%w[rails rack].each { |name| gem name }\n", "gem(dep)\n"} {
+		info, err := parseGemfileManifest([]byte(doc))
+		require.NoError(t, err, doc)
+		require.True(t, info.declares(), doc)
+	}
+	info, err = parseGemfileManifest([]byte(`source "https://rubygems.org"
+git "https://example.com/mono.git" do
+  gem "inner", "1.0.0"
+end
+path "vendor/engines" do
+  gem "engine", "2.0.0"
+end
+group :test do
+  if ENV["CI"]
+    gem "rspec", "3.13.0"
+  end
+end
+gem "rails", "7.1.3"
+`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"rails 7.1.3", "rspec 3.13.0"}, pinSummary(info.pins))
+	require.Equal(t, 2, info.deps)
+
+	// setup.py unpacking keyword arguments into setup() can pass
+	// dependencies under names the text never spells.
+	info, err = parseSetupPyManifest([]byte("import json\nfrom setuptools import setup\nsetup(**json.load(open('setup.json')))\n"))
+	require.NoError(t, err)
+	require.True(t, info.declares())
+	info, err = parseSetupPyManifest([]byte("from setuptools import setup\nsetup(name='x', version='1')\n"))
+	require.NoError(t, err)
+	require.False(t, info.declares())
 }
 
 // manifestTree writes files and returns the coverage entries the rule

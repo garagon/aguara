@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -93,10 +94,8 @@ func sortedRawKeys(m map[string]json.RawMessage) []string {
 // --- npm: package.json -----------------------------------------------
 
 // npmDependencySections are the package.json fields an install resolves.
-// peerDependencies are left out: Yarn does not install them, so a
-// lockfile need not record them, and a library declares them for its
-// consumers.
-var npmDependencySections = []string{"dependencies", "devDependencies", "optionalDependencies"}
+// npm 7 and later and pnpm install peerDependencies too.
+var npmDependencySections = []string{"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"}
 
 // npmNonRegistryPrefixes mark specs that do not resolve from the npm
 // registry: local paths, links, workspace protocols, Git hosts and URLs.
@@ -105,11 +104,35 @@ var npmNonRegistryPrefixes = []string{
 	"git:", "git+", "github:", "gist:", "gitlab:", "bitbucket:", "http:", "https:", "ssh:",
 }
 
-// npmExactVersion is a version npm's semver accepts as one exact
-// version in loose mode: an optional "v" or "=" prefix, a full
-// MAJOR.MINOR.PATCH with an optional pre-release, and build metadata,
-// which the registry drops.
-var npmExactVersion = regexp.MustCompile(`^[=v]*\s*((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+// npmExactVersion is a version npm's semver accepts as one exact version
+// in loose mode (node-semver LOOSEPLAIN, which npm-package-arg uses): an
+// optional "v", "=" or whitespace prefix, a full MAJOR.MINOR.PATCH whose
+// numbers may carry leading zeros, an optional pre-release whose hyphen
+// may be omitted, and build metadata, which the registry drops.
+var npmExactVersion = regexp.MustCompile(`^[=v\s]*([0-9]+)\.([0-9]+)\.([0-9]+)(?:-?([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+
+// npmExactPin returns the version an exact npm spec selects, spelled as
+// node-semver formats it ("03.3.6" is 3.3.6, "1.2.3beta" is 1.2.3-beta),
+// or ok=false for a range, tag or invalid spec.
+func npmExactPin(spec string) (string, bool) {
+	m := npmExactVersion.FindStringSubmatch(strings.TrimSpace(spec))
+	if m == nil {
+		return "", false
+	}
+	parts := make([]string, 3)
+	for i, p := range m[1:4] {
+		n, err := strconv.ParseUint(p, 10, 53)
+		if err != nil {
+			return "", false
+		}
+		parts[i] = strconv.FormatUint(n, 10)
+	}
+	v := strings.Join(parts, ".")
+	if m[4] != "" {
+		v += "-" + m[4]
+	}
+	return v, true
+}
 
 // npmRegistryDependency resolves a package.json entry to the registry
 // package it installs and its spec, following an `npm:` alias. ok is
@@ -166,8 +189,8 @@ func parsePackageJSONManifest(data []byte) (manifestInfo, error) {
 			if err := info.addDep("", ""); err != nil {
 				return info, err
 			}
-			if m := npmExactVersion.FindStringSubmatch(strings.TrimSpace(rangeSpec)); m != nil {
-				info.addPin(PackageRef{Ecosystem: intel.EcosystemNPM, Name: pkg, Version: m[1], Group: groupForNPMSection(section)})
+			if v, ok := npmExactPin(rangeSpec); ok {
+				info.addPin(PackageRef{Ecosystem: intel.EcosystemNPM, Name: pkg, Version: v, Group: groupForNPMSection(section)})
 			}
 		}
 	}
@@ -180,6 +203,8 @@ func groupForNPMSection(section string) string {
 		return "dev"
 	case "optionalDependencies":
 		return "optional"
+	case "peerDependencies":
+		return "peer"
 	default:
 		return ""
 	}
@@ -370,15 +395,40 @@ func sortedNodeKeys(m map[string]*unstable.Node) []string {
 // walkTOMLManifest streams a TOML manifest and calls visit with the full
 // key path of every key/value pair (table header plus key) and with each
 // table header (value nil).
+//
+// An inline table is visited as its members, so `dependencies = {a = "1"}`
+// under [tool.poetry] reads like a [tool.poetry.dependencies] table and
+// `optional-dependencies = {docs = [...]}` under [project] like
+// [project.optional-dependencies]. Nesting stays within the key-part
+// bound of the parser.
 func walkTOMLManifest(data []byte, label string, visit func(full []string, value *unstable.Node, line int, header bool) error) error {
 	var table []string
+	var expand func(full []string, value *unstable.Node, line int) error
+	expand = func(full []string, value *unstable.Node, line int) error {
+		if value == nil || value.Kind != unstable.InlineTable {
+			return visit(full, value, line, false)
+		}
+		if len(full) >= maxTOMLKeyParts {
+			return fmt.Errorf("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
+		}
+		members, ok := tomlInlineTable(value)
+		if !ok {
+			return nil
+		}
+		for _, k := range sortedNodeKeys(members) {
+			if err := expand(append(append([]string(nil), full...), k), members[k], line); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	return walkTOML(data, label, func(e tomlExpr) error {
 		if e.kind == unstable.Table || e.kind == unstable.ArrayTable {
 			table = append([]string(nil), e.keys...)
 			return visit(table, nil, e.line, true)
 		}
 		full := append(append([]string(nil), table...), e.keys...)
-		return visit(full, e.value, e.line, false)
+		return expand(full, e.value, e.line)
 	})
 }
 
@@ -448,6 +498,10 @@ func parsePyprojectManifest(data []byte) (manifestInfo, error) {
 			return forEachTOMLString(value, lines, line, func(s string, l int) error { return info.addPEP508(s, l, full[3]) })
 		case len(full) == 3 && hasPrefixKeys(full, "tool", "uv", "dev-dependencies"):
 			return forEachTOMLString(value, lines, line, func(s string, l int) error { return info.addPEP508(s, l, "dev") })
+		case len(full) == 5 && hasPrefixKeys(full, "tool", "hatch", "envs") && (full[4] == "dependencies" || full[4] == "extra-dependencies"):
+			// Hatch environments install these into their own
+			// environment, not on a plain install of the project.
+			return forEachTOMLString(value, lines, line, func(s string, l int) error { return info.addPEP508(s, l, "hatch-"+full[3]) })
 		}
 		// Poetry: [tool.poetry.dependencies], [tool.poetry.dev-dependencies]
 		// and [tool.poetry.group.<name>.dependencies], with each entry
@@ -661,22 +715,39 @@ func forEachManifestLine(data []byte, label string, fn func(line int, text strin
 // installed dependencies.
 var setupPyDependencyKeyword = regexp.MustCompile(`\b(install_requires|extras_require)\b`)
 
+var (
+	// setupPyCall is a call of setup(), setuptools.setup() or similar.
+	setupPyCall = regexp.MustCompile(`\bsetup\s*\(`)
+	// setupPyKwargsUnpack is keyword unpacking (`**config`, `**dict(...)`,
+	// `**json.load(f)`), which can pass install_requires under a name the
+	// text never spells.
+	setupPyKwargsUnpack = regexp.MustCompile(`\*\*\s*[A-Za-z_({]`)
+)
+
 // parseSetupPyManifest never runs setup.py. setup() receives its
 // dependencies through the install_requires and extras_require keywords,
-// so a file whose code never names them declares none through setup.py
-// (a shim whose dependencies live in setup.cfg or pyproject.toml is
-// covered by those files). A file that names one is treated as declaring
-// dependencies whose versions are unknown, whatever the expression
-// computes; its pins are not read.
+// so a file whose code never names them, and never unpacks keyword
+// arguments into a setup() call, declares none through setup.py (a shim
+// whose dependencies live in setup.cfg or pyproject.toml is covered by
+// those files). A file that names a keyword, or calls setup() and
+// unpacks keyword arguments (which may come from a computed dict or a
+// JSON file), is treated as declaring dependencies whose names and
+// versions are unknown; its pins are not read.
 func parseSetupPyManifest(data []byte) (manifestInfo, error) {
 	var info manifestInfo
+	calls, unpacks := false, false
 	err := forEachManifestLine(data, "setup.py", func(_ int, text string) error {
 		code, _, _ := strings.Cut(text, "#")
 		if setupPyDependencyKeyword.MatchString(code) {
 			info.unknown = true
 		}
+		calls = calls || setupPyCall.MatchString(code)
+		unpacks = unpacks || setupPyKwargsUnpack.MatchString(code)
 		return nil
 	})
+	if calls && unpacks {
+		info.unknown = true
+	}
 	return info, err
 }
 
@@ -753,31 +824,72 @@ var (
 	// gemfileOtherSource is a Git or path option: such a gem is not
 	// resolved from a gem server.
 	gemfileOtherSource = regexp.MustCompile(`\b(?:git|github|gitlab|bitbucket|path)\s*:|:(?:git|github|gitlab|bitbucket|path)\s*=>`)
+	// gemfileSourceBlock opens a block whose gems come from a Git
+	// repository or a local path: `git "url" do`, `path "dir" do`,
+	// `github "org/repo" do`.
+	gemfileSourceBlock = regexp.MustCompile(`^(?:git|github|gitlab|bitbucket|path)\b.*\bdo\s*(?:\|[^|]*\|)?$`)
+	// gemfileBlockOpen opens any other Ruby block or statement that a
+	// later `end` closes.
+	gemfileBlockOpen = regexp.MustCompile(`(?:\bdo\s*(?:\|[^|]*\|)?$)|^(?:if|unless|case|begin|while|until|for|def|class|module)\b`)
+	// gemfileDynamic is a dependency the text cannot name: eval_gemfile,
+	// or a gem call whose name is not a string literal.
+	gemfileDynamic = regexp.MustCompile(`^eval_gemfile\b|(?:^|[\s;{(])gem\s*(?:\(\s*|\s+)[^\s"')]`)
 )
 
 // parseGemfileManifest checks a Gemfile (or gems.rb) textually: Bundler
 // evaluates it as Ruby, which Aguara never does. A `gem` or `gemspec`
-// line declares dependencies. A `gem "name", "version"` line with one
-// exact version and no Git or path option is a pin.
+// line declares dependencies; `eval_gemfile` or a gem call with a
+// computed name declares dependencies the text cannot name. A
+// `gem "name", "version"` line with one exact version and no Git or path
+// option is a pin; gems inside a `git`, `github` or `path` block come
+// from that source and are neither registry dependencies nor pins.
 func parseGemfileManifest(data []byte) (manifestInfo, error) {
 	var info manifestInfo
+	// blocks is the stack of open blocks; true marks a Git or path block.
+	var blocks []bool
+	inSourceBlock := func() bool {
+		for _, b := range blocks {
+			if b {
+				return true
+			}
+		}
+		return false
+	}
 	err := forEachManifestLine(data, "Gemfile", func(line int, text string) error {
 		trimmed := strings.TrimSpace(text)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || !gemfileDependency.MatchString(trimmed) {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			return nil
 		}
-		if strings.HasPrefix(trimmed, "gemspec") {
+		code := strings.TrimSpace(strings.SplitN(trimmed, " #", 2)[0])
+		switch {
+		case code == "end" || strings.HasPrefix(code, "end ") || strings.HasPrefix(code, "end."):
+			if len(blocks) > 0 {
+				blocks = blocks[:len(blocks)-1]
+			}
+			return nil
+		case gemfileSourceBlock.MatchString(code):
+			blocks = append(blocks, true)
+			return nil
+		case gemfileBlockOpen.MatchString(code) && !gemfileDependency.MatchString(code):
+			blocks = append(blocks, false)
+		}
+		if !gemfileDependency.MatchString(code) {
+			if gemfileDynamic.MatchString(code) && !inSourceBlock() {
+				info.unknown = true
+			}
+			return nil
+		}
+		if strings.HasPrefix(code, "gemspec") {
 			info.unknown = true
 			return nil
 		}
-		if gemfileOtherSource.MatchString(trimmed) {
+		if inSourceBlock() || gemfileOtherSource.MatchString(trimmed) {
 			return nil
 		}
 		if err := info.addDep("", ""); err != nil {
 			return err
 		}
-		code, _, _ := strings.Cut(trimmed, " #")
-		m := gemfileExactPin.FindStringSubmatch(strings.TrimSpace(code))
+		m := gemfileExactPin.FindStringSubmatch(code)
 		if m == nil || gemfileOtherVersion.MatchString(strings.TrimSpace(m[5])) {
 			return nil
 		}
