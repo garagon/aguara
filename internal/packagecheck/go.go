@@ -3,6 +3,7 @@ package packagecheck
 import (
 	"bufio"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,11 +30,22 @@ func ParseGo(target Target) ([]PackageRef, error) {
 }
 
 // parseGoSum reads `module version hash` and `module version/go.mod
-// hash` lines. The runtime matcher only cares about (module,
-// version), so we dedupe across both entry kinds. When only the
-// `/go.mod` line is present (a transitive dependency Go resolved
-// the module proxy hash for without downloading the module zip),
-// we strip the `/go.mod` suffix and treat it as a real version.
+// hash` lines and returns one ref per (module, version).
+//
+// The two kinds of line record different things (Go Modules Reference,
+// "go.sum files"): the zip hash is written when the module's content was
+// downloaded to build or load packages; a `/go.mod` hash alone is written
+// when only the module's go.mod was read during version selection, as for
+// a version that minimal version selection considered and then replaced
+// by a higher one. Such a version is in the module graph but its code was
+// never fetched or built, so its ref is GraphOnly: the runner matches it
+// only against advisories that cover every version of the module, never
+// against an exact version or a range.
+//
+// When the directory also has a go.mod, its `require` lines are the
+// versions the build selects: a required version is never graph-only,
+// and a required version missing from go.sum is added, so a go.mod
+// requiring a compromised release is reported whatever go.sum holds.
 //
 // Lines we do NOT recognise are skipped silently; go.sum is a
 // stable format but stray blank lines / future suffixes should not
@@ -46,7 +58,8 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 	defer func() { _ = f.Close() }()
 
 	type key struct{ name, version string }
-	seen := make(map[key]bool)
+	index := make(map[key]int)
+	hasZip := make(map[key]bool)
 	var refs []PackageRef
 
 	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "go.sum"))
@@ -62,19 +75,18 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 			continue
 		}
 		name := fields[0]
-		version := fields[1]
-		// The `/go.mod` suffix marks the proxy-side resolved
-		// module-spec hash; the underlying version is the same
-		// as the zip entry's, so strip it for dedupe.
-		version = strings.TrimSuffix(version, "/go.mod")
+		version, modOnly := strings.CutSuffix(fields[1], "/go.mod")
 		if version == "" {
 			continue
 		}
 		k := key{name, version}
-		if seen[k] {
+		if !modOnly {
+			hasZip[k] = true
+		}
+		if _, ok := index[k]; ok {
 			continue
 		}
-		seen[k] = true
+		index[k] = len(refs)
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemGo,
 			Name:      name,
@@ -85,6 +97,27 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read go.sum: %w", err)
+	}
+
+	required := make(map[key]bool)
+	modPath := filepath.Join(filepath.Dir(target.Path), "go.mod")
+	if manifestCandidate(modPath) {
+		mod, err := parseGoMod(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range mod {
+			k := key{r.Name, r.Version}
+			required[k] = true
+			if _, ok := index[k]; !ok {
+				index[k] = len(refs)
+				refs = append(refs, r)
+			}
+		}
+	}
+	for i := range refs {
+		k := key{refs[i].Name, refs[i].Version}
+		refs[i].GraphOnly = refs[i].Source == "go.sum" && !hasZip[k] && !required[k]
 	}
 	return refs, nil
 }

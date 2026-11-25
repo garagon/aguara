@@ -58,6 +58,12 @@ type PackageRef struct {
 	// requirement, which pip compares as a string, not as a PEP 440
 	// version (see intel.MatchInput.ArbitraryEquality).
 	ArbitraryEquality bool
+	// GraphOnly marks a version a lockfile records only as part of
+	// dependency resolution, not as installed or built: a go.sum entry
+	// with a `/go.mod` hash and no zip hash, that go.mod does not
+	// require. It is matched only against advisories that cover every
+	// version of the package.
+	GraphOnly bool
 }
 
 // Target is one discovery anchor under the scanned root. Discovery

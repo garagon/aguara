@@ -135,10 +135,19 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// the matcher answers only from all-versions entries: every
 			// release of such a package is malicious, so no version has
 			// to be guessed.
+			//
+			// A graph-only ref (a go.sum version that was only read
+			// for version selection) is looked up the same way: its
+			// code was never fetched, so only an advisory covering
+			// every version of the module applies to it.
+			version := ref.Version
+			if ref.GraphOnly {
+				version = ""
+			}
 			matches := r.Matcher.MatchPackage(intel.MatchInput{
 				Ecosystem:         ref.Ecosystem,
 				Name:              ref.Name,
-				Version:           ref.Version,
+				Version:           version,
 				Path:              ref.Path,
 				ArbitraryEquality: ref.ArbitraryEquality,
 			})

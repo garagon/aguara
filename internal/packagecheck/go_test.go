@@ -177,6 +177,60 @@ func TestRunner_GoSumMatchesAdvisoryWithoutLeadingV(t *testing.T) {
 	}
 }
 
+// A go.sum version with only a `/go.mod` hash was read during version
+// selection and never downloaded or built; it matches only advisories
+// covering every version. A zip hash, or a go.mod require, makes it a
+// version the build uses.
+func TestRunner_GoSumGraphOnlyVersions(t *testing.T) {
+	const mod = "github.com/example/scanner"
+	matcher := intel.NewMatcher(intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID: "GHSA-GO-EXACT", Ecosystem: intel.EcosystemGo, Name: mod,
+			Kind: intel.KindMalicious, Versions: []string{"0.69.4"},
+		}},
+		AllVersions: []intel.AllVersionsEntry{{ID: "MAL-GO-ALL", Ecosystem: intel.EcosystemGo, Name: "github.com/evil/everything"}},
+	})
+	graphOnly := mod + " v0.69.4/go.mod h1:AAAA=\n" + mod + " v0.69.5 h1:BBBB=\n" + mod + " v0.69.5/go.mod h1:CCCC=\n"
+	for _, tc := range []struct {
+		name, sum, gomod string
+		want             []string
+	}{
+		{"graph-only compromised version, clean selected", graphOnly,
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.5\n", nil},
+		{"graph-only without a go.mod", graphOnly, "", nil},
+		{"zip hash for the compromised version", mod + " v0.69.4 h1:AAAA=\n" + mod + " v0.69.4/go.mod h1:BBBB=\n", "", []string{"v0.69.4"}},
+		{"go.mod requires the compromised version", mod + " v0.69.4/go.mod h1:AAAA=\n",
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.4 // indirect\n", []string{"v0.69.4"}},
+		{"go.mod requires a version go.sum lacks", mod + " v0.69.5 h1:BBBB=\n",
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.4\n", []string{"v0.69.4"}},
+		{"graph-only entry of a module malicious in every version", "github.com/evil/everything v1.0.0/go.mod h1:AAAA=\n", "", []string{"v1.0.0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "go.sum"), tc.sum)
+			if tc.gomod != "" {
+				writeFile(t, filepath.Join(dir, "go.mod"), tc.gomod)
+			}
+			targets, err := Discover(dir, []string{intel.EcosystemGo})
+			if err != nil || len(targets) != 1 || targets[0].Source != "go.sum" {
+				t.Fatalf("targets = %+v, err %v", targets, err)
+			}
+			res, err := (&Runner{Matcher: matcher}).Run(targets)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var got []string
+			for _, h := range res.Hits {
+				got = append(got, h.Ref.Version)
+			}
+			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+				t.Errorf("hits = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseGo_RejectsUnknownSource(t *testing.T) {
 	_, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: "/dev/null", Source: "Cargo.lock"})
 	if err == nil {
