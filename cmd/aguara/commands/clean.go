@@ -29,6 +29,8 @@ and disables persistence backdoors. Use --dry-run to preview without changes.`,
 }
 
 func init() {
+	addFormatFlag(cleanCmd, "terminal", "json")
+	addOutputFlag(cleanCmd)
 	cleanCmd.Flags().BoolVar(&flagCleanDryRun, "dry-run", false, "Show what would be removed without making changes")
 	cleanCmd.Flags().BoolVar(&flagCleanPurgeCaches, "purge-caches", false, "Also purge pip/uv package caches")
 	cleanCmd.Flags().BoolVar(&flagCleanYes, "yes", false, "Skip confirmation prompt")
@@ -46,33 +48,63 @@ func runClean(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(checkResult.Findings) == 0 {
-		fmt.Println("\n  \033[32m\u2714 No compromised packages or artifacts found.\033[0m")
-		return nil
-	}
-
-	// Show what was found
-	fmt.Printf("\nFound %d issues to clean:\n\n", len(checkResult.Findings))
-	for i, f := range checkResult.Findings {
-		fmt.Printf("  [%d] %s - %s\n", i+1, f.Severity, f.Title)
-		if f.Path != "" {
-			fmt.Printf("      %s\n", f.Path)
+		if flagFormat == "json" {
+			credentials := checkResult.Credentials
+			if credentials == nil {
+				credentials = []incident.CredentialFile{}
+			}
+			return writeCleanJSON(&incident.CleanResult{
+				Actions:     []incident.CleanAction{},
+				Credentials: credentials,
+				DryRun:      flagCleanDryRun,
+			})
 		}
+		return writeReport(func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "\n  %s\n", output.NewStyle(flagNoColor).OK("No compromised packages or artifacts found."))
+			return err
+		})
 	}
-	fmt.Println()
 
+	// A dry run's report is the list of what would be cleaned.
 	if flagCleanDryRun {
-		fmt.Println("No changes made (dry run).")
-		return nil
+		if flagFormat == "json" {
+			planned, err := incident.Clean(incident.CleanOptions{
+				DryRun:      true,
+				PurgeCaches: flagCleanPurgeCaches,
+				CheckOpts: incident.CheckOptions{
+					Path:          flagCheckPath,
+					IncludeCaches: flagCleanPurgeCaches,
+				},
+			})
+			if err != nil {
+				return err
+			}
+			return writeCleanJSON(planned)
+		}
+		return writeReport(func(w io.Writer) error {
+			printCleanPreview(w, checkResult.Findings)
+			_, err := fmt.Fprintln(w, "No changes made (dry run).")
+			return err
+		})
 	}
+
+	// The preview and the confirmation prompt are interaction, not the
+	// report: keep them off stdout when stdout carries JSON or the report
+	// goes to a file.
+	var interactive io.Writer = os.Stdout
+	if flagFormat == "json" || flagOutput != "" {
+		interactive = os.Stderr
+	}
+	printCleanPreview(interactive, checkResult.Findings)
 
 	// Confirm unless --yes
 	if !flagCleanYes {
-		fmt.Print("Proceed with cleanup? [Y/n] ")
+		fmt.Fprint(interactive, "Proceed with cleanup? [Y/n] ")
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
 		if answer == "n" || answer == "no" {
-			fmt.Println("Aborted.")
+			fmt.Fprintln(interactive, "Aborted.")
 			return nil
 		}
 	}
@@ -96,6 +128,18 @@ func runClean(cmd *cobra.Command, args []string) error {
 	return writeCleanTerminal(result)
 }
 
+// printCleanPreview lists the findings clean is about to act on.
+func printCleanPreview(w io.Writer, findings []incident.Finding) {
+	fmt.Fprintf(w, "\nFound %d issues to clean:\n\n", len(findings))
+	for i, f := range findings {
+		fmt.Fprintf(w, "  [%d] %s - %s\n", i+1, output.TerminalText(f.Severity), output.TerminalText(f.Title))
+		if f.Path != "" {
+			fmt.Fprintf(w, "      %s\n", output.TerminalText(f.Path))
+		}
+	}
+	fmt.Fprintln(w)
+}
+
 func writeCleanJSON(result *incident.CleanResult) error {
 	return writeReport(func(w io.Writer) error {
 		enc := json.NewEncoder(w)
@@ -104,7 +148,16 @@ func writeCleanJSON(result *incident.CleanResult) error {
 	})
 }
 
+// writeCleanTerminal renders the cleanup report to stdout, or to the -o
+// file when one is set (color is already off for a file).
 func writeCleanTerminal(result *incident.CleanResult) error {
+	return writeReport(func(w io.Writer) error {
+		renderCleanTerminal(w, result)
+		return nil
+	})
+}
+
+func renderCleanTerminal(w io.Writer, result *incident.CleanResult) {
 	st := output.NewStyle(flagNoColor)
 
 	done := 0
@@ -116,20 +169,20 @@ func writeCleanTerminal(result *incident.CleanResult) error {
 		if !a.Done && a.Error == "" {
 			status = st.Dim("-")
 		}
-		fmt.Printf("\n[%d/%d] %s %s %s\n", i+1, len(result.Actions), status, a.Type, a.Target)
+		fmt.Fprintf(w, "\n[%d/%d] %s %s %s\n", i+1, len(result.Actions), status, a.Type, a.Target)
 		if a.Error != "" {
-			fmt.Printf("       %s\n", st.Red(a.Error))
+			fmt.Fprintf(w, "       %s\n", st.Red(a.Error))
 		}
 		if a.Done {
 			done++
 		}
 	}
 
-	fmt.Printf("\n%s", st.Bold(fmt.Sprintf("Cleaned %d/%d issues.", done, len(result.Actions))))
+	fmt.Fprintf(w, "\n%s", st.Bold(fmt.Sprintf("Cleaned %d/%d issues.", done, len(result.Actions))))
 	if result.QuarantineDir != "" {
-		fmt.Printf(" Quarantine: %s", st.Dim(result.QuarantineDir))
+		fmt.Fprintf(w, " Quarantine: %s", st.Dim(result.QuarantineDir))
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// Credential rotation checklist
 	atRisk := 0
@@ -139,17 +192,15 @@ func writeCleanTerminal(result *incident.CleanResult) error {
 		}
 	}
 	if atRisk > 0 {
-		fmt.Printf("\n%s\n", st.RedBold("IMPORTANT: Rotate these credentials NOW:"))
+		fmt.Fprintf(w, "\n%s\n", st.RedBold("IMPORTANT: Rotate these credentials NOW:"))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %s %s\n", st.Bold(fmt.Sprintf("%-30s", c.Path)), c.Guidance)
+				fmt.Fprintf(w, "  %s %s\n", st.Bold(fmt.Sprintf("%-30s", c.Path)), c.Guidance)
 			}
 		}
-		fmt.Println()
-		fmt.Println("If running Kubernetes, also run:")
-		fmt.Println("  kubectl get pods -n kube-system | grep node-setup")
-		fmt.Println("  kubectl delete pod -n kube-system -l app=node-setup")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "If running Kubernetes, also run:")
+		fmt.Fprintln(w, "  kubectl get pods -n kube-system | grep node-setup")
+		fmt.Fprintln(w, "  kubectl delete pod -n kube-system -l app=node-setup")
 	}
-
-	return nil
 }

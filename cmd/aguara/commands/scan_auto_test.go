@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/garagon/aguara/internal/types"
 )
 
 type autoScanReport struct {
@@ -22,6 +24,10 @@ type autoScanReport struct {
 	Verdict      int     `json:"verdict"`
 	RiskScore    float64 `json:"risk_score"`
 	ToolName     string  `json:"tool_name"`
+	Coverage     *struct {
+		FilesScanned int    `json:"files_scanned"`
+		Scope        string `json:"scope"`
+	} `json:"coverage"`
 }
 
 // runAutoScanWithHome runs `scan --auto` against a fake HOME whose Cursor
@@ -75,6 +81,9 @@ func TestAutoScanReportsHighestVerdictAndRisk(t *testing.T) {
 	}
 	require.Equal(t, 4, maxSeverity, "fixture must produce a CRITICAL finding")
 	require.Equal(t, 1, report.FilesScanned)
+	require.NotNil(t, report.Coverage)
+	require.Equal(t, "auto", report.Coverage.Scope)
+	require.Equal(t, 1, report.Coverage.FilesScanned)
 	require.Equal(t, 2, report.Verdict, "aggregate verdict must be block")
 	require.Greater(t, report.RiskScore, 0.0)
 	require.Positive(t, report.RulesLoaded)
@@ -106,8 +115,37 @@ func TestAutoScanSortsAggregateFindings(t *testing.T) {
 	require.Equal(t, 4, report.Findings[0].Severity)
 }
 
+// TestAutoScanRejectsRuleConfigBeforeDiscovery: invalid caller rule
+// configuration fails the run before discovery says anything, so the
+// output does not read as "nothing to scan" followed by an error, and no
+// report is written.
+func TestAutoScanRejectsRuleConfigBeforeDiscovery(t *testing.T) {
+	resetFlags()
+	t.Cleanup(resetFlags)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(t.TempDir())
+	out := filepath.Join(t.TempDir(), "report.json")
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs([]string{"scan", "--auto", "--format", "json", "-o", out, "--disable-rule", "TYPO_001", "--no-update-check"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+
+	var err error
+	stderr := captureStderrBytes(t, func() { err = rootCmd.Execute() })
+	var cfgErr *types.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	require.NotContains(t, string(stderr), "No MCP configurations found")
+	require.NotContains(t, string(stderr), "Discovered")
+	_, statErr := os.Stat(out)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 // TestAutoScanWithoutConfigurationsKeepsStdoutClean: with no discovered
 // configuration, a plain-text line went to stdout even under --format json.
+// stdout now carries only the report, a valid empty JSON document whose
+// coverage says nothing was scanned, and the notice goes to stderr.
 func TestAutoScanWithoutConfigurationsKeepsStdoutClean(t *testing.T) {
 	resetFlags()
 	t.Cleanup(resetFlags)
@@ -126,6 +164,22 @@ func TestAutoScanWithoutConfigurationsKeepsStdoutClean(t *testing.T) {
 	})
 	stdout := fetch()
 	restore()
-	require.Empty(t, stdout, "stdout must stay free of plain text under --format json")
+	var report struct {
+		Findings     []json.RawMessage `json:"findings"`
+		FilesScanned int               `json:"files_scanned"`
+		Verdict      int               `json:"verdict"`
+		Coverage     *struct {
+			FilesScanned int    `json:"files_scanned"`
+			Scope        string `json:"scope"`
+		} `json:"coverage"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report), "stdout must be exactly one JSON report: %q", stdout)
+	require.NotNil(t, report.Findings, "findings must serialize as []")
+	require.Empty(t, report.Findings)
+	require.Zero(t, report.FilesScanned)
+	require.NotNil(t, report.Coverage)
+	require.Equal(t, "auto", report.Coverage.Scope)
+	require.Zero(t, report.Coverage.FilesScanned)
+	require.NotContains(t, stdout, "No MCP configurations found")
 	require.Contains(t, string(stderr), "No MCP configurations found; nothing to scan.")
 }

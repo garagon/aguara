@@ -41,8 +41,16 @@ LLM calls; default runs stay offline.`,
   aguara audit . --ci        Package check + content scan, one verdict, gate CI
   aguara check               Check dependencies for known-compromised packages
   aguara explain CRED_001    Show what a rule detects and how to fix it`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateFormatFlag(cmd); err != nil {
+			// The message lists the supported formats; the usage block
+			// would only bury it, and some commands printed it while
+			// others (SilenceUsage) did not.
+			cmd.SilenceUsage = true
+			return err
+		}
 		resolveColorMode()
+		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		checkPathHint()
@@ -73,15 +81,14 @@ func init() {
 	)
 	rootCmd.SetHelpCommandGroupID(groupSetup)
 	rootCmd.SetCompletionCommandGroupID(groupSetup)
-	rootCmd.PersistentFlags().StringVar(&flagSeverity, "severity", "info", "Minimum severity to report (critical, high, medium, low, info)")
-	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "terminal", "Output format (terminal, json, sarif, markdown)")
-	rootCmd.PersistentFlags().StringVarP(&flagOutput, "output", "o", "", "Output file path (default: stdout)")
-	rootCmd.PersistentFlags().IntVar(&flagWorkers, "workers", 0, "Number of worker goroutines (default: NumCPU)")
-	// StringArray, not StringSlice: a directory path may contain a comma.
-	rootCmd.PersistentFlags().StringArrayVar(&flagRules, "rules", nil, "Additional rules directory (repeatable)")
+	// Only opt-outs that every command satisfies stay global: a command
+	// that prints no color or never checks for updates already honors
+	// them, and wrappers pass them unconditionally (the GitHub Action,
+	// the release smoke tests). Output and analysis flags are registered
+	// per command in flags.go so an ignored flag is rejected instead.
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable colored output")
-	rootCmd.PersistentFlags().StringSliceVar(&flagDisableRules, "disable-rule", nil, "Rule IDs to disable (comma-separated, repeatable)")
-	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable update check")
+	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable the release update check")
+	rootCmd.SetFlagErrorFunc(scopedFlagError)
 }
 
 // Execute runs the root command.
@@ -96,27 +103,38 @@ func Execute() error {
 // In CI the update check is a net-egress side effect with no user to notify,
 // so it is silently suppressed. Local invocations still get the notice unless
 // the user opts out with --no-update-check or AGUARA_NO_UPDATE_CHECK=1.
+func isCI() bool {
+	return detectedCIVar() != ""
+}
+
+// detectedCIVar returns the name of the first recognized CI environment
+// variable that is set, or "" outside CI. scan uses it to resolve
+// --project-policy auto to ignore, so a repository under review in CI
+// cannot suppress its own findings, and names the variable in its notice
+// so a developer with CI exported locally can see why.
 //
 // The ci env var is the de-facto standard and covers GitHub Actions, GitLab,
 // CircleCI, Travis, Buildkite, Bitbucket Pipelines, Drone, Woodpecker, and
 // most others. The explicit names are a fallback for runners that leave CI
 // unset (Jenkins historically, TeamCity).
-func isCI() bool {
+func detectedCIVar() string {
 	if v := os.Getenv("CI"); v != "" && v != "false" && v != "0" {
-		return true
+		return "CI"
 	}
-	for _, k := range [...]string{
-		"GITHUB_ACTIONS",
-		"GITLAB_CI",
-		"CIRCLECI",
-		"BUILDKITE",
-		"JENKINS_URL",
-		"TEAMCITY_VERSION",
-		"TRAVIS",
-	} {
+	for _, k := range ciFallbackVars {
 		if os.Getenv(k) != "" {
-			return true
+			return k
 		}
 	}
-	return false
+	return ""
+}
+
+var ciFallbackVars = [...]string{
+	"GITHUB_ACTIONS",
+	"GITLAB_CI",
+	"CIRCLECI",
+	"BUILDKITE",
+	"JENKINS_URL",
+	"TEAMCITY_VERSION",
+	"TRAVIS",
 }

@@ -2,6 +2,7 @@ package packagecheck
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -31,6 +32,22 @@ type RunResult struct {
 	// UnresolvedIncludes lists each requirements include that was not
 	// read, once even when several targets reach the same directive.
 	UnresolvedIncludes []UnresolvedInclude
+	// ReadFiles lists every dependency file the run read, by resolved
+	// path (symlinks evaluated), including requirements files reached
+	// only through a -r / -c include. A file in this list was
+	// evaluated even when discovery did not return it as a target.
+	ReadFiles []string
+}
+
+// ResolvedPath returns path with its directory's symlinks evaluated, the
+// form RunResult.ReadFiles uses, or path unchanged when it cannot be
+// resolved.
+func ResolvedPath(path string) string {
+	dir, err := realDir(filepath.Dir(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(dir, filepath.Base(path))
 }
 
 // Runner orchestrates per-target parsing + matching. The Matcher
@@ -72,11 +89,27 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("packagecheck: %s: %w", t.Path, err)
 		}
+		out.ReadFiles = append(out.ReadFiles, ResolvedPath(t.Path))
+		out.ReadFiles = append(out.ReadFiles, parsed.files...)
 		refs := parsed.refs
 		findings := 0
 		unpinned := 0
+		// pinnedPyPI holds the PEP 503 names this target pins exactly,
+		// in a requirement or a constraint: pip installs that version,
+		// which was checked, so a range for the same name elsewhere in
+		// the target leaves nothing unchecked.
+		pinnedPyPI := map[string]bool{}
 		for _, ref := range refs {
-			if ref.Unpinned {
+			if ref.Ecosystem == intel.EcosystemPyPI && !ref.Unpinned {
+				pinnedPyPI[intel.PEP503Normalize(ref.Name)] = true
+			}
+		}
+		for _, ref := range refs {
+			// A constraint (from a constraints file or a -c include)
+			// installs nothing, so a range there leaves no dependency
+			// unchecked: only requirements count as unpinned.
+			pinnedElsewhere := ref.Ecosystem == intel.EcosystemPyPI && pinnedPyPI[intel.PEP503Normalize(ref.Name)]
+			if ref.Unpinned && ref.Group != constraintGroup && !pinnedElsewhere {
 				unpinned++
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,
@@ -183,6 +216,9 @@ func advisoryIDs(matches []intel.Match) []string {
 type parsedTarget struct {
 	refs       []PackageRef
 	unresolved []UnresolvedInclude
+	// files are the requirements files read, by resolved path,
+	// including files reached only through an include.
+	files []string
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the

@@ -48,6 +48,7 @@ func resetFlags() {
 	flagBaseline = ""
 	flagWriteBaseline = ""
 	flagProjectPolicy = "auto"
+	flagFailOnEmpty = false
 	flagCheckPath = ""
 	flagCheckEcosystems = nil
 	flagCheckFailOn = ""
@@ -69,6 +70,21 @@ func resetFlags() {
 	flagAuditInsecure = false
 	flagAuditVerbose = false
 	flagAuditProjectPolicy = "auto"
+	flagCategory = ""
+	flagCleanDryRun = false
+	flagCleanPurgeCaches = false
+	flagCleanYes = false
+	// Cobra keeps a flag's Changed bit across Execute calls on the shared
+	// command tree. Clear it for the flags whose Changed state decides
+	// whether .aguara.yml may supply a default, so an earlier test's
+	// --format does not hide a later test's config value.
+	for _, c := range rootCmd.Commands() {
+		for _, name := range []string{"severity", "format", "fail-on", "rules", "baseline"} {
+			if f := c.Flags().Lookup(name); f != nil {
+				f.Changed = false
+			}
+		}
+	}
 }
 
 // scanToFile runs aguara scan and writes output to a temp file, returning the content.

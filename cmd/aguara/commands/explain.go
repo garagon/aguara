@@ -29,6 +29,9 @@ func init() {
 	// wrong". Same SilenceUsage pattern PR #91 applied to scan /
 	// check / audit / update.
 	explainCmd.SilenceUsage = true
+	addFormatFlag(explainCmd, "terminal", "json")
+	addOutputFlag(explainCmd)
+	addRulesFlag(explainCmd)
 	rootCmd.AddCommand(explainCmd)
 }
 
@@ -54,11 +57,12 @@ func runExplain(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("rule %q not found", ruleID)
 	}
 
-	w := cmd.OutOrStdout()
-	if strings.ToLower(flagFormat) == "json" {
-		return writeExplainJSON(w, found)
-	}
-	return writeExplainTerminal(w, found)
+	return writeCommandReport(cmd, func(w io.Writer) error {
+		if strings.ToLower(flagFormat) == "json" {
+			return writeExplainJSON(w, found)
+		}
+		return writeExplainTerminal(w, found)
+	})
 }
 
 func writeExplainJSON(w io.Writer, r *rulemeta.Rule) error {

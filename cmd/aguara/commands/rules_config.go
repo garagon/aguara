@@ -39,7 +39,7 @@ func resolveCLIRules(cfg config.Config, disable []string, warn io.Writer) (*rule
 	}
 	in := rulecatalog.Input{CustomRulesDirs: dirs}
 
-	cfgFile := cfg.File
+	cfgFile := cfg.Source
 	if cfgFile == "" {
 		cfgFile = ".aguara.yml"
 	}

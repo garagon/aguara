@@ -134,9 +134,9 @@ func TestCLISymlinkedRulesDirectoryLoads(t *testing.T) {
 
 	require.Equal(t, 1, findings("--rules", link, "--project-policy", "ignore")["PACK_A_001"])
 
-	// resetFlags restores values but not pflag's Changed bit; an earlier
-	// --rules run would make loadScanConfig ignore the file's rules: key.
-	rootCmd.PersistentFlags().Lookup("rules").Changed = false
+	// scanToFile calls resetFlags, which also clears the Changed bit of
+	// every command's --rules; otherwise the earlier --rules run would make
+	// loadScanConfig ignore the file's rules: key.
 	require.NoError(t, os.WriteFile(filepath.Join(target, ".aguara.yml"), []byte("rules: "+link+"\n"), 0o600))
 	require.Equal(t, 1, findings("--project-policy", "trust")["PACK_A_001"])
 }

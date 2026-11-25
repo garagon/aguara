@@ -66,11 +66,104 @@ func TestGitChangedFilesModifiedAndUntracked(t *testing.T) {
 	}
 }
 
+// initGitRepo creates a repository with one commit containing files.
+func initGitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	run("init", "-q")
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+	return dir
+}
+
+// A subdirectory target gets paths relative to itself, limited to its
+// subtree. git diff used to report repository-root-relative paths, so
+// "sub/tracked.md" was joined to "sub" and the change silently skipped.
+func TestGitChangedFilesFromSubdirectory(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initGitRepo(t, map[string]string{
+		"top.md":            "ok",
+		"sub/tracked.md":    "ok",
+		"sub/deep/other.md": "ok",
+	})
+	for _, name := range []string{"top.md", "sub/tracked.md", "sub/deep/other.md"} {
+		require.NoError(t, os.WriteFile(filepath.Join(repo, filepath.FromSlash(name)), []byte("changed"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sub", "new.md"), []byte("new"), 0o644))
+
+	files, err := scanner.GitChangedFiles(filepath.Join(repo, "sub"))
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"tracked.md", "deep/other.md", "new.md"}, files)
+	for _, f := range files {
+		_, err := os.Stat(filepath.Join(repo, "sub", filepath.FromSlash(f)))
+		require.NoError(t, err, "%s must resolve under the target", f)
+	}
+
+	files, err = scanner.GitChangedFiles(repo)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"top.md", "sub/tracked.md", "sub/deep/other.md", "sub/new.md"}, files)
+}
+
+// Names git would quote (non-ASCII, spaces) come back verbatim.
+func TestGitChangedFilesKeepsSpecialNamesUnquoted(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initGitRepo(t, map[string]string{"notas añadidas.md": "ok"})
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "notas añadidas.md"), []byte("changed"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "nueva página.md"), []byte("new"), 0o644))
+
+	files, err := scanner.GitChangedFiles(repo)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"notas añadidas.md", "nueva página.md"}, files)
+}
+
 func TestGitChangedFilesNotARepo(t *testing.T) {
 	skipIfNoGit(t)
 
+	// Outside a work tree there is no change set; an empty result would
+	// read as "no changes" and let a --changed scan pass on nothing.
 	dir := t.TempDir()
 	files, err := scanner.GitChangedFiles(dir)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, scanner.ErrNotGitRepository)
 	require.Empty(t, files)
+}
+
+func TestGitChangedFilesRejectsFileRoot(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initGitRepo(t, map[string]string{"a.md": "ok"})
+	_, err := scanner.GitChangedFiles(filepath.Join(repo, "a.md"))
+	require.ErrorContains(t, err, "is not a directory")
+}
+
+// A repository without commits lists staged files from the index.
+func TestGitChangedFilesWithoutCommits(t *testing.T) {
+	skipIfNoGit(t)
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"add", "staged.md"}} {
+		if args[0] == "add" {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "staged.md"), []byte("new"), 0o644))
+		}
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	files, err := scanner.GitChangedFiles(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"staged.md"}, files)
 }

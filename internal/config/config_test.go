@@ -191,7 +191,7 @@ rule_overrides:
 
 	cfg, err := config.Load(dir)
 	require.NoError(t, err)
-	require.Equal(t, path, cfg.File)
+	require.Equal(t, path, cfg.Source)
 	require.Equal(t, "high", cfg.Severity)
 	require.Equal(t, []string{
 		path + `:2: unknown key "disabled_rules" (ignored)`,

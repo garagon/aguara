@@ -78,12 +78,12 @@ type Target struct {
 // would read but the check did not, so any pin in it went unchecked.
 type UnresolvedInclude struct {
 	// Path and Line locate the include directive.
-	Path string
-	Line int
+	Path string `json:"path"`
+	Line int    `json:"line"`
 	// Argument is the include as written, with URL credentials redacted.
-	Argument string
+	Argument string `json:"argument"`
 	// Reason is one of the UnresolvedInclude* constants.
-	Reason string
+	Reason string `json:"reason"`
 }
 
 // Why an include was not read.
