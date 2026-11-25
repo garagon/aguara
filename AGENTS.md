@@ -142,6 +142,9 @@ exported through public aliases, rather than copying a partial struct.
   `unresolved_includes` (requirements includes not read). Zero files, zero
   evaluated evidence, unsupported files or any unpinned requirement is not a
   clean result. Library `ScanResult` values leave `coverage` unset.
+- `skipped` (top level, and in the CLI's `coverage`) lists entries a scan did
+  not read because they are not regular files: symbolic links, named pipes,
+  sockets, devices, and changed submodules under `--changed`. Always an array.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a

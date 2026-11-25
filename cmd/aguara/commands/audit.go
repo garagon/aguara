@@ -863,6 +863,9 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	if result.Scan.Coverage != nil {
 		fmt.Fprintf(w, "\n  %s\n", st.Dim(fmt.Sprintf("Coverage: %d files scanned", result.Scan.FilesScanned)))
 	}
+	if line := output.SkippedSummary(result.Scan.Skipped); line != "" {
+		fmt.Fprintf(w, "  %s\n", st.Dim(line))
+	}
 	switch {
 	case len(result.Scan.Findings) == 0 && result.Scan.FilesScanned == 0:
 		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(output.NothingScannedMessage(result.Scan)))

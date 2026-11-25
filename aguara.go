@@ -64,6 +64,21 @@ const (
 	DecisionImpactReview  = types.DecisionImpactReview
 )
 
+// SkippedFile is an entry a directory scan did not read because it is not a
+// regular file; ScanResult.Skipped lists them. Kind is one of the Skipped*
+// constants.
+type SkippedFile = types.SkippedFile
+
+// Kinds of skipped entries.
+const (
+	SkippedSymlink   = types.SkippedSymlink
+	SkippedNamedPipe = types.SkippedNamedPipe
+	SkippedSocket    = types.SkippedSocket
+	SkippedDevice    = types.SkippedDevice
+	SkippedDirectory = types.SkippedDirectory
+	SkippedIrregular = types.SkippedIrregular
+)
+
 // Configuration problems. NewScanner, the package-level scan functions and
 // ListRulesE return a *ConfigError for invalid rule configuration; each
 // ConfigProblem names the kind, rule ID, source and a message.

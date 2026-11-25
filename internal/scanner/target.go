@@ -2,15 +2,20 @@ package scanner
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/garagon/aguara/internal/safefile"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // DefaultMaxFileSize is the default maximum file size (50 MiB) read from disk.
@@ -26,6 +31,10 @@ type Target struct {
 	// the bytes. Structured parsers use SourceContent to preserve key identity.
 	OriginalContent []byte
 	MaxFileSize     int64 // 0 means use DefaultMaxFileSize
+	// NoFollow refuses a symbolic link as the last component of Path when
+	// the content is loaded. Discovery sets it: a walked or listed entry
+	// that was not a link when it was inspected must not become one.
+	NoFollow bool
 
 	linesOnce  sync.Once
 	lines      []string
@@ -45,7 +54,11 @@ func (t *Target) SourceContent() []byte {
 
 // LoadContent reads the file content into memory.
 // If Content is already populated (e.g. in-memory targets), it is a no-op.
-// Files larger than the configured MaxFileSize (or DefaultMaxFileSize) are rejected.
+// Files larger than the configured MaxFileSize (or DefaultMaxFileSize) are
+// rejected, and so is anything that is not a regular file when it is
+// opened: a named pipe, socket or device is never read (see
+// safefile.OpenRegular), so a file replaced after discovery cannot block
+// or flood the scan.
 func (t *Target) LoadContent() error {
 	if t.Content != nil {
 		return nil
@@ -54,15 +67,11 @@ func (t *Target) LoadContent() error {
 	if limit <= 0 {
 		limit = DefaultMaxFileSize
 	}
-	f, err := os.Open(t.Path)
+	f, info, err := safefile.OpenRegular(t.Path, !t.NoFollow)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
 	if info.Size() > limit {
 		return &fileSizeError{limit: limit}
 	}
@@ -126,7 +135,47 @@ type TargetDiscovery struct {
 	ExcludedByCallerPatterns int
 	ExcludedByIgnoreFile     int
 
+	// Skipped lists the entries Discover did not return because they are
+	// not regular files (see SkippedFile), in walk order. Entries that an
+	// ignore pattern or the binary-extension filter excludes anyway are
+	// not listed.
+	Skipped []types.SkippedFile
+
 	callerPatterns int // IgnorePatterns[:callerPatterns] are the caller's
+}
+
+// maxIgnoreFileBytes bounds a target's .aguaraignore, like .aguara.yml.
+const maxIgnoreFileBytes = 1 << 20
+
+// skipKind names why an entry with this mode is not scanned, or returns ""
+// for a regular file.
+func skipKind(mode os.FileMode) string {
+	switch {
+	case mode.IsRegular():
+		return ""
+	case mode&os.ModeSymlink != 0:
+		return types.SkippedSymlink
+	case mode&os.ModeNamedPipe != 0:
+		return types.SkippedNamedPipe
+	case mode&os.ModeSocket != 0:
+		return types.SkippedSocket
+	case mode&os.ModeDevice != 0:
+		return types.SkippedDevice
+	case mode.IsDir():
+		return types.SkippedDirectory
+	default:
+		return types.SkippedIrregular
+	}
+}
+
+// SortSkipped orders skipped entries by path, then kind.
+func SortSkipped(skipped []types.SkippedFile) {
+	sort.Slice(skipped, func(i, j int) bool {
+		if skipped[i].Path != skipped[j].Path {
+			return skipped[i].Path < skipped[j].Path
+		}
+		return skipped[i].Kind < skipped[j].Kind
+	})
 }
 
 // Discover walks root and returns all targets, respecting .aguaraignore.
@@ -161,8 +210,15 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		if info.IsDir() {
 			return nil
 		}
-		// skip symlinks to prevent path traversal
-		if info.Mode()&os.ModeSymlink != 0 {
+		// Symbolic links (never followed, to prevent path traversal), named
+		// pipes, sockets and devices hold no file content to scan, and
+		// opening a pipe or device can block or never end. They are listed
+		// as skipped unless an exclusion covers them anyway; as before, a
+		// pattern that matches one is not counted as an exclusion.
+		if kind := skipKind(info.Mode()); kind != "" {
+			if !isBinaryExt(path) && !td.matchesIgnore(relPath) {
+				td.Skipped = append(td.Skipped, types.SkippedFile{Path: relPath, Kind: kind})
+			}
 			return nil
 		}
 		// Explicit exclusions take precedence over the file-size boundary.
@@ -179,6 +235,7 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			Path:        path,
 			RelPath:     relPath,
 			MaxFileSize: td.MaxFileSize,
+			NoFollow:    true,
 		})
 		return nil
 	})
@@ -188,16 +245,18 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 	return targets, nil
 }
 
+// loadIgnoreFile reads the target's .aguaraignore. A link to a regular file
+// is followed, as before; a named pipe, device or other special file is an
+// error rather than a read that can block or never end.
 func (td *TargetDiscovery) loadIgnoreFile(root string) error {
-	f, err := os.Open(filepath.Join(root, ".aguaraignore"))
+	data, err := safefile.ReadRegular(filepath.Join(root, ".aguaraignore"), true, maxIgnoreFileBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line != "" && !strings.HasPrefix(line, "#") {
@@ -211,6 +270,16 @@ func (td *TargetDiscovery) isIgnored(relPath string) bool {
 	for i, pattern := range td.IgnorePatterns {
 		if matchGlob(pattern, relPath) {
 			td.recordExclusion(i)
+			return true
+		}
+	}
+	return false
+}
+
+// matchesIgnore is isIgnored without counting the exclusion.
+func (td *TargetDiscovery) matchesIgnore(relPath string) bool {
+	for _, pattern := range td.IgnorePatterns {
+		if matchGlob(pattern, relPath) {
 			return true
 		}
 	}

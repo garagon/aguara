@@ -1,6 +1,7 @@
 package incident
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/jsonfields"
 	"github.com/garagon/aguara/internal/packagecheck"
+	"github.com/garagon/aguara/internal/safefile"
 )
 
 // NPMPackage is a package parsed from a node_modules entry's package.json.
@@ -69,7 +71,10 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	// so the CLI can pass a refreshed local snapshot without
 	// touching package-level state.
 	matcher := matcherFor(opts)
-	packages := readInstalledNPMPackages(root)
+	packages, err := readInstalledNPMPackages(root)
+	if err != nil {
+		return nil, err
+	}
 	result.PackagesRead = len(packages)
 	// npmFindings counts findings emitted by the npm package-match
 	// step only. Mirrors the per-ecosystem accounting the
@@ -163,9 +168,12 @@ func resolveNPMRoot(p string) (string, error) {
 // examples/ or fixtures/ subtree may contain a stray package.json
 // that npm does not treat as an installed dependency; those are
 // skipped so they cannot trigger a false-positive compromise finding.
-func readInstalledNPMPackages(root string) []NPMPackage {
+//
+// A manifest larger than maxInstalledManifestBytes is an error rather than
+// a package left out: padding a package.json must not hide the package.
+func readInstalledNPMPackages(root string) ([]NPMPackage, error) {
 	var pkgs []NPMPackage
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -178,14 +186,24 @@ func readInstalledNPMPackages(root string) []NPMPackage {
 		if !isInstalledPackageManifest(path, root) {
 			return nil
 		}
-		pkg := parseNPMPackage(path)
+		pkg, err := readNPMPackage(path)
+		if err != nil {
+			return err
+		}
 		if pkg.Name != "" && pkg.Version != "" {
 			pkgs = append(pkgs, pkg)
 		}
 		return nil
 	})
-	return pkgs
+	if err != nil {
+		return nil, err
+	}
+	return pkgs, nil
 }
+
+// maxInstalledManifestBytes bounds one installed package.json, matching the
+// dependency-file limit of the lockfile parsers.
+const maxInstalledManifestBytes = 50 << 20
 
 // isInstalledPackageManifest returns true when path is reachable from
 // root via a canonical install layout. Two layouts are accepted:
@@ -256,23 +274,35 @@ func isInstalledPackageManifest(path, root string) bool {
 
 // parseNPMPackage reads a package.json and extracts the name and
 // version fields. Returns a zero-value NPMPackage if the file is
-// malformed or missing those fields.
+// malformed, missing those fields, unreadable or too large.
 func parseNPMPackage(path string) NPMPackage {
+	pkg, _ := readNPMPackage(path)
+	return pkg
+}
+
+// readNPMPackage is parseNPMPackage with the size limit as an error. The
+// read follows a symbolic link (package managers link installed trees) but
+// never blocks on a named pipe or device, which are left out like any
+// unreadable manifest.
+func readNPMPackage(path string) (NPMPackage, error) {
 	pkg := NPMPackage{Dir: filepath.Dir(path)}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return pkg
+	data, readErr := safefile.ReadRegular(path, true, maxInstalledManifestBytes)
+	if errors.Is(readErr, safefile.ErrTooLarge) {
+		return pkg, fmt.Errorf("npm check: %s exceeds %d-byte limit", path, maxInstalledManifestBytes)
+	}
+	if readErr != nil {
+		return pkg, nil // unreadable or not a regular file: left out, as before
 	}
 	var manifest struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	}
-	if err := jsonfields.Decode(data,
+	if jsonfields.Decode(data,
 		jsonfields.Field{Name: "name", To: &manifest.Name},
-		jsonfields.Field{Name: "version", To: &manifest.Version}); err != nil {
-		return pkg
+		jsonfields.Field{Name: "version", To: &manifest.Version}) != nil {
+		return pkg, nil
 	}
 	pkg.Name = manifest.Name
 	pkg.Version = manifest.Version
-	return pkg
+	return pkg, nil
 }

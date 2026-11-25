@@ -14,6 +14,7 @@ import (
 
 	"github.com/garagon/aguara/internal/meta"
 	"github.com/garagon/aguara/internal/rulemeta"
+	"github.com/garagon/aguara/internal/safefile"
 	"github.com/garagon/aguara/internal/types"
 )
 
@@ -232,12 +233,19 @@ func (s *Scanner) SetStateStore(store StateSaver) {
 }
 
 // Scan performs a full scan of the given path. The path can be a directory
-// (walked recursively) or a single file.
+// (walked recursively) or a single file. A path that is neither a
+// directory nor a regular file (a named pipe, socket or device, directly or
+// through a symbolic link) cannot be scanned and is an incomplete-scan
+// error. Inside a directory, such entries and symbolic links are skipped
+// and listed in ScanResult.Skipped.
 func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	// Check if root is a single file (not a directory).
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, IncompleteScanError("inspect target", root, "", err)
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return nil, IncompleteScanError("inspect target", root, "", &safefile.NotRegularError{Path: root, Mode: info.Mode()})
 	}
 	if !info.IsDir() {
 		// Single-file scan: use the filename as RelPath so target-filtered
@@ -275,10 +283,48 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	result.Skipped = append(result.Skipped, discovery.Skipped...)
+	SortSkipped(result.Skipped)
 	if discovery.ExcludedByIgnoreFile > 0 {
 		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	return result, nil
+}
+
+// ScanPaths scans the files at relPaths under root, such as the changed
+// files of a git work tree. Each path is inspected without following a
+// symbolic link: a path that no longer exists is left out (a deletion has
+// no content), and a symbolic link, named pipe, socket, device or directory
+// (for example a changed submodule) is listed in ScanResult.Skipped instead
+// of being read. Any other inspection failure is an incomplete-scan error.
+func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string) (*ScanResult, error) {
+	var targets []*Target
+	var skipped []types.SkippedFile
+	for _, relPath := range relPaths {
+		absPath := filepath.Join(root, relPath)
+		// Lstat so a symlink committed to the repository is not resolved:
+		// following it would read files outside the tree and surface
+		// their contents in findings.
+		info, err := os.Lstat(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, IncompleteScanError("inspect changed target", relPath, "", err)
+		}
+		if kind := skipKind(info.Mode()); kind != "" {
+			skipped = append(skipped, types.SkippedFile{Path: relPath, Kind: kind})
+			continue
+		}
+		targets = append(targets, &Target{Path: absPath, RelPath: relPath, NoFollow: true})
+	}
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, err
+	}
+	result.Skipped = append(result.Skipped, skipped...)
+	SortSkipped(result.Skipped)
 	return result, nil
 }
 

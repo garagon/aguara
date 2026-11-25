@@ -302,6 +302,9 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		}
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
+	if line := SkippedSummary(result.Skipped); line != "" {
+		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
+	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 
 	if rule := topRuleID(result.Findings); rule != "" {
@@ -321,6 +324,46 @@ func NothingScannedMessage(result *scanner.ScanResult) string {
 		}
 	}
 	return "Nothing was scanned: no scannable files under the target. This is not a clean result."
+}
+
+// SkippedSummary is one line naming the entries a scan did not read
+// because they are not regular files, or "" when there are none. Up to
+// three paths are named; the full list is in the JSON report.
+func SkippedSummary(skipped []types.SkippedFile) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	const maxNamed = 3
+	names := make([]string, 0, maxNamed+1)
+	for i, s := range skipped {
+		if i == maxNamed {
+			names = append(names, fmt.Sprintf("+%d more", len(skipped)-maxNamed))
+			break
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", TerminalText(s.Path), skippedKindLabel(s.Kind)))
+	}
+	what := "entries that are not regular files"
+	if len(skipped) == 1 {
+		what = "entry that is not a regular file"
+	}
+	return fmt.Sprintf("Skipped %d %s: %s", len(skipped), what, strings.Join(names, ", "))
+}
+
+func skippedKindLabel(kind string) string {
+	switch kind {
+	case types.SkippedSymlink:
+		return "symbolic link"
+	case types.SkippedNamedPipe:
+		return "named pipe"
+	case types.SkippedSocket:
+		return "socket"
+	case types.SkippedDevice:
+		return "device"
+	case types.SkippedDirectory:
+		return "directory"
+	default:
+		return "irregular file"
+	}
 }
 
 // filesScannedLabel states how many files were evaluated and, when the

@@ -3,6 +3,8 @@ package scanner
 import (
 	"errors"
 	"fmt"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
 
 // ErrIncompleteScan identifies failures that prevent a successful scan result.
@@ -28,6 +30,11 @@ func IncompleteScanError(stage, path, analyzer string, cause error) error {
 		// Only this internally constructed numeric diagnostic is safe to
 		// display. Arbitrary parser or filesystem causes remain hidden.
 		message += fmt.Sprintf(" (file exceeds %d-byte limit)", sizeErr.limit)
+	}
+	var notRegular *safefile.NotRegularError
+	if errors.As(cause, &notRegular) {
+		// The file type comes from a fixed list of descriptions.
+		message += fmt.Sprintf(" (%s, not a regular file)", safefile.DescribeMode(notRegular.Mode))
 	}
 	if analyzer != "" {
 		message += fmt.Sprintf(" (analyzer %q)", boundedErrorLabel(analyzer))

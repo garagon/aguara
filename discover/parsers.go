@@ -3,8 +3,22 @@ package discover
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
+
+// maxConfigBytes bounds a client configuration read during discovery. It is
+// above the scanner's largest --max-file-size, so the scan, not discovery,
+// decides whether a large configuration is too large to evaluate.
+const maxConfigBytes = 512 << 20
+
+// readConfig reads a client configuration file. A symbolic link is followed
+// (dotfile managers link these files), but the file must be a regular file:
+// a named pipe or device found at a configuration path is not read, because
+// reading it could block or never end.
+func readConfig(path string) ([]byte, error) {
+	return safefile.ReadRegular(path, true, maxConfigBytes)
+}
 
 // mcpConfigJSON represents the common structure of MCP client config files.
 type mcpConfigJSON struct {
@@ -21,7 +35,7 @@ type mcpServerJSON struct {
 // If key is empty, defaults to "mcpServers".
 // For VS Code ("servers" key), also tries "mcpServers" as fallback.
 func parseConfigWithKey(path, key string) ([]MCPServer, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +90,7 @@ type openCodeServer struct {
 // parseOpenCodeConfig parses OpenCode's config format where servers are under "mcp"
 // and commands are arrays: {"mcp": {"name": {"command": ["cmd", "arg1"], "environment": {...}}}}
 func parseOpenCodeConfig(path string) ([]MCPServer, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +127,7 @@ func parseOpenCodeConfig(path string) ([]MCPServer, error) {
 // parseClaudeCodeConfig parses Claude Code's ~/.claude.json where mcpServers
 // may be nested under scope keys: {"projects": {"/path": {"mcpServers": {...}}}, "mcpServers": {...}}
 func parseClaudeCodeConfig(path string) ([]MCPServer, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +211,7 @@ type ocAgent struct {
 // scanOpenClawConfig parses an OpenClaw config file and maps it to ClientResult
 // for compatibility with the existing discovery model.
 func scanOpenClawConfig(path string) (*ClientResult, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}

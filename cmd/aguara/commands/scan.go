@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -336,6 +335,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
+		aggregate.Skipped = append(aggregate.Skipped, result.Skipped...)
 		aggregate.Verdict = max(aggregate.Verdict, result.Verdict)
 		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
 		if len(result.TargetPolicy.InlineSuppressed) > 0 {
@@ -346,7 +346,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	aggregate.Duration = time.Since(start)
 	scanner.SortFindings(aggregate.Findings)
 	stopSpinner(sp)
-	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
+	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto, Skipped: aggregate.Skipped}
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, aggregate)
 	}
@@ -520,7 +520,7 @@ func scanCoverage(result *scanner.ScanResult) *types.ScanCoverage {
 	if flagChanged {
 		scope = types.ScanScopeChanged
 	}
-	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope}
+	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope, Skipped: result.Skipped}
 }
 
 func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
@@ -544,30 +544,11 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 		}
 		return nil, fmt.Errorf("--changed: cannot list changed files: %w", err)
 	}
-	var targets []*scanner.Target
-	for _, relPath := range changedFiles {
-		absPath := filepath.Join(targetPath, relPath)
-		// Lstat instead of Stat so a symlink doesn't resolve to its target.
-		// The normal directory walk already skips symlinks (internal/scanner/target.go
-		// in the walk callback); --changed gets file paths from git and must do the
-		// same check, otherwise a malicious symlink committed to the repo would make
-		// aguara read files outside the tree and surface their contents in findings.
-		info, err := os.Lstat(absPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue // Tracked deletions have no content to scan.
-			}
-			return nil, scanner.IncompleteScanError("inspect changed target", relPath, "", err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		targets = append(targets, &scanner.Target{
-			Path:    absPath,
-			RelPath: relPath,
-		})
-	}
-	result, err := s.ScanTargets(ctx, targets)
+	// ScanPaths skips symlinks exactly as the directory walk does, so a
+	// malicious symlink committed to the repository cannot make aguara read
+	// files outside the tree; named pipes, devices and changed submodules
+	// are skipped and listed as well.
+	result, err := s.ScanPaths(ctx, targetPath, changedFiles)
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}

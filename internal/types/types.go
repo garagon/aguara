@@ -340,6 +340,11 @@ type ScanResult struct {
 	Baseline     *BaselineSummary `json:"baseline,omitempty"`
 	Duration     time.Duration    `json:"-"`
 	Target       string           `json:"-"`
+	// Skipped lists entries under the target that were not read because
+	// they are not regular files (symbolic links, named pipes, sockets,
+	// devices), sorted by path. They hold no file content to evaluate, so
+	// they do not make the scan incomplete. Serialized as [] when empty.
+	Skipped []SkippedFile `json:"skipped"`
 	// Coverage states what the scan evaluated. The CLI sets it so an
 	// empty result is distinguishable from a clean one; it is omitted
 	// when nil, which keeps existing library results unchanged.
@@ -375,6 +380,35 @@ const (
 type ScanCoverage struct {
 	FilesScanned int    `json:"files_scanned"`
 	Scope        string `json:"scope"`
+	// Skipped repeats ScanResult.Skipped: entries that were not read
+	// because they are not regular files.
+	Skipped []SkippedFile `json:"skipped"`
+}
+
+// MarshalJSON keeps Skipped as `[]` rather than `null` when empty.
+func (c ScanCoverage) MarshalJSON() ([]byte, error) {
+	if c.Skipped == nil {
+		c.Skipped = []SkippedFile{}
+	}
+	type alias ScanCoverage
+	return json.Marshal(alias(c))
+}
+
+// Kinds of entries a scan skips because they are not regular files.
+const (
+	SkippedSymlink   = "symlink"    // symbolic link (discovery does not follow links)
+	SkippedNamedPipe = "named_pipe" // FIFO: reading one blocks or returns a writer's stream
+	SkippedSocket    = "socket"
+	SkippedDevice    = "device"    // character or block device
+	SkippedDirectory = "directory" // a listed path that is a directory, such as a changed submodule
+	SkippedIrregular = "irregular" // any other non-regular file type
+)
+
+// SkippedFile is an entry a scan did not read because it is not a
+// regular file. Path is relative to the scan target.
+type SkippedFile struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
 }
 
 // MarshalJSON implements custom JSON marshaling so Duration serializes
@@ -387,6 +421,9 @@ type ScanCoverage struct {
 func (r ScanResult) MarshalJSON() ([]byte, error) {
 	if r.Findings == nil {
 		r.Findings = []Finding{}
+	}
+	if r.Skipped == nil {
+		r.Skipped = []SkippedFile{}
 	}
 	type Alias ScanResult
 	return json.Marshal(struct {
