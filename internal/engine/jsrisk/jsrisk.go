@@ -4004,13 +4004,10 @@ var archiveTokenRe = regexp.MustCompile(`tar\.gz|\.gzip\b|\bnt-`)
 //
 // jsRegexLiteralStartingChars lists the characters that, when they
 // are the most recent non-whitespace token before a `/`, indicate
-// the `/` opens a regex literal rather than a division operator.
-// Plus a small set of keywords handled separately in
-// couldBeRegexStart. The list is conservative — it accepts as
-// "regex context" anything that cannot be the left operand of a
-// division. A few rare ambiguous cases (e.g. `++ / pattern /`) are
-// treated as division; in practice that only matters when a payload
-// uses such forms deliberately to evade comment stripping.
+// the `/` opens a regex literal rather than a division operator:
+// punctuation and operators after which an expression starts. A `}`,
+// a `)`, an identifier or keyword, and `++` / `--` depend on what
+// precedes them and are handled in regexStartsAt.
 var jsRegexLiteralStartingChars = map[byte]bool{
 	'=': true, '(': true, '[': true, '{': true, ',': true, ';': true,
 	':': true, '?': true, '!': true, '|': true, '&': true, '^': true,
@@ -4026,11 +4023,30 @@ var jsRegexLiteralStartingChars = map[byte]bool{
 // regex literal (`return`, `typeof`, etc.).
 //
 // This form builds a fresh regexContext for one question and is meant
-// for tests and one-off callers. The lexer walkers keep one regexContext
-// per pass so paren matching stays linear over the whole file.
+// for tests and one-off callers. It has no brace context, so a slash
+// right after a `}` reads as a division. The lexer walkers keep one
+// regexContext per pass, which tracks braces and keeps paren matching
+// linear over the whole file.
 func couldBeRegexStart(content []byte, i int) bool {
 	return newRegexContext(content).regexStartsAt(i)
 }
+
+// braceKind is what a `{` read as code opened, as far as a slash after the
+// matching `}` is concerned.
+type braceKind uint8
+
+const (
+	// braceStatement is a block, a function or class body, a switch body
+	// or a declaration body. A statement can start after its `}`, so a
+	// slash there starts a regex literal: `if (x) {} /re/.test(s)`.
+	braceStatement braceKind = iota
+	// braceExpression is an object literal, a destructuring pattern, an
+	// import or export list, a type literal or a function expression body.
+	// Its `}` ends an operand, so a slash after it is a division.
+	braceExpression
+	// braceSubstitution is the `${` of a template literal.
+	braceSubstitution
+)
 
 // regexContext answers couldBeRegexStart questions for one walker pass
 // over buf. The walker asks about slashes in increasing order and never
@@ -4048,10 +4064,19 @@ func couldBeRegexStart(content []byte, i int) bool {
 // and released when the pass ends. There is no depth cap: a cap would
 // change which '(' matches a ')' and with it the regex reading.
 //
+// Braces are tracked alongside, from the brace events the walker reports
+// for the bytes it reads as code (openBrace, closeBrace, openSubstitution,
+// closeSubstitution). Each `{` is classified when it is read, from the
+// token before it (braceKindAt), and pushed on a stack of one byte per
+// open brace; its `}` pops it. A slash right after that `}` is a regex
+// literal when the brace opened a statement-level body and a division when
+// it closed an expression. Classifying a `{` looks back over the
+// whitespace before it and over at most one paren header and two
+// keyword-length words, each of which ends at a distinct token, so the
+// brace work is linear in the file too (TestLexerBraceWorkIsLinear).
+//
 // typescript enables the postfix non-null reading (bangIsNonNullAssertion).
-// It is off for JavaScript targets, where a `!` is always logical negation,
-// so a JavaScript file gets exactly the reading it had before TypeScript
-// support.
+// It is off for JavaScript targets, where a `!` is always logical negation.
 type regexContext struct {
 	buf        []byte
 	typescript bool
@@ -4067,12 +4092,22 @@ type regexContext struct {
 	memoStart   int
 
 	restarts int // times a question went backwards and the stack was rebuilt
+
+	braces    []braceKind // kinds of the braces open at the walker's position
+	lastClose int         // offset of the last `}` read as code, -1 before the first
+	lastKind  braceKind   // what that `}` closed
+	steps     int         // bytes examined and stack operations for braces (tests bound it)
+
+	// findOpen, when set, replaces the forward paren stack. Tests set it to
+	// a backward scan to check the stack against.
+	findOpen func(buf []byte, closeParen int) int
 }
 
 func newRegexContext(buf []byte) *regexContext {
-	return &regexContext{buf: buf, memoClose: -1}
+	return &regexContext{buf: buf, memoClose: -1, lastClose: -1}
 }
 
+// regexStartsAt reports whether the `/` at offset i starts a regex literal.
 func (r *regexContext) regexStartsAt(i int) bool {
 	content := r.buf
 	j := i - 1
@@ -4091,25 +4126,32 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	if c == '!' && r.typescript && r.bangIsNonNullAssertion(j) {
 		return false
 	}
+	// `x++ / 2` and `x-- / 2` divide: a postfix update ends an operand. A
+	// prefix update (`++` after an operator, a keyword or a line break)
+	// leaves an expression to come.
+	if (c == '+' || c == '-') && j > 0 && content[j-1] == c {
+		k := j - 2
+		for k >= 0 && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r') {
+			k--
+		}
+		return !r.operandEndsAt(k, true)
+	}
 	if jsRegexLiteralStartingChars[c] {
 		return true
+	}
+	// After a `}`, what the brace opened decides: a statement can start
+	// after a block or a declaration body, while an object literal or a
+	// function expression is an operand.
+	if c == '}' {
+		return r.lastClose == j && r.lastKind == braceStatement
 	}
 	// `)` preceding the `/` can be either:
 	//   - the closing of a function call: `f() / x` is division;
 	//   - the closing of a control-flow header: `if (x) /regex/`
 	//     is a regex literal. Find the matching `(` and inspect the
-	//     keyword before it. `if`, `while`, `for`, `switch`, `catch`
-	//     signal control-flow. An unmatched `)` reads as division.
+	//     keyword before it. An unmatched `)` reads as division.
 	if c == ')' {
-		keyword, _, matched := r.parenHeader(j)
-		if !matched {
-			return false
-		}
-		switch keyword {
-		case "if", "while", "for", "switch", "catch":
-			return true
-		}
-		return false
+		return r.closesStatementHeader(j)
 	}
 	// Identifier / keyword preceding the `/`. Walk back over
 	// identifier characters and check against a small list of
@@ -4117,57 +4159,301 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	if !isJSIdentifierByte(c) {
 		return false
 	}
-	switch keywordEndingAt(content, j+1) {
-	case "return", "typeof", "instanceof", "in", "delete",
-		"void", "new", "throw", "yield", "await", "case", "do":
+	word := keywordEndingAt(content, j+1)
+	start := j + 1 - len(word)
+	if word == "" || r.afterDot(start) {
+		// A property name is an operand whatever it is called:
+		// `stats.new / total`, `cfg?.default / 2`.
+		return false
+	}
+	switch word {
+	case "return", "typeof", "instanceof", "in", "delete", "void", "new", "throw",
+		"yield", "await", "case", "do", "else", "default":
+		return true
+	case "of":
+		// `of` is the for-of keyword only right after the loop binding
+		// (`for (const m of /re/g.exec(s))`); anywhere else it is a variable.
+		return r.operandEndsAt(r.skipSpaceBack(start-1), false)
+	}
+	return false
+}
+
+// closesStatementHeader reports whether the `)` at closeParen ends the
+// header of a statement (`if (...)`, `while (...)`, `for (...)`,
+// `for await (...)`, `with (...)`, `switch (...)`, `catch (...)`), after
+// which a statement or block follows rather than an operator.
+func (r *regexContext) closesStatementHeader(closeParen int) bool {
+	keyword, start, matched := r.parenHeader(closeParen)
+	if !matched {
+		return false
+	}
+	switch keyword {
+	case "if", "while", "for", "switch", "catch", "with":
+		return true
+	case "await":
+		return keywordBefore(r.buf, start) == "for"
+	}
+	return false
+}
+
+// operandEndsAt reports whether the token whose last byte is at offset j
+// ends an operand: an identifier (keywords after which an expression
+// starts excepted, but a property name after `.` or `?.` always counts), a
+// closing quote or backtick, a `]`, a `)` that does not end a statement
+// header, or a `}` that closed an expression. ofKeyword allows one look
+// further back to tell the for-of keyword from a variable named `of`.
+func (r *regexContext) operandEndsAt(j int, ofKeyword bool) bool {
+	if j < 0 {
+		return false
+	}
+	c := r.buf[j]
+	switch {
+	case c == ']', c == '\'', c == '"', c == '`':
+		return true
+	case c == ')':
+		_, _, matched := r.parenHeader(j)
+		return matched && !r.closesStatementHeader(j)
+	case c == '}':
+		return r.lastClose == j && r.lastKind == braceExpression
+	case isJSIdentifierByte(c):
+		word := keywordEndingAt(r.buf, j+1)
+		start := j + 1 - len(word)
+		if word == "" || r.afterDot(start) {
+			return true
+		}
+		switch word {
+		case "return", "typeof", "instanceof", "in", "delete", "void", "new", "throw",
+			"yield", "await", "case", "default", "do", "else":
+			return false
+		case "of":
+			// After an operand `of` can only be the for-of keyword.
+			return ofKeyword && !r.operandEndsAt(r.skipSpaceBack(start-1), false)
+		}
 		return true
 	}
 	return false
 }
 
+// skipSpaceBack returns the offset of the last byte at or before k that is
+// not whitespace, line breaks included, or -1.
+func (r *regexContext) skipSpaceBack(k int) int {
+	for k >= 0 {
+		switch r.buf[k] {
+		case ' ', '\t', '\r', '\n':
+			k--
+			r.steps++
+			continue
+		}
+		break
+	}
+	return k
+}
+
+// afterDot reports whether the identifier starting at start is a property
+// name: the token before it on the same line is a `.` (which covers `?.`).
+// A line break is not crossed, so the period that ends a comment on the
+// line above (left in place when the pass reads raw bytes) does not turn
+// `return` or `default` into a property name.
+func (r *regexContext) afterDot(start int) bool {
+	k := start - 1
+	for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r') {
+		k--
+		r.steps++
+	}
+	return k >= 0 && r.buf[k] == '.'
+}
+
 // bangIsNonNullAssertion reports whether the `!` at position bang is a
 // TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
-// `f()! / 2`), after which a `/` is division. It is consulted for
-// TypeScript targets only. The `!` must touch the end of an operand: an
-// identifier that is not a keyword after which an expression starts, a
-// `]`, or a `)` that does not close a statement header. Everything else
-// keeps the logical-negation reading, so a regex literal after it stays a
-// regex literal: `return!/re/`, `export default!/re/`, `if (x)!/re/`,
+// `f()! / 2`, `cfg.default! / 2`, `'7'! / 2`), after which a `/` is
+// division. It is consulted for TypeScript targets only. The `!` must touch
+// the end of an operand (operandEndsAt). Everything else keeps the
+// logical-negation reading, so a regex literal after it stays a regex
+// literal: `return!/re/`, `export default!/re/`, `if (x)!/re/`,
 // `for await (const x of y)!/re/`, `=> !/re/`, `label: !/re/`, an operator
-// or a comma before the `!`, and a `!` separated from the operand by a
-// space or a line break.
+// or a comma before the `!`, a block `{}` before it, and a `!` separated
+// from the operand by a space or a line break.
 func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
 	if bang == 0 {
 		return false
 	}
-	c := r.buf[bang-1]
-	switch {
-	case c == ']':
-		return true
-	case c == ')':
-		keyword, start, matched := r.parenHeader(bang - 1)
-		if !matched {
-			return false
+	return r.operandEndsAt(bang-1, true)
+}
+
+// openBrace records a `{` read as code at offset i.
+func (r *regexContext) openBrace(i int) {
+	r.braces = append(r.braces, r.braceKindAt(i))
+	r.steps++
+}
+
+// openSubstitution records the `${` of a template literal whose `{` is at
+// offset i.
+func (r *regexContext) openSubstitution(int) {
+	r.braces = append(r.braces, braceSubstitution)
+	r.steps++
+}
+
+// closeBrace records a `}` read as code at offset i that does not end a
+// template substitution. An unmatched `}` counts as closing a statement.
+func (r *regexContext) closeBrace(i int) {
+	kind := braceStatement
+	if n := len(r.braces); n > 0 && r.braces[n-1] != braceSubstitution {
+		kind = r.braces[n-1]
+		r.braces = r.braces[:n-1]
+	}
+	r.lastClose, r.lastKind = i, kind
+	r.steps++
+}
+
+// closeSubstitution records the `}` that ends a template substitution,
+// with any brace left open inside it.
+func (r *regexContext) closeSubstitution(int) {
+	for n := len(r.braces); n > 0; n-- {
+		kind := r.braces[n-1]
+		r.braces = r.braces[:n-1]
+		r.steps++
+		if kind == braceSubstitution {
+			break
 		}
-		switch keyword {
-		case "if", "while", "for", "switch", "catch", "with":
-			return false
-		case "await":
-			// `for await (...)` is a loop header; `await (p)!` is an operand.
-			if keywordBefore(r.buf, start) == "for" {
-				return false
+	}
+}
+
+// enclosingKind is the kind of the innermost open brace: the statement
+// level outside any brace, and an expression inside a substitution.
+func (r *regexContext) enclosingKind() braceKind {
+	if n := len(r.braces); n > 0 {
+		if r.braces[n-1] == braceSubstitution {
+			return braceExpression
+		}
+		return r.braces[n-1]
+	}
+	return braceStatement
+}
+
+// braceKindAt classifies the `{` at offset i from the token before it.
+func (r *regexContext) braceKindAt(i int) braceKind {
+	j := r.skipSpaceBack(i - 1)
+	if j < 0 {
+		return braceStatement
+	}
+	switch c := r.buf[j]; {
+	case c == ')':
+		return r.braceAfterParen(j)
+	case c == '>':
+		// `=> {` opens an arrow function body; in TypeScript a type
+		// argument list (`class A<T> {`, `(): Promise<T> {`) precedes a
+		// declaration body.
+		return braceStatement
+	case c == '{':
+		return r.enclosingKind()
+	case c == ':':
+		// A property value in an object literal; a label, a case clause or
+		// a TypeScript annotation elsewhere.
+		return r.enclosingKind()
+	case c == ';', c == '}', c == ']', c == '\'', c == '"', c == '`':
+		// A new statement, a TypeScript return type (`(): string[] {`) or
+		// declaration name (`declare module 'm' {`).
+		return braceStatement
+	case c == '/' && j > 0 && r.buf[j-1] == '*':
+		// After a block comment the lexer reads unmasked.
+		return braceStatement
+	case isJSIdentifierByte(c):
+		return r.braceAfterWord(j, i)
+	}
+	// An operator or punctuation: an expression starts.
+	return braceExpression
+}
+
+// braceAfterWord classifies a `{` at brace whose previous token is the
+// identifier or keyword ending at j.
+func (r *regexContext) braceAfterWord(j, brace int) braceKind {
+	word := keywordEndingAt(r.buf, j+1)
+	start := j + 1 - len(word)
+	if word == "" || r.afterDot(start) {
+		return braceStatement
+	}
+	switch word {
+	case "return", "yield":
+		// `return\n{` returns nothing and opens a block.
+		if bytes.IndexByte(r.buf[j+1:brace], '\n') >= 0 {
+			return braceStatement
+		}
+		return braceExpression
+	case "void":
+		// TypeScript `(): void {` is a return type before a body.
+		if k := r.skipSpaceBack(start - 1); k >= 0 && r.buf[k] == ':' {
+			return braceStatement
+		}
+		return braceExpression
+	case "typeof", "instanceof", "in", "of", "new", "delete", "throw", "case", "await",
+		"default", "extends", "as", "satisfies", "keyof", "import", "export", "const", "let", "var":
+		return braceExpression
+	case "class":
+		// `class {`: a class body, expression or declaration by position.
+		return r.declarationOrExpression(start)
+	}
+	// `class Name {`.
+	if k := r.skipSpaceBack(start - 1); k >= 0 && keywordEndingAt(r.buf, k+1) == "class" {
+		return r.declarationOrExpression(k + 1 - len("class"))
+	}
+	// else, try, finally, do, static and, in TypeScript, return types and
+	// interface, enum or namespace names.
+	return braceStatement
+}
+
+// braceAfterParen classifies a `{` that follows the `)` at closeParen:
+// a statement header or a function, method or arrow parameter list. A
+// function expression body ends an operand; every other body ends a
+// statement.
+func (r *regexContext) braceAfterParen(closeParen int) braceKind {
+	keyword, start, matched := r.parenHeader(closeParen)
+	if !matched {
+		return braceStatement
+	}
+	if keyword == "function" {
+		return r.declarationOrExpression(start)
+	}
+	if keyword != "" {
+		// `function name(`, `function* name(`.
+		k := r.skipSpaceBack(start - 1)
+		if k >= 0 && r.buf[k] == '*' {
+			k = r.skipSpaceBack(k - 1)
+		}
+		if k >= 0 && keywordEndingAt(r.buf, k+1) == "function" {
+			return r.declarationOrExpression(k + 1 - len("function"))
+		}
+	}
+	return braceStatement
+}
+
+// declarationOrExpression tells the body of a function or class expression
+// from a declaration's by the token before the `function` or `class`
+// keyword at fn (an `async` before it is skipped).
+func (r *regexContext) declarationOrExpression(fn int) braceKind {
+	k := r.skipSpaceBack(fn - 1)
+	if k >= 0 && keywordEndingAt(r.buf, k+1) == "async" {
+		k = r.skipSpaceBack(k - len("async"))
+	}
+	if k < 0 {
+		return braceStatement
+	}
+	switch c := r.buf[k]; {
+	case c == ';', c == '{', c == '}', c == ')':
+		return braceStatement
+	case c == ':':
+		return r.enclosingKind()
+	case isJSIdentifierByte(c):
+		word := keywordEndingAt(r.buf, k+1)
+		switch word {
+		case "return", "typeof", "void", "new", "delete", "throw", "case", "in", "of",
+			"instanceof", "yield", "await", "extends":
+			if !r.afterDot(k + 1 - len(word)) {
+				return braceExpression
 			}
 		}
-		return true
-	case isJSIdentifierByte(c):
-		switch keywordEndingAt(r.buf, bang) {
-		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
-			"throw", "yield", "await", "case", "default", "do", "else":
-			return false
-		}
-		return true
+		return braceStatement
 	}
-	return false
+	return braceExpression
 }
 
 // keywordBefore returns the keyword-length identifier ending before offset
@@ -4212,6 +4498,9 @@ func (r *regexContext) parenHeader(closeParen int) (keyword string, start int, m
 // closeParen, or -1. It consumes buf up to closeParen, so the bytes before
 // closeParen must be final.
 func (r *regexContext) matchingOpen(closeParen int) int {
+	if r.findOpen != nil {
+		return r.findOpen(r.buf, closeParen)
+	}
 	if closeParen < r.cursor {
 		// Not reached by the walkers, which ask in increasing order. Start
 		// over so the answer stays exact.
@@ -4688,9 +4977,45 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 
 // regexClassifier answers whether the `/` at an offset of the buffer it was
 // built for starts a regex literal. The walkers ask in increasing offset
-// order and never change bytes behind the offset they ask about.
+// order and never change bytes behind the offset they ask about. They
+// report every brace they read as code, in order, so the classifier knows
+// what a `}` before a slash closed: openBrace for a `{`, openSubstitution
+// for the `{` of a template literal's `${`, closeSubstitution for the `}`
+// that ends it and closeBrace for any other `}`.
 type regexClassifier interface {
 	regexStartsAt(i int) bool
+	openBrace(i int)
+	closeBrace(i int)
+	openSubstitution(i int)
+	closeSubstitution(i int)
+}
+
+// A regex literal never contains a line break, and a quoted string only
+// contains one after a backslash. When the walker meets a line break
+// inside either, the slash or quote that opened it was misread, most
+// likely a division read as a regex literal or a quote inside a regex
+// literal read as code. The walker resynchronises so that a misreading
+// cannot hide the lines after it: a regex literal is read again from its
+// slash as a division, and a quoted string ends at the line break.
+// Re-reading is bounded: once the bytes read again in a pass reach the
+// size of the buffer, a regex literal also just ends at the line break.
+// Valid JavaScript and TypeScript never trigger either rule. Template
+// literals can span lines and are not resynchronised.
+
+// hasHashbang reports whether buf starts with a hashbang line
+// (`#!/usr/bin/env node`), which JavaScript and TypeScript read as a line
+// comment. Read as code, its slashes would open a regex literal.
+func hasHashbang(buf []byte) bool {
+	return len(buf) >= 2 && buf[0] == '#' && buf[1] == '!'
+}
+
+// escapeLen is how many bytes after the backslash at i an escape in a
+// string literal consumes: two for a CRLF line continuation, otherwise one.
+func escapeLen(buf []byte, i int) int {
+	if buf[i+1] == '\r' && i+2 < len(buf) && buf[i+2] == '\n' {
+		return 2
+	}
+	return 1
 }
 
 // jsStringInteriorsWith returns sorted, non-overlapping byte ranges
@@ -4727,8 +5052,13 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 	state := stCode
 	n := len(content)
 	startInterior := -1
+	regexStart, reread := -1, 0
 	var templateStack []int
-	for i := 0; i < n; i++ {
+	start := 0
+	if hasHashbang(content) {
+		state, start = stLineComment, 2
+	}
+	for i := start; i < n; i++ {
 		switch state {
 		case stCode:
 			if content[i] == '/' && i+1 < n {
@@ -4743,28 +5073,31 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 					continue
 				}
 				if regex.regexStartsAt(i) {
-					state = stRegex
+					state, regexStart = stRegex, i
 					continue
 				}
 			}
-			if len(templateStack) > 0 {
-				// Inside a ${...} expression of an outer template
-				// literal. Track brace depth so the matching `}`
-				// transitions back to stStringTemplate.
-				switch content[i] {
-				case '{':
+			switch content[i] {
+			case '{':
+				regex.openBrace(i)
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]++
-				case '}':
+				}
+			case '}':
+				// Inside a ${...} expression of an outer template
+				// literal, the `}` that brings the brace depth back
+				// to zero resumes the template.
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]--
 					if templateStack[len(templateStack)-1] == 0 {
 						templateStack = templateStack[:len(templateStack)-1]
+						regex.closeSubstitution(i)
 						state = stStringTemplate
 						startInterior = i + 1
 						continue
 					}
 				}
-			}
-			switch content[i] {
+				regex.closeBrace(i)
 			case '\'':
 				state = stStringSingle
 				startInterior = i + 1
@@ -4775,24 +5108,17 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				state = stStringTemplate
 				startInterior = i + 1
 			}
-		case stStringSingle:
+		case stStringSingle, stStringDouble:
 			if content[i] == '\\' && i+1 < n {
-				i++
+				i += escapeLen(content, i)
 				continue
 			}
-			if content[i] == '\'' {
-				if startInterior >= 0 && i > startInterior {
-					out = append(out, [2]int{startInterior, i})
-				}
-				startInterior = -1
-				state = stCode
+			quote := byte('\'')
+			if state == stStringDouble {
+				quote = '"'
 			}
-		case stStringDouble:
-			if content[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if content[i] == '"' {
+			// A line break ends a misread string (see escapeLen).
+			if content[i] == quote || content[i] == '\n' {
 				if startInterior >= 0 && i > startInterior {
 					out = append(out, [2]int{startInterior, i})
 				}
@@ -4819,6 +5145,7 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				}
 				startInterior = -1
 				templateStack = append(templateStack, 1)
+				regex.openSubstitution(i + 1)
 				state = stCode
 				i++ // skip `{`
 				continue
@@ -4839,16 +5166,32 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				i++
 				state = stCode
 			}
-		case stRegex:
-			if content[i] == '\\' && i+1 < n {
+		case stRegex, stRegexCharClass:
+			c := content[i]
+			if c == '\n' || c == '\\' && i+1 < n && content[i+1] == '\n' {
+				// A line break inside a regex literal: the slash was a
+				// division. Read again from it, within the budget.
+				state = stCode
+				if reread += i - regexStart; reread <= n {
+					i = regexStart
+				}
+				continue
+			}
+			if c == '\\' && i+1 < n {
 				i++
 				continue
 			}
-			if content[i] == '[' {
+			if state == stRegexCharClass {
+				if c == ']' {
+					state = stRegex
+				}
+				continue
+			}
+			if c == '[' {
 				state = stRegexCharClass
 				continue
 			}
-			if content[i] == '/' {
+			if c == '/' {
 				state = stCode
 				for i+1 < n {
 					f := content[i+1]
@@ -4858,14 +5201,6 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 					}
 					break
 				}
-			}
-		case stRegexCharClass:
-			if content[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if content[i] == ']' {
-				state = stRegex
 			}
 		}
 	}
@@ -4927,25 +5262,27 @@ func newJSLexicalView(content []byte) jsLexicalView {
 
 // jsLexer holds what the lexical passes over one file share: whether the
 // file is TypeScript, which enables the postfix non-null reading, and the
-// paren stack, reused from pass to pass so a file allocates it once. A
-// jsLexer belongs to one Analyze call; passes run one after another and
-// never nest, so the stack is never shared by two live passes.
+// paren and brace stacks, reused from pass to pass so a file allocates
+// them once. A jsLexer belongs to one Analyze call; passes run one after
+// another and never nest, so the stacks are never shared by two live
+// passes.
 type jsLexer struct {
 	typescript bool
 	open32     []int32
 	open       []int
+	braces     []braceKind
 }
 
 func (lx *jsLexer) context(buf []byte) *regexContext {
 	rc := newRegexContext(buf)
 	rc.typescript = lx.typescript
-	rc.open32, rc.open = lx.open32[:0], lx.open[:0]
+	rc.open32, rc.open, rc.braces = lx.open32[:0], lx.open[:0], lx.braces[:0]
 	return rc
 }
 
 func (lx *jsLexer) release(rc *regexContext) {
 	if rc != nil {
-		lx.open32, lx.open = rc.open32[:0], rc.open[:0]
+		lx.open32, lx.open, lx.braces = rc.open32[:0], rc.open[:0], rc.braces[:0]
 	}
 }
 
@@ -5161,8 +5498,14 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 	)
 	state := stCode
 	n := len(out)
+	regexStart, reread := -1, 0
 	var templateStack []int
-	for i := 0; i < n; i++ {
+	start := 0
+	if hasHashbang(out) {
+		state, start = stLineComment, 2
+		out[0], out[1] = ' ', ' '
+	}
+	for i := start; i < n; i++ {
 		switch state {
 		case stCode:
 			if out[i] == '/' && i+1 < n {
@@ -5181,25 +5524,28 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 					continue
 				}
 				if regex.regexStartsAt(i) {
-					state = stRegex
+					state, regexStart = stRegex, i
 					out[i] = ' '
 					continue
 				}
 			}
-			if len(templateStack) > 0 {
-				switch out[i] {
-				case '{':
+			switch out[i] {
+			case '{':
+				regex.openBrace(i)
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]++
-				case '}':
+				}
+			case '}':
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]--
 					if templateStack[len(templateStack)-1] == 0 {
 						templateStack = templateStack[:len(templateStack)-1]
+						regex.closeSubstitution(i)
 						state = stStringTemplate
 						continue
 					}
 				}
-			}
-			switch out[i] {
+				regex.closeBrace(i)
 			case '\'':
 				state = stStringSingle
 			case '"':
@@ -5207,20 +5553,17 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			case '`':
 				state = stStringTemplate
 			}
-		case stStringSingle:
+		case stStringSingle, stStringDouble:
 			if out[i] == '\\' && i+1 < n {
-				i++
+				i += escapeLen(out, i)
 				continue
 			}
-			if out[i] == '\'' {
-				state = stCode
+			quote := byte('\'')
+			if state == stStringDouble {
+				quote = '"'
 			}
-		case stStringDouble:
-			if out[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if out[i] == '"' {
+			// A line break ends a misread string (see escapeLen).
+			if out[i] == quote || out[i] == '\n' {
 				state = stCode
 			}
 		case stStringTemplate:
@@ -5230,6 +5573,7 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			}
 			if out[i] == '$' && i+1 < n && out[i+1] == '{' {
 				templateStack = append(templateStack, 1)
+				regex.openSubstitution(i + 1)
 				state = stCode
 				i++ // skip `{`
 				continue
@@ -5254,23 +5598,38 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			if out[i] != '\n' {
 				out[i] = ' '
 			}
-		case stRegex:
-			if out[i] == '\\' && i+1 < n {
-				if out[i+1] != '\n' {
-					out[i+1] = ' '
+		case stRegex, stRegexCharClass:
+			c := out[i]
+			if c == '\n' || c == '\\' && i+1 < n && out[i+1] == '\n' {
+				// A line break inside a regex literal: the slash was a
+				// division. Restore the bytes blanked since the slash and
+				// read again from it, within the budget; past the budget
+				// the literal ends at the line break.
+				state = stCode
+				if reread += i - regexStart; reread <= n {
+					copy(out[regexStart:i], content[regexStart:i])
+					i = regexStart
 				}
+				continue
+			}
+			if c == '\\' && i+1 < n {
 				out[i] = ' '
+				out[i+1] = ' '
 				i++
 				continue
 			}
-			if out[i] == '[' {
-				state = stRegexCharClass
-				out[i] = ' '
+			out[i] = ' '
+			if state == stRegexCharClass {
+				if c == ']' {
+					state = stRegex
+				}
 				continue
 			}
-			if out[i] == '/' {
+			switch c {
+			case '[':
+				state = stRegexCharClass
+			case '/':
 				state = stCode
-				out[i] = ' '
 				for i+1 < n {
 					f := out[i+1]
 					if (f >= 'a' && f <= 'z') || (f >= 'A' && f <= 'Z') {
@@ -5280,27 +5639,6 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 					}
 					break
 				}
-				continue
-			}
-			if out[i] != '\n' {
-				out[i] = ' '
-			}
-		case stRegexCharClass:
-			if out[i] == '\\' && i+1 < n {
-				if out[i+1] != '\n' {
-					out[i+1] = ' '
-				}
-				out[i] = ' '
-				i++
-				continue
-			}
-			if out[i] == ']' {
-				state = stRegex
-				out[i] = ' '
-				continue
-			}
-			if out[i] != '\n' {
-				out[i] = ' '
 			}
 		}
 	}

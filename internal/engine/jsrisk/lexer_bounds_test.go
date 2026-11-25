@@ -12,15 +12,34 @@ import (
 
 // The lexer walkers used to classify the slash after a `)` by walking back
 // to the matching `(` on every question. regexContext answers from a
-// forward paren stack instead. The functions below are the backward-scan
-// references, kept here only to prove the answers are unchanged:
+// forward paren stack instead. Two kinds of reference are kept here:
 //
-//   - mainCouldBeRegexStart is the classifier as it was before TypeScript
-//     support, copied verbatim. JavaScript targets must read every input
-//     exactly like it;
-//   - backwardCouldBeRegexStart is the same plus the TypeScript non-null
-//     check (backwardBangIsNonNull), both scanning backwards without bound.
-//     TypeScript targets must read every input exactly like it.
+//   - backwardMatchingOpen is the unbounded backward scan to the matching
+//     `(`. A regexContext that uses it instead of the stack must read every
+//     input exactly like the production one, in both dialects;
+//   - mainCouldBeRegexStart (the JavaScript classifier before TypeScript
+//     support, copied verbatim) and backwardCouldBeRegexStart (the same plus
+//     the TypeScript non-null check as it was before brace tracking) are
+//     the classifiers the brace-aware one replaced. Their answers may differ
+//     from the current ones only at the shapes listed in intendedChange.
+
+// backwardMatchingOpen returns the offset of the `(` matching the `)` at
+// closeParen by counting backwards, or -1.
+func backwardMatchingOpen(buf []byte, closeParen int) int {
+	depth := 1
+	for k := closeParen - 1; k >= 0; k-- {
+		switch buf[k] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+			if depth == 0 {
+				return k
+			}
+		}
+	}
+	return -1
+}
 
 func mainCouldBeRegexStart(content []byte, i int) bool {
 	j := i - 1
@@ -275,24 +294,21 @@ func backwardBangIsNonNull(content []byte, bang int) bool {
 	return false
 }
 
-type backwardClassifier struct {
-	buf  []byte
-	bang bool
-}
-
-func (b backwardClassifier) regexStartsAt(i int) bool {
-	if b.bang {
-		return backwardCouldBeRegexStart(b.buf, i)
-	}
-	return mainCouldBeRegexStart(b.buf, i)
-}
-
-func mainClassifier(buf []byte) regexClassifier   { return backwardClassifier{buf: buf} }
-func backwardWithBang(buf []byte) regexClassifier { return backwardClassifier{buf: buf, bang: true} }
-func indexClassifier(buf []byte) regexClassifier  { return newRegexContext(buf) }
+func indexClassifier(buf []byte) regexClassifier { return newRegexContext(buf) }
 
 func typeScriptIndexClassifier(buf []byte) regexClassifier {
 	return (&jsLexer{typescript: true}).context(buf)
+}
+
+// backwardScanClassifier is the production classifier with the paren stack
+// replaced by backwardMatchingOpen.
+func backwardScanClassifier(typescript bool) func([]byte) regexClassifier {
+	return func(buf []byte) regexClassifier {
+		rc := newRegexContext(buf)
+		rc.typescript = typescript
+		rc.findOpen = backwardMatchingOpen
+		return rc
+	}
 }
 
 // lexerViews runs both walkers the way the analyzer does: comment and regex
@@ -318,20 +334,24 @@ func sameViews(a, b lexerViews) bool {
 }
 
 // lexerDifferentialPieces are the token shapes the generator combines:
-// unbalanced and nested parentheses, parentheses inside strings, template
-// literals with interpolation, regex literals and character classes,
-// comments, escapes, keywords that precede regex literals, and non-null
+// unbalanced and nested parentheses and braces, parentheses inside strings,
+// template literals with interpolation, regex literals and character
+// classes, comments, escapes, keywords that precede regex literals, brace
+// openers (function and arrow bodies, object literals, labels), update
+// operators, property names spelled like keywords, and non-null
 // assertions.
 var lexerDifferentialPieces = []string{
 	"(", ")", "((", "))", "/", "/", "//", "/*", "*/", "!", "! ", "[", "]", "{", "}",
 	"'", "\"", "`", "${", "\\", "\n", " ", "\t", "if", "if (", "while", "for", "return",
 	"typeof", "x", "ab", "=", "+", ",", ";", ":", "?", "*", "2", "/re/", "/[/]/g",
 	"'(/'", "\")\"", "`${a(}`", "a!", "f()!", "xs[0]!", "(x)", "catch", "in", "do",
-	"<", ">", "&&", "||", ".", "%",
+	"<", ">", "&&", "||", ".", "%", "} ", "{}", "else", "default", "of", "=>", "++", "--",
+	"function", "function f()", "class A", ".default", "?.new", "const {", "with (", "for await (",
+	"'x'!", "`t`!", "\r\n",
 }
 
-// plainLexerPieces leaves out `!`, so snippets built from them are always
-// compared with the pre-TypeScript classifier too.
+// plainLexerPieces leaves out `!`, so snippets built from them read the
+// same in both dialects.
 var plainLexerPieces = func() []string {
 	var out []string
 	for _, p := range lexerDifferentialPieces {
@@ -366,6 +386,11 @@ var lexerDifferentialSamples = []string{
 	"const n = total! / count; const m = xs[0]! / 2; const q = f()! / 4;",
 	"if (x) !/re/.test(s); y = !/re/.test(z);",
 	"catch (e) /x/.test(e.message)",
+	"if (a) { b(); } /`/.test(s); f(1); // `",
+	"export default /`/.test(s);\nconst o = {a: 1} / 2; const f = function () {} / 3;\n// `",
+	"const p = () => {}\n/re/.test(s); i++ / 2; --j / 3; x = cfg.default / 2;",
+	"for (const m of /x/g.exec(s)) {} const of = 4; y = of / 2; if (a) b(); else /e/.test(c);",
+	"const s = 'unterminated\nfetch(x); const r = a / b; const t = '/`';\nnext();",
 }
 
 // structuredLexerHeaders builds headers of chosen lengths around the
@@ -390,18 +415,110 @@ func structuredLexerHeaders(r *rand.Rand) [][]byte {
 	return out
 }
 
-// checkLexerDifferential compares both dialects with their references on
-// one input: the JavaScript reading with main's classifier and the
-// TypeScript reading with the backward scan that includes the non-null
-// check. Every input is compared in both dialects.
+// checkLexerDifferential compares, on one input, each dialect's reading with
+// the same classifier using the backward scan for parentheses, and checks
+// that the two dialects read an input without `!` the same way. Every
+// classifier decision is also compared with the classifier brace tracking
+// replaced (checkDecisionsAgainstMain).
 func checkLexerDifferential(t *testing.T, src []byte) {
 	t.Helper()
-	if got, want := viewsWith(src, indexClassifier), viewsWith(src, mainClassifier); !sameViews(got, want) {
-		t.Fatalf("JavaScript reading differs from the pre-TypeScript classifier on %q", src)
+	js := viewsWith(src, indexClassifier)
+	if want := viewsWith(src, backwardScanClassifier(false)); !sameViews(js, want) {
+		t.Fatalf("JavaScript reading differs from the backward scan on %q", src)
 	}
-	if got, want := viewsWith(src, typeScriptIndexClassifier), viewsWith(src, backwardWithBang); !sameViews(got, want) {
+	ts := viewsWith(src, typeScriptIndexClassifier)
+	if want := viewsWith(src, backwardScanClassifier(true)); !sameViews(ts, want) {
 		t.Fatalf("TypeScript reading differs from the backward scan on %q", src)
 	}
+	if !bytes.Contains(src, []byte("!")) && !sameViews(js, ts) {
+		t.Fatalf("JavaScript and TypeScript read %q differently without a `!`", src)
+	}
+	checkDecisionsAgainstMain(t, src)
+}
+
+// decisionRecorder wraps a classifier and compares every answer with the
+// classifier that brace tracking replaced, on the same buffer at the same
+// moment of the pass.
+type decisionRecorder struct {
+	*regexContext
+	t   *testing.T
+	src []byte
+}
+
+func (d decisionRecorder) regexStartsAt(i int) bool {
+	got := d.regexContext.regexStartsAt(i)
+	old := mainCouldBeRegexStart(d.buf, i)
+	if d.typescript {
+		old = backwardCouldBeRegexStart(d.buf, i)
+	}
+	if got != old && !intendedChange(d.regexContext, i) {
+		d.t.Fatalf("slash at %d of %q: regex=%v, previous classifier %v, at a shape the change does not cover", i, d.src, got, old)
+	}
+	return got
+}
+
+func checkDecisionsAgainstMain(t *testing.T, src []byte) {
+	t.Helper()
+	for _, typescript := range []bool{false, true} {
+		rec := func(buf []byte) regexClassifier {
+			rc := newRegexContext(buf)
+			rc.typescript = typescript
+			return decisionRecorder{regexContext: rc, t: t, src: src}
+		}
+		viewsWith(src, rec)
+	}
+}
+
+// intendedChange reports whether the slash at i follows one of the shapes
+// whose reading the brace-aware classifier changed: a `}`, `else`,
+// `default` or `of`, a property name spelled like a keyword, a postfix
+// `++` or `--`, a `with (...)` or `for await (...)` header and, in
+// TypeScript, a `!` after a property name, `of`, a closing quote or
+// backtick, or a `}`.
+func intendedChange(rc *regexContext, i int) bool {
+	buf := rc.buf
+	j := i - 1
+	for j >= 0 && (buf[j] == ' ' || buf[j] == '\t' || buf[j] == '\r') {
+		j--
+	}
+	if j < 0 {
+		return false
+	}
+	wordChanged := func(end int) bool {
+		word := keywordEndingAt(buf, end)
+		if word == "" {
+			return false
+		}
+		switch word {
+		case "else", "default", "of":
+			return true
+		}
+		return rc.afterDot(end - len(word))
+	}
+	switch c := buf[j]; {
+	case c == '}':
+		return true
+	case c == '+' || c == '-':
+		return j > 0 && buf[j-1] == c
+	case c == ')':
+		open := backwardMatchingOpen(buf, j)
+		if open < 0 {
+			return false
+		}
+		switch keywordBefore(buf, open) {
+		case "with", "await":
+			return true
+		}
+	case c == '!' && rc.typescript && j > 0:
+		p := buf[j-1]
+		if p == '\'' || p == '"' || p == '`' || p == '}' {
+			return true
+		}
+		return isJSIdentifierByte(p) && wordChanged(j)
+	case isJSIdentifierByte(c):
+		return wordChanged(j + 1)
+	}
+	return false
 }
 
 func TestRegexContextMatchesBackwardScan(t *testing.T) {
@@ -422,7 +539,7 @@ func TestRegexContextMatchesBackwardScan(t *testing.T) {
 	for _, src := range inputs {
 		checkLexerDifferential(t, src)
 	}
-	t.Logf("%d inputs: JavaScript identical to the pre-TypeScript classifier, TypeScript identical to the backward scan", len(inputs))
+	t.Logf("%d inputs: each dialect identical to the backward scan, decisions changed only at the intended shapes", len(inputs))
 }
 
 // TestRegexContextMatchesBackwardScanOnDirectory repeats the differential
@@ -453,7 +570,7 @@ func TestRegexContextMatchesBackwardScanOnDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d files: JavaScript identical to the pre-TypeScript classifier, TypeScript identical to the backward scan", files)
+	t.Logf("%d files: each dialect identical to the backward scan, decisions changed only at the intended shapes", files)
 }
 
 // Each walker pass consumes every byte into the paren stack at most once,
