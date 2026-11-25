@@ -141,6 +141,13 @@ type TargetDiscovery struct {
 	// not listed.
 	Skipped []types.SkippedFile
 
+	// Failures lists the entries Discover could not inspect or will not
+	// read (an unreadable directory, a file over the size limit), in walk
+	// order. The walk continues past them, and a scan of the targets is
+	// incomplete. Only a failure at the root or reading .aguaraignore is
+	// returned as Discover's error.
+	Failures []error
+
 	callerPatterns int // IgnorePatterns[:callerPatterns] are the caller's
 }
 
@@ -205,7 +212,14 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			if td.isIgnoredSubtree(relPath) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
 				return nil
 			}
-			return IncompleteScanError("discover target", relPath, "", err)
+			if path == root {
+				return IncompleteScanError("discover target", relPath, "", err)
+			}
+			// Record the entry and keep walking (nil skips an unreadable
+			// directory's contents): the scan of the other files is then
+			// reported as incomplete instead of discarded.
+			td.Failures = append(td.Failures, IncompleteScanError("discover target", relPath, "", err))
+			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -229,7 +243,8 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			return nil
 		}
 		if info.Size() > limit {
-			return IncompleteScanError("discover target", relPath, "", &fileSizeError{limit: limit})
+			td.Failures = append(td.Failures, IncompleteScanError("read target", relPath, "", &fileSizeError{limit: limit}))
+			return nil
 		}
 		targets = append(targets, &Target{
 			Path:        path,

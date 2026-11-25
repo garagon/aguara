@@ -6,6 +6,7 @@ package aguara
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -26,9 +27,42 @@ import (
 )
 
 // ErrIncompleteScan indicates that a target could not be read or analyzed,
-// or that file discovery failed. Scans return no result in this case.
-// Use errors.Is to distinguish it from findings or caller cancellation.
+// that file discovery failed, or that the scan was canceled. Scans return a
+// nil result in this case; never treat the error as a clean result. When
+// the scan got as far as evaluating files, the error is an
+// *IncompleteError carrying the partial result (use errors.As); a canceled
+// scan's error also matches the context's error.
 var ErrIncompleteScan = scanner.ErrIncompleteScan
+
+// IncompleteError is the error of a scan that evaluated some files but not
+// all of them with every analyzer. Result holds the findings that were
+// found (Result.Incomplete is true, Result.Errors lists the failures and
+// Result.Verdict is never clean); Failures is Result.Errors. It matches
+// ErrIncompleteScan with errors.Is.
+type IncompleteError = scanner.IncompleteError
+
+// ScanFailure is one operation an incomplete scan could not complete:
+// ScanResult.Errors lists them. Stage is one of the FailureStage* and
+// Reason one of the FailureReason* constants.
+type ScanFailure = types.ScanFailure
+
+// Stages and reasons of scan failures.
+const (
+	FailureStageDiscover = types.FailureStageDiscover
+	FailureStageRead     = types.FailureStageRead
+	FailureStageAnalyze  = types.FailureStageAnalyze
+
+	FailureReasonBudget     = types.FailureReasonBudget
+	FailureReasonTooLarge   = types.FailureReasonTooLarge
+	FailureReasonNotRegular = types.FailureReasonNotRegular
+	FailureReasonIO         = types.FailureReasonIO
+	FailureReasonCanceled   = types.FailureReasonCanceled
+	FailureReasonError      = types.FailureReasonError
+
+	// MaxReportedFailures bounds ScanResult.Errors; ScanResult.FailedOperations
+	// counts every failure.
+	MaxReportedFailures = types.MaxReportedFailures
+)
 
 // Re-export core types from internal/types so consumers don't need to
 // import internal packages.
@@ -168,10 +202,20 @@ func Scan(ctx context.Context, path string, opts ...Option) (*ScanResult, error)
 		return nil, err
 	}
 	result, err := s.Scan(ctx, path)
+	return withRulesLoaded(result, err, len(compiled))
+}
+
+// withRulesLoaded sets RulesLoaded on a scan's result, or on the partial
+// result an incomplete scan's error carries.
+func withRulesLoaded(result *ScanResult, err error, rules int) (*ScanResult, error) {
 	if err != nil {
+		var incomplete *IncompleteError
+		if errors.As(err, &incomplete) {
+			incomplete.Result.RulesLoaded = rules
+		}
 		return nil, err
 	}
-	result.RulesLoaded = len(compiled)
+	result.RulesLoaded = rules
 	return result, nil
 }
 
@@ -215,11 +259,7 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	}
 	targets := []*scanner.Target{inlineTarget(content, filename)}
 	result, err := s.ScanTargets(ctx, targets)
-	if err != nil {
-		return nil, err
-	}
-	result.RulesLoaded = len(compiled)
-	return result, nil
+	return withRulesLoaded(result, err, len(compiled))
 }
 
 // ListRules returns all available detection rules. Includes BOTH
@@ -361,11 +401,7 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 	}
 	targets := []*scanner.Target{inlineTarget(content, filename)}
 	result, err := s.ScanTargets(ctx, targets)
-	if err != nil {
-		return nil, err
-	}
-	result.RulesLoaded = len(sc.resolution.Compiled)
-	return result, nil
+	return withRulesLoaded(result, err, len(sc.resolution.Compiled))
 }
 
 func inlineTarget(content, filename string) *scanner.Target {
@@ -386,11 +422,7 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 		return nil, err
 	}
 	result, err := s.Scan(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	result.RulesLoaded = len(sc.resolution.Compiled)
-	return result, nil
+	return withRulesLoaded(result, err, len(sc.resolution.Compiled))
 }
 
 // ListRules returns every pattern and analyzer rule active in this scanner,

@@ -180,7 +180,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	result, err := executeScan(ctx, s, targetPath)
 	stopSpinner(sp)
-	if err != nil {
+	result, scanErr := partialScan(result, err)
+	if result == nil {
 		return err
 	}
 	result.RulesLoaded = len(res.Compiled)
@@ -188,6 +189,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, result)
+	}
+
+	// An incomplete scan still writes the report it has, in the selected
+	// format, and then fails (exit 2). It neither saves rug-pull state nor
+	// writes a baseline: both would record files it did not evaluate.
+	if scanErr != nil {
+		return writeIncompleteScan(result, store, scanErr)
 	}
 
 	if store != nil {
@@ -238,6 +246,41 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return checkFailOnThresholdFindings(gateFindings)
+}
+
+// partialScan returns the partial result an incomplete scan's error
+// carries, so the command can still write its report; the error stays
+// the command's result. Any other error returns no result.
+func partialScan(result *scanner.ScanResult, err error) (*scanner.ScanResult, error) {
+	if err == nil {
+		return result, nil
+	}
+	var incomplete *scanner.IncompleteError
+	if errors.As(err, &incomplete) {
+		return incomplete.Result, err
+	}
+	return nil, err
+}
+
+// writeIncompleteScan writes the report of an incomplete scan and returns
+// scanErr. --baseline is still applied so the report shows the partition,
+// but no baseline is written and no state is saved.
+func writeIncompleteScan(result *scanner.ScanResult, store *state.Store, scanErr error) error {
+	if store != nil {
+		fmt.Fprintln(os.Stderr, "warning: rug-pull state not saved: the scan is incomplete")
+	}
+	if flagWriteBaseline != "" {
+		fmt.Fprintf(os.Stderr, "baseline: not written to %s: the scan is incomplete\n", flagWriteBaseline)
+	} else if flagBaseline != "" {
+		if set, err := baseline.Load(flagBaseline); err == nil {
+			_, summary := baseline.Apply(result.Findings, set, flagBaseline)
+			result.Baseline = &summary
+		}
+	}
+	if err := writeOutput(result); err != nil {
+		return err
+	}
+	return scanErr
 }
 
 // validateBaselineFlags enforces the baseline flag contract before any
@@ -324,14 +367,30 @@ func runAutoScan(cmd *cobra.Command) error {
 	}
 
 	start := time.Now()
+	// The first incomplete configuration's error is the command's error;
+	// the other configurations are still scanned and reported.
+	var incompleteErr error
 	for i, path := range paths {
 		if sp != nil {
 			sp.Update(fmt.Sprintf("Scanning config %d/%d...", i+1, len(paths)))
 		}
-		result, scanErr := s.Scan(ctx, path)
-		if scanErr != nil {
+		result, scanErr := partialScan(s.Scan(ctx, path))
+		if result == nil {
 			stopSpinner(sp)
 			return scanErr
+		}
+		if scanErr != nil {
+			if incompleteErr == nil {
+				incompleteErr = scanErr
+			}
+			aggregate.Incomplete = true
+			aggregate.FailedOperations += max(result.FailedOperations, len(result.Errors))
+			for _, f := range result.Errors {
+				// Single-file scans name the file by its base name; keep the
+				// configuration's full path.
+				f.Path = path
+				aggregate.Errors = append(aggregate.Errors, f)
+			}
 		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
@@ -349,6 +408,13 @@ func runAutoScan(cmd *cobra.Command) error {
 	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto, Skipped: aggregate.Skipped}
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, aggregate)
+	}
+
+	if incompleteErr != nil {
+		if len(aggregate.Errors) > types.MaxReportedFailures {
+			aggregate.Errors = aggregate.Errors[:types.MaxReportedFailures]
+		}
+		return writeIncompleteScan(aggregate, store, incompleteErr)
 	}
 
 	if store != nil {

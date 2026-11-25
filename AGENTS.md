@@ -107,6 +107,17 @@ problems. `ListRules` returns nil in that case. `ExplainRule` reports an unknown
 ID with an error matching `errors.Is(err, ErrRuleNotFound)` and reports rule
 loading problems as themselves.
 
+A scan that cannot evaluate every file with every analyzer (an unreadable or
+oversized file, an analyzer failure or budget, a canceled context) returns a
+nil result and an error matching `errors.Is(err, ErrIncompleteScan)`. Treat it
+as a failure, never as clean, and never fail open on it. When files were
+evaluated, the error is an `*IncompleteError` (`errors.As`): its `Result` holds
+the findings that were found, `Result.Incomplete` is true, `Result.Errors`
+lists what failed (path, stage, analyzer, reason) and `Result.Verdict` is never
+clean. Report or block on those findings; do not drop them. A canceled scan's
+error also matches the context's error. Only a failure to inspect the target,
+resolve it or read its `.aguaraignore` returns no partial result.
+
 Consumers must bound inline inputs and execution resources themselves. A context
 does not guarantee immediate interruption of every parser or regular expression.
 Do not advertise a hard real-time deadline from this API.
@@ -142,6 +153,11 @@ exported through public aliases, rather than copying a partial struct.
   `unresolved_includes` (requirements includes not read). Zero files, zero
   evaluated evidence, unsupported files or any unpinned requirement is not a
   clean result. Library `ScanResult` values leave `coverage` unset.
+- Scan JSON carries `complete` (false for an incomplete scan), `errors` (the
+  failures, at most 100, sorted; always an array) and `failed_operations`. The
+  CLI writes the report of an incomplete scan, then exits 2; `audit` sets
+  top-level `complete`, `verdict.status` `incomplete` unless the gate failed,
+  and a `scan_incomplete` triage reason, so triage is never `proceed`.
 - `skipped` (top level, and in the CLI's `coverage`) lists entries a scan did
   not read because they are not regular files: symbolic links, named pipes,
   sockets, devices, and changed submodules under `--changed`. Always an array.

@@ -4,6 +4,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -345,6 +346,17 @@ type ScanResult struct {
 	// devices), sorted by path. They hold no file content to evaluate, so
 	// they do not make the scan incomplete. Serialized as [] when empty.
 	Skipped []SkippedFile `json:"skipped"`
+	// Incomplete is true when the scan could not evaluate every target
+	// with every analyzer. Such a result is only ever delivered inside an
+	// incomplete-scan error: its findings are real but partial, and its
+	// verdict is never clean. JSON carries the negation as "complete",
+	// always present.
+	Incomplete bool `json:"-"`
+	// Errors lists the operations an incomplete scan could not complete,
+	// sorted, at most MaxReportedFailures of them; FailedOperations
+	// counts all. Serialized as [] when empty.
+	Errors           []ScanFailure `json:"errors"`
+	FailedOperations int           `json:"failed_operations"`
 	// Coverage states what the scan evaluated. The CLI sets it so an
 	// empty result is distinguishable from a clean one; it is omitted
 	// when nil, which keeps existing library results unchanged.
@@ -411,6 +423,43 @@ type SkippedFile struct {
 	Kind string `json:"kind"`
 }
 
+// Stages of a scan at which an operation can fail.
+const (
+	FailureStageDiscover = "discover" // walking the target
+	FailureStageRead     = "read"     // reading a file
+	FailureStageAnalyze  = "analyze"  // running one analyzer on one file
+)
+
+// Reasons a scan operation failed.
+const (
+	FailureReasonBudget     = "budget"      // an analyzer's size or structure budget was exceeded
+	FailureReasonTooLarge   = "too_large"   // the file exceeds the read size limit
+	FailureReasonNotRegular = "not_regular" // the file changed into a non-regular file after discovery
+	FailureReasonIO         = "io"          // the file or directory could not be read
+	FailureReasonCanceled   = "canceled"    // the context was canceled or its deadline passed
+	FailureReasonError      = "error"       // any other analyzer error
+)
+
+// MaxReportedFailures bounds ScanResult.Errors; FailedOperations counts
+// every failure.
+const MaxReportedFailures = 100
+
+// ScanFailure is one operation an incomplete scan could not complete:
+// reading Path, or running Analyzer on it. Path is relative to the scan
+// target. Reason is one of the FailureReason constants. The underlying
+// error is not included: it can quote file content.
+type ScanFailure struct {
+	Path     string `json:"path"`
+	Stage    string `json:"stage"`
+	Analyzer string `json:"analyzer,omitempty"`
+	Reason   string `json:"reason"`
+}
+
+// ErrAnalysisBudget is wrapped by analyzer errors for input over the
+// analyzer's size or structure budget, so the failure is reported with
+// FailureReasonBudget.
+var ErrAnalysisBudget = errors.New("analysis budget exceeded")
+
 // MarshalJSON implements custom JSON marshaling so Duration serializes
 // as milliseconds, and normalizes the empty-results shape so consumers
 // always see `"findings": []` instead of `"findings": null` on clean
@@ -425,12 +474,17 @@ func (r ScanResult) MarshalJSON() ([]byte, error) {
 	if r.Skipped == nil {
 		r.Skipped = []SkippedFile{}
 	}
+	if r.Errors == nil {
+		r.Errors = []ScanFailure{}
+	}
 	type Alias ScanResult
 	return json.Marshal(struct {
 		Alias
+		Complete   bool  `json:"complete"`
 		DurationMS int64 `json:"duration_ms"`
 	}{
 		Alias:      Alias(r),
+		Complete:   !r.Incomplete,
 		DurationMS: r.Duration.Milliseconds(),
 	})
 }

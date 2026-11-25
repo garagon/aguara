@@ -67,8 +67,13 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 	}
 
 	f.printHeader(w, result)
+	f.printIncomplete(w, result)
 
 	switch {
+	case len(result.Findings) == 0 && result.Incomplete:
+		// Not clean: what failed was not evaluated.
+		st := NewStyle(f.NoColor)
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow("No findings in what was evaluated; the scan is incomplete."))
 	case len(result.Findings) == 0 && result.FilesScanned == 0:
 		// Zero files is not a clean result: nothing was evaluated.
 		st := NewStyle(f.NoColor)
@@ -127,6 +132,20 @@ func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult)
 	}
 	fmt.Fprintf(w, "  %s\n", strings.Join(parts, "  \u00b7  "))
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
+}
+
+// printIncomplete states, right under the header, that the scan is
+// incomplete and names what failed.
+func (f *TerminalFormatter) printIncomplete(w io.Writer, result *scanner.ScanResult) {
+	summary := IncompleteSummary(result)
+	if summary == "" {
+		return
+	}
+	st := NewStyle(f.NoColor)
+	fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+	for _, line := range IncompleteDetails(result) {
+		fmt.Fprintf(w, "    %s\n", st.Dim(line))
+	}
 }
 
 func (f *TerminalFormatter) printDashboard(w io.Writer, counts map[scanner.Severity]int) {

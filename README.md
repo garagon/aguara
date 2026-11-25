@@ -220,6 +220,8 @@ JSON reports from `scan`, `check` and `audit` include a `coverage` block stating
 
 In the development version, `scan` and `audit` also list under `coverage.skipped` the entries they did not read because they are not regular files: symbolic links (never followed inside a directory), named pipes, sockets, devices, and with `--changed` a changed submodule. Such entries hold no file content to evaluate and never block the scan. A scan target that is itself a named pipe or device is an error (exit code 2).
 
+A scan that cannot evaluate everything is incomplete and exits with code 2, whatever `--fail-on` says: a file that cannot be read or exceeds the size limit, an analyzer that fails or exceeds its budget on a file, or an interrupted run. In the development version, the report is still written, in every format and to `-o`: the findings from everything that was evaluated are kept, the terminal and Markdown reports open with a "SCAN INCOMPLETE" notice, JSON has `"complete": false` and lists what failed under `errors` (with `failed_operations` counting all of them), and SARIF marks the invocation `executionSuccessful: false` with one notification per failure. The verdict of an incomplete result is never `clean`. No baseline is written and no rug-pull state is saved from an incomplete scan. `audit` reports the same way, with `"complete": false`, `verdict.status` `incomplete` (unless the gate failed) and a `scan_incomplete` triage reason, so triage is never `proceed`.
+
 The [Go library](https://pkg.go.dev/github.com/garagon/aguara) exposes the same content-scanning engine for tools that need analysis without a CLI subprocess:
 
 ```go

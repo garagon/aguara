@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -238,6 +237,11 @@ func (s *Scanner) SetStateStore(store StateSaver) {
 // through a symbolic link) cannot be scanned and is an incomplete-scan
 // error. Inside a directory, such entries and symbolic links are skipped
 // and listed in ScanResult.Skipped.
+//
+// A failure to inspect the target, resolve it or read its .aguaraignore
+// returns no result. Any later failure (an unreadable subdirectory or
+// file, a file over the size limit, an analyzer failure, cancellation)
+// returns an *IncompleteError holding the partial result.
 func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	// Check if root is a single file (not a directory).
 	info, err := os.Stat(root)
@@ -279,17 +283,16 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		target.Path = filepath.Join(root, target.RelPath)
 	}
 
-	result, err := s.ScanTargets(ctx, targets)
-	if err != nil {
-		return nil, err
+	failures := make([]*scanFailure, 0, len(discovery.Failures))
+	for _, f := range discovery.Failures {
+		failures = append(failures, asScanFailure(f, "discover target", ""))
 	}
-	result.Skipped = append(result.Skipped, discovery.Skipped...)
-	SortSkipped(result.Skipped)
-	if discovery.ExcludedByIgnoreFile > 0 {
-		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
-	}
-	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
-	return result, nil
+	return s.scanTargets(ctx, targets, failures, discovery.Skipped, func(result *ScanResult) {
+		if discovery.ExcludedByIgnoreFile > 0 {
+			result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
+		}
+		result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	})
 }
 
 // ScanPaths scans the files at relPaths under root, such as the changed
@@ -297,10 +300,12 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // symbolic link: a path that no longer exists is left out (a deletion has
 // no content), and a symbolic link, named pipe, socket, device or directory
 // (for example a changed submodule) is listed in ScanResult.Skipped instead
-// of being read. Any other inspection failure is an incomplete-scan error.
+// of being read. A path that cannot be inspected makes the scan incomplete
+// (an *IncompleteError with the partial result), as in Scan.
 func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string) (*ScanResult, error) {
 	var targets []*Target
 	var skipped []types.SkippedFile
+	var failures []*scanFailure
 	for _, relPath := range relPaths {
 		absPath := filepath.Join(root, relPath)
 		// Lstat so a symlink committed to the repository is not resolved:
@@ -311,7 +316,8 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string)
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, IncompleteScanError("inspect changed target", relPath, "", err)
+			failures = append(failures, asScanFailure(IncompleteScanError("inspect changed target", relPath, "", err), "", ""))
+			continue
 		}
 		if kind := skipKind(info.Mode()); kind != "" {
 			skipped = append(skipped, types.SkippedFile{Path: relPath, Kind: kind})
@@ -319,17 +325,21 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string)
 		}
 		targets = append(targets, &Target{Path: absPath, RelPath: relPath, NoFollow: true})
 	}
-	result, err := s.ScanTargets(ctx, targets)
-	if err != nil {
-		return nil, err
-	}
-	result.Skipped = append(result.Skipped, skipped...)
-	SortSkipped(result.Skipped)
-	return result, nil
+	return s.scanTargets(ctx, targets, failures, skipped, nil)
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
+// A target that cannot be read, an analyzer that fails on a target and a
+// canceled context make the scan incomplete: the error is an
+// *IncompleteError holding the partial result.
 func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResult, error) {
+	return s.scanTargets(ctx, targets, nil, nil, nil)
+}
+
+// scanTargets is ScanTargets with failures and skipped entries already
+// found while listing the targets, and a hook that completes the result
+// (complete or partial) before it is returned.
+func (s *Scanner) scanTargets(ctx context.Context, targets []*Target, prior []*scanFailure, skipped []types.SkippedFile, finish func(*ScanResult)) (*ScanResult, error) {
 	start := time.Now()
 
 	// Fill MaxFileSize for targets that don't have it set.
@@ -353,35 +363,35 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		findings  []Finding
 		wg        sync.WaitGroup
 		processed atomic.Int32
+		loaded    atomic.Int32
 		redaction types.RedactionPlan
-		scanErr   error
-		failures  int
+		failures  = append([]*scanFailure(nil), prior...)
 		// suppressedBy records files whose inline directives removed
 		// findings, so callers can report that target policy applied.
 		suppressedBy = map[string]bool{}
 	)
 	recordFailure := func(err error) {
+		f := asScanFailure(err, "", "")
 		mu.Lock()
 		defer mu.Unlock()
-		failures++
-		// Keep one deterministic diagnostic instead of retaining an unbounded
-		// collection of errors from an attacker-controlled directory.
-		if scanErr == nil || err.Error() < scanErr.Error() {
-			scanErr = err
-		}
+		failures = append(failures, f)
 	}
 
 	total := len(targets)
 	for range s.workers {
 		wg.Go(func() {
 			for target := range fileCh {
-				if ctx.Err() != nil {
-					return
+				if err := ctx.Err(); err != nil {
+					// Account for every target the canceled scan did
+					// not evaluate; draining the channel is cheap.
+					recordFailure(IncompleteScanError("read target", target.RelPath, "", err))
+					continue
 				}
 				if err := target.LoadContent(); err != nil {
 					recordFailure(IncompleteScanError("read target", target.RelPath, "", err))
 					continue
 				}
+				loaded.Add(1)
 				if s.redact {
 					mu.Lock()
 					redaction.AddContent(target.RelPath, target.StringContent())
@@ -397,13 +407,16 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 				}
 				var fileFindings []Finding
 				for _, analyzer := range s.analyzers {
-					if ctx.Err() != nil {
-						return
+					if err := ctx.Err(); err != nil {
+						recordFailure(IncompleteScanError("analyze target", target.RelPath, analyzer.Name(), err))
+						break
 					}
 					results, err := analyzer.Analyze(ctx, target)
 					if err != nil {
+						// This analyzer failed on this file only: the other
+						// analyzers still run on it, and findings it
+						// reported before failing are kept.
 						recordFailure(IncompleteScanError("analyze target", target.RelPath, analyzer.Name(), err))
-						continue
 					}
 					if len(results) > 0 {
 						if s.redact {
@@ -444,15 +457,18 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 
 	wg.Wait()
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	canceled := ctx.Err()
+	if canceled != nil && len(failures) == 0 {
+		// Nothing was left unevaluated, but the caller canceled: the
+		// scan still reports the cancellation rather than success.
+		failures = append(failures, asScanFailure(IncompleteScanError("canceled", "", "", canceled), "", ""))
 	}
-	if scanErr != nil {
-		return nil, fmt.Errorf("%w; %d failed operation(s)", scanErr, failures)
-	}
+	incomplete := len(failures) > 0
 
-	// Cross-file analysis: finalize after all workers complete
-	if s.crossFileAccumulator != nil {
+	// Cross-file analysis: finalize after all workers complete. A partial
+	// scan correlates the files it did read; a canceled scan returns
+	// without the extra work.
+	if s.crossFileAccumulator != nil && canceled == nil {
 		crossFileFindings := s.crossFileAccumulator.Finalize()
 		if s.redact {
 			redaction.AddFindings(crossFileFindings)
@@ -469,9 +485,14 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	if (s.scanProfile != ProfileStrict || len(s.profileEnforced) > 0) && len(findings) > 0 {
 		verdict = applyProfile(s.scanProfile, findings, s.profileEnforced)
 	}
+	if incomplete && verdict == VerdictClean {
+		// What was not evaluated may hold anything: never clean.
+		verdict = VerdictFlag
+	}
 
-	// Persist state (rug-pull hashes) if configured
-	if s.stateStore != nil {
+	// Persist state (rug-pull hashes) only for a complete scan, so files
+	// that were not evaluated keep their previous hashes.
+	if s.stateStore != nil && !incomplete {
 		_ = s.stateStore.Save() // best-effort; scan results are still valid
 	}
 
@@ -495,15 +516,24 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	}
 	sort.Strings(policy.InlineSuppressed)
 
-	return &ScanResult{
+	result := &ScanResult{
 		Findings:     findings,
-		FilesScanned: len(targets),
+		FilesScanned: int(loaded.Load()),
+		Skipped:      skipped,
 		Verdict:      verdict,
 		RiskScore:    riskScore,
 		ToolName:     s.toolName,
 		Duration:     time.Since(start),
 		TargetPolicy: policy,
-	}, nil
+	}
+	SortSkipped(result.Skipped)
+	if finish != nil {
+		finish(result)
+	}
+	if incomplete {
+		return nil, newIncompleteError(result, failures, canceled)
+	}
+	return result, nil
 }
 
 // observeFileFindings hands one file's per-file findings to an accumulator

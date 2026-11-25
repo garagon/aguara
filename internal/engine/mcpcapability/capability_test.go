@@ -194,5 +194,25 @@ func TestCapabilityEvidenceAndLimits(t *testing.T) {
 		content := "capabilities: all\n" + strings.Repeat(" ", maxConfigBytes)
 		_, err := New().Analyze(context.Background(), &scanner.Target{RelPath: "config.yaml", Content: []byte(content)})
 		require.ErrorContains(t, err, "input limit")
+		require.ErrorIs(t, err, types.ErrAnalysisBudget, "reported as a budget failure")
+	})
+	t.Run("node limit is a budget failure", func(t *testing.T) {
+		content := "capabilities: all\nlist: [" + strings.Repeat("1,", maxNodes) + "1]\n"
+		_, err := New().Analyze(context.Background(), &scanner.Target{RelPath: "config.yaml", Content: []byte(content)})
+		require.ErrorIs(t, err, types.ErrAnalysisBudget)
+	})
+	// A Markdown or text document is parsed snippet by snippet, so the byte
+	// budget applies to each snippet: a long document with a small fenced
+	// configuration is analyzed, and only a single oversized snippet fails.
+	t.Run("long markdown with a small snippet", func(t *testing.T) {
+		filler := strings.Repeat("Plain documentation line.\n", maxConfigBytes/20)
+		doc := "# Tool\n\n```yaml\npermissions: all\n```\n\n" + filler
+		findings, err := New().Analyze(context.Background(), &scanner.Target{RelPath: "README.md", Content: []byte(doc)})
+		require.NoError(t, err)
+		require.Len(t, findings, 1)
+		require.Equal(t, 4, findings[0].Line)
+
+		_, err = New().Analyze(context.Background(), &scanner.Target{RelPath: "README.md", Content: []byte("permissions: all\n" + filler)})
+		require.ErrorIs(t, err, types.ErrAnalysisBudget, "one snippet over the budget still fails")
 	})
 }

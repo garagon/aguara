@@ -3,6 +3,7 @@ package scanner_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,11 +53,31 @@ func TestIncompleteScanRejectsLoadFailure(t *testing.T) {
 			if kind == "missing" {
 				require.ErrorIs(t, err, os.ErrNotExist)
 			}
-			require.Nil(t, r)
-			require.False(t, probe.finalized)
-			require.False(t, probe.saved)
+			require.Nil(t, r, "an incomplete scan returns no result value")
+			partial := requireIncomplete(t, err)
+			require.Equal(t, 1, partial.FilesScanned, "the readable target is still scanned")
+			reason := map[string]string{"missing": types.FailureReasonIO, "directory": types.FailureReasonNotRegular, "oversize": types.FailureReasonTooLarge}[kind]
+			require.Equal(t, []types.ScanFailure{{Path: "bad.txt", Stage: types.FailureStageRead, Reason: reason}}, partial.Errors)
+			require.True(t, probe.finalized, "cross-file correlation runs on the files that were read")
+			require.False(t, probe.saved, "state is not persisted from an incomplete scan")
 		})
 	}
+}
+
+// requireIncomplete returns the partial result carried by an
+// incomplete-scan error and checks its invariants.
+func requireIncomplete(t *testing.T, err error) *scanner.ScanResult {
+	t.Helper()
+	var incomplete *scanner.IncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	require.NotNil(t, incomplete.Result)
+	require.True(t, incomplete.Result.Incomplete)
+	require.NotEmpty(t, incomplete.Result.Errors)
+	require.Equal(t, incomplete.Result.Errors, incomplete.Failures)
+	require.GreaterOrEqual(t, incomplete.Result.FailedOperations, len(incomplete.Result.Errors))
+	require.NotEqual(t, types.VerdictClean, incomplete.Result.Verdict, "an incomplete result is never clean")
+	require.NotNil(t, incomplete.Result.Findings)
+	return incomplete.Result
 }
 
 func TestIncompleteScanRejectsAnalyzerFailure(t *testing.T) {
@@ -71,9 +92,113 @@ func TestIncompleteScanRejectsAnalyzerFailure(t *testing.T) {
 		require.ErrorIs(t, err, scanner.ErrIncompleteScan)
 		require.Nil(t, r)
 		require.NotContains(t, err.Error(), "synthetic-secret")
-		require.False(t, probe.finalized)
+		partial := requireIncomplete(t, err)
+		require.Equal(t, []types.ScanFailure{{Path: "input.txt", Stage: types.FailureStageAnalyze, Analyzer: "test-failure", Reason: types.FailureReasonError}}, partial.Errors)
+		if withFinding {
+			// A finding the analyzer reported before failing is kept, and
+			// the verdict follows it.
+			require.Len(t, partial.Findings, 1)
+			require.Equal(t, "TEST_PARTIAL", partial.Findings[0].RuleID)
+			require.Equal(t, types.VerdictBlock, partial.Verdict)
+		} else {
+			require.Empty(t, partial.Findings)
+			require.Equal(t, types.VerdictFlag, partial.Verdict)
+		}
+		require.True(t, probe.finalized)
 		require.False(t, probe.saved)
 	}
+}
+
+// One analyzer failing on one file fails that file for that analyzer
+// only: the other analyzers' findings on it and every other file's
+// findings are kept, and repeated scans return the same partial result.
+func TestIncompleteScanKeepsOtherAnalyzersAndFiles(t *testing.T) {
+	var first *scanner.ScanResult
+	for range 5 {
+		s := scanner.New(3)
+		s.RegisterAnalyzer(selectiveFailure{fail: "bad.md"})
+		s.RegisterAnalyzer(markerAnalyzer{})
+		_, err := s.ScanTargets(context.Background(), []*scanner.Target{
+			{RelPath: "bad.md", Content: []byte("marker")},
+			{RelPath: "good.md", Content: []byte("marker")},
+			{RelPath: "plain.md", Content: []byte("nothing")},
+		})
+		partial := requireIncomplete(t, err)
+		require.Equal(t, 3, partial.FilesScanned)
+		require.Equal(t, []types.ScanFailure{{Path: "bad.md", Stage: types.FailureStageAnalyze, Analyzer: "selective", Reason: types.FailureReasonBudget}}, partial.Errors)
+		var files []string
+		for _, f := range partial.Findings {
+			files = append(files, f.FilePath)
+		}
+		require.Equal(t, []string{"bad.md", "good.md"}, files)
+		if first == nil {
+			first = partial
+			continue
+		}
+		require.Equal(t, first.Findings, partial.Findings)
+		require.Equal(t, first.Errors, partial.Errors)
+	}
+}
+
+type selectiveFailure struct{ fail string }
+
+func (a selectiveFailure) Name() string { return "selective" }
+func (a selectiveFailure) Analyze(_ context.Context, target *scanner.Target) ([]types.Finding, error) {
+	if target.RelPath == a.fail {
+		return nil, fmt.Errorf("input over budget: %w", types.ErrAnalysisBudget)
+	}
+	return nil, nil
+}
+
+type markerAnalyzer struct{}
+
+func (markerAnalyzer) Name() string { return "marker" }
+func (markerAnalyzer) Analyze(_ context.Context, target *scanner.Target) ([]types.Finding, error) {
+	if !strings.Contains(target.StringContent(), "marker") {
+		return nil, nil
+	}
+	return []types.Finding{{RuleID: "TEST_MARKER", Severity: types.SeverityCritical, FilePath: target.RelPath, Line: 1, Analyzer: "marker"}}, nil
+}
+
+// A canceled scan returns promptly with the partial result and an error
+// matching both ErrIncompleteScan and the context's error.
+func TestIncompleteScanCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := scanner.New(1)
+	s.RegisterAnalyzer(cancelingAnalyzer{cancel: cancel})
+	_, err := s.ScanTargets(ctx, []*scanner.Target{
+		{RelPath: "a.md", Content: []byte("x")},
+		{RelPath: "b.md", Content: []byte("x")},
+		{RelPath: "c.md", Content: []byte("x")},
+	})
+	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	require.ErrorIs(t, err, context.Canceled)
+	partial := requireIncomplete(t, err)
+	require.Equal(t, 3, partial.FailedOperations, "every target not evaluated is accounted for")
+	for _, f := range partial.Errors {
+		require.Equal(t, types.FailureReasonCanceled, f.Reason)
+	}
+}
+
+type cancelingAnalyzer struct{ cancel context.CancelFunc }
+
+func (cancelingAnalyzer) Name() string { return "canceling" }
+func (a cancelingAnalyzer) Analyze(ctx context.Context, _ *scanner.Target) ([]types.Finding, error) {
+	a.cancel()
+	return nil, ctx.Err()
+}
+
+func TestIncompleteResultIsBoundedAndSorted(t *testing.T) {
+	var targets []*scanner.Target
+	for i := range types.MaxReportedFailures + 50 {
+		targets = append(targets, &scanner.Target{Path: filepath.Join(t.TempDir(), "missing"), RelPath: fmt.Sprintf("f%03d.md", i)})
+	}
+	_, err := scanner.New(4).ScanTargets(context.Background(), targets)
+	partial := requireIncomplete(t, err)
+	require.Equal(t, types.MaxReportedFailures+50, partial.FailedOperations)
+	require.Len(t, partial.Errors, types.MaxReportedFailures)
+	require.Equal(t, "f000.md", partial.Errors[0].Path)
+	require.Contains(t, err.Error(), "150 failed operation(s)")
 }
 
 func TestIncompleteScanDiagnosticIsBoundedAndStable(t *testing.T) {
@@ -140,9 +265,12 @@ func TestIncompleteDiscoveryDoesNotTreatDirectoryNamesAsFileExclusions(t *testin
 			if _, err := os.ReadDir(child); err == nil {
 				t.Skip("permissions not enforced")
 			}
+			td = scanner.TargetDiscovery{IgnorePatterns: []string{name}}
 			targets, err = td.Discover(dir)
-			require.ErrorIs(t, err, scanner.ErrIncompleteScan)
-			require.Nil(t, targets)
+			require.NoError(t, err, "only a root failure stops discovery")
+			require.Empty(t, targets)
+			require.Len(t, td.Failures, 1, "the unreadable directory is reported, not dropped")
+			require.ErrorIs(t, td.Failures[0], scanner.ErrIncompleteScan)
 		})
 	}
 }
@@ -169,9 +297,15 @@ func TestIncompleteDiscoveryRejectsErrors(t *testing.T) {
 		if _, err := os.ReadDir(child); err == nil {
 			t.Skip("permissions not enforced")
 		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "ok.md"), []byte("ok"), 0o600))
 		td := scanner.TargetDiscovery{IgnoreProjectFile: true}
-		_, err := td.Discover(dir)
-		require.Error(t, err)
+		targets, err := td.Discover(dir)
+		require.NoError(t, err)
+		require.Len(t, targets, 1, "the rest of the tree is still discovered")
+		require.Len(t, td.Failures, 1)
+		// A scan of the tree is incomplete and keeps the readable file.
+		_, err = scanner.New(1).Scan(context.Background(), dir)
+		require.Equal(t, 1, requireIncomplete(t, err).FilesScanned)
 	})
 }
 

@@ -21,13 +21,36 @@ func (f *MarkdownFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 
 	counts := f.countBySeverity(result.Findings)
 	f.printHeader(w, result, counts)
+	f.printIncomplete(w, result)
 	f.printFindingsByFile(w, result.Findings)
 	f.printFooter(w, result)
 	return nil
 }
 
+// printIncomplete states that the scan is incomplete and names what failed.
+func (f *MarkdownFormatter) printIncomplete(w io.Writer, result *scanner.ScanResult) {
+	summary := IncompleteSummary(result)
+	if summary == "" {
+		return
+	}
+	fmt.Fprintf(w, "> [!WARNING]\n> **%s**\n", escapeMarkdown(summary))
+	for _, line := range IncompleteDetails(result) {
+		fmt.Fprintf(w, "> - %s\n", escapeMarkdown(line))
+	}
+	fmt.Fprintf(w, "\n")
+}
+
 func (f *MarkdownFormatter) printClean(w io.Writer, result *scanner.ScanResult) {
 	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
+	if result.Incomplete {
+		// Not a pass: what failed was not evaluated.
+		fmt.Fprintf(w, "> **Incomplete** · %d files · %d rules · %.2fs\n\n",
+			result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
+		f.printIncomplete(w, result)
+		fmt.Fprintf(w, "No findings in what was evaluated.\n")
+		f.printSkipped(w, result)
+		return
+	}
 	if result.FilesScanned == 0 {
 		// Zero files is not a pass: nothing was evaluated.
 		fmt.Fprintf(w, "> **Nothing scanned** · 0 files · %d rules · %.2fs\n\n",
