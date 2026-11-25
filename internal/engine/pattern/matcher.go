@@ -89,54 +89,136 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	keys := lookupKeys(target.RelPath)
 	applicable := m.rulesForFile(target.RelPath, keys)
 
-	// Pre-filter: run keyword AC to find which rules could possibly match.
-	// Rules whose required literal substrings don't appear are skipped entirely.
-	candidatePatterns := m.pf.candidatePatternMasks(lowerContent.text)
+	matches, err := m.matchText(ctx, applicable, keys, content, lowerContent, lines, target, nil, true)
+	for _, rm := range matches {
+		findings = append(findings, directFinding(rm, lines, target, cbMap, downgradeCode))
+	}
+	if err != nil {
+		return findings, err
+	}
 
-	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
-	acHitRules := m.acPrefilter(keys, lowerContent.text)
+	// Decode encoded blobs and match the decoded text against the same
+	// rules, with the same semantics (see decoder.go).
+	decoded, err := m.decodeAndRescan(ctx, target, applicable, keys, cbMap, true)
+	findings = append(findings, decoded...)
+	return findings, err
+}
 
+// matchText runs the applicable rules over one text and returns their
+// matches in rule order. With prefilter set, the keyword and contains
+// automatons skip rules whose required literals do not occur in the text;
+// without it every pattern runs, which tests use as the reference. A
+// non-nil keep restricts the matches to hits it accepts: a match_mode: any
+// hit must be accepted, and a match_mode: all match needs one accepted hit.
+func (m *Matcher) matchText(ctx context.Context, applicable []*rules.CompiledRule, keys []string, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, keep func(matchHit) bool, prefilter bool) ([]ruleMatch, error) {
+	var candidatePatterns map[string]uint64
+	var acHitRules map[string]bool
+	if prefilter {
+		// Pre-filter: run keyword AC to find which rules could possibly
+		// match. Rules whose required literal substrings don't appear are
+		// skipped entirely.
+		candidatePatterns = m.pf.candidatePatternMasks(lowerContent.text)
+		// Secondary pre-filter: AC on contains patterns for exact
+		// substring pre-check.
+		acHitRules = m.acPrefilter(keys, lowerContent.text)
+	}
+
+	var matches []ruleMatch
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
-			return findings, ctx.Err()
+			return matches, ctx.Err()
 		}
 
-		// Skip rules whose keywords don't appear in content
-		patternMask := candidatePatterns[rule.ID]
-		if m.pf.unfiltered[rule.ID] {
-			patternMask = ^uint64(0)
-		}
-		if candidatePatterns != nil && !m.pf.unfiltered[rule.ID] {
-			switch rule.MatchMode {
-			case rules.MatchAll:
-				if patternMask != m.pf.allPatterns[rule.ID] {
-					continue
-				}
-			default:
-				if patternMask == 0 {
-					continue
+		patternMask := ^uint64(0)
+		if prefilter {
+			// Skip rules whose keywords don't appear in content
+			patternMask = candidatePatterns[rule.ID]
+			if m.pf.unfiltered[rule.ID] {
+				patternMask = ^uint64(0)
+			}
+			if candidatePatterns != nil && !m.pf.unfiltered[rule.ID] {
+				switch rule.MatchMode {
+				case rules.MatchAll:
+					if patternMask != m.pf.allPatterns[rule.ID] {
+						continue
+					}
+				default:
+					if patternMask == 0 {
+						continue
+					}
 				}
 			}
-		}
 
-		// Skip rules that only have contains patterns and got no AC hits
-		if acHitRules != nil && !acHitRules[rule.ID] && isContainsOnly(rule) {
-			continue
+			// Skip rules that only have contains patterns and got no AC hits
+			if acHitRules != nil && !acHitRules[rule.ID] && isContainsOnly(rule) {
+				continue
+			}
 		}
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			matches = append(matches, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, keep)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			if rm, ok := m.matchAll(rule, content, lowerContent, lines, keep); ok {
+				matches = append(matches, rm)
+			}
 		}
 	}
+	return matches, nil
+}
 
-	// Phase 4: decode base64/hex blobs and re-scan with all-target rules only.
-	// Extension-specific rules are irrelevant for decoded content (no file context).
-	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)
+// ruleMatch is one reportable match of a rule in a text: the hit of a
+// match_mode: any rule, or the hit chosen for each pattern of a
+// match_mode: all rule. The first hit is the finding location.
+type ruleMatch struct {
+	rule *rules.CompiledRule
+	hits []matchHit
+	conf float64
+	all  bool
+}
 
-	return findings, nil
+// matchedText is the evidence a finding reports for the match.
+func (rm ruleMatch) matchedText() string {
+	if !rm.all {
+		return rm.hits[0].text
+	}
+	parts := make([]string, 0, len(rm.hits))
+	for _, hit := range rm.hits {
+		parts = append(parts, hit.text)
+	}
+	return strings.Join(parts, " + ")
+}
+
+// directFinding reports a match found in the file's own text.
+func directFinding(rm ruleMatch, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) scanner.Finding {
+	rule, line := rm.rule, rm.hits[0].line
+	sev := rule.Severity
+	inCB := isInCodeBlock(cbMap, line)
+	if inCB && downgradeCode {
+		sev = types.DowngradeSeverity(sev)
+	}
+	finding := scanner.Finding{
+		RuleID:      rule.ID,
+		RuleName:    rule.Name,
+		Severity:    sev,
+		Category:    rule.Category,
+		Description: rule.Description,
+		Remediation: rule.Remediation,
+		FilePath:    target.RelPath,
+		Line:        line,
+		MatchedText: rm.matchedText(),
+		Context:     types.ExtractContext(lines, line, ctxRadius, ctxRadius),
+		Analyzer:    "pattern",
+		InCodeBlock: inCB,
+		Sensitive:   rule.Sensitive,
+		Confidence:  rm.conf,
+	}
+	if rm.all {
+		for _, hit := range rm.hits {
+			finding.AddEvidenceRange(hit.line, hit.endLine)
+		}
+	}
+	return finding
 }
 
 // acPrefilter runs all AC automatons applicable to this file and returns the set
@@ -255,8 +337,8 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
-	var findings []scanner.Finding
+func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, keep func(matchHit) bool) []ruleMatch {
+	var matches []ruleMatch
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
 	seenLines := make(map[int]bool)
@@ -275,49 +357,32 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 			hitPatterns++
 		}
 		for _, hit := range hits {
+			if keep != nil && !keep(hit) {
+				continue
+			}
 			if seenLines[hit.line] {
 				continue
 			}
 			if isExcluded(rule.ExcludePatterns, lines, hit) {
 				continue
 			}
-			sev := rule.Severity
-			inCB := isInCodeBlock(cbMap, hit.line)
-			if inCB && downgradeCode {
-				sev = types.DowngradeSeverity(sev)
-			}
 			seenLines[hit.line] = true
-			findings = append(findings, scanner.Finding{
-				RuleID:      rule.ID,
-				RuleName:    rule.Name,
-				Severity:    sev,
-				Category:    rule.Category,
-				Description: rule.Description,
-				Remediation: rule.Remediation,
-				FilePath:    target.RelPath,
-				Line:        hit.line,
-				MatchedText: hit.text,
-				Context:     types.ExtractContext(lines, hit.line, ctxRadius, ctxRadius),
-				Analyzer:    "pattern",
-				InCodeBlock: inCB,
-				Sensitive:   rule.Sensitive,
-				Confidence:  0.85, // placeholder, updated below
-			})
+			matches = append(matches, ruleMatch{rule: rule, hits: []matchHit{hit}})
 		}
 	}
 
 	// Dynamic confidence: 0.70 (1 of many patterns) to 0.95 (all patterns hit)
-	if len(findings) > 0 && len(rule.Patterns) > 0 {
+	if len(matches) > 0 && len(rule.Patterns) > 0 {
 		conf := 0.70 + 0.25*(float64(hitPatterns)/float64(len(rule.Patterns)))
-		for i := range findings {
-			findings[i].Confidence = conf
+		for i := range matches {
+			matches[i].conf = conf
 		}
 	}
 
-	return findings
+	return matches
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, keep func(matchHit) bool) (ruleMatch, bool) {
 	// All patterns must have at least one hit that no exclude pattern
 	// suppresses. Excludes apply to every contributing hit, as they do in
 	// match_mode: any, so a benign form of any pattern's text does not
@@ -326,7 +391,7 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	for _, pat := range rule.Patterns {
 		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, content, lowerContent, lines))
 		if len(hits) == 0 {
-			return nil
+			return ruleMatch{}, false
 		}
 		allHits = append(allHits, hits)
 	}
@@ -337,43 +402,17 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 	chosen := make([]matchHit, len(allHits))
 	if rule.WithinLines > 0 {
 		if !windowHits(allHits, rule.WithinLines, chosen) {
-			return nil
+			return ruleMatch{}, false
 		}
 	} else {
 		for i, hits := range allHits {
 			chosen[i] = hits[0]
 		}
 	}
-	firstHit := chosen[0]
-	matchedParts := make([]string, 0, len(chosen))
-	for _, hit := range chosen {
-		matchedParts = append(matchedParts, hit.text)
+	if keep != nil && !slices.ContainsFunc(chosen, keep) {
+		return ruleMatch{}, false
 	}
-	sev := rule.Severity
-	inCB := isInCodeBlock(cbMap, firstHit.line)
-	if inCB && downgradeCode {
-		sev = types.DowngradeSeverity(sev)
-	}
-	finding := scanner.Finding{
-		RuleID:      rule.ID,
-		RuleName:    rule.Name,
-		Severity:    sev,
-		Category:    rule.Category,
-		Description: rule.Description,
-		Remediation: rule.Remediation,
-		FilePath:    target.RelPath,
-		Line:        firstHit.line,
-		MatchedText: strings.Join(matchedParts, " + "),
-		Context:     types.ExtractContext(lines, firstHit.line, ctxRadius, ctxRadius),
-		Analyzer:    "pattern",
-		InCodeBlock: inCB,
-		Sensitive:   rule.Sensitive,
-		Confidence:  0.95,
-	}
-	for _, hit := range chosen {
-		finding.AddEvidenceRange(hit.line, hit.endLine)
-	}
-	return []scanner.Finding{finding}
+	return ruleMatch{rule: rule, hits: chosen, conf: 0.95, all: true}, true
 }
 
 // windowHits looks for the earliest window of at most within consecutive
@@ -414,11 +453,14 @@ func windowHits(allHits [][]matchHit, within int, chosen []matchHit) bool {
 }
 
 // matchHit is one pattern match. line and endLine are the 1-based first and
-// last source lines the match spans (equal for a single-line match); text
-// is the matched text, truncated for display.
+// last source lines the match spans (equal for a single-line match); start
+// and end are its byte offsets in the matched text; text is the matched
+// text, truncated for display.
 type matchHit struct {
 	line    int
 	endLine int
+	start   int
+	end     int
 	text    string
 }
 
@@ -493,7 +535,7 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 			if len(matched) > 200 {
 				matched = matched[:200] + "..."
 			}
-			hits = append(hits, matchHit{line: line, endLine: endLine, text: matched})
+			hits = append(hits, matchHit{line: line, endLine: endLine, start: loc[0], end: loc[1], text: matched})
 		}
 	case rules.PatternContains:
 		target := pat.Value // already lowercased during compilation
@@ -511,21 +553,11 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 			end := lowerContent.originalOffset(absPos + len(target))
 			line := lineAt(start)
 			matched := content[start:end]
-			hits = append(hits, matchHit{line: line, endLine: line + strings.Count(matched, "\n"), text: matched})
+			hits = append(hits, matchHit{line: line, endLine: line + strings.Count(matched, "\n"), start: start, end: end, text: matched})
 			idx = absPos + len(target)
 		}
 	}
 	return hits
-}
-
-func lineNumberAtOffset(content string, offset int) int {
-	line := 1
-	for i := 0; i < offset && i < len(content); i++ {
-		if content[i] == '\n' {
-			line++
-		}
-	}
-	return line
 }
 
 // isMarkdownLike reports whether the file is Markdown: it has a Markdown

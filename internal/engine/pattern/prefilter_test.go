@@ -402,18 +402,23 @@ func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanne
 	downgradeCode := cbMap != nil && !types.IsAgentDirectiveFile(target.RelPath)
 
 	var findings []scanner.Finding
-	for _, rule := range m.rulesForFile(target.RelPath, lookupKeys(target.RelPath)) {
+	keys := lookupKeys(target.RelPath)
+	applicable := m.rulesForFile(target.RelPath, keys)
+	for _, rule := range applicable {
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings,
-				m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			for _, rm := range m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, nil) {
+				findings = append(findings, directFinding(rm, lines, target, cbMap, downgradeCode))
+			}
 		case rules.MatchAll:
-			findings = append(findings,
-				m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			if rm, ok := m.matchAll(rule, content, lowerContent, lines, nil); ok {
+				findings = append(findings, directFinding(rm, lines, target, cbMap, downgradeCode))
+			}
 		}
 	}
-	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)
-	return findings
+	// Decoded content goes through the same rules without the prefilter.
+	decoded, _ := m.decodeAndRescan(context.Background(), target, applicable, keys, cbMap, false)
+	return append(findings, decoded...)
 }
 
 func prefilterTestFilename(rule *rules.CompiledRule) string {
