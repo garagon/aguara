@@ -13,12 +13,14 @@ The relaxed scan profiles no longer return `clean` while a HIGH or CRITICAL
 finding remains.
 
 `check` and `audit` now read Python lockfiles, requirements files and project
-virtual environments. Pattern rules match more precisely: exclusions apply to
-the matched line, co-occurrence rules need their evidence close together, agent
-instruction files such as Cursor rules are scanned as Markdown, and fenced
-commands in skills keep their full severity. Some of these changes make CI
-gates fail or pass where they did not before; read the upgrade notes before
-updating a pipeline.
+virtual environments, and the JavaScript risk checks also analyze TypeScript.
+Pattern rules match more precisely: exclusions apply to the matched line,
+co-occurrence rules need their evidence close together, agent instruction files
+such as Cursor rules are scanned as Markdown, and fenced commands in skills
+keep their full severity. A skill that makes a local helper mandatory is now
+reported when the helper's own scan finds high-risk behavior. Some of these
+changes make CI gates fail or pass where they did not before; read the upgrade
+notes before updating a pipeline.
 
 ### Added
 
@@ -49,6 +51,17 @@ updating a pipeline.
   requirements files; terminal output shows `path:line`. PyPI finding titles
   list every matching advisory ID, and the remediation names the dependency
   group when the lockfile records one.
+- TypeScript sources (`.ts`, `.mts`, `.cts`) are analyzed by the JavaScript
+  risk checks with the same rules and severities as JavaScript. Type
+  annotations, generics, `as` casts, decorators, `import type`,
+  `import x = require()`, postfix non-null assertions and call type arguments
+  such as `fetch<T>()` are handled. JavaScript files are read exactly as
+  before, and `.jsx` and `.tsx` files are not analyzed by these checks. Known
+  limits: a postfix non-null assertion is not recognised after a property
+  named like a keyword (for example `cfg.default!`), after a variable named
+  `of`, or after a string or template literal, so the code that follows can be
+  read differently from how the compiler reads it; and an `as` cast on the
+  options of a recursive delete call hides it from JS_WIPER_TRIPWIRE_001.
 - `scan`, `check` and `audit` JSON include a `coverage` block stating what was
   evaluated: `files_scanned` and the scan `scope` (`path`, `changed` or
   `auto`), `package_evidence` per ecosystem and source, `unsupported_evidence`
@@ -96,7 +109,20 @@ updating a pipeline.
   severity and confidence, because the agent is told to run them. Ordinary
   documentation such as a README still reports fenced matches one level lower.
   Fences follow CommonMark, including `~~~` fences and longer fences that
-  contain shorter ones.
+  contain shorter ones, and the skill-chain check uses the same rules to treat
+  instructions inside a fenced block as examples rather than mandatory steps.
+- AGENT_FORCED_HELPER_RISK_001 also reports a skill when a helper that
+  `SKILL.md` makes mandatory has a CRITICAL finding of its own, or a HIGH
+  finding from a behavior analyzer (jsrisk, pyrisk, rsbuild, script-risk) or
+  in the exfiltration or supply-chain-exfil category, including findings whose
+  matched text is redacted. Credential-leak findings never count. Helpers
+  resolve by path inside the skill directory whatever their extension,
+  including `./path` invocations, TypeScript runners such as
+  `npx tsx scripts/x.ts`, and extensionless scripts; URL schemes and unclosed
+  or partial quoted operands do not resolve. The finding names the helper, rule
+  and severity, and its description adds the helper line. The rule keeps its ID
+  and HIGH severity, and the catalog stays at 259 detections; only this rule's
+  catalog description changed.
 - Exclude patterns check only the line or lines a match spans unless marked
   `scope: context`; before, they also checked the 3 lines above every match.
   A comment or logging call above a Python credential read no longer hides the
@@ -188,11 +214,22 @@ updating a pipeline.
   `WithRuleOverrides`) now take effect for analyzer-emitted rules, such as the
   agent-policy, jsrisk, NLP and toxic-flow rules; v0.29.0 accepted them without
   effect for every analyzer rule except MCP_009. `ListRules` reflects them.
+  Disabled rules, severity overrides and tool exemptions also apply before the
+  skill-chain check reads a helper's findings: disabling or lowering the rule
+  behind a helper's finding removes the chain finding, and raising a rule so
+  that it qualifies can add one.
+- SUPPLY_007 matches setuid and setgid modes it missed when applied to a path:
+  `u+s`, `g+s`, `ug+s`, combined symbolic modes such as `u+x,g+s`, and octal
+  modes that set those bits, such as `4755`, `2755` or `06755`. Ordinary modes
+  (`755`, `+x`, `u+x`), `g-s`, the sticky bit alone (`1777`) and prose such as
+  "chmod 4755 binaries." do not match. Kubernetes `SETUID`/`SETGID` capability
+  requests remain LOW K8S_IDENTITY_CAPABILITIES_001 observations.
 - `scan --auto` reports the highest verdict and risk score of the scanned MCP
   configurations; it reported `clean` and a risk score of 0 even with a
-  CRITICAL finding. It also sets `tool_name` from `--tool-name` and orders
-  findings like any other scan. With no MCP configuration found, it writes a
-  normal report in the selected format and prints the notice on stderr.
+  CRITICAL finding. It also sets `tool_name` from `--tool-name` and
+  `duration_ms`, and orders findings like any other scan. With no MCP
+  configuration found, it writes a normal report in the selected format and
+  prints the notice on stderr.
 - An unsupported `--format` is rejected with exit code 2 and the list of
   supported formats instead of falling back to the terminal report:
   `audit --format sarif -o report.sarif` wrote no file and exited 0. An
@@ -218,6 +255,10 @@ updating a pipeline.
 - Repeated scans of the same input return the same findings in the same order.
   Findings are fully ordered, and NLP string sampling, NLP classifier ties and
   cross-file toxic-flow pairs no longer depend on map or scheduling order.
+- JavaScript analysis matches parentheses in linear time, so deeply nested
+  input no longer makes scan time grow quadratically. Results are unchanged;
+  ordinary JavaScript files take a few percent longer to analyze because some
+  patterns gained TypeScript alternatives.
 - `ExplainRule` returns the error from loading custom rules instead of
   reporting the rule as not found.
 - The prompt-injection analyzer reads a leading YAML frontmatter block, as in
@@ -236,6 +277,12 @@ updating a pipeline.
   these findings, because fingerprints do not include severity. Files such as
   `.cursor/rules/*.mdc`, `.cursorrules` and `.rules` are now scanned with the
   Markdown rules and can add findings.
+- Skills whose mandatory helper has a qualifying finding of its own get a new
+  HIGH AGENT_FORCED_HELPER_RISK_001 on `SKILL.md`. Existing
+  AGENT_FORCED_HELPER_RISK_001 findings get new baseline and SARIF fingerprints
+  once, because their matched text now ends with the helper evidence;
+  re-baseline after upgrading. Afterwards the fingerprint stays the same when
+  the helper is edited above the cited line.
 - Exclude patterns no longer look at the lines above a match, so findings that
   a comment, logging call or heading above them used to hide are reported. A
   custom rule whose exclude relied on that needs `scope: context`.
@@ -255,6 +302,15 @@ updating a pipeline.
   Pipfile.lock pipfile-spec up to 6), a requirements file that declares an
   encoding other than UTF-8 or ASCII, an unknown pip option, includes nested
   more than eight levels deep, or a symlinked dependency file.
+- TypeScript repositories can report new findings: JS_CI_SECRET_HARVEST_001
+  (CRITICAL), JS_DAEMON_001 (HIGH) and the other JavaScript risk rules now
+  apply to `.ts`, `.mts` and `.cts` files. JS_CI_SECRET_HARVEST_001 fires when
+  a file reads a CI token such as `GITHUB_TOKEN` or `NPM_TOKEN` from
+  `process.env` and calls a network client, which can include legitimate API
+  clients; JS_DAEMON_001 fires on detached child processes with ignored stdio.
+- SUPPLY_007 now reports `chmod g+s` and octal `2xxx` modes on directories,
+  for example a shared group directory, as HIGH. Baseline or disable the rule
+  where this is intended.
 - Packages from any index are matched by their PyPI name, so an internal
   package served by a private index that shares its name with a malicious PyPI
   package is reported. Treat it as a dependency-confusion exposure: check which
@@ -280,7 +336,9 @@ updating a pipeline.
   must compile. In a detected CI environment, problems in the project's own
   `.aguara.yml` do not fail `scan`, because the file is not applied there.
 - Existing `rule_overrides` and `WithRuleOverrides` entries for
-  analyzer-emitted rules start to apply. This replaces the v0.29.0 note that
+  analyzer-emitted rules start to apply, including to the helper findings the
+  skill-chain check reads, so an override can also add or remove an
+  AGENT_FORCED_HELPER_RISK_001 finding. This replaces the v0.29.0 note that
   analyzer rules such as K8S_IDENTITY_CAPABILITIES_001 support only
   `--disable-rule`.
 - Agents and wrappers reading `audit` `triage`, `agent_handoff` or
