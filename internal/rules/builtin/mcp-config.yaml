@@ -45,6 +45,7 @@ name: "Hardcoded secrets in MCP env block"
 description: "Detects hardcoded API keys, tokens, or passwords in MCP server environment configuration"
 severity: LOW
 category: mcp-config
+cwe: [CWE-798]
 targets: ["*.json", "*.md", "*.txt"]
 match_mode: all
 sensitive: true

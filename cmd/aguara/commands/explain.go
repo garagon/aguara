@@ -80,6 +80,9 @@ func writeExplainTerminal(w io.Writer, found *rulemeta.Rule) error {
 	if found.Analyzer != "" {
 		fmt.Fprintf(w, "%s %s\n", st.Dim("Analyzer:"), found.Analyzer)
 	}
+	if len(found.CWE) > 0 {
+		fmt.Fprintf(w, "%s %s\n", st.Dim("CWE:"), strings.Join(found.CWE, ", "))
+	}
 
 	if found.Description != "" {
 		fmt.Fprintf(w, "\n%s\n%s\n", st.Bold("Description:"), found.Description)

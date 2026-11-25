@@ -162,6 +162,7 @@ name: "Binary download and execute"
 description: "Detects downloading a binary file followed by making it executable"
 severity: CRITICAL
 category: external-download
+cwe: [CWE-494]
 targets: ["*.md", "*.txt"]
 match_mode: all
 within_lines: 25
@@ -329,6 +330,7 @@ name: "Curl or wget piped to shell"
 description: "Detects downloading scripts piped directly to a shell interpreter"
 severity: CRITICAL
 category: external-download
+cwe: [CWE-494]
 targets: ["*.md", "*.txt"]
 match_mode: any
 remediation: "Download the script first, inspect its contents, verify its checksum, then execute it separately."

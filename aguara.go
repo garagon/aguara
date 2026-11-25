@@ -133,6 +133,7 @@ type RuleDetail struct {
 	DecisionImpact string   `json:"decision_impact"`
 	Description    string   `json:"description"`
 	Remediation    string   `json:"remediation,omitempty"`
+	CWE            []string `json:"cwe,omitempty"`
 	Patterns       []string `json:"patterns"`
 	TruePositives  []string `json:"true_positives"`
 	FalsePositives []string `json:"false_positives"`
@@ -421,6 +422,7 @@ func ruleDetailFromMetadata(r rulemeta.Rule) *RuleDetail {
 		DecisionImpact: r.DecisionImpact,
 		Description:    r.Description,
 		Remediation:    r.Remediation,
+		CWE:            append([]string(nil), r.CWE...),
 		Patterns:       append([]string(nil), r.Patterns...),
 		TruePositives:  append([]string(nil), r.TruePositives...),
 		FalsePositives: append([]string(nil), r.FalsePositives...),

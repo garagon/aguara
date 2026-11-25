@@ -262,6 +262,7 @@ func fromCompiledRule(r *rules.CompiledRule) rulemeta.Rule {
 		Analyzer:       rulemeta.AnalyzerPattern, // empty -> JSON omits
 		Description:    r.Description,
 		Remediation:    r.Remediation,
+		CWE:            append([]string(nil), r.CWE...),
 		Patterns:       patterns,
 		TruePositives:  r.Examples.TruePositive,
 		FalsePositives: r.Examples.FalsePositive,

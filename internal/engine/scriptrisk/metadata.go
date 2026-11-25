@@ -26,6 +26,7 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "CRITICAL",
 			Category: "supply-chain-exfil",
 			Analyzer: rulemeta.AnalyzerScriptRisk,
+			CWE:      []string{"CWE-494"},
 			Description: "Python code executes response content fetched through a bound requests, httpx, " +
 				"or urllib client. The analyzer follows the response body through assignments and safe " +
 				"transformations so a download and exec must form one flow.",
@@ -50,6 +51,7 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "MEDIUM",
 			Category: "supply-chain",
 			Analyzer: rulemeta.AnalyzerScriptRisk,
+			CWE:      []string{"CWE-732"},
 			Description: "Python code calls a bound os.chmod or executes chmod through subprocess/os with " +
 				"a literal mode that grants write access to every local user.",
 			Remediation: "Use the narrowest owner/group permissions required. Avoid granting write access " +
