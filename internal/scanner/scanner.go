@@ -301,9 +301,9 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // Ignore patterns, including root's .aguaraignore when project policy is
 // enabled, apply to every path, files named directly included. Cross-file
 // correlation sees only the files of this scan, grouped by their directory
-// relative to root. It also returns the symbolic links it was given, which
-// are not followed.
-func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*ScanResult, []string, error) {
+// relative to root. It also returns the paths it was given and did not
+// scan (symbolic links, paths inside .git, node_modules or .aguara).
+func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*ScanResult, []SkippedPath, error) {
 	discovery := &TargetDiscovery{
 		IgnorePatterns:    s.ignorePatterns,
 		MaxFileSize:       s.maxFileSize,
@@ -327,7 +327,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
 	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
 	result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
-	return result, discovery.SkippedLinks, nil
+	return result, discovery.Skipped, nil
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.

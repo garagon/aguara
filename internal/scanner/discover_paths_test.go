@@ -55,10 +55,34 @@ func TestDiscoverPathsRejectsPathsOutsideRoot(t *testing.T) {
 	targets, err := td.DiscoverPaths(root, []string{filepath.Join(root, "in.md"), filepath.Join(root, "linked")})
 	require.NoError(t, err)
 	require.Equal(t, []string{"in.md"}, relPaths(targets))
-	require.Equal(t, []string{filepath.Join(root, "linked")}, td.SkippedLinks)
+	require.Len(t, td.Skipped, 1)
+	require.Equal(t, filepath.Join(root, "linked"), td.Skipped[0].Path)
+	require.Contains(t, td.Skipped[0].Reason, "symbolic link")
 
 	_, err = td.DiscoverPaths(root, []string{filepath.Join(root, "missing.md")})
 	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+}
+
+// Paths inside the directories a walk always skips are skipped when named
+// too, so a path list equals a directory scan, and each is reported.
+func TestDiscoverPathsSkipsAlwaysSkippedDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, "a.md", "node_modules/pkg/index.md", ".git/config", ".aguara/state.md", "src/node_modules/x.md")
+	t.Chdir(dir)
+	td := &scanner.TargetDiscovery{}
+	targets, err := td.DiscoverPaths(".", []string{"a.md", "node_modules/pkg/index.md", ".git/config", ".aguara", "src/node_modules", "node_modules"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.md"}, relPaths(targets))
+	var skipped []string
+	for _, s := range td.Skipped {
+		skipped = append(skipped, s.Path)
+		require.Contains(t, s.Reason, "directory walks always skip")
+	}
+	require.Equal(t, []string{"node_modules/pkg/index.md", ".git/config", ".aguara", "src/node_modules", "node_modules"}, skipped)
+
+	whole, err := (&scanner.TargetDiscovery{}).Discover(dir)
+	require.NoError(t, err)
+	require.Equal(t, relPaths(whole), relPaths(targets), "the same files as a directory scan")
 }
 
 // A working directory reached through a symbolic link is still the root.

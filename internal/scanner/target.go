@@ -130,9 +130,10 @@ type TargetDiscovery struct {
 	ExcludedByCallerPatterns int
 	ExcludedByIgnoreFile     int
 
-	// SkippedLinks lists the symbolic links DiscoverPaths was given and
-	// did not follow.
-	SkippedLinks []string
+	// Skipped lists the paths DiscoverPaths was given and did not scan:
+	// symbolic links, which are not followed, and paths inside the
+	// directories a walk always skips (.git, node_modules, .aguara).
+	Skipped []SkippedPath
 
 	// OutputFiles are files the current invocation writes, such as its
 	// report or baseline. Discovery never returns them, so a report left
@@ -272,12 +273,13 @@ func (td *TargetDiscovery) walkFunc(root string, targets *[]*Target) filepath.Wa
 // as they would in a Discover of root; a directory is walked the way
 // Discover walks root. A path reached more than once is returned once.
 //
-// A symbolic link named in paths is not followed and is listed in
-// SkippedLinks, as a walk skips the links it finds. A path that does not
-// exist, is not a regular file or a directory, or resolves outside root is
-// an error.
+// A symbolic link named in paths is not followed, and a path inside a
+// directory a walk always skips (.git, node_modules, .aguara) is not
+// scanned; both are listed in Skipped, so a path list returns what a
+// Discover of root would. A path that does not exist, is not a regular
+// file or a directory, or resolves outside root is an error.
 func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target, error) {
-	td.SkippedLinks = nil
+	td.Skipped = nil
 	realRoot, err := filepath.Abs(root)
 	if err == nil {
 		realRoot, err = filepath.EvalSymlinks(realRoot)
@@ -302,7 +304,11 @@ func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target
 			return nil, err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			td.SkippedLinks = append(td.SkippedLinks, p)
+			td.Skipped = append(td.Skipped, SkippedPath{Path: p, Reason: "a symbolic link (directory walks skip links too)"})
+			continue
+		}
+		if dir := alwaysSkippedParent(rel, info.IsDir()); dir != "" {
+			td.Skipped = append(td.Skipped, SkippedPath{Path: p, Reason: "inside " + dir + "/, which directory walks always skip"})
 			continue
 		}
 		if info.IsDir() {
@@ -340,6 +346,28 @@ func (td *TargetDiscovery) DiscoverPaths(root string, paths []string) ([]*Target
 }
 
 var errNotRegularFile = errors.New("not a regular file or directory")
+
+// SkippedPath is a path DiscoverPaths was given and did not scan.
+type SkippedPath struct {
+	Path   string // as given
+	Reason string
+}
+
+// alwaysSkippedParent returns the name of the directory a walk always
+// skips (.git, node_modules, .aguara) that rel is in, or that rel is when
+// it names a directory, or "".
+func alwaysSkippedParent(rel string, isDir bool) string {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if !isDir {
+		parts = parts[:len(parts)-1]
+	}
+	for _, part := range parts {
+		if part == ".git" || part == "node_modules" || part == ".aguara" {
+			return part
+		}
+	}
+	return ""
+}
 
 // resolveInRoot locates p (as the user typed it, relative to the working
 // directory) inside realRoot, the resolved scan root. p itself is not

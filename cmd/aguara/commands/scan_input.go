@@ -146,17 +146,28 @@ func (in scanInput) execute(ctx context.Context, s *scanner.Scanner, cfg config.
 	case in.stdin:
 		return in.scanStdin(ctx, s, cfg)
 	case in.root != "":
-		result, links, err := s.ScanPaths(ctx, in.root, in.args)
+		result, skipped, err := s.ScanPaths(ctx, in.root, in.args)
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-		for _, link := range links {
-			fmt.Fprintf(os.Stderr, "notice: %s is a symbolic link and was not scanned (directory walks skip links too)\n", output.TerminalText(link))
-		}
+		noteSkippedPaths(skipped)
 		noteSkippedOutputs(result)
 		return result, nil
 	}
 	return executeScan(ctx, s, in.args[0])
+}
+
+// noteSkippedPaths names the paths of a path list that were not scanned,
+// up to a few, so a long list from a hook manager stays readable.
+func noteSkippedPaths(skipped []scanner.SkippedPath) {
+	const maxListed = 3
+	for i, s := range skipped {
+		if i == maxListed {
+			fmt.Fprintf(os.Stderr, "notice: %d more paths were not scanned for the same reasons\n", len(skipped)-maxListed)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "notice: %s was not scanned: %s\n", output.TerminalText(s.Path), s.Reason)
+	}
 }
 
 // outputFilesOfThisRun lists the files this invocation writes: the -o

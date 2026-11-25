@@ -260,7 +260,7 @@ func TestScanSeveralPathsSkipsNamedSymlinks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.FilesScanned)
 	require.Empty(t, res.keys())
-	require.Contains(t, stderr, "link.md is a symbolic link")
+	require.Contains(t, stderr, "link.md was not scanned: a symbolic link")
 }
 
 // Content piped to `scan -` is analyzed exactly like a file with the name
