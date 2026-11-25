@@ -53,9 +53,15 @@ var stdinIsTerminal = func(r io.Reader) bool {
 
 func parseScanInput(cmd *cobra.Command, args []string) (scanInput, error) {
 	in := scanInput{args: args}
+	// After "--" every argument is a file name, so a file named "-" (or
+	// one named like a flag) can be scanned.
+	dash := -1
+	if cmd != nil {
+		dash = cmd.ArgsLenAtDash()
+	}
 	stdinArgs := 0
-	for _, a := range args {
-		if stdinPaths[a] {
+	for i, a := range args {
+		if stdinPaths[a] && (dash < 0 || i < dash) {
 			stdinArgs++
 		}
 	}

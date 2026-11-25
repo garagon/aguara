@@ -46,8 +46,9 @@ func runScanCLI(t *testing.T, stdin io.Reader, args ...string) (inputScanResult,
 	t.Helper()
 	resetFlags()
 	out := filepath.Join(t.TempDir(), "out.json")
-	full := append([]string{"scan"}, args...)
-	full = append(full, "--format", "json", "-o", out, "--no-update-check")
+	// The helper's own flags go first, so args may end option parsing
+	// with "--" before file names.
+	full := append([]string{"scan", "--format", "json", "-o", out, "--no-update-check"}, args...)
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}

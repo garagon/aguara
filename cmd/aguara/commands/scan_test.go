@@ -86,6 +86,9 @@ func resetFlags() {
 				f.Changed = false
 			}
 		}
+		// pflag keeps the position of a "--" from the previous parse;
+		// Init resets it. 0 is pflag.ContinueOnError, which cobra uses.
+		c.Flags().Init(c.Name(), 0)
 	}
 }
 
