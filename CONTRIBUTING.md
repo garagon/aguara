@@ -66,7 +66,7 @@ internal/
   rulemeta/            Analyzer rule metadata and decision impact
   rulecatalog/         Unified catalog for list-rules and explain
   kubeconfig/          Bounded Kubernetes configuration recognition
-  scanner/             Orchestrator: file discovery, parallel analysis, result aggregation
+  scanner/             Orchestrator: file discovery, ignore patterns, parallel analysis, result aggregation
   meta/                Post-processing: dedup, scoring, cross-finding correlation
   output/              Formatters: terminal (ANSI), JSON, SARIF, Markdown
   config/              .aguara.yml loader
@@ -77,7 +77,10 @@ internal/
   state/               Hash store for rug-pull detection (--monitor)
   update/              Release check used by `aguara version`
   types/               Shared types (Finding, Severity, ScanResult)
+.pre-commit-hooks.yaml Hooks for the pre-commit framework (aguara, aguara-system)
 ```
+
+Ignore patterns follow the rules in the README's ignore pattern section. A change to the matcher must keep `internal/scanner/ignore_compat_test.go` passing: patterns from the repository's `.aguara.yml`, the `aguara init` scaffolds and the README examples must keep matching the files they matched before.
 
 ## Adding Rules
 

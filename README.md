@@ -179,6 +179,32 @@ aguara audit . --ci --baseline .aguara-baseline.json
 
 Baseline-matched content findings remain visible but do not fail the gate. New findings are evaluated against the selected threshold. Compromised-package findings are not baselineable, and sensitive findings are omitted when writing a baseline. A missing or malformed baseline returns an error. Treat baseline changes as security decisions during review.
 
+### Scaffolded workflow and commit hooks
+
+`aguara init` writes `.aguara.yml`, `.aguaraignore` and `.github/workflows/aguara.yml`, and never overwrites an existing file. In the development version the workflow runs `aguara audit . --ci --project-policy ignore` with the binary the pinned Action installs, uploads the Action's content findings to code scanning, and writes the audit report to the job summary instead of commenting on pull requests. It requests `contents: read`, `security-events: write` and `actions: read`. The upload is skipped for pull requests from forks, which cannot write to code scanning, and when the repository variable `AGUARA_UPLOAD_SARIF` is `false`, for example in a private repository without code scanning; a failed upload does not fail the job.
+
+`aguara init --hook` writes a git pre-commit hook into the hooks directory git uses, including in a linked worktree. In the development version it scans the staged version of added, copied, modified, renamed and type-changed files, which is what the commit will contain, and blocks the commit on HIGH or CRITICAL findings; `git commit --no-verify` skips it once. It does not use `scan --changed`, which reads the work tree copy of changed and untracked files.
+
+For the [pre-commit](https://pre-commit.com) framework, the development version adds `.pre-commit-hooks.yaml` with two hooks: `aguara` builds the scanner at the pinned revision (Go 1.26 or later), and `aguara-system` runs the `aguara` already on your `PATH`.
+
+```yaml
+repos:
+  - repo: https://github.com/garagon/aguara
+    rev: <a commit or a release after v0.29.0>
+    hooks:
+      - id: aguara
+```
+
+Both run `aguara scan --root . --fail-on high` with the file names pre-commit passes, as one scan rooted at the repository root. pre-commit splits very long file lists into several runs; cross-file checks then see only the files of the same run.
+
+### Several paths in one scan
+
+```bash
+aguara scan SKILL.md scripts/ .mcp.json
+```
+
+In the development version, `scan` accepts several files and directories and writes one report. The scan is rooted at the current directory, or at `--root DIR`, which also works with a single path: policy files are read from the root, ignore patterns apply to every path including files named on the command line, and findings report paths relative to the root, so baselines written by `aguara scan .` match. Every path must be inside the root. Symbolic links named on the command line are not followed, as in a directory walk. Cross-file checks group the scanned files by directory and see only the files of this scan. `--changed` takes a single path. A single path without `--root` behaves as before: a file is reported by its name and policy is read from its directory.
+
 ## Installation
 
 The following alternatives install the published release:
@@ -215,6 +241,25 @@ The default SARIF upload needs `security-events: write`. See [`action.yml`](acti
 `scan` offers terminal, JSON, SARIF, and Markdown output. `audit` offers a combined terminal or JSON report, and `check` offers terminal or JSON. Use SARIF from `scan` for GitHub Code Scanning; other SAST services may require a different schema.
 
 In the development version, a `--format` value a command cannot render is rejected with exit code 2 instead of falling back to the terminal report, and `-o` writes the selected format, terminal included, to the file without color. Flags such as `--severity`, `--rules`, `--disable-rule` and `--workers` are accepted only by the commands they affect; `aguara <command> --help` lists them.
+
+### Scanning piped content
+
+```bash
+cat tool-description.md | aguara scan - --stdin-filename SKILL.md --fail-on high
+```
+
+In the development version, `scan -` reads the content to scan from standard input, up to `--max-file-size` (50 MB by default), and supports every scan format and the usual exit codes. The name given with `--stdin-filename` decides how the content is analyzed, as a file with that name would be: `SKILL.md` for a skill, `mcp.json` for an MCP configuration, `.github/workflows/ci.yml` for a workflow. The default is `skill.md`, the same as the Go API's `ScanContent`. Piped content is untrusted input: no `.aguara.yml` or `.aguaraignore` is read for it, inline `aguara-ignore` directives in it are not honored, and `--project-policy trust` is rejected. Empty input is a scan of nothing, which `--fail-on-empty` turns into exit code 2. When standard input is a terminal, `scan -` exits with code 2 and a usage hint instead of waiting for input. `/dev/stdin` is read the same way as `-`.
+
+An agent host that runs a command before a tool call can use this to check the content a tool is about to write, or the description of a tool it is about to load. This sketch reads a JSON event on standard input, scans `tool_input.content` under the name in `tool_input.file_path`, and blocks the call when Aguara reports HIGH or CRITICAL findings or cannot complete the scan. Adapt the field names and the blocking exit code to your host's hook contract:
+
+```sh
+#!/bin/sh
+event=$(cat)
+name=$(printf '%s' "$event" | jq -r '.tool_input.file_path // "tool.md"')
+printf '%s' "$event" | jq -r '.tool_input.content // .tool_input.description // empty' |
+  aguara scan - --stdin-filename "$name" --fail-on high --no-color >&2
+[ "$?" -eq 0 ] || exit 2
+```
 
 JSON reports from `scan`, `check` and `audit` include a `coverage` block stating what was evaluated: files scanned, package evidence read per ecosystem and source (with an `unpinned` count where entries have no exact version), `unsupported_evidence`, dependency files that were found but that Aguara cannot evaluate (for example `deno.lock`, `gems.locked`, `Podfile.lock`, or a `dev-requirements.txt` that no discovered requirements file includes), and `unresolved_includes`, requirements includes that were not read. No packages in unsupported files were checked. Read the coverage before treating an empty result as clean.
 
@@ -306,6 +351,22 @@ aguara scan . --rules ./my-rules/
 ```
 
 Custom rules and local configuration can change coverage. Review `.aguara.yml`, `.aguaraignore`, custom rules, and inline suppressions before trusting a project's scan policy. Use `aguara init` to scaffold a local configuration. The `--project-policy` boundary described above is available from v0.28.0.
+
+### Ignore patterns
+
+`.aguaraignore` (one pattern per line, `#` starts a comment) and the `ignore:` list of `.aguara.yml` exclude files from a local scan. `audit`, `scan --ci`, the GitHub Action and a scan in a detected CI environment do not read them. The Go API's `WithIgnorePatterns` uses the same syntax. `node_modules/` and `.git/` are always skipped.
+
+| Pattern | Excludes |
+|---|---|
+| `dist/` | every directory named `dist` and everything in it, at any depth |
+| `/build/` or `/build` | `build` at the scan root only |
+| `**/fixtures/` | every directory named `fixtures` |
+| `docs/internal` | the file or directory at that path from the scan root |
+| `docs/*.md` | Markdown files directly in `docs/` |
+| `generated/**` | everything under `generated/` |
+| `*.min.js` | files with a matching name at any depth |
+
+A pattern without a slash, such as `vendor` or `*.log`, matches file names only, as in earlier releases; add a trailing slash to exclude directories with that name. In the development version, patterns with a trailing slash, a leading slash or `./`, a literal path naming a directory, and `**` alone take effect; in v0.29.0 and earlier they matched nothing, so `dist/` excluded nothing while `dist/**` did. Patterns that matched before match the same files, except a character class that starts with `!`, such as `[!a]`, which now negates as in gitignore (it used to match a literal `!`). Character classes such as `[a-z]` and `[^a]` work as before. Negation (`!pattern`) is not supported: a scan warns about such a line, and it has no effect. `scan --verbose` lists the patterns that matched nothing in that scan, with a hint when a bare name matches a directory that was scanned.
 
 ## Verifying Signed Releases
 

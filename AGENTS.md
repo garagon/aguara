@@ -15,6 +15,8 @@ The installed binary's catalog is authoritative for that binary.
 | Task | Command |
 |---|---|
 | Inspect skills, code or agent configuration | `aguara scan ./skills/ --project-policy ignore` |
+| Scan several files and directories as one report | `aguara scan SKILL.md scripts/ --root .` |
+| Scan piped content (a tool description, a file about to be written) | `aguara scan - --stdin-filename SKILL.md` |
 | Check dependencies against malicious-package intelligence | `aguara check .` |
 | Combine content and dependency checks | `aguara audit .` |
 | Produce machine-readable audit results | `aguara audit . --format json` |
@@ -37,7 +39,9 @@ From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
 `.aguara.yml` when `--fail-on` is not passed (a threshold can only add a gate),
 and says so on stderr. It prints a stderr notice naming the files whenever
 applying the policy changed the result. A local `scan` can still trust
-it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+it. Use `--project-policy ignore` when inspecting unfamiliar content. Content piped to
+`scan -` never applies project policy, and `--project-policy trust` is rejected there.
+The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 
@@ -91,7 +95,10 @@ Important options:
   catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
-- `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
+- `WithIgnorePatterns([]string{...})`: caller-owned exclusions in the `.aguaraignore`
+  syntax (`dist/` excludes every `dist` directory, `/build` only the root one; a
+  pattern without a slash matches file names only; `!` negation is unsupported and
+  never matches). Repeated use accumulates; earlier versions kept only the last call.
 - `WithCustomRules(dirs...)`: additional YAML rules. Repeated use accumulates
   directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
