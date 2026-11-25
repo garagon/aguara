@@ -3,7 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +20,8 @@ var discoverCmd = &cobra.Command{
 }
 
 func init() {
+	addFormatFlag(discoverCmd, "terminal", "json", "markdown")
+	addOutputFlag(discoverCmd)
 	rootCmd.AddCommand(discoverCmd)
 }
 
@@ -29,16 +31,18 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
 
-	switch flagFormat {
-	case "json":
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result.Redacted())
-	case "markdown", "md":
-		fmt.Print(discover.FormatMarkdown(result))
-		return nil
-	default:
-		fmt.Print(discover.FormatTree(result))
-		return nil
-	}
+	return writeReport(func(w io.Writer) error {
+		switch flagFormat {
+		case "json":
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result.Redacted())
+		case "markdown", "md":
+			_, err := fmt.Fprint(w, discover.FormatMarkdown(result))
+			return err
+		default:
+			_, err := fmt.Fprint(w, discover.FormatTree(result))
+			return err
+		}
+	})
 }

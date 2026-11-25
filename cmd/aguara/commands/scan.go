@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,12 +41,37 @@ var (
 	flagBaseline      string
 	flagWriteBaseline string
 	flagProjectPolicy string
+	flagFailOnEmpty   bool
 )
+
+// errNothingScanned fails a --fail-on-empty scan that evaluated no files.
+// It is not ErrThresholdExceeded: nothing was found because nothing was
+// read, so it exits 2 like other scans that could not do their job.
+var errNothingScanned = errors.New("no files were scanned and --fail-on-empty is set; check that the path points at the files you meant to scan")
 
 var scanCmd = &cobra.Command{
 	Use:     "scan [path]",
 	GroupID: groupScan,
 	Short:   "Scan a directory for security issues",
+	Long: `Scan files for prompt injection, credential leaks, risky agent and MCP
+configuration, CI workflow trust issues and supply-chain behavior.
+
+Policy owned by the scanned project (.aguara.yml, .aguaraignore and inline
+aguara-ignore directives) can exclude files and suppress findings. With the
+default --project-policy auto:
+
+  - A local scan applies it and, when it changed the result, prints a
+    notice on stderr naming what was applied.
+  - With --ci it is not applied; --ci sets its own --fail-on high.
+  - When a CI environment is detected (CI, GITHUB_ACTIONS, GITLAB_CI,
+    CIRCLECI, BUILDKITE, JENKINS_URL, TEAMCITY_VERSION or TRAVIS is set)
+    and --ci is not passed, it is not applied, except a fail_on in
+    .aguara.yml, which still applies when --fail-on is not passed: a
+    failure threshold can only add a gate. A notice on stderr names the
+    CI variable and what was and was not applied.
+
+Pass --project-policy trust to apply all of it in CI, or --project-policy
+ignore to apply none of it (fail_on included) for unfamiliar content.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
@@ -63,10 +89,17 @@ var scanCmd = &cobra.Command{
 }
 
 func init() {
+	addSeverityFlag(scanCmd)
+	addFormatFlag(scanCmd, "terminal", "json", "sarif", "markdown")
+	addOutputFlag(scanCmd)
+	addWorkersFlag(scanCmd)
+	addRulesFlag(scanCmd)
+	addDisableRuleFlag(scanCmd)
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
-	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: equivalent to --fail-on high --format terminal --no-color")
+	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
+	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
-	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files (staged, unstaged, untracked)")
+	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
 	scanCmd.Flags().BoolVar(&flagAuto, "auto", false, "Auto-discover and scan all MCP client configs")
@@ -76,7 +109,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagNoRedact, "no-redact", false, "Keep raw matched text in credential-leak findings (default: redact to [REDACTED])")
 	scanCmd.Flags().StringVar(&flagBaseline, "baseline", "", "Gate only on findings NOT in this baseline file (fails closed if missing/malformed)")
 	scanCmd.Flags().StringVar(&flagWriteBaseline, "write-baseline", "", "Write current findings as a baseline to this file and exit 0 (skips sensitive findings)")
-	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Target policy: auto (trust local, ignore with --ci), trust, or ignore")
+	scanCmd.Flags().StringVar(&flagProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (apply locally; ignore with --ci; in a detected CI environment ignore all but .aguara.yml fail_on), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after a successful scan,
 	// network failures on --auto) should not trigger Cobra's
 	// flag-usage block: a CI log that already says
@@ -99,13 +132,28 @@ func runScan(cmd *cobra.Command, args []string) error {
 	targetPath := args[0]
 
 	applyCIDefaults()
-	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI)
+	// auto applies the project's own policy only to local runs. In CI the
+	// scanned repository is usually the change under review, so it must
+	// not decide what its own gate sees; --project-policy trust opts in.
+	ciVar := ""
+	if !flagCI {
+		ciVar = detectedCIVar()
+	}
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "")
 	if err != nil {
 		return err
 	}
 	cfg := config.Config{}
-	if trustProjectPolicy {
-		cfg = loadScanConfig(cmd, targetPath)
+	switch {
+	case trustProjectPolicy:
+		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
+			return err
+		}
+	case ciVar != "" && isAutoProjectPolicy(flagProjectPolicy):
+		// Say what CI detection skipped, and keep the project's fail_on.
+		if err := applyCIProjectPolicy(cmd, targetPath, ciVar); err != nil {
+			return err
+		}
 	}
 
 	// .aguara.yml `baseline:` feeds --baseline when the flag is unset
@@ -138,11 +186,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
+	result.Coverage = scanCoverage(result)
+	if trustProjectPolicy {
+		noteProjectPolicy(cmd, cfg, res, result)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: saving state: %v\n", err)
 		}
+	}
+
+	// An empty scan under --fail-on-empty still writes its report (which
+	// says nothing was scanned) but never establishes a baseline.
+	if flagFailOnEmpty && result.FilesScanned == 0 {
+		if err := writeOutput(result); err != nil {
+			return err
+		}
+		return errNothingScanned
 	}
 
 	// Baseline runs after redaction. Only non-baselineable findings are
@@ -193,33 +254,18 @@ func validateBaselineFlags() error {
 }
 
 func runAutoScan(cmd *cobra.Command) error {
+	// --auto scans the machine's MCP client configs, not a project: there
+	// is no .aguara.yml or .aguaraignore to load, and auto has never
+	// applied inline directives here, in CI or not. Only an explicit
+	// --project-policy trust does, which noteProjectPolicy reports.
 	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, false)
 	if err != nil {
 		return err
 	}
-	discovered, err := discover.Scan()
-	if err != nil {
-		return fmt.Errorf("discovery failed: %w", err)
-	}
 
-	if discovered.TotalClients() == 0 {
-		fmt.Fprintln(os.Stderr, "No MCP configurations found; nothing to scan.")
-		return nil
-	}
-
-	// Collect unique config file paths
-	var paths []string
-	seen := map[string]bool{}
-	for _, cr := range discovered.Clients {
-		if !seen[cr.Path] {
-			seen[cr.Path] = true
-			paths = append(paths, cr.Path)
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
-		len(paths), discovered.TotalClients())
-
+	// Validate the caller's flags and rule configuration before discovery
+	// prints anything, so an invalid --severity, --rules or --disable-rule
+	// fails alone instead of after "nothing to scan".
 	applyCIDefaults()
 
 	minSev, err := parseSeverityFlag()
@@ -233,6 +279,33 @@ func runAutoScan(cmd *cobra.Command) error {
 	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
 		return err
+	}
+
+	discovered, err := discover.Scan()
+	if err != nil {
+		return fmt.Errorf("discovery failed: %w", err)
+	}
+
+	// Collect unique config file paths
+	var paths []string
+	seen := map[string]bool{}
+	for _, cr := range discovered.Clients {
+		if !seen[cr.Path] {
+			seen[cr.Path] = true
+			paths = append(paths, cr.Path)
+		}
+	}
+
+	// With no configs the run still produces its report in the selected
+	// format (a valid empty report whose coverage says nothing was
+	// scanned), so --format, -o and --fail-on-empty behave the same as
+	// for any other empty scan. The human notice goes to stderr so stdout
+	// carries only the report.
+	if len(paths) == 0 {
+		fmt.Fprintln(os.Stderr, "No MCP configurations found; nothing to scan.")
+	} else {
+		fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
+			len(paths), discovered.TotalClients())
 	}
 
 	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)
@@ -265,10 +338,18 @@ func runAutoScan(cmd *cobra.Command) error {
 		aggregate.FilesScanned += result.FilesScanned
 		aggregate.Verdict = max(aggregate.Verdict, result.Verdict)
 		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
+		if len(result.TargetPolicy.InlineSuppressed) > 0 {
+			// Single-file scans report the base name; keep the full path.
+			aggregate.TargetPolicy.InlineSuppressed = append(aggregate.TargetPolicy.InlineSuppressed, path)
+		}
 	}
 	aggregate.Duration = time.Since(start)
 	scanner.SortFindings(aggregate.Findings)
 	stopSpinner(sp)
+	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
+	if trustProjectPolicy {
+		noteProjectPolicy(cmd, cfg, res, aggregate)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -279,11 +360,22 @@ func runAutoScan(cmd *cobra.Command) error {
 	if err := writeOutput(aggregate); err != nil {
 		return err
 	}
+	if flagFailOnEmpty && aggregate.FilesScanned == 0 {
+		// --auto takes no path, so point at discovery instead.
+		if len(paths) == 0 {
+			return errors.New("no files were scanned and --fail-on-empty is set; no MCP client configurations were found")
+		}
+		return errors.New("no files were scanned and --fail-on-empty is set; none of the discovered MCP client configurations could be read")
+	}
 
 	return checkFailOnThreshold(aggregate)
 }
 
-func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
+// loadScanConfig reads the target's .aguara.yml and applies its defaults
+// for flags the caller did not set. A `format` value the command cannot
+// render is an error for scan, whose setting it is; audit only borrows
+// the key, so there it is reported and the flag value is kept.
+func loadScanConfig(cmd *cobra.Command, targetPath string) (config.Config, error) {
 	cfg, err := config.Load(targetPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -295,7 +387,15 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 		flagSeverity = cfg.Severity
 	}
 	if !cmd.Flags().Changed("format") && cfg.Format != "" {
-		flagFormat = cfg.Format
+		canonical, ok := canonicalFormat(cmd, cfg.Format)
+		switch {
+		case ok:
+			flagFormat = canonical
+		case cmd.Name() == "scan":
+			return cfg, unsupportedFormatError(cmd, ".aguara.yml format", cfg.Format)
+		default:
+			fmt.Fprintf(os.Stderr, "warning: ignoring %v\n", unsupportedFormatError(cmd, ".aguara.yml format", cfg.Format))
+		}
 	}
 	if !cmd.Flags().Changed("fail-on") && cfg.FailOn != "" {
 		flagFailOn = cfg.FailOn
@@ -303,7 +403,7 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) config.Config {
 	if !cmd.Flags().Changed("rules") && cfg.Rules != "" {
 		flagRules = []string{cfg.Rules}
 	}
-	return cfg
+	return cfg, nil
 }
 
 func applyCIDefaults() {
@@ -413,6 +513,16 @@ func contextWithInterrupt() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
+// scanCoverage states what a path scan evaluated: every eligible file
+// under the target, or only the git-changed ones with --changed.
+func scanCoverage(result *scanner.ScanResult) *types.ScanCoverage {
+	scope := types.ScanScopePath
+	if flagChanged {
+		scope = types.ScanScopeChanged
+	}
+	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope}
+}
+
 func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
 	if flagChanged {
 		return scanChangedFiles(ctx, s, targetPath)
@@ -427,7 +537,12 @@ func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*s
 func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
 	changedFiles, err := scanner.GitChangedFiles(targetPath)
 	if err != nil {
-		return nil, fmt.Errorf("getting changed files: %w", err)
+		// Without a change set there is nothing --changed can vouch for;
+		// reporting "0 files, no findings" would pass a CI gate on nothing.
+		if errors.Is(err, scanner.ErrNotGitRepository) {
+			return nil, fmt.Errorf("--changed needs a git work tree: %w; run from a git checkout, or drop --changed to scan every file", err)
+		}
+		return nil, fmt.Errorf("--changed: cannot list changed files: %w", err)
 	}
 	var targets []*scanner.Target
 	for _, relPath := range changedFiles {

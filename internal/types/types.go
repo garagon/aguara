@@ -340,6 +340,41 @@ type ScanResult struct {
 	Baseline     *BaselineSummary `json:"baseline,omitempty"`
 	Duration     time.Duration    `json:"-"`
 	Target       string           `json:"-"`
+	// Coverage states what the scan evaluated. The CLI sets it so an
+	// empty result is distinguishable from a clean one; it is omitted
+	// when nil, which keeps existing library results unchanged.
+	Coverage *ScanCoverage `json:"coverage,omitempty"`
+	// TargetPolicy records target-owned policy that shaped this result.
+	// It is empty unless target policy was enabled, and not serialized.
+	TargetPolicy TargetPolicyUse `json:"-"`
+}
+
+// TargetPolicyUse records which exclusion and suppression policy changed
+// this result, so a caller can tell the user that a project's own files
+// changed what was reported. A source that changed nothing is not listed.
+type TargetPolicyUse struct {
+	// IgnoreFile is the target's .aguaraignore when it excluded at least
+	// one entry.
+	IgnoreFile string
+	// IgnorePatternExclusions counts entries excluded by the caller's
+	// ignore patterns (the CLI passes a trusted .aguara.yml's `ignore`).
+	IgnorePatternExclusions int
+	// InlineSuppressed lists files whose aguara-ignore directives
+	// removed at least one finding, sorted.
+	InlineSuppressed []string
+}
+
+// Scan coverage scopes: which files a scan was asked to evaluate.
+const (
+	ScanScopePath    = "path"    // every eligible file under the target
+	ScanScopeChanged = "changed" // only git-changed files under the target
+	ScanScopeAuto    = "auto"    // auto-discovered MCP client configurations
+)
+
+// ScanCoverage states what a content scan evaluated.
+type ScanCoverage struct {
+	FilesScanned int    `json:"files_scanned"`
+	Scope        string `json:"scope"`
 }
 
 // MarshalJSON implements custom JSON marshaling so Duration serializes

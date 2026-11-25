@@ -28,6 +28,13 @@ func (f *MarkdownFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 
 func (f *MarkdownFormatter) printClean(w io.Writer, result *scanner.ScanResult) {
 	fmt.Fprintf(w, "## Aguara Security Scan\n\n")
+	if result.FilesScanned == 0 {
+		// Zero files is not a pass: nothing was evaluated.
+		fmt.Fprintf(w, "> **Nothing scanned** · 0 files · %d rules · %.2fs\n\n",
+			result.RulesLoaded, result.Duration.Seconds())
+		fmt.Fprintf(w, "%s\n", NothingScannedMessage(result))
+		return
+	}
 	fmt.Fprintf(w, "> **Passed** · %d files · %d rules · %.2fs\n\n",
 		result.FilesScanned, result.RulesLoaded, result.Duration.Seconds())
 	fmt.Fprintf(w, "No security issues found.\n")

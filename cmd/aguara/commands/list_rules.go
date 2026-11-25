@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"text/tabwriter"
 
@@ -21,6 +22,10 @@ var listRulesCmd = &cobra.Command{
 }
 
 func init() {
+	addFormatFlag(listRulesCmd, "terminal", "json")
+	addOutputFlag(listRulesCmd)
+	addRulesFlag(listRulesCmd)
+	addDisableRuleFlag(listRulesCmd)
 	listRulesCmd.Flags().StringVar(&flagCategory, "category", "", "Filter by category")
 	// A configuration error (unknown --disable-rule ID, invalid --rules
 	// directory) is not command misuse; print the error without the usage
@@ -44,27 +49,28 @@ func runListRules(cmd *cobra.Command, args []string) error {
 	}
 	cat := res.Catalog(flagCategory)
 
-	w := cmd.OutOrStdout()
-
-	if strings.ToLower(flagFormat) == "json" {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(cat)
-	}
-
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tIMPACT\tCATEGORY\tANALYZER\n")
-	fmt.Fprintf(tw, "--\t----\t--------\t------\t--------\t--------\n")
-	for _, r := range cat {
-		analyzer := r.Analyzer
-		if analyzer == "" {
-			analyzer = "-"
+	return writeCommandReport(cmd, func(w io.Writer) error {
+		if strings.ToLower(flagFormat) == "json" {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			return enc.Encode(cat)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, r.Name, r.Severity, r.DecisionImpact, r.Category, analyzer)
-	}
-	_ = tw.Flush()
-	fmt.Fprintf(w, "\n%d rules loaded\n", len(cat))
 
-	return nil
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(tw, "ID\tNAME\tSEVERITY\tIMPACT\tCATEGORY\tANALYZER\n")
+		fmt.Fprintf(tw, "--\t----\t--------\t------\t--------\t--------\n")
+		for _, r := range cat {
+			analyzer := r.Analyzer
+			if analyzer == "" {
+				analyzer = "-"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				r.ID, r.Name, r.Severity, r.DecisionImpact, r.Category, analyzer)
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(w, "\n%d rules loaded\n", len(cat))
+		return err
+	})
 }

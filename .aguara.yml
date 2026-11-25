@@ -8,9 +8,9 @@
 #
 # This file scopes self-scans of a checkout so contributors get a useful
 # signal-to-noise ratio. It is read only from the scan root: scanning a
-# subdirectory directly (for example `aguara scan internal/rules/builtin`)
-# or passing `--ci` or `--project-policy ignore` scans without these
-# exclusions.
+# subdirectory directly (for example `aguara scan internal/rules/builtin`),
+# passing `--ci` or `--project-policy ignore`, or running in a detected CI
+# environment scans without these exclusions.
 
 ignore:
   # Rule definitions. Each rule ships its own true_positive examples so the

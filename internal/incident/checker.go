@@ -75,6 +75,10 @@ type CheckResult struct {
 	// Findings stays the flat union across every path so JSON
 	// consumers that read `findings` keep working unchanged.
 	Ecosystems []packagecheck.EcosystemResult `json:"ecosystems"`
+	// Coverage summarizes which dependency evidence was read and which
+	// dependency files were found but not evaluated. Set by the CLI
+	// after discovery; omitted when a caller does not compute it.
+	Coverage *packagecheck.Coverage `json:"coverage,omitempty"`
 }
 
 // IntelSummary tells the consumer (terminal output, JSON

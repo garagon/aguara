@@ -55,12 +55,12 @@ type Config struct {
 	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
 	Baseline      string                  `yaml:"baseline,omitempty"`
 
-	// File is the path of the loaded configuration file; empty when none
+	// Source is the path of the file Load read, or "" when no config file
 	// was found.
-	File string `yaml:"-"`
+	Source string `yaml:"-"`
 	// Warnings lists keys in the file that Aguara does not recognize (for
 	// example a misspelled "disabled_rules"). They are ignored, so callers
-	// should show these warnings to the user.
+	// that apply the file should show these warnings to the user.
 	Warnings []string `yaml:"-"`
 }
 
@@ -101,7 +101,7 @@ func Load(dir string) (Config, error) {
 				return Config{}, fmt.Errorf("rule %s: apply_to_tools and exempt_tools are mutually exclusive", id)
 			}
 		}
-		cfg.File = path
+		cfg.Source = path
 		cfg.Warnings = unknownKeys(path, data)
 		return cfg, nil
 	}

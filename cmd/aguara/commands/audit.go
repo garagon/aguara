@@ -12,6 +12,7 @@ import (
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/incident"
 	"github.com/garagon/aguara/internal/output"
+	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
@@ -53,6 +54,11 @@ to fail-on critical with no color (the default for unattended CI runs).`,
 }
 
 func init() {
+	addFormatFlag(auditCmd, "terminal", "json")
+	addOutputFlag(auditCmd)
+	addWorkersFlag(auditCmd)
+	addRulesFlag(auditCmd)
+	addDisableRuleFlag(auditCmd)
 	auditCmd.Flags().StringVar(&flagAuditPath, "path", "", "Path to audit (also accepted as a positional argument; defaults to '.')")
 	auditCmd.Flags().BoolVar(&flagAuditCI, "ci", false, "CI mode: --fail-on critical, no color")
 	auditCmd.Flags().StringVar(&flagAuditFailOn, "fail-on", "", "Exit code 1 when findings reach this severity (critical, warning, info)")
@@ -62,7 +68,7 @@ func init() {
 	auditCmd.Flags().StringVar(&flagAuditBaseline, "baseline", "", "Gate scan findings only on those NOT in this baseline file (package findings always gate; fails closed if missing/malformed)")
 	auditCmd.Flags().StringVar(&flagAuditWriteBaseline, "write-baseline", "", "Write the scan findings as a baseline to this file (skips sensitive findings); package findings still gate")
 	auditCmd.Flags().BoolVar(&flagAuditVerbose, "verbose", false, "List every content finding instead of capping at 10")
-	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Target policy: auto (ignore), trust, or ignore")
+	auditCmd.Flags().StringVar(&flagAuditProjectPolicy, "project-policy", "auto", "Project-owned policy (.aguara.yml, .aguaraignore, inline directives): auto (ignore), trust, or ignore")
 	// Runtime errors (ErrThresholdExceeded after the verdict
 	// computes "fail", --fresh network failures) should not
 	// trigger Cobra's flag-usage block. The verdict line plus the
@@ -86,6 +92,9 @@ type AuditResult struct {
 	Handoff AuditAgentHandoff     `json:"agent_handoff"`
 	Plan    AuditActionPlan       `json:"action_plan"`
 	Intel   incident.IntelSummary `json:"intel"`
+	// Coverage states what the audit evaluated: files scanned, package
+	// evidence read, and dependency files found but not evaluated.
+	Coverage AuditCoverage `json:"coverage"`
 
 	scanGate    []types.Finding
 	scanGateSet bool
@@ -207,10 +216,11 @@ func runAudit(cmd *cobra.Command, args []string) error {
 
 	// 3. Compose result + verdict.
 	result := &AuditResult{
-		Target: target,
-		Check:  checkResult,
-		Scan:   scanResult,
-		Intel:  checkResult.Intel,
+		Target:   target,
+		Check:    checkResult,
+		Scan:     scanResult,
+		Intel:    checkResult.Intel,
+		Coverage: auditCoverage(checkResult, scanResult),
 	}
 
 	// Baseline applies to the SCAN side only; package (check) findings
@@ -300,9 +310,10 @@ func applyAuditCIDefaults() {
 // command does not duplicate scanner-construction logic; if the
 // scan pipeline grows new flags, audit picks them up automatically.
 //
-// Note we do NOT honour --severity for audit: the audit's job is
-// to be a strict gate, so we always run with SeverityInfo and let
-// the verdict / --fail-on threshold filter what matters.
+// audit has no --severity flag: the audit's job is to be a strict
+// gate, so it always runs with SeverityInfo and lets the verdict /
+// --fail-on threshold decide what matters. Passing --severity to audit
+// is rejected at parse time rather than silently ignored.
 func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, error) {
 	trustProjectPolicy, err := resolveProjectPolicy(flagAuditProjectPolicy, false)
 	if err != nil {
@@ -310,7 +321,9 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	}
 	cfg := config.Config{}
 	if trustProjectPolicy {
-		cfg = loadScanConfig(cmd, targetPath)
+		if cfg, err = loadScanConfig(cmd, targetPath); err != nil {
+			return nil, err
+		}
 	}
 
 	// .aguara.yml `baseline:` feeds audit's --baseline when unset and we
@@ -337,6 +350,10 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	}
 	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
+	result.Coverage = scanCoverage(result)
+	if trustProjectPolicy {
+		noteProjectPolicy(cmd, cfg, res, result)
+	}
 
 	if store != nil {
 		if err := store.Save(); err != nil {
@@ -541,7 +558,133 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 		}
 	}
 
+	applyAuditCoverageTriage(&t, result)
 	return t
+}
+
+// applyAuditCoverageTriage keeps an audit that evaluated nothing from
+// clearing the target. Absence of findings only means something when
+// files were scanned. handoff and action_plan derive from the decision,
+// so a coverage review also withholds install and execution there.
+func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
+	if result.Scan.FilesScanned == 0 {
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "nothing_scanned",
+			Severity: "warning",
+			Message:  "No files were scanned under the target, so the audit evaluated nothing.",
+		})
+		if t.Decision == "proceed" {
+			t.Decision = "review"
+			t.Summary = "Nothing was scanned: the audit evaluated no files, so it cannot clear this target."
+			t.RecommendedNextSteps = []string{
+				"Check that the audit path points at the project you meant to audit.",
+				"Do not treat this result as a clean audit.",
+			}
+		}
+		return
+	}
+
+	// Any installable entry without one exact version (that no pin of
+	// the same name covers) was matched only against advisories covering
+	// every version: an install resolves a version this audit never saw.
+	if counts, files := unpinnedEntries(result.Check.Ecosystems, result.Target); counts != "" {
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "unpinned_dependency_evidence",
+			Severity: "warning",
+			Message:  counts,
+		})
+		escalateForCoverage(t,
+			"Some dependency entries are not pinned to one version, so the audit cannot clear dependency installation.",
+			"Pin exact versions in "+files+" (for example with pip-compile or uv pip compile) and audit again, or review those dependencies before installing them.")
+	}
+
+	cov := result.Check.Coverage
+	if cov == nil || len(cov.UnsupportedEvidence) == 0 {
+		// No dependency files at all keeps the package side as before.
+		return
+	}
+	files := unsupportedEvidenceNames(cov.UnsupportedEvidence, result.Target)
+	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
+	summary := "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
+	if cov.Evaluated() {
+		// Some evidence was checked, but action_plan grants or withholds
+		// installation for the whole repository: an install would also
+		// pull the packages in these files, which nothing checked.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "partial_dependency_coverage",
+			Severity: "warning",
+			Message:  "These dependency files could not be evaluated and their packages were not checked: " + files + ".",
+		})
+		summary = "Some dependency files could not be evaluated, so the audit cannot clear dependency installation."
+	} else {
+		// Dependency evidence exists but none of it could be evaluated.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "dependency_evidence_not_evaluated",
+			Severity: "warning",
+			Message:  "Dependency files were found but none could be evaluated: " + files + ". No package in them was checked against malicious-package intelligence.",
+		})
+	}
+	escalateForCoverage(t, summary, step)
+}
+
+// escalateForCoverage turns a proceed decision into review with the
+// coverage summary and next steps; a decision already at review or stop
+// keeps its summary and gains the step.
+func escalateForCoverage(t *AuditTriage, summary, step string) {
+	if t.Decision == "proceed" {
+		t.Decision = "review"
+		t.Summary = summary
+		t.RecommendedNextSteps = []string{
+			step,
+			"Do not install dependencies on the strength of this audit.",
+		}
+		return
+	}
+	t.RecommendedNextSteps = append(t.RecommendedNextSteps, step)
+}
+
+// unpinnedEntries describes the read dependency files that have entries
+// without one exact version: the reason message ("N of M entries in
+// <file> are not pinned ...") and the file names for the next step.
+// Both are "" when every entry is pinned. Constraints files are skipped:
+// they install nothing. The runner already leaves out entries that a pin
+// of the same name in the same file covers.
+func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (message, files string) {
+	var counts []string
+	var evidence []packagecheck.UnsupportedEvidence
+	unpinned := 0
+	for _, e := range results {
+		if packagecheck.IsConstraintsFile(e.Source) || e.Unpinned == 0 {
+			continue
+		}
+		unpinned += e.Unpinned
+		counts = append(counts, fmt.Sprintf("%d of %d entries in %s", e.Unpinned, e.PackagesRead, displayPath(root, e.Path)))
+		evidence = append(evidence, packagecheck.UnsupportedEvidence{Path: e.Path, Ecosystem: e.Ecosystem})
+	}
+	if len(counts) == 0 {
+		return "", ""
+	}
+	const maxNamed = 5
+	if len(counts) > maxNamed {
+		counts = append(counts[:maxNamed], fmt.Sprintf("entries in %d more files", len(counts)-maxNamed))
+	}
+	verb, pronoun := "are", "them"
+	if unpinned == 1 {
+		verb, pronoun = "is", "it"
+	}
+	message = fmt.Sprintf("%s %s not pinned to one version, so only advisories covering every version were checked for %s.",
+		strings.Join(counts, ", "), verb, pronoun)
+	return message, unsupportedEvidenceNames(evidence, root)
+}
+
+// auditCoverageIncomplete reports whether triage raised a coverage reason:
+// nothing was scanned, some dependency files could not be evaluated, or
+// some entries are not pinned to one version.
+func auditCoverageIncomplete(t AuditTriage) bool {
+	return hasTriageReason(t.Reasons, "nothing_scanned") ||
+		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
+		hasTriageReason(t.Reasons, "partial_dependency_coverage") ||
+		hasTriageReason(t.Reasons, "unpinned_dependency_evidence")
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {
@@ -578,9 +721,15 @@ func computeAuditAgentHandoff(triage AuditTriage) AuditAgentHandoff {
 			},
 		}
 	case "review":
+		summary := "Limit agent work to inspection and remediation until findings are reviewed."
+		if triage.ReviewFindings == 0 {
+			// Coverage-driven review: nothing was found, but not
+			// everything was evaluated (see triage.reasons).
+			summary = "Limit agent work to inspection until what this audit could not evaluate is reviewed."
+		}
 		return AuditAgentHandoff{
 			Status:  "review_only",
-			Summary: "Limit agent work to inspection and remediation until findings are reviewed.",
+			Summary: summary,
 			AllowedActions: []string{
 				"Inspect source, lockfiles, configs, and findings.",
 				"Explain risk and propose patches.",
@@ -669,48 +818,69 @@ func writeAuditJSON(result *AuditResult) error {
 	})
 }
 
+// writeAuditTerminal renders the terminal report to stdout, or to the
+// -o file when one is set (color is already off for a file).
 func writeAuditTerminal(result *AuditResult) error {
+	return writeReport(func(w io.Writer) error {
+		return renderAuditTerminal(w, result)
+	})
+}
+
+func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	st := output.NewStyle(flagNoColor)
-	width := output.DetectWidth(os.Stdout)
+	width := output.DetectWidth(w)
 	sep := st.Separator(width)
 
-	fmt.Printf("\n%s\n", sep)
-	fmt.Printf("  %s\n", st.Bold("AGUARA AUDIT"))
-	fmt.Printf("  Target: %s\n", output.TerminalText(result.Target))
-	fmt.Printf("%s\n", sep)
+	fmt.Fprintf(w, "\n%s\n", sep)
+	fmt.Fprintf(w, "  %s\n", st.Bold("AGUARA AUDIT"))
+	fmt.Fprintf(w, "  Target: %s\n", output.TerminalText(result.Target))
+	fmt.Fprintf(w, "%s\n", sep)
 
-	fmt.Printf("\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
-	if len(result.Check.Findings) == 0 {
-		fmt.Printf("\n  %s\n", st.OK("No known-compromised packages or persistence artifacts found."))
-	} else {
-		for _, f := range result.Check.Findings {
-			label := output.TerminalText(string(f.Severity))
-			fmt.Printf("\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
-			if f.Path != "" {
-				fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Location())))
-			}
+	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("PACKAGE CHECK", width))
+	if line := packageCoverageLine(result.Check.Coverage); line != "" {
+		fmt.Fprintf(w, "\n  %s\n", st.Dim(line))
+		for _, line := range unsupportedEvidenceLines(result.Check.Coverage, result.Target) {
+			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
 		}
 	}
+	switch {
+	case len(result.Check.Findings) > 0:
+		for _, f := range result.Check.Findings {
+			label := output.TerminalText(string(f.Severity))
+			fmt.Fprintf(w, "\n  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
+			if f.Path != "" {
+				fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Location())))
+			}
+		}
+	default:
+		fmt.Fprintf(w, "\n  %s\n", noPackageFindingsLine(st, result.Check.Coverage))
+	}
 	if note := unpinnedNote(result.Check); note != "" {
-		fmt.Printf("\n  %s\n", st.Yellow(note))
+		fmt.Fprintf(w, "\n  %s\n", st.Yellow(note))
 	}
 
-	fmt.Printf("\n%s\n", st.SectionHeader("CONTENT SCAN", width))
-	if len(result.Scan.Findings) == 0 {
-		fmt.Printf("\n  %s\n", st.OK("No content findings."))
-	} else {
+	fmt.Fprintf(w, "\n%s\n", st.SectionHeader("CONTENT SCAN", width))
+	if result.Scan.Coverage != nil {
+		fmt.Fprintf(w, "\n  %s\n", st.Dim(fmt.Sprintf("Coverage: %d files scanned", result.Scan.FilesScanned)))
+	}
+	switch {
+	case len(result.Scan.Findings) == 0 && result.Scan.FilesScanned == 0:
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(output.NothingScannedMessage(result.Scan)))
+	case len(result.Scan.Findings) == 0:
+		fmt.Fprintf(w, "\n  %s\n", st.OK("No content findings."))
+	default:
 		// Cap the listing unless --verbose -- a noisy repo can dump
 		// hundreds of low-severity findings into the audit output,
 		// and showing all of them buries the verdict.
 		const maxList = 10
 		shown := 0
-		fmt.Println()
+		fmt.Fprintln(w)
 		for _, f := range result.Scan.Findings {
 			if !flagAuditVerbose && shown >= maxList {
 				break
 			}
 			label := f.Severity.String()
-			fmt.Printf("  %s %s %s %s\n",
+			fmt.Fprintf(w, "  %s %s %s %s\n",
 				st.SeverityIcon(label),
 				st.Bold(st.Cell(output.TerminalText(f.RuleID), 24)),
 				st.Cell(output.TerminalText(f.RuleName), 36),
@@ -718,7 +888,7 @@ func writeAuditTerminal(result *AuditResult) error {
 			shown++
 		}
 		if !flagAuditVerbose && len(result.Scan.Findings) > maxList {
-			fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
+			fmt.Fprintf(w, "  %s\n", st.Dim(fmt.Sprintf("... +%d more (rerun with --verbose or use --format json)",
 				len(result.Scan.Findings)-maxList)))
 		}
 	}
@@ -727,13 +897,15 @@ func writeAuditTerminal(result *AuditResult) error {
 	// (stdout stays verdict + findings); a stale local cache still notes
 	// to stderr inside printIntelFreshness.
 	if !flagAuditCI {
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
-	printIntelFreshness(result.Intel, flagAuditCI)
+	fprintIntelFreshness(w, os.Stderr, result.Intel, flagAuditCI)
 
 	// Green is reserved for a clean pass: FINDINGS exits 0 but still
 	// means unresolved findings exist, so it renders yellow with the
-	// medium-tier icon; FAIL is red with the critical icon.
+	// medium-tier icon; FAIL is red with the critical icon. A PASS that
+	// triage still sends to review (nothing scanned, dependency files
+	// not evaluated) is not a clean pass either.
 	verdict := fmt.Sprintf("Verdict: %s", output.TerminalText(strings.ToUpper(result.Verdict.Status)))
 	counts := fmt.Sprintf("(check: %d critical / %d warning, scan: %d critical / %d high)",
 		result.Verdict.CheckCriticals, result.Verdict.CheckWarnings,
@@ -744,11 +916,17 @@ func writeAuditTerminal(result *AuditResult) error {
 		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts
 	case result.Verdict.Status == "findings":
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
+	case result.Triage.Decision != "" && result.Triage.Decision != "proceed":
+		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
+		if auditCoverageIncomplete(result.Triage) {
+			// PASS only means no finding; say why triage still asks for review.
+			line += " " + st.Yellow("(coverage incomplete, see triage)")
+		}
 	default:
 		line = st.Green(st.Bold("✔ "+verdict)) + " " + counts
 	}
 
-	fmt.Printf("\n%s\n  %s\n%s\n", sep, line, sep)
+	fmt.Fprintf(w, "\n%s\n  %s\n%s\n", sep, line, sep)
 
 	if result.Triage.Decision != "" {
 		var triageLine string
@@ -760,12 +938,12 @@ func writeAuditTerminal(result *AuditResult) error {
 		default:
 			triageLine = st.Green(st.Bold("✔ Triage: PROCEED"))
 		}
-		fmt.Printf("  %s\n", triageLine)
+		fmt.Fprintf(w, "  %s\n", triageLine)
 		if result.Triage.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Triage.Summary)))
+			fmt.Fprintf(w, "  %s\n", st.Dim(output.TerminalText(result.Triage.Summary)))
 		}
 		if len(result.Triage.RecommendedNextSteps) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Next: "+output.TerminalText(result.Triage.RecommendedNextSteps[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Next: "+output.TerminalText(result.Triage.RecommendedNextSteps[0])))
 		}
 	}
 
@@ -779,15 +957,15 @@ func writeAuditTerminal(result *AuditResult) error {
 		default:
 			handoffLine = st.Green(st.Bold("✔ Agent handoff: ALLOWED"))
 		}
-		fmt.Printf("  %s\n", handoffLine)
+		fmt.Fprintf(w, "  %s\n", handoffLine)
 		if result.Handoff.Summary != "" {
-			fmt.Printf("  %s\n", st.Dim(output.TerminalText(result.Handoff.Summary)))
+			fmt.Fprintf(w, "  %s\n", st.Dim(output.TerminalText(result.Handoff.Summary)))
 		}
 		if len(result.Handoff.AllowedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Allowed: "+output.TerminalText(result.Handoff.AllowedActions[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Allowed: "+output.TerminalText(result.Handoff.AllowedActions[0])))
 		}
 		if len(result.Handoff.BlockedActions) > 0 {
-			fmt.Printf("  %s\n", st.Dim("Blocked: "+output.TerminalText(result.Handoff.BlockedActions[0])))
+			fmt.Fprintf(w, "  %s\n", st.Dim("Blocked: "+output.TerminalText(result.Handoff.BlockedActions[0])))
 		}
 	}
 
@@ -800,12 +978,12 @@ func writeAuditTerminal(result *AuditResult) error {
 		if !result.Plan.CanInstallDependencies {
 			installStatus = "no"
 		}
-		fmt.Printf("  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
+		fmt.Fprintf(w, "  %s\n", st.Dim(fmt.Sprintf("Action plan: install=%s execute=%s trust_state=%s",
 			installStatus, execStatus, output.TerminalText(result.Plan.TrustState))))
 	}
 
 	if rule := topScanRule(result.Scan.Findings); rule != "" {
-		fmt.Printf("  %s\n", st.Dim("Next: aguara explain "+output.TerminalText(rule)))
+		fmt.Fprintf(w, "  %s\n", st.Dim("Next: aguara explain "+output.TerminalText(rule)))
 	}
 	return nil
 }

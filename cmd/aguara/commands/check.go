@@ -117,6 +117,8 @@ all supported ecosystems.`,
 }
 
 func init() {
+	addFormatFlag(checkCmd, "terminal", "json")
+	addOutputFlag(checkCmd)
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages (also accepted as a positional argument)")
 	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
 	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
@@ -253,6 +255,11 @@ type checkPlan struct {
 	// ("Maven / Gradle dependencies") instead of falling back
 	// to the Python default.
 	explicitEcosystem bool
+	// unsupported lists dependency files found under the root that no
+	// parser reads (deno.lock, gems.locked, dev-requirements.txt, ...). They are reported
+	// in the coverage block so an unread lockfile cannot pass as a
+	// clean check. Scoped to the requested ecosystems when explicit.
+	unsupported []packagecheck.UnsupportedEvidence
 }
 
 // intelEcosystems returns the OSV bucket IDs the plan needs intel
@@ -570,12 +577,15 @@ func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan
 				)
 			}
 		}
+		root := path
+		if root == "" {
+			root = "."
+		}
 		if pythonRequested {
-			root := path
-			if root == "" {
-				root = "."
-			}
 			addPythonEnvironments(&plan, root, implicit)
+		}
+		if err := plan.discoverUnsupported(root, plan.requestedEcosystems); err != nil {
+			return checkPlan{}, err
 		}
 		return plan, nil
 	}
@@ -609,6 +619,9 @@ func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan
 			return checkPlan{}, fmt.Errorf("check: discover %s: %w", resolved, err)
 		}
 		plan.packagecheckTargets = targets
+		if err := plan.discoverUnsupported(resolved, nil); err != nil {
+			return checkPlan{}, err
+		}
 	}
 
 	// Python legacy: explicit path heuristic (site-packages-shaped
@@ -639,6 +652,20 @@ func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan
 	}
 
 	return plan, nil
+}
+
+// discoverUnsupported records dependency files under root that no parser
+// reads. Explicit --ecosystem plans only report those ecosystems.
+func (p *checkPlan) discoverUnsupported(root string, ecosystems []string) error {
+	if !statDir(root) {
+		return nil
+	}
+	found, err := packagecheck.DiscoverUnsupported(root, ecosystems)
+	if err != nil {
+		return fmt.Errorf("check: discover %s: %w", root, err)
+	}
+	p.unsupported = found
+	return nil
 }
 
 // canonicaliseCheckEcosystem maps a raw --ecosystem flag value to
@@ -822,12 +849,14 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		}
 		parts = append(parts, r)
 	}
+	var run *packagecheck.RunResult
 	if len(plan.packagecheckTargets) > 0 {
-		r, err := runPackagecheckPlan(plan, override)
+		r, rr, err := runPackagecheckPlan(plan, override)
 		if err != nil {
 			return nil, err
 		}
 		parts = append(parts, r)
+		run = rr
 	}
 	if len(plan.pythonEnvs) > 0 {
 		envParts, err := runPythonEnvironments(plan, override)
@@ -837,6 +866,7 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		parts = append(parts, envParts...)
 	}
 
+	var result *incident.CheckResult
 	if len(parts) == 0 {
 		// Explicit --path with no signals. Return the canonical
 		// empty CheckResult so the JSON contract still emits
@@ -845,15 +875,18 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		if env == "" {
 			env = "."
 		}
-		return &incident.CheckResult{
+		result = &incident.CheckResult{
 			Environment: env,
 			Findings:    []incident.Finding{},
 			Credentials: []incident.CredentialFile{},
 			Ecosystems:  []packagecheck.EcosystemResult{},
 			Intel:       incident.IntelSummaryForOverride(override),
-		}, nil
+		}
+	} else {
+		result = mergeCheckResults(parts, plan.rootPath)
 	}
-	return mergeCheckResults(parts, plan.rootPath), nil
+	result.Coverage = checkCoverage(plan, result, run)
+	return result, nil
 }
 
 // runPackagecheckPlan runs the packagecheck Runner against every
@@ -861,11 +894,15 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 // incident.Finding entries with per-ecosystem remediation text.
 // The Ecosystems slice carries one entry per lockfile so multi-
 // language repos show every manifest in JSON output.
-func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, error) {
+//
+// The RunResult is returned too: coverage needs the files the run read
+// (including requirements files reached through an include) and the
+// includes it could not read.
+func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.CheckResult, *packagecheck.RunResult, error) {
 	runner := &packagecheck.Runner{Matcher: incident.MatcherForOverride(override)}
 	runRes, err := runner.Run(plan.packagecheckTargets)
 	if err != nil {
-		return nil, fmt.Errorf("aguara check: packagecheck: %w", err)
+		return nil, nil, fmt.Errorf("aguara check: packagecheck: %w", err)
 	}
 	root := plan.rootPath
 	if root == "" {
@@ -913,7 +950,7 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 	for _, u := range runRes.UnresolvedIncludes {
 		result.Findings = append(result.Findings, unresolvedIncludeFinding(u))
 	}
-	return result, nil
+	return result, runRes, nil
 }
 
 // mergeCheckResults concatenates Findings + Credentials +
@@ -1014,9 +1051,17 @@ func writeCheckJSON(result *incident.CheckResult) error {
 	})
 }
 
+// writeCheckTerminal renders the terminal report to stdout, or to the
+// -o file when one is set (color is already off for a file).
 func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
+	return writeReport(func(w io.Writer) error {
+		return renderCheckTerminal(w, result, plan)
+	})
+}
+
+func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPlan) error {
 	st := output.NewStyle(flagNoColor)
-	width := output.DetectWidth(os.Stdout)
+	width := output.DetectWidth(w)
 	sep := st.Separator(width)
 
 	ecosystem := plan.singleEcoToken()
@@ -1025,8 +1070,8 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		envLabel = "project dependencies"
 	}
 
-	fmt.Printf("\n%s\n", sep)
-	fmt.Printf("  %s\n", st.Bold("AGUARA CHECK"))
+	fmt.Fprintf(w, "\n%s\n", sep)
+	fmt.Fprintf(w, "  %s\n", st.Bold("AGUARA CHECK"))
 	var meta string
 	switch {
 	case plan.isMulti():
@@ -1039,32 +1084,41 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	default:
 		meta = fmt.Sprintf("%d packages · %d .pth files", result.PackagesRead, result.PthScanned)
 	}
-	fmt.Printf("  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
-	fmt.Printf("%s\n\n", sep)
+	fmt.Fprintf(w, "  Target: %s  ·  %s  ·  %s\n", output.TerminalText(result.Environment), envLabel, meta)
+	fmt.Fprintf(w, "%s\n\n", sep)
+
+	// What was actually read, and what was found but not evaluated.
+	if line := packageCoverageLine(result.Coverage); line != "" {
+		fmt.Fprintf(w, "  %s\n", st.Dim(line))
+		for _, line := range unsupportedEvidenceLines(result.Coverage, plan.rootPath) {
+			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
+		}
+		fmt.Fprintln(w)
+	}
 
 	// Provenance line: which intel answered this scan, and how old it is.
 	// Suppressed under --ci to keep stdout to findings (a stale local
 	// cache still earns a stderr note inside printIntelFreshness).
-	printIntelFreshness(result.Intel, flagCheckCI)
+	fprintIntelFreshness(w, os.Stderr, result.Intel, flagCheckCI)
 	if note := unpinnedNote(result); note != "" {
-		fmt.Printf("  %s\n\n", st.Yellow(note))
+		fmt.Fprintf(w, "  %s\n\n", st.Yellow(note))
 	}
 
 	if len(result.Findings) == 0 {
-		fmt.Printf("  %s\n\n", st.OK("No known-compromised packages or persistence artifacts found."))
+		fmt.Fprintf(w, "  %s\n\n", noPackageFindingsLine(st, result.Coverage))
 		return nil
 	}
 
 	for _, f := range result.Findings {
 		label := output.TerminalText(string(f.Severity))
-		fmt.Printf("  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
+		fmt.Fprintf(w, "  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 		if f.Path != "" {
-			fmt.Printf("             %s\n", st.Dim("Path: "+output.TerminalText(f.Location())))
+			fmt.Fprintf(w, "             %s\n", st.Dim("Path: "+output.TerminalText(f.Location())))
 		}
 		if f.Detail != "" {
-			fmt.Printf("             %s\n", st.Dim(output.TerminalText(f.Detail)))
+			fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Detail)))
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Credentials at risk
@@ -1075,13 +1129,13 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 		}
 	}
 	if atRisk > 0 {
-		fmt.Printf("%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("CREDENTIALS AT RISK", width))
 		for _, c := range result.Credentials {
 			if c.Exists {
-				fmt.Printf("  %-30s %s  %s\n", output.TerminalText(c.Path), st.Red("EXISTS"), st.Dim(output.TerminalText(c.Guidance)))
+				fmt.Fprintf(w, "  %-30s %s  %s\n", output.TerminalText(c.Path), st.Red("EXISTS"), st.Dim(output.TerminalText(c.Guidance)))
 			}
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// Action guidance is ecosystem-specific because `aguara clean`
@@ -1091,20 +1145,20 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	// credentials" guidance; the Python path keeps the
 	// `aguara clean` recommendation since it owns the
 	// persistence-artifact cleanup.
-	fmt.Printf("%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
+	fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
 	switch ecosystem {
 	case ecoPython:
-		fmt.Println("  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
-		fmt.Println("  2. Rotate ALL credentials listed above")
-		fmt.Println("  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+		fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
+		fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
+		fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
 	default:
 		// Single packagecheck ecosystem, or single npm, or
 		// multi-ecosystem: same guidance shape (the
 		// per-ecosystem package-manager commands live in each
 		// Finding.Remediation, not in this summary).
-		fmt.Println("  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
-		fmt.Println("  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
-		fmt.Println("  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
+		fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
+		fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
+		fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
 	}
 
 	// Build summary line
@@ -1125,7 +1179,7 @@ func writeCheckTerminal(result *incident.CheckResult, plan checkPlan) error {
 	if warnCount > 0 {
 		parts = append(parts, st.Yellow(fmt.Sprintf("%d warning", warnCount)))
 	}
-	fmt.Printf("\n%s\n  %s\n%s\n", sep, strings.Join(parts, " · "), sep)
+	fmt.Fprintf(w, "\n%s\n  %s\n%s\n", sep, strings.Join(parts, " · "), sep)
 
 	return nil
 }

@@ -271,7 +271,15 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		target.Path = filepath.Join(root, target.RelPath)
 	}
 
-	return s.ScanTargets(ctx, targets)
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, err
+	}
+	if discovery.ExcludedByIgnoreFile > 0 {
+		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
+	}
+	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	return result, nil
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
@@ -302,6 +310,9 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		redaction types.RedactionPlan
 		scanErr   error
 		failures  int
+		// suppressedBy records files whose inline directives removed
+		// findings, so callers can report that target policy applied.
+		suppressedBy = map[string]bool{}
 	)
 	recordFailure := func(err error) {
 		mu.Lock()
@@ -360,6 +371,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 								if !isIgnoredByInline(ignoreIndex, f.Line, f.RuleID) {
 									kept = append(kept, f)
 								}
+							}
+							if len(kept) < len(results) {
+								mu.Lock()
+								suppressedBy[target.RelPath] = true
+								mu.Unlock()
 							}
 							results = kept
 						}
@@ -427,6 +443,12 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		findings = []Finding{}
 	}
 
+	var policy types.TargetPolicyUse
+	for path := range suppressedBy {
+		policy.InlineSuppressed = append(policy.InlineSuppressed, path)
+	}
+	sort.Strings(policy.InlineSuppressed)
+
 	return &ScanResult{
 		Findings:     findings,
 		FilesScanned: len(targets),
@@ -434,6 +456,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		RiskScore:    riskScore,
 		ToolName:     s.toolName,
 		Duration:     time.Since(start),
+		TargetPolicy: policy,
 	}, nil
 }
 

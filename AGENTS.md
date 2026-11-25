@@ -31,9 +31,13 @@ version-matching limits.
 
 ## Trust Boundary
 
-From v0.28.0, `audit` and CI scans ignore target-owned policy by default. A local
-`scan` can still trust it. Use `--project-policy ignore` when inspecting unfamiliar
-content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
+`.aguaraignore`, inline `aguara-ignore` directives) by default. In this checkout,
+`scan` also ignores it when a CI environment is detected, except a `fail_on` in
+`.aguara.yml` when `--fail-on` is not passed (a threshold can only add a gate),
+and says so on stderr. It prints a stderr notice naming the files whenever
+applying the policy changed the result. A local `scan` can still trust
+it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 
@@ -132,6 +136,12 @@ exported through public aliases, rather than copying a partial struct.
   stable identifiers or expect raw secrets.
 - Go results have `Duration time.Duration`; JSON exposes `duration_ms`.
 - Empty scan findings serialize as `[]`, not `null`.
+- CLI JSON from `scan`, `check` and `audit` carries a `coverage` block: files
+  scanned, package evidence read (with `unpinned` counts),
+  `unsupported_evidence` (dependency files found but not evaluated) and
+  `unresolved_includes` (requirements includes not read). Zero files, zero
+  evaluated evidence, unsupported files or any unpinned requirement is not a
+  clean result. Library `ScanResult` values leave `coverage` unset.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a
