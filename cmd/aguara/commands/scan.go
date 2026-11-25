@@ -383,6 +383,9 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) (config.Config, error
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
+	for _, n := range cfg.Notices {
+		fmt.Fprintf(os.Stderr, "notice: %s\n", n)
+	}
 	if !cmd.Flags().Changed("severity") && cfg.Severity != "" {
 		flagSeverity = cfg.Severity
 	}

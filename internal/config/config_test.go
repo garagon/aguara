@@ -224,6 +224,26 @@ baseline: base.json
 	require.Empty(t, cfg.Warnings)
 }
 
+// paths was scaffolded (commented out) by `aguara init` but never read.
+// A file that sets it still loads without an unknown-key warning, and a
+// notice says the key has no effect.
+func TestLoadConfigPathsIsAcceptedWithANotice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".aguara.yml")
+	require.NoError(t, os.WriteFile(path, []byte("severity: high\npaths:\n  - .\n"), 0644))
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Warnings)
+	require.Equal(t, []string{
+		path + `:2: "paths" has no effect; name the paths to scan on the command line`,
+	}, cfg.Notices)
+
+	require.NoError(t, os.WriteFile(path, []byte("severity: high\n"), 0644))
+	cfg, err = config.Load(dir)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Notices)
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()
