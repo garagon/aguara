@@ -108,8 +108,9 @@ func addWorkersFlag(cmd *cobra.Command) {
 }
 
 // addRulesFlag registers --rules for commands that load the rule catalog.
+// StringArray, not StringSlice: a directory path may contain a comma.
 func addRulesFlag(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&flagRules, "rules", "", "Additional rules directory")
+	cmd.Flags().StringArrayVar(&flagRules, "rules", nil, "Additional rules directory (repeatable)")
 }
 
 // addDisableRuleFlag registers --disable-rule for commands that filter

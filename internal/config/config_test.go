@@ -170,6 +170,60 @@ func TestLoadConfigSymlinkRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "symbolic link")
 }
 
+// TestLoadConfigReportsUnknownKeys: unknown keys used to be dropped by
+// yaml.Unmarshal without a trace, so a misspelled "disabled_rules" silently
+// disabled nothing. They are still not fatal, but are reported.
+func TestLoadConfigReportsUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".aguara.yml")
+	data := []byte(`severity: high
+disabled_rules:
+  - CRED_002
+defaults: &defaults
+  severity: low
+rule_overrides:
+  CRED_002:
+    <<: *defaults
+    severty: low
+    exempt_tools: [WebFetch]
+`)
+	require.NoError(t, os.WriteFile(path, data, 0644))
+
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Equal(t, path, cfg.Source)
+	require.Equal(t, "high", cfg.Severity)
+	require.Equal(t, []string{
+		path + `:2: unknown key "disabled_rules" (ignored)`,
+		path + `:4: unknown key "defaults" (ignored)`,
+		path + `:9: unknown key "severty" in rule_overrides.CRED_002 (ignored)`,
+	}, cfg.Warnings)
+	require.Equal(t, "low", cfg.RuleOverrides["CRED_002"].Severity, "merge keys still apply")
+}
+
+func TestLoadConfigKnownKeysHaveNoWarnings(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`paths: [src/]
+ignore: ["*.log"]
+severity: high
+fail_on: critical
+format: json
+rules: custom/
+disable_rules: [CRED_002]
+rule_overrides:
+  CRED_002:
+    severity: low
+    disabled: false
+    apply_to_tools: [Bash]
+max_file_size: 2097152
+baseline: base.json
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".aguara.yml"), data, 0644))
+	cfg, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Warnings)
+}
+
 func TestLoadConfigPrecedence(t *testing.T) {
 	// .aguara.yml takes priority over .aguara.yaml
 	dir := t.TempDir()

@@ -14,7 +14,7 @@ func FuzzParseAndCompile(f *testing.F) {
 	f.Add("- &a\n  id: *a\n")
 
 	f.Fuzz(func(t *testing.T, src string) {
-		raw, err := parseMultiDocYAML([]byte(src))
+		raw, err := parseMultiDocYAML([]byte(src), "fuzz.yaml")
 		if err != nil {
 			return
 		}

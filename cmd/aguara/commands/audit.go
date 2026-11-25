@@ -332,12 +332,12 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 		flagAuditBaseline = cfg.Baseline
 	}
 
-	compiled, err := loadAndCompileRules(cfg)
+	res, err := resolveCLIRules(cfg, flagDisableRules, os.Stderr)
 	if err != nil {
 		return nil, err
 	}
 
-	s, store := buildScanner(compiled, cfg, scanner.SeverityInfo, trustProjectPolicy)
+	s, store := buildScanner(res, cfg, scanner.SeverityInfo, trustProjectPolicy)
 	sp := startSpinnerIfTerminal(s, "Auditing content...")
 
 	ctx, cancel := contextWithInterrupt()
@@ -348,7 +348,7 @@ func auditRunScan(cmd *cobra.Command, targetPath string) (*scanner.ScanResult, e
 	if err != nil {
 		return nil, err
 	}
-	result.RulesLoaded = len(compiled)
+	result.RulesLoaded = len(res.Compiled)
 	result.Target = targetPath
 	result.Coverage = scanCoverage(result)
 	if trustProjectPolicy {

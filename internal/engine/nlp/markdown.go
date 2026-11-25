@@ -51,12 +51,76 @@ var mdParser = goldmark.New()
 
 // ParseMarkdown extracts structured sections from markdown content.
 func ParseMarkdown(source []byte) []MarkdownSection {
+	source = blankFrontmatterDelimiters(source)
 	reader := text.NewReader(source)
 	doc := mdParser.Parser().Parse(reader)
 
 	var sections []MarkdownSection
 	walkNode(doc, source, &sections, source)
 	return sections
+}
+
+// blankFrontmatterDelimiters returns source with the two delimiter lines of
+// a leading YAML frontmatter block ("---" ... "---" or "...") overwritten
+// with spaces. SKILL.md files, Cursor .mdc rules and other agent
+// instruction files start with such a block, but CommonMark has no
+// frontmatter: the opening "---" parses as a thematic break and the
+// closing one turns the metadata into a setext heading, which made the
+// heading checks compare "globs: ... alwaysApply: false" against the body.
+// Blanking only the delimiters keeps every byte offset and line number and
+// leaves the metadata as an ordinary paragraph, which is how an agent
+// reads a rule's description. Source without frontmatter is returned
+// unchanged.
+func blankFrontmatterDelimiters(source []byte) []byte {
+	start := 0
+	if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+		start = len("\xef\xbb\xbf")
+	}
+	firstEnd := lineEnd(source, start)
+	if !isFrontmatterDelimiter(source[start:firstEnd], false) {
+		return source
+	}
+	for pos := nextLine(source, firstEnd); pos < len(source); pos = nextLine(source, pos) {
+		end := lineEnd(source, pos)
+		if isFrontmatterDelimiter(source[pos:end], true) {
+			out := bytes.Clone(source)
+			blank(out[start:firstEnd])
+			blank(out[pos:end])
+			return out
+		}
+		pos = end
+	}
+	return source
+}
+
+// lineEnd returns the offset of the newline ending the line at pos, or
+// len(b) for the last line.
+func lineEnd(b []byte, pos int) int {
+	if i := bytes.IndexByte(b[pos:], '\n'); i >= 0 {
+		return pos + i
+	}
+	return len(b)
+}
+
+// nextLine returns the offset just past the newline at end.
+func nextLine(b []byte, end int) int {
+	if end < len(b) {
+		return end + 1
+	}
+	return len(b)
+}
+
+func isFrontmatterDelimiter(line []byte, closing bool) bool {
+	line = bytes.TrimRight(line, " \t\r")
+	return string(line) == "---" || (closing && string(line) == "...")
+}
+
+func blank(b []byte) {
+	for i, c := range b {
+		if c != '\r' {
+			b[i] = ' '
+		}
+	}
 }
 
 func walkNode(n ast.Node, source []byte, sections *[]MarkdownSection, fullSource []byte) {

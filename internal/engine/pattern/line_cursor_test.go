@@ -15,17 +15,17 @@ func TestMatchPatternLinePositions(t *testing.T) {
 		kind                 rules.PatternType
 		want                 []matchHit
 	}{
-		{"regex same line", "x x\nx", "x", rules.PatternRegex, []matchHit{{1, "x"}, {1, "x"}, {2, "x"}}},
-		{"regex blank lines and CRLF", "\r\nx\r\n\r\nx\n", "x", rules.PatternRegex, []matchHit{{2, "x"}, {4, "x"}}},
-		{"regex multiline", "x\ny\nx\ny", "x\ny", rules.PatternRegex, []matchHit{{1, "x\ny"}, {3, "x\ny"}}},
-		{"regex empty input", "", "^$", rules.PatternRegex, []matchHit{{1, ""}}},
-		{"regex zero width", "x\n\ny\n", "(?m)^", rules.PatternRegex, []matchHit{{1, ""}, {2, ""}, {3, ""}, {4, ""}}},
-		{"regex EOF", "x\n", "$", rules.PatternRegex, []matchHit{{2, ""}}},
-		{"contains same line", "X x\nx", "x", rules.PatternContains, []matchHit{{1, "X"}, {1, "x"}, {2, "x"}}},
-		{"contains multiline", "X\nY\nx\ny", "x\ny", rules.PatternContains, []matchHit{{1, "X\nY"}, {3, "x\ny"}}},
-		{"contains blank lines and CRLF", "\r\nX\r\n\r\nx\n", "x", rules.PatternContains, []matchHit{{2, "X"}, {4, "x"}}},
-		{"contains unicode contraction", "\u0130\n\n\u0130 \u0130", "i", rules.PatternContains, []matchHit{{1, "\u0130"}, {3, "\u0130"}, {3, "\u0130"}}},
-		{"contains unicode expansion", "\u023a\n\u023a \u023a", "\u2c65", rules.PatternContains, []matchHit{{1, "\u023a"}, {2, "\u023a"}, {2, "\u023a"}}},
+		{"regex same line", "x x\nx", "x", rules.PatternRegex, []matchHit{{1, 1, "x"}, {1, 1, "x"}, {2, 2, "x"}}},
+		{"regex blank lines and CRLF", "\r\nx\r\n\r\nx\n", "x", rules.PatternRegex, []matchHit{{2, 2, "x"}, {4, 4, "x"}}},
+		{"regex multiline", "x\ny\nx\ny", "x\ny", rules.PatternRegex, []matchHit{{1, 2, "x\ny"}, {3, 4, "x\ny"}}},
+		{"regex empty input", "", "^$", rules.PatternRegex, []matchHit{{1, 1, ""}}},
+		{"regex zero width", "x\n\ny\n", "(?m)^", rules.PatternRegex, []matchHit{{1, 1, ""}, {2, 2, ""}, {3, 3, ""}, {4, 4, ""}}},
+		{"regex EOF", "x\n", "$", rules.PatternRegex, []matchHit{{2, 2, ""}}},
+		{"contains same line", "X x\nx", "x", rules.PatternContains, []matchHit{{1, 1, "X"}, {1, 1, "x"}, {2, 2, "x"}}},
+		{"contains multiline", "X\nY\nx\ny", "x\ny", rules.PatternContains, []matchHit{{1, 2, "X\nY"}, {3, 4, "x\ny"}}},
+		{"contains blank lines and CRLF", "\r\nX\r\n\r\nx\n", "x", rules.PatternContains, []matchHit{{2, 2, "X"}, {4, 4, "x"}}},
+		{"contains unicode contraction", "\u0130\n\n\u0130 \u0130", "i", rules.PatternContains, []matchHit{{1, 1, "\u0130"}, {3, 3, "\u0130"}, {3, 3, "\u0130"}}},
+		{"contains unicode expansion", "\u023a\n\u023a \u023a", "\u2c65", rules.PatternContains, []matchHit{{1, 1, "\u023a"}, {2, 2, "\u023a"}, {2, 2, "\u023a"}}},
 		{"contains no match", "normal\ntext", "marker", rules.PatternContains, nil},
 		{"contains empty pattern", "normal\ntext", "", rules.PatternContains, nil},
 	} {
@@ -52,7 +52,7 @@ func TestMatchPatternLineCursorResetsPerPattern(t *testing.T) {
 			if kind == rules.PatternRegex {
 				pat.Regex = regexp.MustCompile(tc.value)
 			}
-			require.Equal(t, []matchHit{{tc.line, tc.value}}, matchPattern(pat, content, lower, strings.Split(content, "\n")))
+			require.Equal(t, []matchHit{{tc.line, tc.line, tc.value}}, matchPattern(pat, content, lower, strings.Split(content, "\n")))
 		}
 	}
 }

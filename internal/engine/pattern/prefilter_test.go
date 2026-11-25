@@ -9,6 +9,7 @@ import (
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -395,19 +396,20 @@ func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanne
 	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 	var cbMap []bool
-	if isMarkdown(target.RelPath) {
+	if isMarkdownLike(target.RelPath) {
 		cbMap = BuildCodeBlockMap(lines)
 	}
+	downgradeCode := cbMap != nil && !types.IsAgentDirectiveFile(target.RelPath)
 
 	var findings []scanner.Finding
-	for _, rule := range m.rulesForFile(target.RelPath) {
+	for _, rule := range m.rulesForFile(target.RelPath, lookupKeys(target.RelPath)) {
 		switch rule.MatchMode {
 		case rules.MatchAny:
 			findings = append(findings,
-				m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, cbMap)...)
+				m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		case rules.MatchAll:
 			findings = append(findings,
-				m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
+				m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		}
 	}
 	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)

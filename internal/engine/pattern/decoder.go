@@ -359,15 +359,18 @@ func rescan(decoded []byte, origLine int, origLines []string, target *scanner.Ta
 	lowerDecoded := newLowercaseContent(decodedStr)
 	decodedLines := strings.Split(decodedStr, "\n")
 
-	// Decoded blob inherits code block status from the line where the blob was found
+	// Decoded blob inherits code block status from the line where the blob
+	// was found; as for direct matches, only ordinary documentation lowers
+	// severity for it (see Matcher.Analyze).
 	inCB := isInCodeBlock(cbMap, origLine)
+	downgrade := inCB && !types.IsAgentDirectiveFile(target.RelPath)
 
 	for _, rule := range compiled {
 		for _, pat := range rule.Patterns {
 			hits := matchPattern(pat, decodedStr, lowerDecoded, decodedLines)
 			for _, hit := range hits {
 				sev := rule.Severity
-				if inCB {
+				if downgrade {
 					sev = types.DowngradeSeverity(sev)
 				}
 				findings = append(findings, scanner.Finding{

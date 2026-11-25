@@ -2,15 +2,14 @@ package commands
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/output"
-	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 )
 
@@ -39,22 +38,23 @@ func init() {
 func runExplain(cmd *cobra.Command, args []string) error {
 	ruleID := strings.ToUpper(strings.TrimSpace(args[0]))
 
-	found, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: flagRules,
-		Warn: func(format string, a ...any) {
-			fmt.Fprintf(cmd.ErrOrStderr(), format, a...)
-		},
-	}, ruleID)
+	// A catalog-build failure (e.g. --rules points at a missing directory
+	// or holds a rule that does not compile) surfaces its real error so
+	// the user can diagnose it, instead of being masked as "rule not
+	// found". explain does not apply --disable-rule.
+	res, err := resolveCLIRules(config.Config{}, nil, cmd.ErrOrStderr())
 	if err != nil {
-		// Distinguish a clean miss (typo in the ID) from a
-		// catalog-build failure (e.g. --rules points at a
-		// missing directory). The latter must surface its real
-		// error so the user can diagnose, not get masked as
-		// "rule not found".
-		if errors.Is(err, rulecatalog.ErrRuleNotFound) {
-			return fmt.Errorf("rule %q not found", ruleID)
-		}
 		return err
+	}
+	var found *rulemeta.Rule
+	for _, r := range res.Catalog("") {
+		if strings.EqualFold(r.ID, ruleID) {
+			found = &r
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("rule %q not found", ruleID)
 	}
 
 	return writeCommandReport(cmd, func(w io.Writer) error {

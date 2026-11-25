@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,13 +55,19 @@ type Config struct {
 	MaxFileSize   int64                   `yaml:"max_file_size,omitempty"`
 	Baseline      string                  `yaml:"baseline,omitempty"`
 
-	// Source is the file Load read, or "" when no config file was found.
+	// Source is the path of the file Load read, or "" when no config file
+	// was found.
 	Source string `yaml:"-"`
+	// Warnings lists keys in the file that Aguara does not recognize (for
+	// example a misspelled "disabled_rules"). They are ignored, so callers
+	// that apply the file should show these warnings to the user.
+	Warnings []string `yaml:"-"`
 }
 
 // Load reads the .aguara.yml or .aguara.yaml config file from the given path.
 // If path is a file, its parent directory is used. If no config file is found,
-// it returns a zero Config (not an error).
+// it returns a zero Config (not an error). Unknown keys are not an error, for
+// compatibility with existing files; they are listed in Config.Warnings.
 func Load(dir string) (Config, error) {
 	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
 		dir = filepath.Dir(dir)
@@ -94,7 +102,63 @@ func Load(dir string) (Config, error) {
 			}
 		}
 		cfg.Source = path
+		cfg.Warnings = unknownKeys(path, data)
 		return cfg, nil
 	}
 	return Config{}, nil
+}
+
+// unknownKeys reports top-level keys and rule_overrides entry keys that do
+// not map to a Config or RuleOverride field. yaml.Unmarshal ignores them, so
+// a misspelled key silently loses the setting.
+func unknownKeys(path string, data []byte) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	topKeys := yamlFieldNames(reflect.TypeFor[Config]())
+	overrideKeys := yamlFieldNames(reflect.TypeFor[RuleOverride]())
+	var warnings []string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		if key.Value == "<<" {
+			continue // merge key; its contents are checked by the decoder
+		}
+		if !topKeys[key.Value] {
+			warnings = append(warnings, fmt.Sprintf("%s:%d: unknown key %q (ignored)", path, key.Line, key.Value))
+			continue
+		}
+		if key.Value != "rule_overrides" || value.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(value.Content); j += 2 {
+			id, body := value.Content[j], value.Content[j+1]
+			if body.Kind != yaml.MappingNode {
+				continue
+			}
+			for k := 0; k+1 < len(body.Content); k += 2 {
+				field := body.Content[k]
+				if field.Value != "<<" && !overrideKeys[field.Value] {
+					warnings = append(warnings, fmt.Sprintf("%s:%d: unknown key %q in rule_overrides.%s (ignored)", path, field.Line, field.Value, id.Value))
+				}
+			}
+		}
+	}
+	return warnings
+}
+
+// yamlFieldNames returns the YAML key of every field of struct type t.
+func yamlFieldNames(t reflect.Type) map[string]bool {
+	names := make(map[string]bool, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			names[name] = true
+		}
+	}
+	return names
 }

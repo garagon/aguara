@@ -19,6 +19,20 @@ func TestAdjustConfidenceCodeBlockDowngrade(t *testing.T) {
 	require.InDelta(t, 0.765, result[1].Confidence, 0.01) // 0.85 * 0.9 (md)
 }
 
+// A fenced block in a SKILL.md or agent instruction file is an instruction,
+// not an example: no code-block confidence reduction there.
+func TestAdjustConfidenceNoCodeBlockReductionInDirectiveFiles(t *testing.T) {
+	findings := []types.Finding{
+		{RuleID: "R1", FilePath: "skills/pdf/SKILL.md", Line: 5, Confidence: 0.85, InCodeBlock: true},
+		{RuleID: "R2", FilePath: ".cursor/rules/setup.mdc", Line: 5, Confidence: 0.70, InCodeBlock: true},
+		{RuleID: "R3", FilePath: "README.md", Line: 5, Confidence: 0.85, InCodeBlock: true},
+	}
+	result := meta.AdjustConfidence(findings)
+	require.InDelta(t, 0.765, result[0].Confidence, 0.01) // 0.85 * 0.9 (md), no 0.6
+	require.InDelta(t, 0.875, result[1].Confidence, 0.01) // 0.70 * 1.25 (instruction file), no 0.6
+	require.InDelta(t, 0.459, result[2].Confidence, 0.01) // 0.85 * 0.6 * 0.9
+}
+
 func TestAdjustConfidenceCorrelationBoost(t *testing.T) {
 	findings := []types.Finding{
 		{RuleID: "R1", FilePath: "a.md", Line: 5, Confidence: 0.85},
@@ -119,6 +133,23 @@ func TestAdjustConfidenceInstructionFileBoost(t *testing.T) {
 	require.InDelta(t, 0.875, result[1].Confidence, 0.01) // .cursorrules: 0.70 * 1.25 boost
 	require.InDelta(t, 0.875, result[2].Confidence, 0.01) // AGENTS.md: 0.70 * 1.25 boost
 	require.InDelta(t, 1.0, result[3].Confidence, 0.001)  // 0.90 * 1.25 clamped to 1.0
+}
+
+// Instruction files recognised by their directory or by the .mdc
+// extension get the same boost as base-name instruction files.
+func TestAdjustConfidenceInstructionDirectoryBoost(t *testing.T) {
+	paths := []string{
+		".windsurf/rules/general.md", ".cursor/rules/style.mdc", ".clinerules/a.md",
+		".github/instructions/web.instructions.md", ".claude/agents/helper.md", "CLAUDE.md",
+		".roorules", ".goosehints",
+	}
+	var findings []types.Finding
+	for i, p := range paths {
+		findings = append(findings, types.Finding{RuleID: "R", FilePath: p, Line: 10 * (i + 1), Confidence: 0.70})
+	}
+	for i, f := range meta.AdjustConfidence(findings) {
+		require.InDelta(t, 0.875, f.Confidence, 0.01, paths[i])
+	}
 }
 
 func TestAdjustConfidenceZeroConfidenceUntouched(t *testing.T) {

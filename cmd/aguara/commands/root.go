@@ -15,7 +15,7 @@ var (
 	flagFormat        string
 	flagOutput        string
 	flagWorkers       int
-	flagRules         string
+	flagRules         []string
 	flagNoColor       bool
 	flagDisableRules  []string
 	flagNoUpdateCheck bool

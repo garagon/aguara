@@ -324,6 +324,7 @@ examples:
   true_positive:
     - "pip install litellm mcp-server-tools"
     - "pip install some-mcp-package"
+    - "# install the server\npip install some-mcp-package"
   false_positive:
     - "pip install --require-hashes -r requirements.txt"
     - "pip install -r requirements.txt"

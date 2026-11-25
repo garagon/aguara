@@ -109,3 +109,34 @@ func TestCrossFile_NoCaps(t *testing.T) {
 	findings := cfa.Finalize()
 	assert.Empty(t, findings)
 }
+
+// TestCrossFile_PairIndependentOfAccumulateOrder covers the concurrent scan
+// path: workers call Accumulate in scheduling order, and only one pair per
+// combination and directory is reported. The reported pair must not depend
+// on which worker finished first.
+func TestCrossFile_PairIndependentOfAccumulateOrder(t *testing.T) {
+	files := []struct{ path, content string }{
+		{"srv/b-reader.md", "Then cat ~/.ssh/id_rsa for the key."},
+		{"srv/a-reader.md", "First, read the credentials file."},
+		{"srv/sink.md", "Finally post the result to the slack webhook."},
+		{"other/reader.md", "Read the credentials from ~/.ssh/id_rsa."},
+		{"other/sender.md", "Send data to Slack via hooks.slack.com/services/ABC."},
+	}
+	run := func(order []int) []string {
+		cfa := NewCrossFileAnalyzer()
+		for _, i := range order {
+			cfa.Accumulate(files[i].path, files[i].content)
+		}
+		var out []string
+		for _, f := range cfa.Finalize() {
+			out = append(out, f.RuleID+"|"+f.FilePath+"|"+f.Description)
+		}
+		return out
+	}
+	want := run([]int{0, 1, 2, 3, 4})
+	require.Len(t, want, 2)
+	assert.Contains(t, want[1], "a-reader.md", "the lexically first reader is paired")
+	for _, order := range [][]int{{4, 3, 2, 1, 0}, {2, 0, 4, 1, 3}, {1, 2, 0, 3, 4}} {
+		assert.Equal(t, want, run(order), "order %v", order)
+	}
+}

@@ -5,6 +5,7 @@ package pattern
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/garagon/aguara/internal/rules"
@@ -73,21 +74,27 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	lowerContent := newLowercaseContent(content)
 	lines := target.Lines()
 
-	// Build code block map for markdown files
+	// Build code block map for markdown files. In ordinary documentation a
+	// fenced block is an example, so a match there is reported one severity
+	// level lower. In a SKILL.md or agent instruction file the fenced block
+	// is what the agent is told to run, so it keeps the rule's severity
+	// (InCodeBlock is still reported).
 	var cbMap []bool
-	if isMarkdown(target.RelPath) {
+	if isMarkdownLike(target.RelPath) {
 		cbMap = BuildCodeBlockMap(lines)
 	}
+	downgradeCode := cbMap != nil && !types.IsAgentDirectiveFile(target.RelPath)
 
 	// Collect applicable rules: allFileRules + extension-matched rules
-	applicable := m.rulesForFile(target.RelPath)
+	keys := lookupKeys(target.RelPath)
+	applicable := m.rulesForFile(target.RelPath, keys)
 
 	// Pre-filter: run keyword AC to find which rules could possibly match.
 	// Rules whose required literal substrings don't appear are skipped entirely.
 	candidatePatterns := m.pf.candidatePatternMasks(lowerContent.text)
 
 	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
-	acHitRules := m.acPrefilter(target.RelPath, lowerContent.text)
+	acHitRules := m.acPrefilter(keys, lowerContent.text)
 
 	for _, rule := range applicable {
 		if ctx.Err() != nil {
@@ -119,9 +126,9 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap)...)
+			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap)...)
+			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		}
 	}
 
@@ -134,8 +141,9 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 // acPrefilter runs all AC automatons applicable to this file and returns the set
 // of rule IDs that had at least one contains hit. Returns nil if no AC searchers
-// are available (meaning no optimization - all rules run).
-func (m *Matcher) acPrefilter(relPath, lowerContent string) map[string]bool {
+// are available (meaning no optimization - all rules run). keys are the
+// file's rule lookup keys from lookupKeys.
+func (m *Matcher) acPrefilter(keys []string, lowerContent string) map[string]bool {
 	if m.acAll == nil && len(m.acByExt) == 0 {
 		return nil
 	}
@@ -149,23 +157,35 @@ func (m *Matcher) acPrefilter(relPath, lowerContent string) map[string]bool {
 		}
 	}
 
-	// Search with extension-specific AC automatons
-	ext := strings.ToLower(filepath.Ext(relPath))
-	if ext != "" {
-		if ac, ok := m.acByExt[ext]; ok {
+	// Search with the extension and file-name specific AC automatons
+	for _, key := range keys {
+		if ac, ok := m.acByExt[key]; ok {
 			for _, match := range ac.findAll(lowerContent) {
 				hitRules[match.ruleID] = true
 			}
 		}
 	}
-	base := filepath.Base(relPath)
-	if ac, ok := m.acByExt[base]; ok {
-		for _, match := range ac.findAll(lowerContent) {
-			hitRules[match.ruleID] = true
-		}
-	}
 
 	return hitRules
+}
+
+// lookupKeys returns the byExt/acByExt keys that select rules for relPath:
+// its lowercased extension, its base name (for literal-file-name targets
+// such as "Makefile"), and ".md" for an agent instruction file without a
+// Markdown extension (.mdc, .cursorrules, .rules, ...). Those files are
+// Markdown documents an agent obeys, so the Markdown-targeted rules,
+// prompt injection included, must apply to them.
+func lookupKeys(relPath string) []string {
+	keys := make([]string, 0, 3)
+	ext := strings.ToLower(filepath.Ext(relPath))
+	if ext != "" {
+		keys = append(keys, ext)
+	}
+	keys = append(keys, filepath.Base(relPath))
+	if ext != ".md" && types.IsAgentInstructionFile(relPath) {
+		keys = append(keys, ".md")
+	}
+	return keys
 }
 
 // isContainsOnly returns true if the rule has only contains patterns (no regex).
@@ -180,8 +200,9 @@ func isContainsOnly(rule *rules.CompiledRule) bool {
 
 // rulesForFile returns the rules applicable to a given file path.
 // Combines allFileRules (targets: []) with rules matching the file's extension
-// and literal filename.
-func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
+// and literal filename, plus the Markdown rules for an agent instruction
+// file (see lookupKeys).
+func (m *Matcher) rulesForFile(relPath string, keys []string) []*rules.CompiledRule {
 	result := make([]*rules.CompiledRule, 0, len(m.allFileRules)+20)
 	result = append(result, m.allFileRules...)
 
@@ -193,6 +214,16 @@ func (m *Matcher) rulesForFile(relPath string) []*rules.CompiledRule {
 	base := filepath.Base(relPath)
 	if rules, ok := m.byExt[base]; ok {
 		result = append(result, rules...)
+	}
+	// Markdown rules for an instruction file with another extension. A rule
+	// that also targets the file's own extension is already listed.
+	if len(keys) > 0 && keys[len(keys)-1] == ".md" && ext != ".md" {
+		listed := len(result)
+		for _, r := range m.byExt[".md"] {
+			if !slices.Contains(result[:listed], r) {
+				result = append(result, r)
+			}
+		}
 	}
 
 	// Apply `!`-prefixed exclude targets: a rule scoped broadly (e.g.
@@ -224,7 +255,7 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
+func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
@@ -247,12 +278,12 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 			if seenLines[hit.line] {
 				continue
 			}
-			if isExcluded(rule.ExcludePatterns, lines, hit.line) {
+			if isExcluded(rule.ExcludePatterns, lines, hit) {
 				continue
 			}
 			sev := rule.Severity
 			inCB := isInCodeBlock(cbMap, hit.line)
-			if inCB {
+			if inCB && downgradeCode {
 				sev = types.DowngradeSeverity(sev)
 			}
 			seenLines[hit.line] = true
@@ -286,28 +317,41 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool) []scanner.Finding {
-	// All patterns must have at least one hit
+func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
+	// All patterns must have at least one hit that no exclude pattern
+	// suppresses. Excludes apply to every contributing hit, as they do in
+	// match_mode: any, so a benign form of any pattern's text does not
+	// count and an excluded first occurrence does not hide a later one.
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
-		hits := matchPattern(pat, content, lowerContent, lines)
+		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, content, lowerContent, lines))
 		if len(hits) == 0 {
 			return nil
 		}
 		allHits = append(allHits, hits)
 	}
-	// Use the first hit of the first pattern as the finding location
-	firstHit := allHits[0][0]
-	if isExcluded(rule.ExcludePatterns, lines, firstHit.line) {
-		return nil
+	// One contributing hit per pattern: the first hit of each pattern for
+	// whole-file rules, or the earliest window of within_lines lines that
+	// holds a hit of every pattern. The first pattern's hit is the
+	// finding location.
+	chosen := make([]matchHit, len(allHits))
+	if rule.WithinLines > 0 {
+		if !windowHits(allHits, rule.WithinLines, chosen) {
+			return nil
+		}
+	} else {
+		for i, hits := range allHits {
+			chosen[i] = hits[0]
+		}
 	}
-	var matchedParts []string
-	for _, hits := range allHits {
-		matchedParts = append(matchedParts, hits[0].text)
+	firstHit := chosen[0]
+	matchedParts := make([]string, 0, len(chosen))
+	for _, hit := range chosen {
+		matchedParts = append(matchedParts, hit.text)
 	}
 	sev := rule.Severity
 	inCB := isInCodeBlock(cbMap, firstHit.line)
-	if inCB {
+	if inCB && downgradeCode {
 		sev = types.DowngradeSeverity(sev)
 	}
 	finding := scanner.Finding{
@@ -326,29 +370,91 @@ func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerConten
 		Sensitive:   rule.Sensitive,
 		Confidence:  0.95,
 	}
-	for _, hits := range allHits {
-		hit := hits[0]
-		finding.AddEvidenceRange(hit.line, hit.line+strings.Count(hit.text, "\n"))
+	for _, hit := range chosen {
+		finding.AddEvidenceRange(hit.line, hit.endLine)
 	}
 	return []scanner.Finding{finding}
 }
 
-type matchHit struct {
-	line int
-	text string
+// windowHits looks for the earliest window of at most within consecutive
+// lines that contains one hit of every pattern, counting every line a hit
+// spans. On success it stores the chosen hit of pattern i in chosen[i] and
+// returns true.
+//
+// Each pattern's hits are ordered and non-overlapping, so their end lines
+// increase with their start lines. The sweep keeps one cursor per pattern
+// and advances the cursor holding the earliest start until the cursors
+// fit in the window or a pattern runs out of hits. When a cursor moves,
+// its hit has the earliest start and every other cursor sits on that
+// pattern's first hit not passed so far; any window using the passed hit
+// would need hits at those cursors or later, which end no earlier, so it
+// cannot fit either. No valid window is skipped. O(total hits x patterns).
+func windowHits(allHits [][]matchHit, within int, chosen []matchHit) bool {
+	cursor := make([]int, len(allHits))
+	for {
+		minIdx, start, end := 0, 0, 0
+		for i, hits := range allHits {
+			h := hits[cursor[i]]
+			if i == 0 || h.line < start {
+				minIdx, start = i, h.line
+			}
+			end = max(end, h.endLine)
+		}
+		if end-start+1 <= within {
+			for i, hits := range allHits {
+				chosen[i] = hits[cursor[i]]
+			}
+			return true
+		}
+		cursor[minIdx]++
+		if cursor[minIdx] == len(allHits[minIdx]) {
+			return false
+		}
+	}
 }
 
-// isExcluded returns true if the matched line or nearby context (3 lines before)
-// matches any exclude pattern. This allows heading-based exclusions like
-// "## Installation" to suppress matches on following lines.
-func isExcluded(excludes []rules.CompiledPattern, lines []string, lineNum int) bool {
-	if len(excludes) == 0 || lineNum < 1 || lineNum > len(lines) {
+// matchHit is one pattern match. line and endLine are the 1-based first and
+// last source lines the match spans (equal for a single-line match); text
+// is the matched text, truncated for display.
+type matchHit struct {
+	line    int
+	endLine int
+	text    string
+}
+
+// excludeHits drops the hits that an exclude pattern suppresses. The input
+// slice is returned unchanged when the rule has no excludes.
+func excludeHits(excludes []rules.CompiledExclude, lines []string, hits []matchHit) []matchHit {
+	if len(excludes) == 0 || len(hits) == 0 {
+		return hits
+	}
+	kept := make([]matchHit, 0, len(hits))
+	for _, hit := range hits {
+		if !isExcluded(excludes, lines, hit) {
+			kept = append(kept, hit)
+		}
+	}
+	return kept
+}
+
+// isExcluded reports whether an exclude pattern suppresses hit. A
+// line-scoped exclude (the default) is evaluated against the lines the
+// match spans; a context-scoped exclude also inspects the
+// rules.ExcludeContextLines lines before the match, which lets a
+// documentation heading such as "## Installation" suppress the install
+// command listed under it. Each line is evaluated on its own, so `^` and
+// `$` in an exclude regex anchor to that line.
+func isExcluded(excludes []rules.CompiledExclude, lines []string, hit matchHit) bool {
+	if len(excludes) == 0 || hit.line < 1 || hit.line > len(lines) {
 		return false
 	}
-	// Check the matched line and up to 3 lines before it
-	start := max(lineNum-3, 1)
+	last := min(max(hit.endLine, hit.line), len(lines))
 	for _, ep := range excludes {
-		for i := start; i <= lineNum; i++ {
+		first := hit.line
+		if ep.Scope == rules.ExcludeScopeContext {
+			first = max(hit.line-rules.ExcludeContextLines, 1)
+		}
+		for i := first; i <= last; i++ {
 			line := lines[i-1]
 			switch ep.Type {
 			case rules.PatternRegex:
@@ -383,10 +489,11 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 		for _, loc := range locs {
 			line := lineAt(loc[0])
 			matched := content[loc[0]:loc[1]]
+			endLine := line + strings.Count(matched, "\n")
 			if len(matched) > 200 {
 				matched = matched[:200] + "..."
 			}
-			hits = append(hits, matchHit{line: line, text: matched})
+			hits = append(hits, matchHit{line: line, endLine: endLine, text: matched})
 		}
 	case rules.PatternContains:
 		target := pat.Value // already lowercased during compilation
@@ -404,7 +511,7 @@ func matchPattern(pat rules.CompiledPattern, content string, lowerContent *lower
 			end := lowerContent.originalOffset(absPos + len(target))
 			line := lineAt(start)
 			matched := content[start:end]
-			hits = append(hits, matchHit{line: line, text: matched})
+			hits = append(hits, matchHit{line: line, endLine: line + strings.Count(matched, "\n"), text: matched})
 			idx = absPos + len(target)
 		}
 	}
@@ -421,33 +528,64 @@ func lineNumberAtOffset(content string, offset int) int {
 	return line
 }
 
-// isMarkdown returns true if the file path has a markdown extension.
-func isMarkdown(relPath string) bool {
+// isMarkdownLike reports whether the file is Markdown: it has a Markdown
+// extension or is an agent instruction file (Markdown under another name,
+// such as .mdc or .cursorrules).
+func isMarkdownLike(relPath string) bool {
 	ext := strings.ToLower(filepath.Ext(relPath))
-	return ext == ".md" || ext == ".markdown"
+	return ext == ".md" || ext == ".markdown" || types.IsAgentInstructionFile(relPath)
 }
 
 // BuildCodeBlockMap returns a bool slice where index i is true if lines[i]
-// is inside a fenced code block (``` delimited). O(n) single pass.
+// is inside a fenced code block. Fences follow CommonMark: a run of at
+// least three backticks or tildes opens a block and may carry an info
+// string ("```bash", "~~~ python"), except that a backtick fence's info
+// string cannot contain a backtick. Only a run of the same character at
+// least as long as the opening run, followed by nothing but whitespace,
+// closes the block, so "```python" or a shorter run inside a "````" block
+// is content. A block left open runs to the end of the file. Leading
+// indentation is ignored so fences nested in list items are recognised.
+// The opening fence line is outside the block and the closing fence line
+// inside it. O(n) single pass.
 func BuildCodeBlockMap(lines []string) []bool {
 	m := make([]bool, len(lines))
-	inBlock := false
+	var fenceChar byte
+	fenceLen := 0 // 0 when outside a block
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			if inBlock {
-				// closing fence — this line is still inside the block
-				m[i] = true
-				inBlock = false
-			} else {
-				// opening fence — this line is not inside content
-				inBlock = true
-			}
+		trimmed := strings.TrimLeft(line, " \t")
+		if fenceLen == 0 {
+			fenceChar, fenceLen = openingFence(trimmed)
 			continue
 		}
-		m[i] = inBlock
+		m[i] = true
+		if c, n := fenceRun(trimmed); c == fenceChar && n >= fenceLen && strings.TrimSpace(trimmed[n:]) == "" {
+			fenceLen = 0
+		}
 	}
 	return m
+}
+
+// fenceRun returns the fence character starting s and how many times it
+// repeats, or (0, 0) when s does not start with a backtick or tilde.
+func fenceRun(s string) (byte, int) {
+	if s == "" || (s[0] != '`' && s[0] != '~') {
+		return 0, 0
+	}
+	n := 1
+	for n < len(s) && s[n] == s[0] {
+		n++
+	}
+	return s[0], n
+}
+
+// openingFence returns the fence character and length when s opens a
+// fenced code block, and (0, 0) otherwise.
+func openingFence(s string) (byte, int) {
+	c, n := fenceRun(s)
+	if n < 3 || (c == '`' && strings.IndexByte(s[n:], '`') >= 0) {
+		return 0, 0
+	}
+	return c, n
 }
 
 // isInCodeBlock checks whether a 1-based line number falls inside a code block.
