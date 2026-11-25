@@ -15,6 +15,13 @@ type MatchInput struct {
 	Name      string
 	Version   string
 	Path      string
+	// ArbitraryEquality marks a PyPI version taken from a `===`
+	// requirement. pip compares it as a case-insensitive string against
+	// each candidate's normalized version (PEP 440 "Arbitrary equality";
+	// packaging's Specifier._compare_arbitrary), not with PEP 440 version
+	// equality, so `===1.0` selects 1.0 but not 1.0.0. Ignored for other
+	// ecosystems.
+	ArbitraryEquality bool
 }
 
 // Match is the resolved result of a MatchPackage hit. Record is a
@@ -229,6 +236,10 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 		// means a record carrying both Versions and Ranges does not
 		// produce two Match entries for one installed version.
 		switch {
+		case in.ArbitraryEquality && normalizeEcosystem(in.Ecosystem) == EcosystemPyPI:
+			if !arbitraryVersionMatches(*rec, in.Version) {
+				continue
+			}
 		case versionMatches(*rec, in.Version):
 		case allowRanges && rangeMatches(*rec, in.Version):
 		default:
@@ -418,6 +429,27 @@ func PEP503Normalize(name string) string {
 		out = strings.TrimRight(out, "-")
 	}
 	return out
+}
+
+// arbitraryVersionMatches reports whether a `===spec` requirement selects
+// one of rec.Versions the way pip does: the candidate's normalized
+// version string (str(Version(candidate))) equals spec, ignoring case. A
+// candidate that is not a valid PEP 440 version is compared as written,
+// which is what pip did while it still accepted legacy versions.
+func arbitraryVersionMatches(rec Record, spec string) bool {
+	if spec == "" {
+		return false
+	}
+	for _, candidate := range rec.Versions {
+		s, ok := PEP440String(candidate)
+		if !ok {
+			s = candidate
+		}
+		if strings.EqualFold(s, spec) {
+			return true
+		}
+	}
+	return false
 }
 
 // versionMatches reports whether v names one of rec.Versions. Literal

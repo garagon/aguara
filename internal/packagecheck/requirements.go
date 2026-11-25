@@ -567,12 +567,13 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		}
 		rest = strings.TrimSpace(rest[1 : len(rest)-1])
 	}
-	version, pinned, err := parseVersionSpecifier(rest)
+	version, pinned, arbitrary, err := parseVersionSpecifier(rest)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if pinned {
 		ref.Version = version
+		ref.ArbitraryEquality = arbitrary
 	} else {
 		ref.Unpinned, ref.Constraint = true, rest
 	}
@@ -585,8 +586,23 @@ var specifierVersion = regexp.MustCompile(`^[A-Za-z0-9._*+!-]+$`)
 
 // parseVersionSpecifier validates a PEP 440 specifier set and reports
 // the version when the set pins exactly one release: `==` clauses
-// without a wildcard, or `===` clauses, that all agree.
-func parseVersionSpecifier(spec string) (string, bool, error) {
+// without a wildcard, or `===` clauses, that all agree. arbitrary is true
+// when a `===` clause takes part: pip then selects only a release whose
+// normalized version string equals the pin, which the matcher must
+// compare the same way (intel.MatchInput.ArbitraryEquality).
+func parseVersionSpecifier(spec string) (version string, pinned, arbitrary bool, err error) {
+	version, pinned, err = parsePinnedSpecifier(spec)
+	if pinned {
+		for _, clause := range strings.Split(spec, ",") {
+			if strings.HasPrefix(strings.TrimSpace(clause), "===") {
+				arbitrary = true
+			}
+		}
+	}
+	return version, pinned, arbitrary, err
+}
+
+func parsePinnedSpecifier(spec string) (string, bool, error) {
 	if spec == "" {
 		return "", false, nil
 	}

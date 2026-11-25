@@ -54,6 +54,10 @@ type PackageRef struct {
 	// version of the package; it never guesses a version.
 	Unpinned   bool
 	Constraint string
+	// ArbitraryEquality marks a version pinned with `===` in a pip
+	// requirement, which pip compares as a string, not as a PEP 440
+	// version (see intel.MatchInput.ArbitraryEquality).
+	ArbitraryEquality bool
 }
 
 // Target is one discovery anchor under the scanned root. Discovery

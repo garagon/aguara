@@ -542,6 +542,32 @@ func TestPythonLockfileInputRejectsLinkedFiles(t *testing.T) {
 	}
 }
 
+// A `===` pin is compared the way pip compares it, as a string against
+// the release's normalized version, while `==` keeps PEP 440 equality.
+func TestRequirementsArbitraryEqualityMatchesLikePip(t *testing.T) {
+	matcher := intel.NewMatcher(intel.Snapshot{Records: []intel.Record{{
+		ID: "MAL-ARB", Ecosystem: intel.EcosystemPyPI, Name: "evil-pkg", Kind: intel.KindMalicious, Versions: []string{"0.0.1"},
+	}}})
+	for _, tc := range []struct {
+		line string
+		hit  bool
+	}{
+		{"evil-pkg===0.0.1\n", true},
+		{"Evil_Pkg===0.0.1\n", true},
+		{"evil-pkg===0.0.1.0\n", false}, // pip would not select 0.0.1
+		{"evil-pkg===v0.0.1\n", false},
+		{"evil-pkg==0.0.1.0\n", true}, // PEP 440 equality pads zeros
+		{"evil-pkg==v0.0.1\n", true},
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "requirements.txt")
+		writeFile(t, path, tc.line)
+		res, err := (&Runner{Matcher: matcher}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: path, Source: "requirements.txt", Root: dir}})
+		require.NoError(t, err)
+		require.Equal(t, tc.hit, len(res.Hits) == 1, "line %q", tc.line)
+	}
+}
+
 func TestPythonParsersDoNotEchoInputInErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "uv.lock")
 	writeFile(t, path, "version = 1\n[[package]]\nname = secretFixtureTOKEN\n")

@@ -136,10 +136,11 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// release of such a package is malicious, so no version has
 			// to be guessed.
 			matches := r.Matcher.MatchPackage(intel.MatchInput{
-				Ecosystem: ref.Ecosystem,
-				Name:      ref.Name,
-				Version:   ref.Version,
-				Path:      ref.Path,
+				Ecosystem:         ref.Ecosystem,
+				Name:              ref.Name,
+				Version:           ref.Version,
+				Path:              ref.Path,
+				ArbitraryEquality: ref.ArbitraryEquality,
 			})
 			if len(matches) == 0 {
 				continue
