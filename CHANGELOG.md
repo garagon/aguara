@@ -5,12 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-Aguara no longer reports a clean result for input it did not evaluate. `scan`,
-`check` and `audit` now state what they covered, a scan of zero files says that
-nothing was scanned, `audit` asks for review when dependency files could not be
-checked, and invalid rule configuration is an error instead of being skipped.
-The relaxed scan profiles no longer return `clean` while a HIGH or CRITICAL
-finding remains.
+Aguara now says what it did not evaluate instead of reporting a clean result
+for it. `scan`, `check` and `audit` state what they covered, a scan of zero
+files says that nothing was scanned, `audit` asks for review when a dependency
+file it recognises could not be checked, and invalid rule configuration is an
+error instead of being skipped. Dependency manifests without a lockfile, such
+as `package.json` or `pyproject.toml`, are still not read and do not change the
+`audit` result. The relaxed scan profiles no longer return `clean` while a HIGH
+or CRITICAL finding remains.
 
 `check` and `audit` now read Python lockfiles, requirements files and project
 virtual environments, and the JavaScript risk checks also analyze TypeScript.
@@ -39,13 +41,14 @@ notes before updating a pipeline.
 - Python dependencies that are not pinned to one exact version are counted
   (in requirements files only `==` and `===` pin a version): the terminal
   report says how many there are, and JSON `ecosystems` and
-  `coverage.package_evidence` entries carry an `unpinned` count. An exact pin
-  of the same name in the same file, or in a constraints file read through
-  `-c`, covers a requirement; constraints files are not counted.
+  `coverage.package_evidence` entries carry an `unpinned` count, omitted when
+  zero. An exact pin of the same name in the same file, or in a constraints
+  file read through `-c`, covers a requirement; constraints files are not
+  counted.
 - A requirements include that is not read (a URL, a path outside the checked
   directory, a path through an environment variable or a missing file) is a
   WARNING finding with its file and line, and is counted as
-  `unresolved_includes` in the JSON `ecosystems` entry.
+  `unresolved_includes` in the JSON `ecosystems` entry, omitted when zero.
 - Package findings in `check` and `audit` JSON carry `advisory_ids`, every
   advisory that matched, and `line` for entries in Python lockfiles and
   requirements files; terminal output shows `path:line`. PyPI finding titles
@@ -60,8 +63,10 @@ notes before updating a pipeline.
   limits: a postfix non-null assertion is not recognised after a property
   named like a keyword (for example `cfg.default!`), after a variable named
   `of`, or after a string or template literal, so the code that follows can be
-  read differently from how the compiler reads it; and an `as` cast on the
-  options of a recursive delete call hides it from JS_WIPER_TRIPWIRE_001.
+  read differently from how the compiler reads it; and a type assertion on the
+  path or options of a recursive delete call (`'/x' as string`,
+  `{ recursive: true } as RmOptions`, `<RmOptions>{ ... }`) hides it from
+  JS_WIPER_TRIPWIRE_001.
 - `scan`, `check` and `audit` JSON include a `coverage` block stating what was
   evaluated: `files_scanned` and the scan `scope` (`path`, `changed` or
   `auto`), `package_evidence` per ecosystem and source, `unsupported_evidence`
@@ -73,19 +78,20 @@ notes before updating a pipeline.
   README's package coverage section names the rest. `check` and `audit`
   terminal reports print a coverage line. The fields are additive.
 - `scan --fail-on-empty` exits with code 2 when no files were scanned, for
-  example after a mistyped path, an empty change set or `scan --auto` with no
-  MCP configurations. The report is still written. Without the flag, an empty
-  scan still exits 0.
+  example when the path points at a directory with no scannable files, an
+  empty change set or `scan --auto` with no MCP configurations. The report is
+  still written. Without the flag, an empty scan still exits 0.
 - Agent instruction files are recognised by name, extension and directory, and
   Markdown rules, including prompt injection, apply to them whatever their
   extension. This covers rule and instruction files of Cursor
-  (`.cursor/rules/*.mdc`, `.cursorrules`), Windsurf, Cline, Roo Code, Kiro,
-  GitHub Copilot (`.github/instructions/`, `.github/prompts/`), Claude Code
-  (`CLAUDE.md`, `.claude/agents/`, `.claude/commands/`, `.claude/rules/`),
-  Gemini CLI, Zed (`.rules`), Goose (`.goosehints`), Continue and JetBrains.
-  Names such as `AGENTS.md` match in their documented spelling anywhere, and in
-  other letter cases only at the scan root or in `.claude/` and `.junie/`.
-  RULES.md lists the locations.
+  (`.cursor/rules/*.mdc`, `.cursorrules`), Codex (`AGENTS.override.md`),
+  Windsurf and Devin (`.devin/rules/`), Cline, Roo Code, Kiro, GitHub Copilot
+  (`.github/instructions/`, `.github/prompts/`), Claude Code (`CLAUDE.md`,
+  `.claude/agents/`, `.claude/commands/`, `.claude/rules/`), Gemini CLI, Zed
+  (`.rules`), Goose (`.goosehints`), Continue and JetBrains. Names such as
+  `AGENTS.md` match in their documented spelling anywhere, and in other letter
+  cases only at the scan root or in `.claude/` and `.junie/`. RULES.md lists
+  the locations.
 - Rule files can use two new fields. `within_lines: N` on a `match_mode: all`
   rule requires every pattern to match within N consecutive lines. An exclude
   pattern's optional `scope` is `line` (the default: only the line or lines the
@@ -136,13 +142,14 @@ notes before updating a pipeline.
   prompt-injection and supply-chain categories use 25 lines, so numbered steps,
   a heredoc or a multi-line manifest between the two halves still match.
   CRED_019, CRED_021, THIRDPARTY_001 and THIRDPARTY_004, whose second pattern
-  is a single common word, use 5. The rule files in `internal/rules/builtin/`
+  matches common words, use 5. The rule files in `internal/rules/builtin/`
   show the window of each rule. On a corpus of 1,246 public skills, findings
   drop from 1,444 with v0.29.0 to 1,310, almost all from these rules.
 - CRED_017 checks each indented `- NAME=value` list entry, as in a
   docker-compose `environment:` list, on its own line and reports the finding
-  on that entry. A placeholder in one entry no longer hides a literal
-  credential in another, and a list whose credential entries are all
+  on that entry instead of on the `environment:` line. A placeholder entry or
+  comment in the three lines above the `environment:` line no longer hides a
+  literal credential in the list, and a list whose credential entries are all
   placeholders is no longer reported.
 - In a detected CI environment (`CI` set to a value other than `false` or `0`,
   or `GITHUB_ACTIONS`, `GITLAB_CI`, `CIRCLECI`, `BUILDKITE`, `JENKINS_URL`,
@@ -153,17 +160,19 @@ notes before updating a pipeline.
   add a gate. A notice on stderr names the variable, the files and settings
   that were not applied, and any `fail_on` that was. Local scans still apply
   the whole policy, and `--project-policy trust` applies it in CI.
-- When `scan` or `audit` applies project-owned policy that changes the result,
-  it prints one notice on stderr naming the files and settings applied.
+- When `scan` or `audit` applies project-owned policy that takes effect, for
+  example an exclusion that hides a file or finding, or a non-default
+  `format`, it prints one notice on stderr naming the files and settings
+  applied.
 - `audit` triage returns `review`, and `agent_handoff` and `action_plan`
   withhold install, execution and CI, when the content scan covered no files
-  (reason `nothing_scanned`), when a dependency file was found that could not
-  be evaluated (`dependency_evidence_not_evaluated`, or
-  `partial_dependency_coverage` when other files were checked), or when a
-  Python dependency is not pinned to one exact version
-  (`unpinned_dependency_evidence`). The terminal verdict line then ends with
-  "(coverage incomplete, see triage)". An unread requirements include also
-  leads to `review` through its WARNING finding.
+  (reason `nothing_scanned`), when a dependency file listed under
+  `coverage.unsupported_evidence` was found
+  (`dependency_evidence_not_evaluated`, or `partial_dependency_coverage` when
+  other files were checked), or when a Python dependency is not pinned to one
+  exact version (`unpinned_dependency_evidence`). The terminal verdict line
+  then ends with "(coverage incomplete, see triage)". An unread requirements
+  include also leads to `review` through its WARNING finding.
 - Flags are accepted only by the commands they affect: `--severity`,
   `--format`, `-o`, `--workers`, `--rules` and `--disable-rule`. Passing one to
   another command (for example `audit --severity critical`,
@@ -181,11 +190,12 @@ notes before updating a pipeline.
   `within_lines` without `match_mode: all` or an unknown exclude `scope`, an
   unknown rule ID in a disable list or override, an invalid override severity,
   or an override that sets both `apply_to_tools` and `exempt_tools`. The CLI
-  exits with code 2 for problems in `--rules` directories and
-  `--disable-rule`; the library returns a `*ConfigError`. In `.aguara.yml`,
-  unknown keys, unknown rule IDs and invalid severities are warnings on stderr
-  that name the file (and the line, for keys); the entry is ignored, or only
-  its severity when the severity is invalid.
+  exits with code 2 for problems in a rules directory, whether given with
+  `--rules` or with the `rules:` key of an applied `.aguara.yml`, and for
+  unknown `--disable-rule` IDs; the library returns a `*ConfigError`. In
+  `.aguara.yml`, unknown keys, unknown rule IDs and invalid severities are
+  warnings on stderr that name the file (and the line, for keys); the entry is
+  ignored, or only its severity when the severity is invalid.
 - Override keys match rule IDs case-insensitively, and repeated
   `WithRuleOverrides` calls merge, a later entry for the same rule replacing
   the earlier one. Built-in tool exemptions match tool names
@@ -215,9 +225,10 @@ notes before updating a pipeline.
   agent-policy, jsrisk, NLP and toxic-flow rules; v0.29.0 accepted them without
   effect for every analyzer rule except MCP_009. `ListRules` reflects them.
   Disabled rules, severity overrides and tool exemptions also apply before the
-  skill-chain check reads a helper's findings: disabling or lowering the rule
-  behind a helper's finding removes the chain finding, and raising a rule so
-  that it qualifies can add one.
+  skill-chain check reads a helper's findings: disabling the rule behind a
+  helper's finding, or lowering it so that the finding no longer qualifies,
+  removes the chain finding, and raising a rule so that it qualifies can add
+  one.
 - SUPPLY_007 matches setuid and setgid modes it missed when applied to a path:
   `u+s`, `g+s`, `ug+s`, combined symbolic modes such as `u+x,g+s`, and octal
   modes that set those bits, such as `4755`, `2755` or `06755`. Ordinary modes
@@ -227,9 +238,10 @@ notes before updating a pipeline.
 - `scan --auto` reports the highest verdict and risk score of the scanned MCP
   configurations; it reported `clean` and a risk score of 0 even with a
   CRITICAL finding. It also sets `tool_name` from `--tool-name` and
-  `duration_ms`, and orders findings like any other scan. With no MCP
-  configuration found, it writes a normal report in the selected format and
-  prints the notice on stderr.
+  `duration_ms` (elapsed whole milliseconds; v0.29.0 always reported 0), and
+  orders findings like any other scan. With no MCP configuration found, it
+  writes a normal report in the selected format and prints the notice on
+  stderr.
 - An unsupported `--format` is rejected with exit code 2 and the list of
   supported formats instead of falling back to the terminal report:
   `audit --format sarif -o report.sarif` wrote no file and exited 0. An
@@ -243,15 +255,17 @@ notes before updating a pipeline.
 - A scan of zero files says that nothing was scanned instead of "No security
   issues found" (terminal) or "Passed" (Markdown). A package check that read no
   dependency evidence no longer shows a success mark.
-- `scan --changed` outside a git work tree, or when git cannot list the
-  changes, exits with code 2 instead of returning an empty, passing scan.
-  `scan <subdir> --changed` scans modified files inside the subdirectory,
-  including names with spaces or non-ASCII characters; they were skipped.
+- `scan --changed` outside a git work tree, in a bare repository, with a file
+  as the target, or when git cannot list the changes, exits with code 2
+  instead of returning an empty, passing scan. `scan <subdir> --changed`
+  scanned none of the modified files inside the subdirectory; it now scans
+  them, and changed files with non-ASCII names are no longer skipped by any
+  `--changed` scan.
 - A custom rules directory given as a symbolic link (`--rules`,
   `WithCustomRules`, `.aguara.yml` `rules:`) loads its rules; it loaded none,
-  without an error. Inside a rules directory, symlinked rule files are read
-  from their target, and a symlinked subdirectory is reported as a
-  configuration problem.
+  without an error. Inside a rules directory, the 1 MB limit for a symlinked
+  rule file now applies to the target's size, and a symlinked subdirectory is
+  reported as a configuration problem.
 - Repeated scans of the same input return the same findings in the same order.
   Findings are fully ordered, and NLP string sampling, NLP classifier ties and
   cross-file toxic-flow pairs no longer depend on map or scheduling order.
@@ -301,7 +315,12 @@ notes before updating a pipeline.
   and 2.x, pdm.lock lock_version 3.x and 4.x, pylock.toml lock-version 1.x,
   Pipfile.lock pipfile-spec up to 6), a requirements file that declares an
   encoding other than UTF-8 or ASCII, an unknown pip option, includes nested
-  more than eight levels deep, or a symlinked dependency file.
+  more than eight levels deep, or a symlinked or special (for example a named
+  pipe) dependency file.
+- Package gates can also start passing: a lockfile vendored under
+  `site-packages`, `.venv`, `dist-packages` or `__pypackages__` below the
+  checked directory is no longer read, for any ecosystem, so a malicious pin
+  that only appears there no longer fails `check` or `audit`.
 - TypeScript repositories can report new findings: JS_CI_SECRET_HARVEST_001
   (CRITICAL), JS_DAEMON_001 (HIGH) and the other JavaScript risk rules now
   apply to `.ts`, `.mts` and `.cts` files. JS_CI_SECRET_HARVEST_001 fires when
@@ -328,28 +347,36 @@ notes before updating a pipeline.
   `--format` value, now fail with exit code 2. So does `scan` with an
   unsupported `format:` in `.aguara.yml`, and a GitHub Action `format:` input
   with an unsupported value fails the step. `scan --changed` outside a git work
-  tree also exits with code 2.
-- Invalid rule configuration in `--rules` directories and unknown
-  `--disable-rule` IDs now fail `scan`, `audit`, `list-rules` and `explain`
-  with exit code 2; before, they produced a warning or nothing. A rules
-  directory given as a symbolic link now loads, so its rules start running and
-  must compile. In a detected CI environment, problems in the project's own
-  `.aguara.yml` do not fail `scan`, because the file is not applied there.
+  tree, in a bare repository or with a file target also exits with code 2.
+- Invalid rule configuration in `--rules` directories now fails `scan`,
+  `audit`, `list-rules` and `explain` with exit code 2, and unknown
+  `--disable-rule` IDs fail `scan`, `audit` and `list-rules`; before, they
+  produced a warning or nothing. The same applies to a rules directory named
+  by `rules:` in the project's `.aguara.yml` wherever that file is applied: a
+  local `scan`, or `--project-policy trust`. A rules directory given as a
+  symbolic link now loads, so its rules start running and must compile. In a
+  detected CI environment, problems in the project's own `.aguara.yml` do not
+  fail `scan`, except an invalid `fail_on`, because the rest of the file is
+  not applied there.
 - Existing `rule_overrides` and `WithRuleOverrides` entries for
   analyzer-emitted rules start to apply, including to the helper findings the
   skill-chain check reads, so an override can also add or remove an
-  AGENT_FORCED_HELPER_RISK_001 finding. This replaces the v0.29.0 note that
-  analyzer rules such as K8S_IDENTITY_CAPABILITIES_001 support only
+  AGENT_FORCED_HELPER_RISK_001 finding. This replaces the v0.29.0 RULES.md
+  note that analyzer rules such as K8S_IDENTITY_CAPABILITIES_001 support only
   `--disable-rule`.
 - Agents and wrappers reading `audit` `triage`, `agent_handoff` or
   `action_plan` now see `review`, with install, execution and CI withheld, for
-  empty targets, for projects with any dependency file Aguara does not read or
-  has no package intelligence for (even when other files were checked), for
+  empty targets, for projects with a dependency file listed under
+  `coverage.unsupported_evidence` (even when other files were checked), for
   Python dependency files with any unpinned entry, and for requirements
-  includes that were not read. Exit codes and `verdict.status` are unchanged,
-  except that an unread include adds a WARNING finding, which sets
-  `verdict.status` to `findings`. `audit --ci` still fails only on critical
-  findings.
+  includes that were not read. Manifests without resolved versions
+  (`package.json` without a lockfile, `pyproject.toml`, `Pipfile`,
+  `requirements.in`, `setup.py`) and pip files under other names, such as
+  `dev-reqs.txt`, are neither read nor listed, so they still get `proceed`.
+  Exit codes and `verdict.status` are unchanged, except that an unread include
+  adds a WARNING finding: `verdict.status` becomes `findings`, and `check` or
+  `audit` with `--fail-on warning` or `--fail-on info` exits 1. `--ci` still
+  fails only on critical findings.
 - Scan profiles: callers relying on `content-aware` or `minimal` returning
   `clean` now get `flag` for HIGH and CRITICAL findings. The CLI exit code
   still follows `--fail-on`, not the profile. Callers that load their own rules
@@ -359,10 +386,10 @@ notes before updating a pipeline.
   `rule_overrides` `exempt_tools`. Built-in tool exemptions now also apply to
   tool names in other letter cases, such as `bash`.
 - Library: `NewScanner`, the package-level scan functions and `ListRulesE`
-  return a `*ConfigError` for configuration that v0.29.0 skipped silently.
-  Fix the configuration or pass `WithLenientConfig()` to keep the old
-  behaviour. `ListRules` returns nil in that case and `ExplainRule` returns the
-  load error.
+  return a `*ConfigError` for configuration that v0.29.0 skipped, at most with
+  a warning on stderr. Fix the configuration or pass `WithLenientConfig()` to
+  keep the old behaviour. `ListRules` returns nil in that case and
+  `ExplainRule` returns the load error.
 - Library: `WithCustomRules` is variadic, so code that stores it as a
   `func(string) Option` value needs a change. Repeated calls load every
   directory, so two packs that define the same rule ID now return a
