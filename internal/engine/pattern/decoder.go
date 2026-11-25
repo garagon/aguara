@@ -807,14 +807,15 @@ func isLikelyText(data []byte) bool {
 	return text*minTextRatioDen >= total*minTextRatioNum
 }
 
-// isTextRune reports whether r is a printable character, common whitespace
-// or a format character such as a zero-width space or a bidirectional
-// control. Format characters are invisible but are text, and the
-// unicode-attack rules look for them in decoded content too.
+// isTextRune reports whether r is a printable character, whitespace (any
+// Unicode separator included) or a format character such as a zero-width
+// space or a bidirectional control. Separators and format characters can
+// be invisible but are text, and the unicode-attack rules look for them in
+// decoded content too.
 func isTextRune(r rune) bool {
 	switch r {
 	case '\n', '\r', '\t':
 		return true
 	}
-	return unicode.IsPrint(r) || unicode.Is(unicode.Cf, r)
+	return unicode.IsPrint(r) || unicode.In(r, unicode.Z, unicode.Cf)
 }
