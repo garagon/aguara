@@ -27,8 +27,10 @@ type CrossFileAccumulator interface {
 // When the configured accumulator also implements it, the scanner passes each
 // file's findings to ObserveFindings after every registered per-file analyzer
 // has run on that file. The findings have already passed inline suppression
-// (when project policy is trusted) and the disabled-rule and tool-exemption
-// filters that apply before reporting.
+// (when project policy is trusted), the disabled-rule filter, severity
+// overrides and tool exemptions, the same steps and order the report applies
+// first, so an observer sees each finding's reported severity. Later report
+// steps (dedup, scoring, the minimum-severity filter) are not applied.
 //
 // Findings returned by Finalize are never observed, so a cross-file finding
 // cannot feed back into the correlation that produced it. ObserveFindings can
@@ -436,9 +438,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 }
 
 // observeFileFindings hands one file's per-file findings to an accumulator
-// that implements CrossFileFindingObserver. Disabled rules and tool
-// exemptions are applied first so a correlation never cites a finding the
-// caller has already removed from the report.
+// that implements CrossFileFindingObserver. Disabled rules, severity
+// overrides and tool exemptions are applied first, in postProcess order, so
+// a correlation never cites a finding the caller removed or a severity the
+// report does not show. The observed findings are copies: overriding their
+// severity does not touch the findings postProcess later receives.
 func (s *Scanner) observeFileFindings(relPath string, fileFindings []Finding) {
 	observer, ok := s.crossFileAccumulator.(CrossFileFindingObserver)
 	if !ok || len(fileFindings) == 0 {
@@ -449,12 +453,31 @@ func (s *Scanner) observeFileFindings(relPath string, fileFindings []Finding) {
 		if s.disabledRules[strings.ToUpper(f.RuleID)] {
 			continue
 		}
+		s.applySeverityOverride(&f)
 		kept = append(kept, f)
 	}
 	kept = applyToolExemptions(s.toolName, kept, s.toolScopedRules)
 	if len(kept) > 0 {
 		observer.ObserveFindings(relPath, kept)
 	}
+}
+
+// applySeverityOverride sets f's severity to the override configured for its
+// rule (canonical upper-cased ID), if there is one. Same contract as the
+// pattern matcher: only ordinary documentation lowers a fenced finding one
+// level; in SKILL.md and agent instruction files the fenced block is what
+// the agent runs. The result depends only on the override and where the
+// finding is, never on its current severity, so a value that already
+// carries the override is unchanged by a second application.
+func (s *Scanner) applySeverityOverride(f *Finding) {
+	sev, ok := s.severityOverrides[strings.ToUpper(f.RuleID)]
+	if !ok {
+		return
+	}
+	if f.InCodeBlock && !types.IsAgentDirectiveFile(f.FilePath) {
+		sev = types.DowngradeSeverity(sev)
+	}
+	f.Severity = sev
 }
 
 // postProcess deduplicates, scores, correlates, filters, and sorts findings.
@@ -482,17 +505,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 
 	if len(s.severityOverrides) > 0 {
 		for i := range findings {
-			sev, ok := s.severityOverrides[strings.ToUpper(findings[i].RuleID)]
-			if !ok {
-				continue
-			}
-			// Same contract as the pattern matcher: only ordinary
-			// documentation lowers a fenced finding; in SKILL.md and agent
-			// instruction files the fenced block is what the agent runs.
-			if findings[i].InCodeBlock && !types.IsAgentDirectiveFile(findings[i].FilePath) {
-				sev = types.DowngradeSeverity(sev)
-			}
-			findings[i].Severity = sev
+			s.applySeverityOverride(&findings[i])
 		}
 	}
 
