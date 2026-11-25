@@ -44,7 +44,7 @@ func TestContainsOriginalUnicodeOffsets(t *testing.T) {
 func TestContainsUnicodeExclusionsAndCodeBlocks(t *testing.T) {
 	rule := compileTestRule(t, rules.RawRule{ID: "UNICODE_CONTEXT_TEST", Name: "Unicode context", Severity: "HIGH", Category: "test",
 		Patterns:        []rules.RawPattern{{Type: rules.PatternContains, Value: "marker"}},
-		ExcludePatterns: []rules.RawPattern{{Type: rules.PatternContains, Value: "example"}}})
+		ExcludePatterns: []rules.RawExcludePattern{{Type: rules.PatternContains, Value: "example"}}})
 	content := strings.Repeat("\u023a", 64) + "\nexample MARKER\n\n\n\n```text\nMARKER\n```\n"
 	findings, err := pattern.NewMatcher([]*rules.CompiledRule{rule}).Analyze(context.Background(), &scanner.Target{RelPath: "test.md", Content: []byte(content)})
 	require.NoError(t, err)

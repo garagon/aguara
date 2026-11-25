@@ -79,6 +79,10 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 	if ext == ".md" {
 		blocks = pattern.BuildCodeBlockMap(lines)
 	}
+	// Same contract as the pattern matcher: fenced examples in ordinary
+	// documentation are reported one level lower, but in a SKILL.md or
+	// agent instruction file the fenced block is what the agent runs.
+	downgradeBlocks := !types.IsAgentDirectiveFile(target.RelPath)
 	var findings []scanner.Finding
 	seen := make(map[int]bool)
 	emit := func(line, column int, evidence string) {
@@ -89,7 +93,7 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 		meta := RuleMetadata()[0]
 		severity := a.severity
 		inBlock := line > 0 && line <= len(blocks) && blocks[line-1]
-		if inBlock {
+		if inBlock && downgradeBlocks {
 			severity = types.DowngradeSeverity(severity)
 		}
 		findings = append(findings, scanner.Finding{

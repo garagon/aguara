@@ -30,6 +30,34 @@ type RawPattern struct {
 	Value string      `yaml:"value"`
 }
 
+// ExcludeScope selects which lines an exclude pattern is evaluated against.
+type ExcludeScope int
+
+const (
+	// ExcludeScopeLine evaluates the exclude only against the line or lines
+	// the match itself spans. It is the default: an exclude that describes a
+	// benign form of the matched text (a comment line, a placeholder value,
+	// a logging call) must not be satisfied by a neighbouring line.
+	ExcludeScopeLine ExcludeScope = iota
+	// ExcludeScopeContext also evaluates the exclude against the
+	// ExcludeContextLines lines before the match. It is meant for excludes
+	// that identify a documentation section, such as an "## Installation"
+	// heading shortly above an install command.
+	ExcludeScopeContext
+)
+
+// ExcludeContextLines is how many lines before a match a context-scoped
+// exclude pattern inspects.
+const ExcludeContextLines = 3
+
+// RawExcludePattern is an exclude pattern as defined in YAML. Scope is
+// optional: "line" (the default) or "context".
+type RawExcludePattern struct {
+	Type  PatternType `yaml:"type"`
+	Value string      `yaml:"value"`
+	Scope string      `yaml:"scope"`
+}
+
 // RawExamples contains test examples for rule self-testing.
 type RawExamples struct {
 	TruePositive  []string `yaml:"true_positive"`
@@ -45,16 +73,20 @@ type RawRule struct {
 	Category    string   `yaml:"category"`
 	Targets     []string `yaml:"targets"`
 	MatchMode   string   `yaml:"match_mode"`
+	// WithinLines, for match_mode: all, requires every pattern to match
+	// within a window of that many consecutive lines. Zero (the default)
+	// keeps whole-file co-occurrence.
+	WithinLines int `yaml:"within_lines"`
 	// Sensitive marks rules whose match captures a real secret value
 	// (credential read combined with a transmission sink, cross-tool
 	// data leak, exfil chain). The scanner copies this flag onto every
 	// emitted Finding so RedactSensitiveFindings can scrub MatchedText
 	// and the matching context line before JSON/SARIF output.
-	Sensitive       bool         `yaml:"sensitive"`
-	Patterns        []RawPattern `yaml:"patterns"`
-	ExcludePatterns []RawPattern `yaml:"exclude_patterns"`
-	Remediation     string       `yaml:"remediation"`
-	Examples        RawExamples  `yaml:"examples"`
+	Sensitive       bool                `yaml:"sensitive"`
+	Patterns        []RawPattern        `yaml:"patterns"`
+	ExcludePatterns []RawExcludePattern `yaml:"exclude_patterns"`
+	Remediation     string              `yaml:"remediation"`
+	Examples        RawExamples         `yaml:"examples"`
 	// Source is the file the rule was loaded from and Document the 1-based
 	// position of the rule's YAML document in that file. Both are set by
 	// the loaders, not read from YAML, and are used in configuration
@@ -70,6 +102,12 @@ type CompiledPattern struct {
 	Value string         // set when Type == PatternContains (lowercased)
 }
 
+// CompiledExclude is an exclude pattern ready for matching.
+type CompiledExclude struct {
+	CompiledPattern
+	Scope ExcludeScope
+}
+
 // CompiledRule is a rule compiled and ready for execution.
 type CompiledRule struct {
 	ID          string
@@ -83,11 +121,14 @@ type CompiledRule struct {
 	// YAML as `!`-prefixed entries in `targets` (e.g. "!package.json").
 	// Lets a broadly-scoped rule (targets: *.json) carve out a file that
 	// a more specific rule owns, without per-file content heuristics.
-	ExcludeTargets  []string
-	MatchMode       MatchMode
+	ExcludeTargets []string
+	MatchMode      MatchMode
+	// WithinLines > 0 bounds a match_mode: all rule to hits that fit in a
+	// window of that many consecutive lines; 0 means anywhere in the file.
+	WithinLines     int
 	Sensitive       bool
 	Patterns        []CompiledPattern
-	ExcludePatterns []CompiledPattern
+	ExcludePatterns []CompiledExclude
 	Remediation     string
 	Examples        RawExamples
 }
