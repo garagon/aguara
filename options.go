@@ -80,12 +80,13 @@ func WithDisabledRules(ids ...string) Option {
 // WithRuleOverrides applies severity overrides, disables rules, or scopes
 // rules to tools, for pattern and analyzer-emitted rules alike. A severity
 // override replaces the severity of every finding of that rule (a finding
-// inside a Markdown code block is lowered one level from it, as with a
-// pattern rule's own severity). Keys are rule IDs (case-insensitive) and
-// must name a rule in the catalog. Severity must be one of critical, high,
-// medium, low or info, and ApplyToTools and ExemptTools are mutually
-// exclusive. A problem with an override is a ConfigError unless
-// WithLenientConfig is set.
+// inside a Markdown code block in ordinary documentation is lowered one
+// level from it, as with a pattern rule's own severity; in SKILL.md and
+// agent instruction files it keeps the full severity). Keys are rule IDs
+// (case-insensitive) and must name a rule in the catalog. Severity must be
+// one of critical, high, medium, low or info, and ApplyToTools and
+// ExemptTools are mutually exclusive. A problem with an override is a
+// ConfigError unless WithLenientConfig is set.
 //
 // Repeated use merges the maps: a later entry for the same rule replaces an
 // earlier one, also when the keys differ only in letter case. Within one

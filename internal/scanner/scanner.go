@@ -180,8 +180,10 @@ func (s *Scanner) SetDisabledRules(ids []string) {
 
 // SetSeverityOverrides replaces the severity of every finding whose rule ID
 // (case-insensitive) has an entry, whichever analyzer emitted it. As with a
-// pattern rule's own severity, a finding inside a Markdown code block is
-// lowered one level from the override. Overrides apply after the
+// pattern rule's own severity, a finding inside a Markdown code block in
+// ordinary documentation is lowered one level from the override; in
+// SKILL.md and agent instruction files (types.IsAgentDirectiveFile) it keeps
+// the override's full severity. Overrides apply after the
 // disabled-rule filter and before tool exemptions, dedup, scoring and the
 // minimum-severity filter, so they behave exactly like a changed rule
 // severity.
@@ -444,7 +446,10 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 			if !ok {
 				continue
 			}
-			if findings[i].InCodeBlock {
+			// Same contract as the pattern matcher: only ordinary
+			// documentation lowers a fenced finding; in SKILL.md and agent
+			// instruction files the fenced block is what the agent runs.
+			if findings[i].InCodeBlock && !types.IsAgentDirectiveFile(findings[i].FilePath) {
 				sev = types.DowngradeSeverity(sev)
 			}
 			findings[i].Severity = sev
