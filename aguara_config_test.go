@@ -703,22 +703,56 @@ patterns:
 			_, err = aguara.ScanContent(ctx, "consumer-critical-marker", "x.md", opts...)
 			requireProblem(t, err, aguara.ConfigProblemConflictingOverride, "CONSUMER_TC_002", "WithProfileEnforcedRules")
 
-			// Lenient: the rule stays disabled, the entry is not enforced,
-			// and the conflict is recorded rather than dropped.
-			sc, err := aguara.NewScanner(append(opts, aguara.WithLenientConfig())...)
+			// Lenient: the conflict resolves toward more scanning. The rule
+			// stays enabled and enforced, so the CRITICAL finding blocks,
+			// and the conflict is recorded. Before, the disable list won
+			// and every profile returned clean.
+			lenient := append(opts, aguara.WithLenientConfig())
+			sc, err := aguara.NewScanner(lenient...)
 			if err != nil {
 				t.Fatal(err)
 			}
 			problems := sc.ConfigProblems()
-			if len(problems) != 1 || problems[0].Kind != aguara.ConfigProblemConflictingOverride {
+			if len(problems) != 1 || problems[0].Kind != aguara.ConfigProblemConflictingOverride ||
+				!strings.Contains(problems[0].Message, "stays enabled and enforced") {
 				t.Fatalf("ConfigProblems = %+v", problems)
 			}
-			result, err := sc.ScanContent(ctx, "consumer-critical-marker", "x.md")
+			reused, err := sc.ScanContent(ctx, "consumer-critical-marker", "x.md")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(result.Findings) != 0 {
-				t.Fatalf("disabled rule must not report: %+v", result.Findings)
+			pkg, err := aguara.ScanContent(ctx, "consumer-critical-marker", "x.md", lenient...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for label, result := range map[string]*aguara.ScanResult{"scanner": reused, "package": pkg} {
+				if findingIDs(result)["CONSUMER_TC_002"] != 1 || result.Verdict != aguara.VerdictBlock {
+					t.Fatalf("%s: enforced rule must stay enabled and block: verdict %v, %+v", label, result.Verdict, result.Findings)
+				}
+			}
+			if catalogCount(sc.ListRules(), "CONSUMER_TC_002") != 1 {
+				t.Fatal("the re-enabled rule must stay in the catalog")
+			}
+		})
+	}
+}
+
+// TestDisabledAndEnforcedMCP009StaysEnabledWhenLenient covers the rule whose
+// analyzer is not registered at all when the rule is disabled.
+func TestDisabledAndEnforcedMCP009StaysEnabledWhenLenient(t *testing.T) {
+	content := `{"capabilities":["all"]}`
+	for name, disable := range map[string]aguara.Option{
+		"disable list":      aguara.WithDisabledRules("MCP_009"),
+		"disabled override": aguara.WithRuleOverrides(map[string]aguara.RuleOverride{"mcp_009": {Disabled: true}}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := aguara.ScanContent(context.Background(), content, "mcp.json", disable,
+				aguara.WithProfileEnforcedRules("MCP_009"), aguara.WithLenientConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if findingIDs(result)["MCP_009"] != 1 || result.Verdict != aguara.VerdictBlock {
+				t.Fatalf("MCP_009 must stay enabled and block: verdict %v, %+v", result.Verdict, result.Findings)
 			}
 		})
 	}

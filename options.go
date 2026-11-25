@@ -130,11 +130,13 @@ type overrideEntry struct {
 // WithLenientConfig makes rule configuration problems non-fatal, as they
 // were before ConfigError existed: a custom rule that does not compile is
 // skipped, a custom rule whose ID is already defined is skipped (the
-// existing rule is kept), an unknown rule ID in WithDisabledRules or
-// WithRuleOverrides is ignored, an invalid override severity is ignored
-// (the rule keeps its severity and the rest of the override still applies),
-// and when an override sets both ApplyToTools and ExemptTools, ApplyToTools
-// is used.
+// existing rule is kept), an unknown rule ID in WithDisabledRules,
+// WithRuleOverrides or WithProfileEnforcedRules is ignored, an invalid
+// override severity is ignored (the rule keeps its severity and the rest of
+// the override still applies), when an override sets both ApplyToTools and
+// ExemptTools, ApplyToTools is used, and a rule that is both disabled and
+// named in WithProfileEnforcedRules stays enabled and enforced (the
+// enforcement wins, so a forwarded disable list cannot switch it off).
 //
 // The skipped problems are not discarded: Scanner.ConfigProblems returns
 // them. The package-level Scan, ScanContent and ScanContentAs functions have
@@ -231,7 +233,7 @@ func WithScanProfile(profile ScanProfile) Option {
 // (WithDisabledRules, or a Disabled entry in WithRuleOverrides) is a
 // ConfigProblemConflictingOverride: a disabled rule never produces a
 // finding, so the enforcement would do nothing. With WithLenientConfig the
-// rule stays disabled, the entry is not enforced, and the problem is
+// enforcement wins: the rule stays enabled and enforced, and the problem is
 // returned by Scanner.ConfigProblems. Repeated use accumulates. With
 // ProfileStrict, a finding from an enforced rule also blocks whatever its
 // severity.

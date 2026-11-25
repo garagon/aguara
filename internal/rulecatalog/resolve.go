@@ -204,10 +204,6 @@ func Resolve(in Input) (*Resolution, error) {
 			disabled[id] = true
 		}
 	}
-	for id := range disabled {
-		res.Disabled = append(res.Disabled, id)
-	}
-	sort.Strings(res.Disabled)
 
 	enforced := map[string]bool{}
 	for _, ref := range in.Enforced {
@@ -220,13 +216,19 @@ func Resolve(in Input) (*Resolution, error) {
 			continue
 		}
 		// A disabled rule never produces a finding, so enforcing it would
-		// silently enforce nothing. A caller that forwards a user-supplied
-		// disable list must not let it switch off an enforced rule without
-		// a signal. The rule stays disabled and the entry is not enforced.
+		// silently enforce nothing, and a caller that forwards a
+		// user-supplied disable list must not let it switch off an enforced
+		// rule. The conflict is always a problem (fatal unless lenient);
+		// when tolerated it resolves toward more scanning: the rule stays
+		// enabled and enforced.
 		if disabled[id] {
 			addProblem(types.ConfigProblemConflictingOverride, ref.ID, ref.Source,
-				"rule %s is both disabled and enforced by the scan profile", id)
-			continue
+				"rule %s is both disabled and enforced by the scan profile; it stays enabled and enforced", id)
+			delete(disabled, id)
+			if ovr, ok := res.Overrides[id]; ok && ovr.Disabled {
+				ovr.Disabled = false
+				res.Overrides[id] = ovr
+			}
 		}
 		if !enforced[id] {
 			enforced[id] = true
@@ -234,6 +236,12 @@ func Resolve(in Input) (*Resolution, error) {
 		}
 	}
 	sort.Strings(res.Enforced)
+
+	// Built after the enforcement loop, which can re-enable a rule.
+	for id := range disabled {
+		res.Disabled = append(res.Disabled, id)
+	}
+	sort.Strings(res.Disabled)
 
 	for _, cr := range accepted {
 		id := CanonicalID(cr.ID)
