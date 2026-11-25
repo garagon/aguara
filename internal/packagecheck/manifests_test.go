@@ -363,7 +363,9 @@ func manifestEntries(t *testing.T, files map[string]string, ecosystems []string)
 	require.NoError(t, err)
 	found, err := DiscoverUnevaluated(root, ecosystems)
 	require.NoError(t, err)
-	listed := ManifestsWithoutLockfile(root, found.Manifests, CoveringLockfiles(targets, found.Unsupported))
+	run, err := (&Runner{Matcher: intel.NewMatcher(intel.Snapshot{})}).Run(targets)
+	require.NoError(t, err)
+	listed := ManifestsWithoutLockfile(root, found.Manifests, CoveringLockfiles(targets, found.Unsupported), run.Requirements)
 	out := map[string]UnsupportedEvidence{}
 	for _, u := range listed {
 		rel, err := filepath.Rel(root, u.Path)
@@ -478,6 +480,73 @@ func TestManifestsWithoutLockfileRule(t *testing.T) {
 				tc.want = []string{}
 			}
 			require.Equal(t, tc.want, listedNames(got))
+		})
+	}
+}
+
+// A requirements file stands for a Python manifest only when it records
+// what installing the manifest resolves: no local project install, and an
+// exact pin for every dependency the manifest pulls on a plain install.
+func TestRequirementsFileCoversPythonManifestOnlyWhenItPinsIt(t *testing.T) {
+	const project = "[project]\nname = \"app\"\ndependencies = [\"requests>=2\", \"Flask_Login\"]\n" +
+		"[project.optional-dependencies]\ndocs = [\"sphinx\"]\n[dependency-groups]\ndev = [\"pytest\"]\n"
+	for _, tc := range []struct {
+		name     string
+		files    map[string]string
+		covered  bool
+		detail   string
+		notPinne []string
+	}{
+		{"editable install of the project", map[string]string{"pyproject.toml": project, "requirements.txt": "-e .\n"},
+			false, "requirements.txt installs a local project (an editable or path entry), whose dependencies it does not pin", nil},
+		{"bare dot", map[string]string{"pyproject.toml": project, "requirements.txt": ".\n"},
+			false, "requirements.txt installs a local project", nil},
+		{"editable install beside full pins", map[string]string{"pyproject.toml": project, "requirements.txt": "-e .\nrequests==2.32.3\nflask-login==0.6.3\n"},
+			false, "installs a local project", nil},
+		{"file URL", map[string]string{"pyproject.toml": project, "requirements.txt": "app @ file:///src/app\nrequests==2.32.3\nflask-login==0.6.3\n"},
+			false, "installs a local project", nil},
+		{"unrelated pinned file", map[string]string{"pyproject.toml": project, "requirements.txt": "black==24.4.2\n"},
+			false, "requirements.txt does not pin flask-login, requests with == or ===", []string{"flask-login", "requests"}},
+		{"partly pinned", map[string]string{"pyproject.toml": project, "requirements.txt": "requests==2.32.3\nflask-login>=0.6\n"},
+			false, "does not pin flask-login", []string{"flask-login"}},
+		{"compiled file pins the default set", map[string]string{"pyproject.toml": project,
+			"requirements.txt": "certifi==2024.2.2\nflask-login==0.6.3 \\\n    --hash=sha256:00\nrequests==2.32.3\nurllib3==2.2.1\n"}, true, "", nil},
+		{"pins through an include and a constraint", map[string]string{"pyproject.toml": project,
+			"requirements.txt": "-r requirements/base.txt\n-c constraints.txt\nflask-login\n", "requirements/base.txt": "requests===2.32.3\n",
+			"constraints.txt": "flask-login==0.6.3\n"}, true, "", nil},
+		{"requirements in a parent directory", map[string]string{"app/pyproject.toml": project, "requirements.txt": "requests==2.32.3\nflask-login==0.6.3\n"}, true, "", nil},
+		{"only groups declared, groups pinned", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+			"requirements.txt": "pytest==8.2.0\n"}, true, "", nil},
+		{"only groups declared, not pinned", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+			"requirements.txt": "black==24.4.2\n"}, false, "does not pin pytest", []string{"pytest"}},
+		{"setup.py with a fully pinned file", map[string]string{"setup.py": "setup(install_requires=open('r').read())\n", "requirements.txt": "requests==2.32.3\n"}, true, "", nil},
+		{"setup.py with an unpinned entry", map[string]string{"setup.py": "setup(install_requires=x)\n", "requirements.txt": "requests==2.32.3\nflask\n"},
+			false, "requirements.txt has entries without one exact version", nil},
+		{"setup.py with no pin", map[string]string{"setup.py": "setup(install_requires=x)\n", "requirements.txt": "-r other.txt\n", "other.txt": "# empty\n"},
+			false, "requirements.txt pins no exact version", nil},
+		{"Pipfile packages pinned", map[string]string{"Pipfile": "[packages]\nrequests = \"*\"\n[dev-packages]\npytest = \"*\"\n", "requirements.txt": "requests==2.32.3\n"}, true, "", nil},
+		{"constraints alone", map[string]string{"pyproject.toml": project, "constraints.txt": "requests==2.32.3\nflask-login==0.6.3\n"}, false, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := manifestEntries(t, tc.files, nil)
+			var entry UnsupportedEvidence
+			listed := false
+			for _, u := range got {
+				if u.IsManifest() {
+					entry, listed = u, true
+				}
+			}
+			require.Equal(t, !tc.covered, listed, "%+v", got)
+			if !listed {
+				return
+			}
+			require.Contains(t, entry.Detail, tc.detail)
+			if tc.notPinne != nil {
+				require.Equal(t, tc.notPinne, entry.NotPinned)
+			}
+			if tc.detail != "" {
+				require.NotEmpty(t, entry.RequirementsFile)
+			}
 		})
 	}
 }

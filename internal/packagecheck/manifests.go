@@ -52,6 +52,13 @@ type Manifest struct {
 	// Pins are the entries that pin one exact registry release, with
 	// Path and Source set to this manifest.
 	Pins []PackageRef
+	// DefaultDependencies and GroupDependencies are the PEP 503 names of
+	// a Python manifest's registry dependencies: what a plain install
+	// pulls, and the optional extras and dependency groups.
+	// DependencyNamesKnown is false when the list cannot be told from the
+	// file (setup.py, a dynamic list, an include, an unreadable file).
+	DefaultDependencies, GroupDependencies []string
+	DependencyNamesKnown                   bool
 }
 
 // manifestSpec describes one manifest kind.
@@ -173,6 +180,8 @@ func readManifestAt(path string, want map[string]bool, parsed *int) (Manifest, b
 			return m, true
 		}
 		m.Declares, m.Workspace = info.declares(), info.workspace
+		m.DefaultDependencies, m.GroupDependencies = info.defaultNames, info.groupNames
+		m.DependencyNamesKnown = !info.unknown
 		for _, pin := range info.pins {
 			pin.Path, pin.Source = path, spec.kind
 			m.Pins = append(m.Pins, pin)
@@ -193,10 +202,10 @@ func (l LockfileDirs) add(eco, path string) {
 	l[eco][filepath.Clean(filepath.Dir(path))] = true
 }
 
-// lockfileSource reports whether a target records the resolved versions
-// for its ecosystem's manifests. A requirements file read by discovery is
-// the pinned dependency list of the Python project beside it; constraints
-// files install nothing and do not count.
+// lockfileSource reports whether a target is a lockfile that records the
+// resolved versions for its ecosystem's manifests. A Python requirements
+// file is not one by itself: whether it stands for a manifest depends on
+// what it pins (see requirementsCover).
 func lockfileSource(t Target) bool {
 	switch t.Ecosystem {
 	case intel.EcosystemNPM:
@@ -205,9 +214,6 @@ func lockfileSource(t Target) bool {
 			return true
 		}
 	case intel.EcosystemPyPI:
-		if isRequirementsSource(t.Source) {
-			return !IsConstraintsFile(t.Path)
-		}
 		return contains(pythonLockfileNames, t.Source) || isPylockName(t.Source)
 	case intel.EcosystemCargo:
 		return t.Source == "Cargo.lock"
@@ -256,10 +262,16 @@ func CoveringLockfiles(targets []Target, unsupported []UnsupportedEvidence) Lock
 //   - Every other uncovered manifest that declares dependencies is listed.
 //   - A conda environment is always listed when it declares dependencies:
 //     Aguara reads no conda lockfile and has no conda intelligence.
+//   - A Python manifest not covered by a Python lockfile (uv.lock,
+//     poetry.lock, pdm.lock, Pipfile.lock, pylock) can be covered by a
+//     read requirements file in its directory or a parent directory, but
+//     only when that file records what an install of the manifest
+//     resolves (requirementsCover). Otherwise the entry names the nearest
+//     such file and what it does not pin.
 //
 // Entries keep the manifests' exact pins (members' pins included) so the
 // caller can match them. root must be the directory discovery walked.
-func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileDirs) []UnsupportedEvidence {
+func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileDirs, reqs []RequirementsEvidence) []UnsupportedEvidence {
 	root = filepath.Clean(root)
 	parent := func(d string) (string, bool) {
 		if d == root {
@@ -322,8 +334,45 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 		}
 		return nil, ""
 	}
+	reqsByDir := map[string][]RequirementsEvidence{}
+	for _, r := range reqs {
+		dir := filepath.Clean(filepath.Dir(r.Path))
+		reqsByDir[dir] = append(reqsByDir[dir], r)
+	}
+	for _, list := range reqsByDir {
+		sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+	}
+	// requirementsNote returns whether a requirements file in the
+	// manifest's directory or a parent covers it, and otherwise what the
+	// nearest one lacks.
+	requirementsNote := func(m *Manifest, dir string) (bool, requirementsGap) {
+		var nearest requirementsGap
+		found := false
+		for d, ok := dir, true; ok; d, ok = parent(d) {
+			for _, r := range reqsByDir[d] {
+				gap := requirementsCover(r, m)
+				if gap.covered {
+					return true, gap
+				}
+				if !found {
+					nearest, found = gap, true
+				}
+			}
+		}
+		return false, nearest
+	}
+	entry := func(m *Manifest, gap requirementsGap) UnsupportedEvidence {
+		u := UnsupportedEvidence{Path: m.Path, Kind: m.Kind, Ecosystem: m.Ecosystem, Reason: ReasonManifestWithoutLockfile, pins: m.Pins}
+		if gap.file != "" {
+			u.RequirementsFile = gap.file
+			u.NotPinned = gap.notPinned
+			u.Detail = gap.describe(root)
+		}
+		return u
+	}
 
 	var out []UnsupportedEvidence
+	notes := map[*Manifest]requirementsGap{}
 	for i := range manifests {
 		m := &manifests[i]
 		dir := filepath.Clean(filepath.Dir(m.Path))
@@ -337,6 +386,13 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 		if covered(m.Ecosystem, dir) {
 			continue
 		}
+		if m.Ecosystem == intel.EcosystemPyPI && m.Declares {
+			ok, gap := requirementsNote(m, dir)
+			if ok {
+				continue
+			}
+			notes[m] = gap
+		}
 		if w, wdir := nearestRoot(m.Ecosystem, dir); w != nil {
 			w.declares = w.declares || m.Declares
 			w.pins = append(w.pins, m.Pins...)
@@ -346,8 +402,7 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 			continue
 		}
 		if m.Declares {
-			out = append(out, UnsupportedEvidence{Path: m.Path, Kind: m.Kind, Ecosystem: m.Ecosystem,
-				Reason: ReasonManifestWithoutLockfile, pins: m.Pins})
+			out = append(out, entry(m, notes[m]))
 		}
 	}
 	for _, byDir := range roots {
@@ -355,12 +410,102 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 			if !w.declares {
 				continue
 			}
-			out = append(out, UnsupportedEvidence{Path: w.entry.Path, Kind: w.entry.Kind, Ecosystem: w.entry.Ecosystem,
-				Reason: ReasonManifestWithoutLockfile, NestedManifests: w.members, pins: w.pins})
+			u := entry(w.entry, notes[w.entry])
+			u.NestedManifests, u.pins = w.members, w.pins
+			out = append(out, u)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// requirementsGap is the result of checking one requirements file against
+// one Python manifest.
+type requirementsGap struct {
+	covered bool
+	file    string
+	// local: the file installs a local project (-e, ".", a path, file:).
+	local bool
+	// notPinned: declared dependencies the file does not pin exactly.
+	notPinned []string
+	// unpinned, noPins: for a manifest whose dependency names are
+	// unknown, the file has entries without one exact version, or pins
+	// nothing.
+	unpinned int
+	noPins   bool
+}
+
+// maxNotPinned bounds the names an entry lists.
+const maxNotPinned = 20
+
+// requirementsCover decides whether a read requirements file (with its -r
+// and -c includes) stands for a Python manifest beside it, so that
+// installing from it resolves what the check read:
+//
+//   - The file must not install a local project (-e, ".", "./x", a local
+//     archive, file:): pip would build that project from its own metadata
+//     and resolve its dependencies anew.
+//   - When the manifest's dependency names are known, each one it pulls
+//     on a plain install (project dependencies, Poetry main
+//     dependencies, Pipfile [packages], install_requires, requirements.in
+//     entries) must be pinned with == or === in the file or a file it
+//     includes. Extras and dependency groups are not required: pip
+//     installs them only on request, and a compiled requirements file
+//     normally pins the default set. When a manifest declares only
+//     optional groups, those groups must be pinned instead, since they
+//     are all an install of it would pull.
+//   - When the names are unknown (setup.py, a dynamic list, an include, an
+//     unreadable manifest), the file covers it only if it has at least one
+//     exact registry pin and no entry without one exact version.
+func requirementsCover(r RequirementsEvidence, m *Manifest) requirementsGap {
+	gap := requirementsGap{file: r.Path}
+	if r.Local {
+		gap.local = true
+		return gap
+	}
+	if !m.DependencyNamesKnown {
+		gap.unpinned, gap.noPins = r.Unpinned, r.ExactPins == 0
+		gap.covered = r.Unpinned == 0 && r.ExactPins > 0
+		return gap
+	}
+	required := m.DefaultDependencies
+	if len(required) == 0 {
+		required = m.GroupDependencies
+	}
+	seen := map[string]bool{}
+	for _, name := range required {
+		if r.Pinned[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		gap.notPinned = append(gap.notPinned, name)
+	}
+	sort.Strings(gap.notPinned)
+	gap.covered = len(gap.notPinned) == 0
+	if len(gap.notPinned) > maxNotPinned {
+		gap.notPinned = gap.notPinned[:maxNotPinned]
+	}
+	return gap
+}
+
+// describe says why the requirements file does not stand for the
+// manifest, naming the file relative to root.
+func (g requirementsGap) describe(root string) string {
+	name := g.file
+	if rel, err := filepath.Rel(root, g.file); err == nil && !strings.HasPrefix(rel, "..") {
+		name = filepath.ToSlash(rel)
+	}
+	switch {
+	case g.local:
+		return name + " installs a local project (an editable or path entry), whose dependencies it does not pin"
+	case len(g.notPinned) > 0:
+		return name + " does not pin " + strings.Join(g.notPinned, ", ") + " with == or ==="
+	case g.noPins:
+		return name + " pins no exact version, and the manifest's dependencies cannot be read from it"
+	case g.unpinned > 0:
+		return name + " has entries without one exact version, and the manifest's dependencies cannot be read from it"
+	}
+	return ""
 }
 
 // IsManifest reports whether a coverage entry is a dependency manifest

@@ -74,11 +74,15 @@ type requirementsFile struct {
 }
 
 type requirementsItem struct {
-	ref *PackageRef // nil for an include
+	ref *PackageRef // nil for an include or a local entry
 	// include is set for -r / -c directives.
 	include    string
 	constraint bool
-	line       int
+	// local marks an editable install (-e) or a requirement that is a
+	// local path or file: URL: pip builds that project and resolves its
+	// own dependency metadata, which the file does not record.
+	local bool
+	line  int
 }
 
 // ParseRequirements reads a pip requirements or constraints file and
@@ -128,7 +132,7 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 	for key := range w.visited {
 		files = append(files, key)
 	}
-	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files}, nil
+	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files, local: w.local}, nil
 }
 
 type requirementsWalk struct {
@@ -137,6 +141,9 @@ type requirementsWalk struct {
 	visited    map[string]bool
 	coll       *pythonRefCollector
 	unresolved []UnresolvedInclude
+	// local is set when the file or one it includes has an editable or
+	// local-path entry.
+	local bool
 }
 
 func (w *requirementsWalk) visit(path string, constraint bool, depth int) error {
@@ -164,6 +171,10 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 		w.cache.files[key] = file
 	}
 	for _, item := range file.items {
+		if item.local {
+			w.local = true
+			continue
+		}
 		if item.ref != nil {
 			ref := *item.ref
 			ref.Path = path
@@ -442,12 +453,44 @@ func parseRequirementsLine(text string, line int) ([]requirementsItem, error) {
 			return nil, err
 		}
 	}
-	ref, err := parseNamedRequirement(strings.TrimSpace(strings.Join(args, " ")))
-	if err != nil || ref == nil {
+	spec := strings.TrimSpace(strings.Join(args, " "))
+	ref, err := parseNamedRequirement(spec)
+	if err != nil {
 		return nil, err
+	}
+	if ref == nil {
+		if isLocalRequirement(spec) {
+			return []requirementsItem{{local: true, line: line}}, nil
+		}
+		return nil, nil
 	}
 	ref.Line = line
 	return []requirementsItem{{ref: ref, line: line}}, nil
+}
+
+// isLocalRequirement reports a requirement pip builds from the local file
+// system: a path (".", "./pkg", "../x", "/abs", "~/x", "pkg.tar.gz"), a
+// file: URL, or `name @` either of those. Remote URLs and VCS references
+// are not local.
+func isLocalRequirement(spec string) bool {
+	target := spec
+	if name, ref, ok := strings.Cut(spec, "@"); ok && pep508Name.MatchString(strings.TrimSpace(strings.SplitN(name, "[", 2)[0])) {
+		target = strings.TrimSpace(ref)
+	}
+	if i := strings.IndexAny(target, " \t;"); i >= 0 {
+		target = target[:i]
+	}
+	if target == "" {
+		return false
+	}
+	lower := strings.ToLower(target)
+	if strings.HasPrefix(lower, "file:") {
+		return true
+	}
+	if strings.Contains(target, "://") || hasURLScheme(target) {
+		return false
+	}
+	return looksLikeRequirementPath(target)
 }
 
 func parseRequirementsOptions(text string, line int) ([]requirementsItem, error) {
@@ -487,6 +530,8 @@ func parseRequirementsOptions(text string, line int) ([]requirementsItem, error)
 			items = append(items, requirementsItem{include: value, line: line})
 		case "-c", "--constraint":
 			items = append(items, requirementsItem{include: value, constraint: true, line: line})
+		case "-e", "--editable":
+			items = append(items, requirementsItem{local: true, line: line})
 		}
 	}
 	return items, nil

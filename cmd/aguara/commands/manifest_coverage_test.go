@@ -82,6 +82,42 @@ func TestAuditProceedsForManifestsWithLockfiles(t *testing.T) {
 	}
 }
 
+// A requirements file covers a pyproject.toml only when it pins what a
+// plain install of it resolves; a file that installs the project itself,
+// or pins something unrelated, leaves the audit at review and says what
+// is not pinned.
+func TestAuditRequirementsCoverageOfPythonManifests(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const project = "[project]\nname = \"app\"\ndependencies = [\"requests>=2\"]\n"
+	for name, tc := range map[string]struct {
+		requirements, decision, message string
+	}{
+		"editable project":   {"-e .\n", "review", "requirements.txt installs a local project"},
+		"bare dot":           {".\n", "review", "requirements.txt installs a local project"},
+		"unrelated pin only": {"black==24.4.2\n", "review", "requirements.txt does not pin requests with == or ==="},
+		"compiled":           {"certifi==2024.2.2\nrequests==2.32.3\nurllib3==2.2.1\n", "proceed", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{"pyproject.toml": project, "requirements.txt": tc.requirements})
+			result := auditToFile(t, dir)
+			require.Equal(t, tc.decision, result.Triage.Decision, "%+v", result.Triage.Reasons)
+			require.Equal(t, tc.decision == "proceed", result.Plan.CanInstallDependencies)
+			if tc.message == "" {
+				require.Empty(t, result.Coverage.UnsupportedEvidence)
+				return
+			}
+			requireTriageReason(t, result.Triage, "manifest_without_lockfile")
+			for _, r := range result.Triage.Reasons {
+				if r.Kind == "manifest_without_lockfile" {
+					require.Contains(t, r.Message, "pyproject.toml (PyPI; "+tc.message)
+				}
+			}
+			require.Len(t, result.Coverage.UnsupportedEvidence, 1)
+			require.Equal(t, filepath.Join(dir, "requirements.txt"), result.Coverage.UnsupportedEvidence[0].RequirementsFile)
+		})
+	}
+}
+
 // A workspace without a lockfile is listed once, at its root, with the
 // number of manifests below it that a root lockfile would cover. A
 // separate project with its own lockfile below the root is covered by it.

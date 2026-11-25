@@ -62,7 +62,11 @@ func checkCoverage(plan checkPlan, result *incident.CheckResult, run *packageche
 	// Manifests that declare dependencies no lockfile covers: an install
 	// would resolve versions the check never saw.
 	locks := packagecheck.CoveringLockfiles(plan.packagecheckTargets, unsupported)
-	unsupported = append(unsupported, packagecheck.ManifestsWithoutLockfile(plan.discoveryRoot, plan.manifests, locks)...)
+	var reqs []packagecheck.RequirementsEvidence
+	if run != nil {
+		reqs = run.Requirements
+	}
+	unsupported = append(unsupported, packagecheck.ManifestsWithoutLockfile(plan.discoveryRoot, plan.manifests, locks, reqs)...)
 	includes := []packagecheck.UnresolvedInclude{}
 	if run != nil {
 		includes = append(includes, run.UnresolvedIncludes...)
@@ -266,15 +270,24 @@ func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root 
 		name := displayPath(root, u.Path)
 		switch {
 		case u.IsManifest() && u.NestedManifests > 0:
-			name += fmt.Sprintf(" (%s workspace root, %d more %s below it)", u.Ecosystem, u.NestedManifests, plural(u.NestedManifests, "manifest", "manifests"))
+			name += fmt.Sprintf(" (%s workspace root, %d more %s below it%s)", u.Ecosystem, u.NestedManifests, plural(u.NestedManifests, "manifest", "manifests"), detailSuffix(u))
 		case u.IsManifest():
-			name += " (" + u.Ecosystem + ")"
+			name += " (" + u.Ecosystem + detailSuffix(u) + ")"
 		case u.NoIntel():
 			name += " (Aguara has no package intelligence for " + u.Ecosystem + ")"
 		}
 		names = append(names, name)
 	}
 	return strings.Join(names, ", ")
+}
+
+// detailSuffix is "; <detail>" for an entry that explains itself, such as
+// a manifest whose requirements file does not pin its dependencies.
+func detailSuffix(u packagecheck.UnsupportedEvidence) string {
+	if u.Detail == "" {
+		return ""
+	}
+	return "; " + u.Detail
 }
 
 // displayPath shortens path to be relative to root when it lies inside.

@@ -36,6 +36,25 @@ type RunResult struct {
 	// only through a -r / -c include. A file in this list was
 	// evaluated even when discovery did not return it as a target.
 	ReadFiles []string
+	// Requirements summarises each requirements target (not constraints
+	// files) for the manifest coverage rule: whether it records the
+	// versions a Python manifest beside it would install.
+	Requirements []RequirementsEvidence
+}
+
+// RequirementsEvidence is what a read requirements file, with the files it
+// includes through -r and -c, pins.
+type RequirementsEvidence struct {
+	Path string
+	// Pinned holds the PEP 503 names pinned with == or ===.
+	Pinned map[string]bool
+	// ExactPins counts those pins; Unpinned counts the requirements
+	// without one exact version that no pin covers.
+	ExactPins, Unpinned int
+	// Local reports an editable or local-path entry, such as -e . or a
+	// bare ".": pip installs that project from its own metadata, which
+	// the file does not record.
+	Local bool
 }
 
 // ResolvedPath returns path with its directory's symlinks evaluated, the
@@ -173,6 +192,16 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			Unpinned:           unpinned,
 			UnresolvedIncludes: len(parsed.unresolved),
 		})
+		if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
+			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local}
+			for _, ref := range refs {
+				if !ref.Unpinned && ref.Version != "" {
+					ev.Pinned[intel.PEP503Normalize(ref.Name)] = true
+					ev.ExactPins++
+				}
+			}
+			out.Requirements = append(out.Requirements, ev)
+		}
 		for _, u := range parsed.unresolved {
 			key := hitKey{name: u.Argument, path: u.Path, line: u.Line}
 			if seenInclude[key] {
@@ -214,6 +243,9 @@ type parsedTarget struct {
 	// files are the requirements files read, by resolved path,
 	// including files reached only through an include.
 	files []string
+	// local reports an editable or local-path requirement in the file or
+	// one it includes.
+	local bool
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the

@@ -62,6 +62,14 @@ type UnsupportedEvidence struct {
 	// matched against exact-version intelligence. The rest of the file
 	// was not evaluated. Omitted when zero.
 	ExactPinsChecked int `json:"exact_pins_checked,omitempty"`
+	// RequirementsFile, NotPinned and Detail explain a Python manifest
+	// listed although a requirements file sits beside it or above it: the
+	// nearest such file, the declared dependencies it does not pin with
+	// == or === (at most 20), and a sentence saying why it does not stand
+	// for the manifest. Omitted when empty.
+	RequirementsFile string   `json:"requirements_file,omitempty"`
+	NotPinned        []string `json:"not_pinned,omitempty"`
+	Detail           string   `json:"detail,omitempty"`
 
 	// pins are the exact pins MatchPins checks.
 	pins []PackageRef

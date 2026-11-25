@@ -47,15 +47,31 @@ type manifestInfo struct {
 	workspace bool
 	// pins are the entries that name one exact registry release.
 	pins []PackageRef
+	// defaultNames and groupNames are the PEP 503 names of the registry
+	// dependencies the manifest declares, split into what a plain
+	// install pulls (project dependencies, Poetry main dependencies,
+	// Pipfile [packages], install_requires, requirements.in entries) and
+	// optional sets (extras, dependency groups, dev dependencies). Only
+	// Python manifests use them.
+	defaultNames, groupNames []string
 }
 
 func (m manifestInfo) declares() bool { return m.deps > 0 || m.unknown }
 
-func (m *manifestInfo) addDep() error {
+// addDep counts one registry dependency; group is "" for a dependency a
+// plain install pulls.
+func (m *manifestInfo) addDep(name, group string) error {
 	if m.deps >= maxManifestEntries {
 		return fmt.Errorf("more than %d dependencies", maxManifestEntries)
 	}
 	m.deps++
+	if name = intel.PEP503Normalize(strings.TrimSpace(name)); name != "" {
+		if group == "" {
+			m.defaultNames = append(m.defaultNames, name)
+		} else {
+			m.groupNames = append(m.groupNames, name)
+		}
+	}
 	return nil
 }
 
@@ -147,7 +163,7 @@ func parsePackageJSONManifest(data []byte) (manifestInfo, error) {
 			if !ok {
 				continue
 			}
-			if err := info.addDep(); err != nil {
+			if err := info.addDep("", ""); err != nil {
 				return info, err
 			}
 			if m := npmExactVersion.FindStringSubmatch(strings.TrimSpace(rangeSpec)); m != nil {
@@ -194,7 +210,7 @@ func parseComposerManifest(data []byte) (manifestInfo, error) {
 			if !strings.Contains(name, "/") {
 				continue
 			}
-			if err := info.addDep(); err != nil {
+			if err := info.addDep(name, ""); err != nil {
 				return info, err
 			}
 			var constraint string
@@ -229,7 +245,7 @@ func (m *manifestInfo) addPEP508(s string, line int, group string) error {
 	if ref == nil {
 		return nil
 	}
-	if err := m.addDep(); err != nil {
+	if err := m.addDep(ref.Name, group); err != nil {
 		return err
 	}
 	if ref.Version != "" {
@@ -471,7 +487,7 @@ func parsePyprojectManifest(data []byte) (manifestInfo, error) {
 		if d.nonRegistry {
 			continue
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep(d.name, d.group); err != nil {
 			return info, err
 		}
 		if d.multiple || !d.hasVersion {
@@ -523,7 +539,7 @@ func parsePipfileManifest(data []byte) (manifestInfo, error) {
 		if d.nonRegistry {
 			continue
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep(d.name, d.group); err != nil {
 			return info, err
 		}
 		if !d.hasVersion {
@@ -604,7 +620,7 @@ func parseCargoManifest(data []byte) (manifestInfo, error) {
 		if d.nonRegistry {
 			continue
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep("", ""); err != nil {
 			return info, err
 		}
 		if d.otherRegistry || d.inherited || !d.hasVersion {
@@ -757,7 +773,7 @@ func parseGemfileManifest(data []byte) (manifestInfo, error) {
 		if gemfileOtherSource.MatchString(trimmed) {
 			return nil
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep("", ""); err != nil {
 			return err
 		}
 		code, _, _ := strings.Cut(trimmed, " #")
@@ -783,14 +799,16 @@ func parseRequirementsInManifest(path string) (manifestInfo, error) {
 		return info, err
 	}
 	for _, item := range file.items {
-		if item.include != "" {
+		if item.include != "" || item.local {
+			// An include or a local project: what it pulls in is not
+			// named here.
 			info.unknown = true
 			continue
 		}
 		if item.ref == nil {
 			continue
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep(item.ref.Name, ""); err != nil {
 			return info, err
 		}
 		if item.ref.Version != "" && !item.ref.Unpinned {
@@ -840,7 +858,7 @@ func parseCondaEnvironment(data []byte) (info manifestInfo, ok bool, err error) 
 		default:
 			return info, false, nil
 		}
-		if err := info.addDep(); err != nil {
+		if err := info.addDep("", "conda"); err != nil {
 			return info, true, err
 		}
 	}
