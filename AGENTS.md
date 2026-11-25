@@ -41,6 +41,8 @@ and says so on stderr. It prints a stderr notice naming the files whenever
 applying the policy changed the result. A local `scan` can still trust
 it. Use `--project-policy ignore` when inspecting unfamiliar content. Content piped to
 `scan -` never applies project policy, and `--project-policy trust` is rejected there.
+Commit hooks (`aguara init --hook`, `.pre-commit-hooks.yaml`) apply the committer's own
+policy; enforce in CI with `--project-policy ignore`.
 The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
