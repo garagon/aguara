@@ -321,6 +321,7 @@ func (r *decodeRun) forEachCandidate(text string, enc encoding, fn func(candidat
 		for next < len(blocks) && blocks[next].start <= pos {
 			b := blocks[next]
 			next++
+			b.encoded = joinLines(text[b.start:b.end])
 			left := r.blobsLeft[enc]
 			if !fn(b) {
 				return false
@@ -332,11 +333,10 @@ func (r *decodeRun) forEachCandidate(text string, enc encoding, fn func(candidat
 		return true
 	}
 	for pos := 0; pos < len(text); {
-		loc := re.FindStringIndex(text[pos:])
-		if loc == nil {
+		start, end, ok := nextBlob(enc, re, text, pos)
+		if !ok {
 			break
 		}
-		start, end := pos+loc[0], pos+loc[1]
 		pos = end
 		if !offerBlocksBefore(start) {
 			return
@@ -351,22 +351,85 @@ func (r *decodeRun) forEachCandidate(text string, enc encoding, fn func(candidat
 	offerBlocksBefore(len(text))
 }
 
+// nextBlob returns the next match of enc's pattern in text at or after pos.
+// The three patterns that are a run of one character class (base64, base32
+// and hex) are matched by a byte scan that gives the same leftmost-first
+// matches as the regular expression (TestBlobScannersMatchPatterns) without
+// its automaton, which costs most of the decoder's time on a file full of
+// such runs. pos must be 0 or the end of the previous match.
+func nextBlob(enc encoding, re *regexp.Regexp, text string, pos int) (start, end int, ok bool) {
+	switch enc {
+	case encBase64:
+		return nextRun(text, pos, &base64Class, minBase64Length, 2)
+	case encBase32:
+		return nextRun(text, pos, &base32Class, 40, 6)
+	case encHex:
+		start, end, ok = nextRun(text, pos, &hexClass, 32, 0)
+		// `(?:0x)?` takes a "0x" right before the run unless a previous
+		// match already used it.
+		if ok && start-2 >= pos && text[start-2] == '0' && text[start-1] == 'x' {
+			start -= 2
+		}
+		return start, end, ok
+	}
+	loc := re.FindStringIndex(text[pos:])
+	if loc == nil {
+		return 0, 0, false
+	}
+	return pos + loc[0], pos + loc[1], true
+}
+
+// nextRun finds the first maximal run of class bytes at or after pos that
+// is at least min long, followed by up to maxPad '=' bytes.
+func nextRun(text string, pos int, class *[256]bool, minLen, maxPad int) (start, end int, ok bool) {
+	for i := pos; i < len(text); {
+		if !class[text[i]] {
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(text) && class[text[j]] {
+			j++
+		}
+		if j-i >= minLen {
+			k := j
+			for k < len(text) && k-j < maxPad && text[k] == '=' {
+				k++
+			}
+			return i, k, true
+		}
+		i = j
+	}
+	return 0, 0, false
+}
+
+var base64Class, base32Class, hexClass = byteClass("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"),
+	byteClass("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"), byteClass("0123456789abcdefABCDEF")
+
+func byteClass(chars string) [256]bool {
+	var class [256]bool
+	for i := 0; i < len(chars); i++ {
+		class[chars[i]] = true
+	}
+	return class
+}
+
 // wrappedBase64Blocks returns the base64 blocks of text that are wrapped
 // over two or more consecutive lines: every line but the last holds only
 // base64 alphabet characters, at least minWrapWidth of them and all the
 // same number, and the last line holds at most that many, optionally ending
 // in padding. Leading and trailing blanks of each line are ignored, so
-// indented blocks qualify.
+// indented blocks qualify. The candidates carry spans only; joinLines builds
+// a block's encoded text when it is offered, so memory stays bounded by one
+// block whatever the number of blocks.
 func wrappedBase64Blocks(text string) []candidate {
 	var blocks []candidate
-	var b strings.Builder
-	start, end, width, nlines := 0, 0, 0, 0
+	start, end, width, nlines, joined := 0, 0, 0, 0, 0
 	flush := func() {
-		if nlines >= 2 && b.Len() >= minBase64Length && b.Len() <= maxEncodedBlobSize {
-			blocks = append(blocks, candidate{start: start, end: end, encoded: b.String(), width: width, nlines: nlines})
+		if nlines >= 2 && joined >= minBase64Length && joined <= maxEncodedBlobSize {
+			blocks = append(blocks, candidate{start: start, end: end, width: width, nlines: nlines})
 		}
-		b.Reset()
-		nlines = 0
+		nlines, joined = 0, 0
 	}
 	for off := 0; off <= len(text); {
 		nl := strings.IndexByte(text[off:], '\n')
@@ -385,11 +448,9 @@ func wrappedBase64Blocks(text string) []candidate {
 		if nlines > 0 {
 			switch {
 			case ok && pad == 0 && n == width:
-				b.WriteString(text[ts:te])
-				end, nlines = te, nlines+1
+				end, nlines, joined = te, nlines+1, joined+n
 			case ok && n > 0 && n <= width:
-				b.WriteString(text[ts:te])
-				end, nlines = te, nlines+1
+				end, nlines, joined = te, nlines+1, joined+n
 				flush()
 				ok = false // the closing line cannot start a block
 			default:
@@ -397,8 +458,7 @@ func wrappedBase64Blocks(text string) []candidate {
 			}
 		}
 		if nlines == 0 && ok && pad == 0 && n >= minWrapWidth {
-			b.WriteString(text[ts:te])
-			start, end, width, nlines = ts, te, n, 1
+			start, end, width, nlines, joined = ts, te, n, 1, n
 		}
 		if nl < 0 {
 			break
@@ -407,6 +467,21 @@ func wrappedBase64Blocks(text string) []candidate {
 	}
 	flush()
 	return blocks
+}
+
+// joinLines returns a wrapped block's span without the line breaks and the
+// blanks around each line.
+func joinLines(span string) string {
+	var b strings.Builder
+	b.Grow(len(span))
+	for i := 0; i < len(span); i++ {
+		switch span[i] {
+		case '\n', '\r', ' ', '\t':
+		default:
+			b.WriteByte(span[i])
+		}
+	}
+	return b.String()
 }
 
 // base64LineShape reports whether s is base64 alphabet characters followed

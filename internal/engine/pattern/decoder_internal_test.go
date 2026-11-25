@@ -91,11 +91,39 @@ func TestWrappedBase64Blocks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
 			for _, b := range wrappedBase64Blocks(tc.text) {
-				got = append(got, b.encoded)
+				got = append(got, joinLines(tc.text[b.start:b.end]))
 				require.Equal(t, strings.Count(tc.text[b.start:b.end], "\n")+1, b.nlines)
 			}
 			require.Equal(t, tc.joined, got)
 		})
+	}
+}
+
+// The byte scans that find base64, base32 and hex blobs give exactly the
+// matches of the regular expressions they replace.
+func TestBlobScannersMatchPatterns(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	pieces := []string{"A", "z", "9", "+", "/", "=", "==", "0x", "0", "x", "f", "F", "Q", "2", "7", "8", " ", "\n", "-", "é", "\xff",
+		strings.Repeat("a", 31), strings.Repeat("b", 32), strings.Repeat("C", 39), strings.Repeat("D", 40), strings.Repeat("E2", 21), strings.Repeat("0f", 20)}
+	for i := 0; i < 20000; i++ {
+		var b strings.Builder
+		for n := r.Intn(30); n > 0; n-- {
+			b.WriteString(pieces[r.Intn(len(pieces))])
+		}
+		text := b.String()
+		for _, enc := range []encoding{encBase64, encBase32, encHex} {
+			var got [][]int
+			for pos := 0; pos < len(text); {
+				start, end, ok := nextBlob(enc, nil, text, pos)
+				if !ok {
+					break
+				}
+				got = append(got, []int{start, end})
+				pos = end
+			}
+			want := encodingPatterns[enc].FindAllStringIndex(text, -1)
+			require.Equal(t, want, got, "%s on %q", encodingNames[enc], text)
+		}
 	}
 }
 
