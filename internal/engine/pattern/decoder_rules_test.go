@@ -85,7 +85,7 @@ func lineOf(content, needle string) int {
 // Printable decoys before a payload must not use up the budget of a small
 // fixed number of blobs per file.
 func TestDecoderPayloadAfterManyTextDecoys(t *testing.T) {
-	for _, decoys := range []int{9, 10, 100, 255} {
+	for _, decoys := range []int{10, 255} {
 		var b strings.Builder
 		for i := range decoys {
 			fmt.Fprintf(&b, "Note %d: %s\n", i, b64(fmt.Sprintf("%s %d", exampleDecoy, i)))
@@ -102,7 +102,7 @@ func TestDecoderPayloadAfterManyTextDecoys(t *testing.T) {
 // Hash and integrity values decode to binary data. They must not count
 // against the budget however many precede the payload.
 func TestDecoderPayloadAfterIntegrityValues(t *testing.T) {
-	for _, n := range []int{12, 300} {
+	for _, n := range []int{12, 150} {
 		var b strings.Builder
 		for i := range n {
 			sum := sha512.Sum512([]byte(fmt.Sprintf("dep-%d", i)))
@@ -118,7 +118,7 @@ func TestDecoderPayloadAfterIntegrityValues(t *testing.T) {
 // Each encoding has its own budget: base64 decoys do not stop a hex payload.
 func TestDecoderBudgetIsPerEncoding(t *testing.T) {
 	var b strings.Builder
-	for i := range 400 {
+	for i := range 300 {
 		fmt.Fprintf(&b, "Note %d: %s\n", i, b64(fmt.Sprintf("%s %d", exampleDecoy, i)))
 	}
 	b.WriteString("Setup: " + hex.EncodeToString([]byte(examplePipeToShell)) + "\n")

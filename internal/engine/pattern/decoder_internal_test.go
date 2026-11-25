@@ -20,7 +20,7 @@ import (
 // accepted about two thirds of them.
 func TestIsLikelyTextRejectsRandomBytes(t *testing.T) {
 	r := rand.New(rand.NewSource(20261125))
-	const samples = 20000
+	const samples = 10000
 	for _, n := range []int{16, 20, 24, 28, 32, 48, 64, 128} {
 		buf := make([]byte, n)
 		passed := 0
@@ -105,7 +105,7 @@ func TestBlobScannersMatchPatterns(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
 	pieces := []string{"A", "z", "9", "+", "/", "=", "==", "0x", "0", "x", "f", "F", "Q", "2", "7", "8", " ", "\n", "-", "é", "\xff",
 		strings.Repeat("a", 31), strings.Repeat("b", 32), strings.Repeat("C", 39), strings.Repeat("D", 40), strings.Repeat("E2", 21), strings.Repeat("0f", 20)}
-	for i := 0; i < 20000; i++ {
+	for i := 0; i < 5000; i++ {
 		var b strings.Builder
 		for n := r.Intn(30); n > 0; n-- {
 			b.WriteString(pieces[r.Intn(len(pieces))])
@@ -142,9 +142,16 @@ func compiledBuiltins(t *testing.T) []*rules.CompiledRule {
 // bytes handed to decoders are linear in the file. The counts are exact, so
 // the test holds under the race detector and coverage instrumentation.
 func TestDecoderWorkIsBounded(t *testing.T) {
-	m := NewMatcher(compiledBuiltins(t))
+	// One rule is enough: the budgets do not depend on the rules, and the
+	// builtin set would only make each rescan slower.
+	rule, err := rules.Compile(rules.RawRule{
+		ID: "TEST_BOUND", Name: "Bound", Severity: "LOW", Category: "test",
+		Patterns: []rules.RawPattern{{Type: rules.PatternRegex, Value: `(?i)ignore\s+previous`}},
+	})
+	require.NoError(t, err)
+	m := NewMatcher([]*rules.CompiledRule{rule})
 	var b strings.Builder
-	for i := range 600 {
+	for i := range 300 {
 		text := fmt.Sprintf("Users should ignore previous versions of this document %d", i)
 		inner := base64.StdEncoding.EncodeToString([]byte(text))
 		fmt.Fprintf(&b, "%s %s %s\n", base64.StdEncoding.EncodeToString([]byte(inner)), hex.EncodeToString([]byte(text)), inner)

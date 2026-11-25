@@ -415,11 +415,17 @@ func structuredLexerHeaders(r *rand.Rand) [][]byte {
 	return out
 }
 
+// maxDecisionCheckInput bounds the inputs whose decisions are compared with
+// the previous classifiers, whose backward scans make long inputs slow;
+// short inputs cover every shape.
+const maxDecisionCheckInput = 4096
+
 // checkLexerDifferential compares, on one input, each dialect's reading with
 // the same classifier using the backward scan for parentheses, and checks
-// that the two dialects read an input without `!` the same way. Every
-// classifier decision is also compared with the classifier brace tracking
-// replaced (checkDecisionsAgainstMain).
+// that the two dialects read an input without `!` the same way. On inputs
+// up to maxDecisionCheckInput bytes every classifier decision is also
+// compared with the classifier brace tracking replaced
+// (checkDecisionsAgainstMain).
 func checkLexerDifferential(t *testing.T, src []byte) {
 	t.Helper()
 	js := viewsWith(src, indexClassifier)
@@ -433,7 +439,9 @@ func checkLexerDifferential(t *testing.T, src []byte) {
 	if !bytes.Contains(src, []byte("!")) && !sameViews(js, ts) {
 		t.Fatalf("JavaScript and TypeScript read %q differently without a `!`", src)
 	}
-	checkDecisionsAgainstMain(t, src)
+	if len(src) <= maxDecisionCheckInput {
+		checkDecisionsAgainstMain(t, src)
+	}
 }
 
 // decisionRecorder wraps a classifier and compares every answer with the

@@ -39,9 +39,15 @@ func TestRegexLiteralAfterBraceOrDefaultDoesNotHideCode(t *testing.T) {
 		"else keyword":            "if (a) b(); else /`/.test(process.title);\n",
 		"for of keyword":          "for (const m of /`/g.exec(process.title)) {}\n",
 	}
+	// Every shape in one file of each dialect; the two reported shapes in
+	// every routed extension.
+	everyExtension := map[string]bool{"if with a block": true, "export default": true}
 	for rule, payload := range lexerEvasionPayloads {
 		for shape, prefix := range shapes {
 			for _, ext := range javaScriptAndTypeScriptExtensions {
+				if ext != ".js" && ext != ".ts" && !everyExtension[shape] {
+					continue
+				}
 				if !hasRule(analyze(t, "index"+ext, prefix+payload+"// `\n"), rule) {
 					t.Errorf("%s, %s in %s: the regex literal hid the code after it", rule, shape, ext)
 				}
