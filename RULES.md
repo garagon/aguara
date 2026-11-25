@@ -450,5 +450,8 @@ aguara scan .claude/skills/ --rules ./my-rules/
 ```
 
 Repeat `--rules` to load several directories (`--rules ./team-rules/ --rules ./my-rules/`).
+The directory may be a symbolic link. Inside it, symlinked rule files are read
+from their target; symlinked subdirectories are not followed and are reported
+as a configuration problem.
 
 See the [Contributing Guide](CONTRIBUTING.md) for more details on rule structure and testing.

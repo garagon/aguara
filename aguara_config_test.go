@@ -150,6 +150,85 @@ func TestWithCustomRulesSameDirectoryLoadsOnce(t *testing.T) {
 	}
 }
 
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+// TestSymlinkedCustomRulesDirectory: filepath.Walk does not follow a
+// symlinked root, so a rules directory given as a symlink loaded zero rules
+// with no error.
+func TestSymlinkedCustomRulesDirectory(t *testing.T) {
+	base := t.TempDir()
+	real := writeMarkerRule(t, filepath.Join(base, "real"), "PACK_A_001", "pack-a-marker")
+	link := filepath.Join(base, "link")
+	symlinkOrSkip(t, real, link)
+
+	sc, err := aguara.NewScanner(aguara.WithCustomRules(link))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := catalogCount(sc.ListRules(), "PACK_A_001"); n != 1 {
+		t.Fatalf("symlinked directory: PACK_A_001 listed %d times, want 1", n)
+	}
+	result, err := sc.ScanContent(context.Background(), "pack-a-marker", "x.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findingIDs(result)["PACK_A_001"] != 1 {
+		t.Fatalf("symlinked directory rule must run: %+v", result.Findings)
+	}
+
+	// The same directory by absolute path and by symlink loads once.
+	sc, err = aguara.NewScanner(aguara.WithCustomRules(real, link))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := catalogCount(sc.ListRules(), "PACK_A_001"); n != 1 {
+		t.Fatalf("path and symlink: PACK_A_001 listed %d times, want 1", n)
+	}
+}
+
+// TestSymlinksInsideCustomRulesDirectory: a symlinked subdirectory was
+// skipped silently, and a symlinked file bypassed the 1 MB size limit
+// because the limit was checked on the link.
+func TestSymlinksInsideCustomRulesDirectory(t *testing.T) {
+	base := t.TempDir()
+	dir := writeMarkerRule(t, filepath.Join(base, "rules"), "PACK_A_001", "pack-a-marker")
+	other := writeMarkerRule(t, filepath.Join(base, "other"), "PACK_B_001", "pack-b-marker")
+	subLink := filepath.Join(dir, "linked-dir")
+	symlinkOrSkip(t, other, subLink)
+
+	_, err := aguara.NewScanner(aguara.WithCustomRules(dir))
+	requireProblem(t, err, aguara.ConfigProblemInvalidRule, "", subLink)
+	sc, err := aguara.NewScanner(aguara.WithCustomRules(dir), aguara.WithLenientConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sc.ConfigProblems()) != 1 || catalogCount(sc.ListRules(), "PACK_A_001") != 1 || catalogCount(sc.ListRules(), "PACK_B_001") != 0 {
+		t.Fatalf("lenient: problems %+v", sc.ConfigProblems())
+	}
+
+	// A symlinked file is read from its target, under the target's size.
+	fileDir := writeMarkerRule(t, filepath.Join(base, "files"), "PACK_C_001", "pack-c-marker")
+	symlinkOrSkip(t, filepath.Join(other, "PACK_B_001.yaml"), filepath.Join(fileDir, "linked.yaml"))
+	sc, err = aguara.NewScanner(aguara.WithCustomRules(fileDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalogCount(sc.ListRules(), "PACK_B_001") != 1 {
+		t.Fatal("a symlinked rule file must still load")
+	}
+	huge := filepath.Join(base, "huge.yaml")
+	writeFile(t, huge, "# "+strings.Repeat("x", 1<<20)+"\n")
+	hugeLink := filepath.Join(fileDir, "huge-link.yaml")
+	symlinkOrSkip(t, huge, hugeLink)
+	_, err = aguara.NewScanner(aguara.WithCustomRules(fileDir))
+	requireProblem(t, err, aguara.ConfigProblemInvalidRule, "", hugeLink)
+}
+
 // TestWithCustomRulesRelativeAndAbsoluteDirLoadOnce: directories were
 // compared after filepath.Clean only, so "pack" and its absolute path were
 // loaded twice and every rule in them reported as a duplicate ID.

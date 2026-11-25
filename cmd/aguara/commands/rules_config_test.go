@@ -103,6 +103,44 @@ func TestScanRulesFlagRepeatable(t *testing.T) {
 	require.Equal(t, 1, listIDs("--rules", packA, "--rules", packA+string(filepath.Separator))["PACK_A_001"])
 }
 
+// TestCLISymlinkedRulesDirectoryLoads: `--rules ./link` and `.aguara.yml
+// rules: link` loaded zero rules, with no error, when the directory was a
+// symbolic link.
+func TestCLISymlinkedRulesDirectoryLoads(t *testing.T) {
+	base := t.TempDir()
+	real := writeCLIRule(t, filepath.Join(base, "real"), "PACK_A_001", "pack-a-marker")
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	target := filepath.Join(base, "target")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "x.md"), []byte("pack-a-marker\n"), 0o600))
+
+	findings := func(args ...string) map[string]int {
+		data := scanToFile(t, append([]string{target, "--format", "json"}, args...)...)
+		var result struct {
+			Findings []struct {
+				RuleID string `json:"rule_id"`
+			} `json:"findings"`
+		}
+		require.NoError(t, json.Unmarshal(data, &result))
+		ids := map[string]int{}
+		for _, f := range result.Findings {
+			ids[f.RuleID]++
+		}
+		return ids
+	}
+
+	require.Equal(t, 1, findings("--rules", link, "--project-policy", "ignore")["PACK_A_001"])
+
+	// resetFlags restores values but not pflag's Changed bit; an earlier
+	// --rules run would make loadScanConfig ignore the file's rules: key.
+	rootCmd.PersistentFlags().Lookup("rules").Changed = false
+	require.NoError(t, os.WriteFile(filepath.Join(target, ".aguara.yml"), []byte("rules: "+link+"\n"), 0o600))
+	require.Equal(t, 1, findings("--project-policy", "trust")["PACK_A_001"])
+}
+
 func requireCLIConfigError(t *testing.T, err error, kind types.ConfigProblemKind, ruleID string) {
 	t.Helper()
 	var cfgErr *types.ConfigError
