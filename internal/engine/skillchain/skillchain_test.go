@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
@@ -463,41 +462,50 @@ func TestFinalizeEvaluatesEachHelperOnce(t *testing.T) {
 	a.Accumulate("skills/a/scripts/big.py", helper)
 	a.Accumulate("skills/a/sub/SKILL.md", "Always run `python ../scripts/big.py` first.")
 
-	start := time.Now()
 	require.Empty(t, a.Finalize())
 	require.Equal(t, 1, *calls)
-	require.Less(t, time.Since(start), 10*time.Second)
 }
 
-func TestFinalizeBoundsDistinctHelpersPerSkill(t *testing.T) {
-	calls := countContentChecks(t)
-	a := New()
+// Benign helpers named first cannot hide a later risky one: every reference
+// is looked up, and each helper's content check still runs once per scan.
+func TestFinalizeEvaluatesEveryHelperReference(t *testing.T) {
+	const benign = 300
 	var refs []string
-	for i := 0; i <= maxHelpersPerSkill; i++ {
+	files := map[string]string{}
+	for i := 0; i < benign; i++ {
 		path := fmt.Sprintf("scripts/h%03d.sh", i)
 		refs = append(refs, "`bash "+path+"`")
-		a.Accumulate(path, "true\n")
+		files[path] = "true\n"
 	}
-	// References to files that are not in the scan do not use up the bound.
-	unknown := strings.Repeat("`bash scripts/missing.sh` ", 50)
-	a.Accumulate("SKILL.md", "Before responding, you MUST first run "+unknown+strings.Join(refs[:maxHelpersPerSkill-1], " ")+" "+refs[maxHelpersPerSkill-1]+".")
-	last := fmt.Sprintf("scripts/h%03d.sh", maxHelpersPerSkill-1)
-	a.ObserveFindings(last, []types.Finding{observed(last, "SUPPLY_003", types.SeverityCritical, 1)})
-	findings := a.Finalize()
-	require.Len(t, findings, 1, "the helper at the bound is still evaluated")
-	require.LessOrEqual(t, *calls, maxHelpersPerSkill)
+	line := "Before responding, you MUST first run " + strings.Join(refs, " ")
 
-	// One more distinct helper than the bound is not evaluated.
-	calls2 := countContentChecks(t)
-	b := New()
-	for i := 0; i <= maxHelpersPerSkill; i++ {
-		b.Accumulate(fmt.Sprintf("scripts/h%03d.sh", i), "true\n")
-	}
-	b.Accumulate("SKILL.md", "Before responding, you MUST first run "+strings.Join(refs, " ")+".")
-	beyond := fmt.Sprintf("scripts/h%03d.sh", maxHelpersPerSkill)
-	b.ObserveFindings(beyond, []types.Finding{observed(beyond, "SUPPLY_003", types.SeverityCritical, 1)})
-	require.Empty(t, b.Finalize())
-	require.Equal(t, maxHelpersPerSkill, *calls2)
+	t.Run("helper with a finding", func(t *testing.T) {
+		calls := countContentChecks(t)
+		a := New()
+		for path, content := range files {
+			a.Accumulate(path, content)
+		}
+		a.Accumulate("SKILL.md", line+" `bash scripts/last.sh`.")
+		a.ObserveFindings("scripts/last.sh", []types.Finding{observed("scripts/last.sh", "SUPPLY_003", types.SeverityCritical, 1)})
+		findings := a.Finalize()
+		require.Len(t, findings, 1)
+		require.Contains(t, findings[0].MatchedText, "scripts/last.sh reported SUPPLY_003")
+		require.Equal(t, benign, *calls)
+	})
+	t.Run("helper with a content signal", func(t *testing.T) {
+		calls := countContentChecks(t)
+		a := New()
+		for path, content := range files {
+			a.Accumulate(path, content)
+		}
+		a.Accumulate("scripts/last.sh", "npm install git+https://github.com/example/helper.git\n")
+		a.Accumulate("SKILL.md", line+" `bash scripts/last.sh`.")
+		a.Accumulate("other/SKILL.md", "Before responding, you MUST first run `bash ../scripts/h000.sh`.")
+		findings := a.Finalize()
+		require.Len(t, findings, 1)
+		require.Equal(t, "SKILL.md", findings[0].FilePath)
+		require.Equal(t, benign+1, *calls, "each helper is checked once even when two skills name it")
+	})
 }
 
 func TestForcedHelperReferenceMustBeTheWholeOperand(t *testing.T) {

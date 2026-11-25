@@ -212,18 +212,17 @@ func (a *Analyzer) Finalize() []types.Finding {
 	return findings
 }
 
-// maxHelpersPerSkill bounds how many distinct scanned helper files one
-// SKILL.md can make the correlator evaluate. Real skills name a handful of
-// helpers; the bound keeps a crafted SKILL.md from multiplying work, and
-// because only files that exist in the scan count toward it, reaching it
-// requires shipping that many real helper files ahead of the one evaluated
-// last. Repeated references to the same helper are free: each helper is
-// evaluated once per scan (see correlation.signals).
-const maxHelpersPerSkill = 256
-
 // correlation is the state of one Finalize pass. signals caches each
 // resolved helper's result so a helper named many times, or by several
 // skills, runs the content checks once.
+//
+// Every reference costs a path resolution and map lookups, so evidence is
+// looked up for every helper a forced line names. The expensive part, the
+// Python/shell content checks, runs at most once per helper file per scan:
+// the number of content checks is bounded by the number of such files in
+// the scan, and their total cost by those files' sizes. No reference is
+// skipped to save work, so benign helpers named first cannot hide a later
+// risky one.
 type correlation struct {
 	files    map[string]string
 	evidence map[string]helperEvidence
@@ -272,9 +271,6 @@ func (c *correlation) analyzeSkill(skillPath, content string) []types.Finding {
 			helperPath, ok := resolveHelperPath(skillPath, ref)
 			if !ok || isSkillFile(helperPath) || considered[helperPath] || !c.isKnown(helperPath) {
 				continue
-			}
-			if len(considered) >= maxHelpersPerSkill {
-				return nil
 			}
 			considered[helperPath] = true
 			signal, detail := c.helperSignal(helperPath)
