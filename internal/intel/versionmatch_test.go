@@ -39,6 +39,12 @@ func TestGoVersionEquality(t *testing.T) {
 		{"2.27.0", "v2.27.0+incompatible", true},
 		{"2.27.0+incompatible", "v2.27.0+incompatible", true},
 		{"v2.27.0+incompatible", "2.27.0", true},
+		// +incompatible is only valid from major version 2.
+		{"1.2.3+incompatible", "1.2.3", false},
+		{"1.2.3+incompatible", "v1.2.3", false},
+		{"1.2.3", "v1.2.3+incompatible", false},
+		{"0.9.0+incompatible", "v0.9.0", false},
+		{"10.0.0+incompatible", "v10.0.0+incompatible", true},
 		// Pre-releases and pseudo-versions must be equal exactly.
 		{"1.0.0-rc.1", "v1.0.0-rc.1", true},
 		{"0.0.0-20210510213326-e313ffa8abf6", "v0.0.0-20210510213326-e313ffa8abf6", true},
@@ -78,8 +84,28 @@ func TestPackagistVersionEquality(t *testing.T) {
 		{"1.0.0-beta1", "1.0.0", false},
 		{"1.02.0", "1.2.0", false},
 		{"dev-main", "dev-main", true},
+		{"dev-main", "DEV-main", true},
+		{"dev-main", "dev-Main", false},
 		{"dev-main", "dev-master", false},
 		{"2.x-dev", "2.0.0-dev", false},
+		// Date versions take Composer's date(time) branch: separators
+		// become ".", the leading "v" is dropped, modifiers apply.
+		{"20200101", "v20200101", true},
+		{"123456", "v123456", true},
+		{"2020.01.01", "v2020.01.01", true},
+		// Composer reads 2020.01.01 as a classical version (2020.01.01.0)
+		// and 2020-01-01 as a date (2020.01.01), so they differ.
+		{"2020-01-01", "2020.01.01", false},
+		{"2020-01-01", "v2020-01-01", true},
+		// The runner's former lookup with one leading "v" stripped is kept.
+		{"v4.0.0-alpha.3", "vv4.0.0-alpha.3", true},
+		{"2020-01-01 10:20", "2020.01.01", false},
+		{"20200101-beta1", "v20200101b1", true},
+		{"20200101", "20200101-dev", false},
+		{"20200101", "2020.01.01", false},
+		{"20200101", "20200102", false},
+		{"20200101", "v202001010", false},
+		{"123456", "v1234567", false},
 	})
 }
 

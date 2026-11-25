@@ -452,6 +452,13 @@ func arbitraryVersionMatches(rec Record, spec string) bool {
 	return false
 }
 
+// VersionsEqual reports whether a lockfile version names the release an
+// advisory lists as advisory, under the same per-ecosystem equality
+// MatchPackage applies.
+func VersionsEqual(ecosystem, advisory, lockfile string) bool {
+	return versionMatches(Record{Ecosystem: ecosystem, Versions: []string{advisory}}, lockfile)
+}
+
 // versionMatches reports whether v names one of rec.Versions. Literal
 // equality always matches. Ecosystems whose tooling treats several
 // spellings as one release then compare canonical forms (see
@@ -476,6 +483,16 @@ func versionMatches(rec Record, v string) bool {
 		}
 	}
 	eco := normalizeEcosystem(rec.Ecosystem)
+	if eco == EcosystemPackagist && strings.HasPrefix(v, "v") {
+		// The runner used to retry a Packagist lookup with one leading
+		// "v" removed, literally. Keep that so no spelling that matched
+		// then stops matching, even one Composer itself would reject.
+		for _, candidate := range rec.Versions {
+			if candidate == v[1:] {
+				return true
+			}
+		}
+	}
 	canonical, ok := canonicalVersion(eco, v)
 	if !ok {
 		return false

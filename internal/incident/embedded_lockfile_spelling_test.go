@@ -391,6 +391,78 @@ func TestEmbeddedNuGetRecordsMatchLockAndProjectSpelling(t *testing.T) {
 	}
 }
 
+// mainBranchMatched is how the matcher and runner compared an advisory
+// version with a lockfile version before per-ecosystem version equality:
+// literal equality, PEP 440 equality for PyPI, and for Packagist the
+// runner's second lookup with one leading "v" stripped from the lockfile
+// version.
+func mainBranchMatched(ecosystem, advisory, lockfile string) bool {
+	if advisory == lockfile {
+		return true
+	}
+	switch ecosystem {
+	case intel.EcosystemPyPI:
+		return intel.PEP440Equal(advisory, lockfile)
+	case intel.EcosystemPackagist:
+		return strings.TrimPrefix(lockfile, "v") == advisory && strings.HasPrefix(lockfile, "v")
+	}
+	return false
+}
+
+// Every (advisory version, lockfile version) pair that matched before the
+// matcher compared versions per ecosystem must still match. The corpus is
+// every distinct version spelling per ecosystem in the embedded snapshots,
+// withdrawn records included, plus Composer date versions, which the
+// snapshot does not currently list; each is tried against the lockfile
+// spellings the old rules accepted.
+func TestPairsThatMatchedBeforeStillMatch(t *testing.T) {
+	type pair struct{ ecosystem, advisory string }
+	seen := map[pair]bool{}
+	var pairs []pair
+	add := func(eco, v string) {
+		p := pair{eco, v}
+		if v != "" && !seen[p] {
+			seen[p] = true
+			pairs = append(pairs, p)
+		}
+	}
+	for _, s := range EmbeddedSnapshots() {
+		for _, r := range s.Records {
+			for _, v := range r.Versions {
+				add(r.Ecosystem, v)
+			}
+		}
+	}
+	for _, v := range []string{"20200101", "123456", "2020.01.01", "2020-01-01", "20200101-beta1", "v20200101"} {
+		add(intel.EcosystemPackagist, v)
+	}
+	checked, lost := 0, []string{}
+	for _, p := range pairs {
+		if p.ecosystem == intel.EcosystemRubyGems && strings.Contains(p.advisory, "-") {
+			// Gemfile.lock now reads `name (1.0-x86_64-linux)` as version
+			// 1.0; an advisory spelled with a platform would no longer be
+			// matched by that line.
+			t.Errorf("RubyGems advisory version %q has a platform-like suffix", p.advisory)
+		}
+		for _, l := range []string{p.advisory, "v" + p.advisory, strings.TrimPrefix(p.advisory, "v"), strings.ToUpper(p.advisory), " " + p.advisory} {
+			if !mainBranchMatched(p.ecosystem, p.advisory, l) {
+				continue
+			}
+			checked++
+			if !intel.VersionsEqual(p.ecosystem, p.advisory, l) {
+				lost = append(lost, fmt.Sprintf("%s advisory %q lockfile %q", p.ecosystem, p.advisory, l))
+			}
+		}
+	}
+	t.Logf("%d advisory/lockfile spelling pairs that matched before were checked", checked)
+	if len(lost) > 0 {
+		if len(lost) > 10 {
+			lost = append(lost[:10], fmt.Sprintf("and %d more", len(lost)-10))
+		}
+		t.Errorf("%d pairs no longer match: %s", len(lost), strings.Join(lost, "; "))
+	}
+}
+
 func everyNth(in []exactTuple, n int) []exactTuple {
 	var out []exactTuple
 	for i := 0; i < len(in); i += n {
