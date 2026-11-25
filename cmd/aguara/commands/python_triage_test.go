@@ -21,12 +21,12 @@ func TestAuditReviewsDependencyFilesWithNoPinnedEntry(t *testing.T) {
 	result := auditToFile(t, dir)
 	require.Equal(t, "pass", result.Verdict.Status)
 	require.Equal(t, "review", result.Triage.Decision)
-	require.Equal(t, "Some dependency files pin no exact versions, so the audit cannot clear dependency installation.", result.Triage.Summary)
+	require.Equal(t, "Some dependency entries are not pinned to one version, so the audit cannot clear dependency installation.", result.Triage.Summary)
 	requireTriageReason(t, result.Triage, "unpinned_dependency_evidence")
 	for _, r := range result.Triage.Reasons {
 		if r.Kind == "unpinned_dependency_evidence" {
 			require.Equal(t, "warning", r.Severity)
-			require.Contains(t, r.Message, "requirements.txt")
+			require.Equal(t, "2 of 2 entries in requirements.txt are not pinned to one version, so only advisories covering every version were checked for them.", r.Message)
 		}
 	}
 	require.False(t, result.Plan.CanInstallDependencies)
@@ -77,16 +77,137 @@ func TestConstraintRangesDoNotCountAsUnpinnedDependencies(t *testing.T) {
 	}
 }
 
-// One pinned entry is enough to count the file as evaluated; the
-// unpinned entries are still reported by the terminal note and the JSON
-// counts.
-func TestAuditProceedsWhenSomeEntriesArePinned(t *testing.T) {
+// Any installable entry without an exact pin leaves a version nothing
+// checked, whatever else the file pins; an entry that a pin of the same
+// name covers (in the file or through -c) does not, and neither does a
+// constraint.
+func TestAuditUnpinnedRuleCountsEveryUnpinnedEntry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	dir := projectWith(t, map[string]string{"requirements.txt": "requests>=2\nflask==3.0.0\n"})
-	result := auditToFile(t, dir)
-	require.Equal(t, "proceed", result.Triage.Decision)
-	require.Equal(t, 1, result.Coverage.PackageEvidence[0].Unpinned)
-	require.Contains(t, readReport(t, "audit", dir), "1 Python dependency is not pinned to one version")
+	cases := []struct {
+		name     string
+		files    map[string]string
+		decision string
+		message  string
+	}{
+		{
+			name:     "one pin plus three ranges",
+			files:    map[string]string{"requirements.txt": "flask==3.0.0\nrequests>=2\nclick\njinja2~=3.1\n"},
+			decision: "review",
+			message:  "3 of 4 entries in requirements.txt are not pinned to one version, so only advisories covering every version were checked for them.",
+		},
+		{
+			name:     "clean uv.lock plus a range beside an unrelated pin",
+			files:    map[string]string{"uv.lock": uvLockFixture, "requirements.txt": "requests>=2\nflask==3.0.0\n"},
+			decision: "review",
+			message:  "1 of 2 entries in requirements.txt is not pinned to one version, so only advisories covering every version were checked for it.",
+		},
+		{
+			name: "range pinned by a -c constraint",
+			files: map[string]string{
+				"requirements.txt": "requests\n-c constraints.txt\n",
+				"constraints.txt":  "requests==2.31.0\n",
+			},
+			decision: "proceed",
+		},
+		{
+			name:     "range pinned in the same file",
+			files:    map[string]string{"requirements.txt": "Requests>=2\nrequests==2.31.0\n"},
+			decision: "proceed",
+		},
+		{
+			name:     "constraints file with ranges",
+			files:    map[string]string{"requirements.txt": "flask==3.0.0\n", "constraints.txt": "urllib3<2\nidna>=3\n"},
+			decision: "proceed",
+		},
+		{
+			name:     "all pinned",
+			files:    map[string]string{"requirements.txt": "flask==3.0.0\nrequests===2.31.0\n"},
+			decision: "proceed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, tc.files))
+			require.Equal(t, tc.decision, result.Triage.Decision)
+			require.Equal(t, tc.decision == "proceed", result.Plan.CanInstallDependencies)
+			var got string
+			for _, r := range result.Triage.Reasons {
+				if r.Kind == "unpinned_dependency_evidence" {
+					require.Equal(t, "warning", r.Severity)
+					got = r.Message
+				}
+			}
+			require.Equal(t, tc.message, got)
+		})
+	}
+}
+
+// Tool-generated lockfiles stay `proceed`: workspace members, editable
+// installs, local paths and git checkouts have no index version by
+// design and are not index requirements, so they never count as
+// unpinned.
+func TestResolvedLockfilesWithNonIndexEntriesProceed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const uvWorkspace = `version = 1
+requires-python = ">=3.11"
+
+[manifest]
+members = ["app", "shared"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [{ name = "shared" }, { name = "requests" }, { name = "gitdep" }, { name = "localdep" }]
+
+[[package]]
+name = "shared"
+version = "0.2.0"
+source = { editable = "packages/shared" }
+
+[[package]]
+name = "gitdep"
+version = "1.0.0"
+source = { git = "https://github.com/example/gitdep?rev=v1#0123456789abcdef0123456789abcdef01234567" }
+
+[[package]]
+name = "localdep"
+version = "0.3.0"
+source = { directory = "vendor/localdep" }
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }
+`
+	const pipfileLock = `{
+  "_meta": {"hash": {"sha256": "0000"}, "pipfile-spec": 6, "requires": {}, "sources": [{"name": "pypi", "url": "https://pypi.org/simple", "verify_ssl": true}]},
+  "default": {
+    "requests": {"hashes": ["sha256:0000"], "index": "pypi", "version": "==2.31.0"},
+    "mylib": {"editable": true, "path": "."},
+    "gitdep": {"git": "https://github.com/example/gitdep.git", "ref": "0123456789abcdef0123456789abcdef01234567"}
+  },
+  "develop": {
+    "pytest": {"hashes": ["sha256:0000"], "index": "pypi", "version": "==8.2.0"}
+  }
+}
+`
+	cases := map[string]map[string]string{
+		"uv.lock with workspace, editable, git and directory entries": {"uv.lock": uvWorkspace},
+		"poetry.lock":  {"poetry.lock": "@../../../internal/packagecheck/testdata/python-poetry/poetry.lock"},
+		"pdm.lock":     {"pdm.lock": "@../../../internal/packagecheck/testdata/python-pdm/pdm.lock"},
+		"Pipfile.lock": {"Pipfile.lock": pipfileLock},
+	}
+	for name, files := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, files))
+			require.Equal(t, "proceed", result.Triage.Decision)
+			require.True(t, result.Plan.CanInstallDependencies)
+			require.Len(t, result.Check.Ecosystems, 1)
+			require.Zero(t, result.Check.Ecosystems[0].Unpinned)
+			require.NotZero(t, result.Check.Ecosystems[0].PackagesRead)
+		})
+	}
 }
 
 // A Python lockfile that was evaluated clean does not cover an

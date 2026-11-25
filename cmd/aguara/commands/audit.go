@@ -584,18 +584,17 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 		return
 	}
 
-	// A dependency file in which no entry is pinned to one version was
-	// read, but nothing in it could be matched against an exact-version
-	// advisory: only advisories covering every version were checked, and
-	// an install resolves versions this audit never saw.
-	if files := unpinnedOnlyFiles(result.Check.Ecosystems, result.Target); files != "" {
+	// Any installable entry without one exact version (that no pin of
+	// the same name covers) was matched only against advisories covering
+	// every version: an install resolves a version this audit never saw.
+	if counts, files := unpinnedEntries(result.Check.Ecosystems, result.Target); counts != "" {
 		t.Reasons = append(t.Reasons, AuditTriageReason{
 			Kind:     "unpinned_dependency_evidence",
 			Severity: "warning",
-			Message:  "No entry in " + files + " is pinned to one version, so only advisories covering every version of those packages were checked.",
+			Message:  counts,
 		})
 		escalateForCoverage(t,
-			"Some dependency files pin no exact versions, so the audit cannot clear dependency installation.",
+			"Some dependency entries are not pinned to one version, so the audit cannot clear dependency installation.",
 			"Pin exact versions in "+files+" (for example with pip-compile or uv pip compile) and audit again, or review those dependencies before installing them.")
 	}
 
@@ -644,29 +643,43 @@ func escalateForCoverage(t *AuditTriage, summary, step string) {
 	t.RecommendedNextSteps = append(t.RecommendedNextSteps, step)
 }
 
-// unpinnedOnlyFiles names the dependency files that were read but pin no
-// entry to one version, or "" when there are none. A file with no entries
-// at all is not counted: there is nothing in it to install.
-func unpinnedOnlyFiles(results []packagecheck.EcosystemResult, root string) string {
+// unpinnedEntries describes the read dependency files that have entries
+// without one exact version: the reason message ("N of M entries in
+// <file> are not pinned ...") and the file names for the next step.
+// Both are "" when every entry is pinned. Constraints files are skipped:
+// they install nothing. The runner already leaves out entries that a pin
+// of the same name in the same file covers.
+func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (message, files string) {
+	var counts []string
 	var evidence []packagecheck.UnsupportedEvidence
+	unpinned := 0
 	for _, e := range results {
-		if packagecheck.IsConstraintsFile(e.Source) {
-			// A constraints file installs nothing.
+		if packagecheck.IsConstraintsFile(e.Source) || e.Unpinned == 0 {
 			continue
 		}
-		if e.PackagesRead > 0 && e.Unpinned == e.PackagesRead {
-			evidence = append(evidence, packagecheck.UnsupportedEvidence{Path: e.Path, Ecosystem: e.Ecosystem})
-		}
+		unpinned += e.Unpinned
+		counts = append(counts, fmt.Sprintf("%d of %d entries in %s", e.Unpinned, e.PackagesRead, displayPath(root, e.Path)))
+		evidence = append(evidence, packagecheck.UnsupportedEvidence{Path: e.Path, Ecosystem: e.Ecosystem})
 	}
-	if len(evidence) == 0 {
-		return ""
+	if len(counts) == 0 {
+		return "", ""
 	}
-	return unsupportedEvidenceNames(evidence, root)
+	const maxNamed = 5
+	if len(counts) > maxNamed {
+		counts = append(counts[:maxNamed], fmt.Sprintf("entries in %d more files", len(counts)-maxNamed))
+	}
+	verb, pronoun := "are", "them"
+	if unpinned == 1 {
+		verb, pronoun = "is", "it"
+	}
+	message = fmt.Sprintf("%s %s not pinned to one version, so only advisories covering every version were checked for %s.",
+		strings.Join(counts, ", "), verb, pronoun)
+	return message, unsupportedEvidenceNames(evidence, root)
 }
 
 // auditCoverageIncomplete reports whether triage raised a coverage reason:
 // nothing was scanned, some dependency files could not be evaluated, or
-// some pin no exact version.
+// some entries are not pinned to one version.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||

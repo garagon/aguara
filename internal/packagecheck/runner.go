@@ -94,11 +94,22 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		refs := parsed.refs
 		findings := 0
 		unpinned := 0
+		// pinnedPyPI holds the PEP 503 names this target pins exactly,
+		// in a requirement or a constraint: pip installs that version,
+		// which was checked, so a range for the same name elsewhere in
+		// the target leaves nothing unchecked.
+		pinnedPyPI := map[string]bool{}
+		for _, ref := range refs {
+			if ref.Ecosystem == intel.EcosystemPyPI && !ref.Unpinned {
+				pinnedPyPI[intel.PEP503Normalize(ref.Name)] = true
+			}
+		}
 		for _, ref := range refs {
 			// A constraint (from a constraints file or a -c include)
 			// installs nothing, so a range there leaves no dependency
 			// unchecked: only requirements count as unpinned.
-			if ref.Unpinned && ref.Group != constraintGroup {
+			if ref.Unpinned && ref.Group != constraintGroup &&
+				!(ref.Ecosystem == intel.EcosystemPyPI && pinnedPyPI[intel.PEP503Normalize(ref.Name)]) {
 				unpinned++
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,
