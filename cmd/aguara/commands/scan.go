@@ -78,12 +78,21 @@ report, rooted at the current directory or at --root: policy files are read
 from the root, ignore patterns apply to every path, named files included,
 and findings report paths relative to the root. Every path must be inside
 the root; symbolic links named on the command line are not followed.
-Cross-file checks see only the files of this scan, grouped by directory.`,
+Cross-file checks see only the files of this scan, grouped by directory.
+
+"-" reads the content to scan from standard input, up to --max-file-size.
+The name given with --stdin-filename (default skill.md) decides how it is
+analyzed, as a file of that name would be: SKILL.md for a skill,
+mcp.json for an MCP configuration, .github/workflows/ci.yml for a
+workflow. Piped content is untrusted: no project policy is read and its
+inline aguara-ignore directives are not honored, so --project-policy trust
+is rejected.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
   aguara scan . --format sarif -o scan.sarif   For GitHub code scanning
-  aguara scan SKILL.md scripts/ mcp.json      Several paths, one report`,
+  aguara scan SKILL.md scripts/ mcp.json      Several paths, one report
+  cat tool.md | aguara scan - --stdin-filename SKILL.md --fail-on high`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if flagAuto {
 			if len(args) > 0 {
@@ -107,6 +116,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
 	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings, and list ignore patterns that matched nothing")
+	scanCmd.Flags().StringVar(&flagStdinFilename, "stdin-filename", defaultStdinFilename, "With - as the path: the file name the piped content is analyzed as (SKILL.md, mcp.json, .github/workflows/ci.yml, ...)")
 	scanCmd.Flags().StringVar(&flagScanRoot, "root", "", "Scan root for path arguments: policy files are read from it and paths are reported relative to it (default for several paths: the current directory)")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
@@ -149,10 +159,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// scanned repository is usually the change under review, so it must
 	// not decide what its own gate sees; --project-policy trust opts in.
 	ciVar := ""
-	if !flagCI {
+	if !flagCI && !in.stdin {
 		ciVar = detectedCIVar()
 	}
-	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "")
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "" && !in.stdin)
 	if err != nil {
 		return err
 	}
@@ -192,7 +202,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
-	result, err := in.execute(ctx, s)
+	result, err := in.execute(ctx, s, cfg)
 	stopSpinner(sp)
 	if err != nil {
 		return err
@@ -200,6 +210,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	result.RulesLoaded = len(res.Compiled)
 	result.Target = in.target()
 	result.Coverage = scanCoverage(result)
+	in.coverageScope(result.Coverage)
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, result)
 	}

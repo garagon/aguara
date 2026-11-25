@@ -49,6 +49,7 @@ func resetFlags() {
 	flagWriteBaseline = ""
 	flagProjectPolicy = "auto"
 	flagFailOnEmpty = false
+	flagStdinFilename = defaultStdinFilename
 	flagScanRoot = ""
 	flagCheckPath = ""
 	flagCheckEcosystems = nil
@@ -80,7 +81,7 @@ func resetFlags() {
 	// whether .aguara.yml may supply a default, so an earlier test's
 	// --format does not hide a later test's config value.
 	for _, c := range rootCmd.Commands() {
-		for _, name := range []string{"severity", "format", "fail-on", "rules", "baseline", "root"} {
+		for _, name := range []string{"severity", "format", "fail-on", "rules", "baseline", "stdin-filename", "root"} {
 			if f := c.Flags().Lookup(name); f != nil {
 				f.Changed = false
 			}

@@ -392,6 +392,7 @@ const (
 	ScanScopePath    = "path"    // every eligible file under the target
 	ScanScopeChanged = "changed" // only git-changed files under the target
 	ScanScopeAuto    = "auto"    // auto-discovered MCP client configurations
+	ScanScopeStdin   = "stdin"   // content read from standard input
 )
 
 // ScanCoverage states what a content scan evaluated.
