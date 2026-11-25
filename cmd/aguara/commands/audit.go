@@ -650,6 +650,10 @@ func escalateForCoverage(t *AuditTriage, summary, step string) {
 func unpinnedOnlyFiles(results []packagecheck.EcosystemResult, root string) string {
 	var evidence []packagecheck.UnsupportedEvidence
 	for _, e := range results {
+		if packagecheck.IsConstraintsFile(e.Source) {
+			// A constraints file installs nothing.
+			continue
+		}
 		if e.PackagesRead > 0 && e.Unpinned == e.PackagesRead {
 			evidence = append(evidence, packagecheck.UnsupportedEvidence{Path: e.Path, Ecosystem: e.Ecosystem})
 		}

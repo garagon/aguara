@@ -44,6 +44,39 @@ func TestAuditReviewsDependencyFilesWithNoPinnedEntry(t *testing.T) {
 	require.Contains(t, out, "No pinned versions were found")
 }
 
+// A constraints file installs nothing: a range in it leaves no
+// dependency unchecked, whether the file is found by name or reached
+// through a -c include, so it never triggers the unpinned review.
+func TestConstraintRangesDoNotCountAsUnpinnedDependencies(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cases := map[string]map[string]string{
+		"pin plus constraints file": {
+			"requirements.txt": "flask==3.0.0\n",
+			"constraints.txt":  "urllib3<2\n",
+		},
+		"constraints file only": {
+			"constraints.txt": "urllib3<2\n",
+		},
+		"constraint included with -c": {
+			"requirements.txt": "flask==3.0.0\n-c constraints.txt\n",
+			"constraints.txt":  "urllib3<2\n",
+		},
+	}
+	for name, files := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, files))
+			require.Equal(t, "proceed", result.Triage.Decision)
+			require.True(t, result.Plan.CanInstallDependencies)
+			for _, r := range result.Triage.Reasons {
+				require.NotEqual(t, "unpinned_dependency_evidence", r.Kind, r.Message)
+			}
+			for _, e := range result.Check.Ecosystems {
+				require.Zero(t, e.Unpinned, "%s: constraint entries are not unpinned dependencies", e.Source)
+			}
+		})
+	}
+}
+
 // One pinned entry is enough to count the file as evaluated; the
 // unpinned entries are still reported by the terminal note and the JSON
 // counts.

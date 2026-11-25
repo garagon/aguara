@@ -95,7 +95,10 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		findings := 0
 		unpinned := 0
 		for _, ref := range refs {
-			if ref.Unpinned {
+			// A constraint (from a constraints file or a -c include)
+			// installs nothing, so a range there leaves no dependency
+			// unchecked: only requirements count as unpinned.
+			if ref.Unpinned && ref.Group != constraintGroup {
 				unpinned++
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,

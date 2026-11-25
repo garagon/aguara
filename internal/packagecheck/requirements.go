@@ -33,6 +33,17 @@ func isRequirementsSource(base string) bool {
 		(strings.HasPrefix(base, "requirements") || strings.HasPrefix(base, "constraints"))
 }
 
+// constraintGroup is the PackageRef.Group of entries read from a
+// constraints file or through a -c include.
+const constraintGroup = "constraint"
+
+// IsConstraintsFile reports a file read as pip constraints, by base
+// name, the rule discovery applies: constraints install nothing, they
+// only limit the versions requirements may resolve to.
+func IsConstraintsFile(path string) bool {
+	return strings.HasPrefix(filepath.Base(path), "constraints")
+}
+
 // pep508Name is the PEP 508 project-name grammar (case-insensitive).
 var pep508Name = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
@@ -107,7 +118,7 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 		visited:  map[string]bool{},
 		coll:     newPythonRefCollector(target.Source),
 	}
-	constraint := strings.HasPrefix(filepath.Base(target.Path), "constraints")
+	constraint := IsConstraintsFile(target.Path)
 	if err := w.visit(target.Path, constraint, 0); err != nil {
 		return parsedTarget{}, err
 	}
@@ -156,7 +167,7 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 			ref.Path = path
 			ref.Source = filepath.Base(path)
 			if constraint {
-				ref.Group = "constraint"
+				ref.Group = constraintGroup
 			}
 			if err := w.coll.add(ref); err != nil {
 				return err

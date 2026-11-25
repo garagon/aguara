@@ -112,10 +112,14 @@ func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
 }
 
 // noExactVersions reports evidence in which every package read is
-// unpinned (and at least one package was read).
+// unpinned (and at least one package was read). Constraints files are
+// not counted: they install nothing.
 func noExactVersions(c *packagecheck.Coverage) bool {
 	read := 0
 	for _, e := range c.PackageEvidence {
+		if packagecheck.IsConstraintsFile(e.Source) {
+			continue
+		}
 		if e.Unpinned < e.PackagesRead {
 			return false
 		}
