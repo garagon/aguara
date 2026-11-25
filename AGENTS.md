@@ -120,7 +120,11 @@ resolve it or read its `.aguaraignore` returns no partial result.
 
 Consumers must bound inline inputs and execution resources themselves. A context
 does not guarantee immediate interruption of every parser or regular expression.
-Do not advertise a hard real-time deadline from this API.
+Do not advertise a hard real-time deadline from this API. The pattern matcher
+checks the context between its passes over the content, during the keyword
+pass and before each pattern, but one regular expression over a large input
+runs to completion (over a second on 8 MiB), and so does any single analyzer
+pass that takes no context.
 
 ## Result Contracts
 

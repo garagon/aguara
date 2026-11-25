@@ -397,10 +397,6 @@ func (s *Scanner) scanTargets(ctx context.Context, targets []*Target, prior []*s
 					redaction.AddContent(target.RelPath, target.StringContent())
 					mu.Unlock()
 				}
-				// Accumulate content for cross-file analysis
-				if s.crossFileAccumulator != nil {
-					s.crossFileAccumulator.Accumulate(target.RelPath, target.StringContent())
-				}
 				var ignoreIndex map[int]map[string]bool
 				if s.projectPolicyEnabled {
 					ignoreIndex = buildIgnoreIndex(parseIgnoreDirectives(target.Content))
@@ -412,11 +408,15 @@ func (s *Scanner) scanTargets(ctx context.Context, targets []*Target, prior []*s
 						break
 					}
 					results, err := analyzer.Analyze(ctx, target)
+					canceled := false
 					if err != nil {
 						// This analyzer failed on this file only: the other
 						// analyzers still run on it, and findings it
-						// reported before failing are kept.
+						// reported before failing are kept. An analyzer
+						// stopped by the context is the file's one
+						// canceled failure; the rest are not run.
 						recordFailure(IncompleteScanError("analyze target", target.RelPath, analyzer.Name(), err))
+						canceled = ctx.Err() != nil
 					}
 					if len(results) > 0 {
 						if s.redact {
@@ -445,6 +445,18 @@ func (s *Scanner) scanTargets(ctx context.Context, targets []*Target, prior []*s
 							mu.Unlock()
 						}
 					}
+					if canceled {
+						break
+					}
+				}
+				// Accumulate content for cross-file analysis. It runs after
+				// the per-file analyzers and not at all once the context is
+				// done: it takes no context, costs a regex pass per
+				// capability over the whole file, and a canceled scan never
+				// finalizes it. Cross-file results do not depend on the
+				// order files are accumulated in.
+				if s.crossFileAccumulator != nil && ctx.Err() == nil {
+					s.crossFileAccumulator.Accumulate(target.RelPath, target.StringContent())
 				}
 				s.observeFileFindings(target.RelPath, fileFindings)
 				if s.onProgress != nil {

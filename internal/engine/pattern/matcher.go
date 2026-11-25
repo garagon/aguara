@@ -89,9 +89,19 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 	keys := lookupKeys(target.RelPath)
 	applicable := m.rulesForFile(target.RelPath, keys)
 
+	// The context is checked between the passes over the whole content,
+	// inside the keyword pass, before each pattern and before decoding, so
+	// a canceled scan of a large file stops within one pass or pattern.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Pre-filter: run keyword AC to find which rules could possibly match.
 	// Rules whose required literal substrings don't appear are skipped entirely.
-	candidatePatterns := m.pf.candidatePatternMasks(lowerContent.text)
+	candidatePatterns, err := m.pf.candidatePatternMasksContext(ctx, lowerContent.text)
+	if err != nil {
+		return nil, err
+	}
 
 	// Secondary pre-filter: AC on contains patterns for exact substring pre-check.
 	acHitRules := m.acPrefilter(keys, lowerContent.text)
@@ -126,10 +136,13 @@ func (m *Matcher) Analyze(ctx context.Context, target *scanner.Target) ([]scanne
 
 		switch rule.MatchMode {
 		case rules.MatchAny:
-			findings = append(findings, m.matchAnySelected(rule, patternMask, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			findings = append(findings, m.matchAnySelected(ctx, rule, patternMask, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		case rules.MatchAll:
-			findings = append(findings, m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+			findings = append(findings, m.matchAll(ctx, rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return findings, err
 	}
 
 	// Phase 4: decode base64/hex blobs and re-scan with all-target rules only.
@@ -255,7 +268,9 @@ func fileMatchesAnyGlob(globs []string, relPath, base string) bool {
 	return false
 }
 
-func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
+// matchAnySelected matches a match_mode: any rule. When ctx is done it
+// stops before the next pattern; Analyze then returns the context's error.
+func (m *Matcher) matchAnySelected(ctx context.Context, rule *rules.CompiledRule, patternMask uint64, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
 	var findings []scanner.Finding
 	// Deduplicate findings by line to avoid reporting the same line from
 	// multiple patterns. Track which lines already have a finding.
@@ -265,6 +280,9 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 	for patternIndex, pat := range rule.Patterns {
 		if patternIndex < 64 && patternMask&(uint64(1)<<patternIndex) == 0 {
 			continue
+		}
+		if ctx.Err() != nil {
+			break
 		}
 		patternContent := content
 		if rule.ID == "SUPPLY_007" && pat.Type == rules.PatternRegex && pat.Value == privilegeWordPattern {
@@ -317,13 +335,19 @@ func (m *Matcher) matchAnySelected(rule *rules.CompiledRule, patternMask uint64,
 	return findings
 }
 
-func (m *Matcher) matchAll(rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
+// matchAll matches a match_mode: all rule. When ctx is done it stops before
+// the next pattern without a finding; Analyze then returns the context's
+// error.
+func (m *Matcher) matchAll(ctx context.Context, rule *rules.CompiledRule, content string, lowerContent *lowercaseContent, lines []string, target *scanner.Target, cbMap []bool, downgradeCode bool) []scanner.Finding {
 	// All patterns must have at least one hit that no exclude pattern
 	// suppresses. Excludes apply to every contributing hit, as they do in
 	// match_mode: any, so a benign form of any pattern's text does not
 	// count and an excluded first occurrence does not hide a later one.
 	var allHits [][]matchHit
 	for _, pat := range rule.Patterns {
+		if ctx.Err() != nil {
+			return nil
+		}
 		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, content, lowerContent, lines))
 		if len(hits) == 0 {
 			return nil
