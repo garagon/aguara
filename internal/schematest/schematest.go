@@ -15,27 +15,48 @@ import (
 	"github.com/go-openapi/validate"
 )
 
+type cacheKey struct {
+	path     string
+	expanded bool
+}
+
 var (
 	cacheMu sync.Mutex
-	cache   = map[string]*spec.Schema{}
+	cache   = map[cacheKey]*spec.Schema{}
 )
 
-// Load reads and expands a JSON Schema file. Local "#/definitions/..."
-// references are resolved; the schema's own id is not fetched. Expanded
-// schemas are cached per path for the life of the test binary.
+// Load reads a JSON Schema file for Validate. Local "#/definitions/..."
+// references are resolved by the validator as it meets them, which is far
+// cheaper than expanding a large schema such as SARIF's; the schema's own
+// id is not fetched. Schemas are cached per path for the life of the test
+// binary.
 func Load(t testing.TB, path string) *spec.Schema {
+	t.Helper()
+	return cached(t, path, false)
+}
+
+// LoadExpanded reads a JSON Schema file with every local reference
+// replaced by its definition, for Undocumented and for validating against
+// one definition on its own.
+func LoadExpanded(t testing.TB, path string) *spec.Schema {
+	t.Helper()
+	return cached(t, path, true)
+}
+
+func cached(t testing.TB, path string, expanded bool) *spec.Schema {
 	t.Helper()
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	if s, ok := cache[path]; ok {
+	key := cacheKey{path, expanded}
+	if s, ok := cache[key]; ok {
 		return s
 	}
-	s := load(t, path)
-	cache[path] = s
+	s := load(t, path, expanded)
+	cache[key] = s
 	return s
 }
 
-func load(t testing.TB, path string) *spec.Schema {
+func load(t testing.TB, path string, expand bool) *spec.Schema {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -45,11 +66,13 @@ func load(t testing.TB, path string) *spec.Schema {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatalf("parse schema %s: %v", path, err)
 	}
-	// An absolute id would make the expander resolve references against
+	// An absolute id would make the validator resolve references against
 	// the network location; the files are self-contained.
 	schema.ID = ""
-	if err := spec.ExpandSchema(&schema, &schema, nil); err != nil {
-		t.Fatalf("expand schema %s: %v", path, err)
+	if expand {
+		if err := spec.ExpandSchema(&schema, &schema, nil); err != nil {
+			t.Fatalf("expand schema %s: %v", path, err)
+		}
 	}
 	return &schema
 }
@@ -67,7 +90,7 @@ func Validate(t testing.TB, schema *spec.Schema, doc []byte) {
 }
 
 // Undocumented returns the JSON paths of object members in doc that the
-// schema does not describe in any `properties` (including through allOf),
+// schema (loaded with LoadExpanded) does not describe in any `properties` (including through allOf),
 // so a published schema cannot silently fall behind the output it
 // describes. Members of objects without declared properties are not
 // checked.

@@ -65,9 +65,8 @@ func runReport(t *testing.T, args ...string) ([]byte, error) {
 
 func requireNoUndocumented(t *testing.T, schemaPath string, doc []byte) {
 	t.Helper()
-	schema := schematest.Load(t, schemaPath)
-	schematest.Validate(t, schema, doc)
-	require.Empty(t, schematest.Undocumented(t, schema, doc), "fields missing from %s", schemaPath)
+	schematest.Validate(t, schematest.Load(t, schemaPath), doc)
+	require.Empty(t, schematest.Undocumented(t, schematest.LoadExpanded(t, schemaPath), doc), "fields missing from %s", schemaPath)
 }
 
 func TestJSONReportsMatchPublishedSchemas(t *testing.T) {
@@ -193,7 +192,7 @@ func TestVersionJSONReportsIdentity(t *testing.T) {
 	})
 	require.NoError(t, rootCmd.Execute())
 
-	schema := schematest.Load(t, scanSchemaPath)
+	schema := schematest.LoadExpanded(t, scanSchemaPath)
 	header := schema.Definitions["reportHeader"]
 	schematest.Validate(t, &header, []byte(buf.String()))
 	require.Contains(t, buf.String(), `"schema_version": "1.0"`)
@@ -310,11 +309,11 @@ func requireGitHubSARIF(t *testing.T, data []byte) sarifRunDoc {
 func TestSARIFReportsMatchSchemaAndGitHubContract(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := contractRepo(t, true)
+	// check and audit SARIF go through the same checks in
+	// TestPackageFindingsInSARIF.
 	for _, args := range [][]string{
 		{"scan", filepath.Join(root, "skills"), "--format", "sarif"},
 		{"scan", root, "--format", "sarif"},
-		{"check", root, "--format", "sarif"},
-		{"audit", root, "--format", "sarif"},
 		{"scan", t.TempDir(), "--format", "sarif"},
 	} {
 		t.Run(strings.Join(args[:1], " "), func(t *testing.T) {

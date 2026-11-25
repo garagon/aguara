@@ -120,35 +120,47 @@ func TestScanGateNamesConfigSource(t *testing.T) {
 	require.Contains(t, err.Error(), "threshold warning from --fail-on")
 }
 
+func TestDecisionGate(t *testing.T) {
+	for _, tc := range []struct {
+		decision, threshold string
+		trips               bool
+	}{
+		{"stop", "stop", true}, {"stop", "review", true},
+		{"review", "review", true}, {"review", "stop", false},
+		{"proceed", "review", false}, {"proceed", "stop", false},
+		{"stop", "", false},
+	} {
+		triage := AuditTriage{Decision: tc.decision, Reasons: []AuditTriageReason{{Kind: "nothing_scanned"}}}
+		err := decisionGate(triage, tc.threshold)
+		name := tc.decision + " " + tc.threshold
+		require.Equal(t, tc.trips, errors.Is(err, ErrThresholdExceeded), name)
+		if tc.trips {
+			require.Equal(t, "audit decision gate: triage decision is "+tc.decision+", at or above --fail-on-decision "+tc.threshold+" (reasons: nothing_scanned)", err.Error())
+		}
+	}
+	for _, bad := range []string{"proceed", "block", "high"} {
+		_, err := parseFailOnDecision(bad)
+		require.ErrorContains(t, err, "choose review or stop", bad)
+	}
+}
+
 func TestAuditFailOnDecision(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := contractRepo(t, true) // triage: stop
 	clean := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(clean, "README.md"), []byte("# hello\n"), 0o600)) // triage: proceed
-	empty := t.TempDir()                                                                            // triage: review (nothing scanned)
 
-	for _, tc := range []struct {
-		dir, threshold string
-		trips          bool
-	}{
-		{root, "stop", true}, {root, "review", true},
-		{empty, "review", true}, {empty, "stop", false},
-		{clean, "review", false}, {clean, "stop", false},
-	} {
-		data, err := runReport(t, "audit", tc.dir, "--fail-on-decision", tc.threshold, "--format", "json")
-		name := tc.dir + " " + tc.threshold
-		if tc.trips {
-			require.ErrorIs(t, err, ErrThresholdExceeded, name)
-			require.Contains(t, err.Error(), "--fail-on-decision "+tc.threshold, name)
-			require.Contains(t, string(data), `"decision_gate_exceeded": true`, name)
-			require.Contains(t, string(data), `"status": "fail"`, name)
-		} else {
-			require.NoError(t, err, name)
-			require.Contains(t, string(data), `"decision_gate_exceeded": false`, name)
-		}
-	}
+	data, err := runReport(t, "audit", root, "--fail-on-decision", "review", "--format", "json")
+	require.ErrorIs(t, err, ErrThresholdExceeded)
+	require.Contains(t, err.Error(), "triage decision is stop, at or above --fail-on-decision review")
+	require.Contains(t, string(data), `"decision_gate_exceeded": true`)
+	require.Contains(t, string(data), `"status": "fail"`)
 
-	err := runCLI(t, "audit", clean, "--fail-on-decision", "proceed")
+	data, err = runReport(t, "audit", clean, "--fail-on-decision", "review", "--format", "json")
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"decision_gate_exceeded": false`)
+
+	err = runCLI(t, "audit", clean, "--fail-on-decision", "proceed")
 	requireUsageError(t, err, `invalid --fail-on-decision "proceed": choose review or stop`)
 
 	// Combined with --fail-on, either gate exits 1 and both are named.
