@@ -45,6 +45,10 @@ type TerminalFormatter struct {
 	// Width is the rendering width for separators and section headers.
 	// Zero falls back to the 72-column default.
 	Width int
+	// Detections is the number of rules in the catalog the scan used
+	// (pattern and analyzer rules). Zero reports only the compiled
+	// pattern rule count.
+	Detections int
 }
 
 func (f *TerminalFormatter) width() int {
@@ -121,7 +125,7 @@ func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult)
 		parts = append(parts, fmt.Sprintf("Target: %s", TerminalText(result.Target)))
 	}
 	parts = append(parts, fmt.Sprintf("%d files", result.FilesScanned))
-	parts = append(parts, fmt.Sprintf("%d rules", result.RulesLoaded))
+	parts = append(parts, RulesLabel(f.Detections, result.RulesLoaded))
 	if result.Duration > 0 {
 		parts = append(parts, fmt.Sprintf("%.2fs", result.Duration.Seconds()))
 	}
@@ -185,62 +189,146 @@ func (f *TerminalFormatter) printSeveritySection(w io.Writer, sev scanner.Severi
 }
 
 func (f *TerminalFormatter) printFindingExpanded(w io.Writer, finding scanner.Finding) {
-	icon := f.severityIcon(finding.Severity)
-	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, TerminalText(finding.RuleID))
-	name := truncate(TerminalText(finding.RuleName), nameWidth)
-	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("%s:%d", TerminalText(finding.FilePath), finding.Line)
-	if finding.InCodeBlock {
-		lineStr += " " + f.color(dim, "[code]")
-	}
-	if f.Verbose && finding.Confidence > 0 {
-		lineStr += " " + f.color(dim, fmt.Sprintf("[%d%%]", int(finding.Confidence*100)))
-	}
-
-	fmt.Fprintf(w, "\n    %s %s %s %s\n",
-		icon,
-		f.color(bold, ruleID),
-		namePadded,
-		f.color(cyan, lineStr),
-	)
+	fmt.Fprintln(w)
+	f.printFindingHead(w, finding)
 
 	if finding.MatchedText != "" {
-		preview := truncate(TerminalText(finding.MatchedText), previewWidth)
-		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(dim, preview))
+		evidence := TerminalText(finding.MatchedText)
+		if !f.Verbose {
+			evidence = truncate(evidence, previewWidth)
+		}
+		f.printDetail(w, "", evidence, dim)
 	}
 	if f.Verbose && finding.Description != "" {
-		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, TerminalText(finding.Description)))
+		f.printDetail(w, "", TerminalText(finding.Description), yellow)
 	}
 	if finding.Remediation != "" {
-		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, TerminalText(finding.Remediation)))
+		f.printDetail(w, "Fix: ", TerminalText(finding.Remediation), cyan)
 	}
+	f.printAlsoMatched(w, finding)
 }
 
 func (f *TerminalFormatter) printFindingCompact(w io.Writer, finding scanner.Finding) {
-	icon := f.severityIcon(finding.Severity)
-	ruleID := fmt.Sprintf("%-*s", ruleIDWidth, TerminalText(finding.RuleID))
-	name := truncate(TerminalText(finding.RuleName), nameWidth)
-	namePadded := fmt.Sprintf("%-*s", nameWidth, name)
-	lineStr := fmt.Sprintf("%s:%d", TerminalText(finding.FilePath), finding.Line)
-	if finding.InCodeBlock {
-		lineStr += " " + f.color(dim, "[code]")
+	f.printFindingHead(w, finding)
+	if f.Verbose && finding.MatchedText != "" {
+		f.printDetail(w, "", TerminalText(finding.MatchedText), dim)
 	}
-	if f.Verbose && finding.Confidence > 0 {
-		lineStr += " " + f.color(dim, fmt.Sprintf("[%d%%]", int(finding.Confidence*100)))
-	}
-
-	fmt.Fprintf(w, "    %s %s %s %s\n",
-		icon,
-		f.color(bold, ruleID),
-		namePadded,
-		f.color(cyan, lineStr),
-	)
 	if f.Verbose && finding.Severity >= scanner.SeverityHigh && finding.Description != "" {
-		fmt.Fprintf(w, "      %s %s\n", f.color(dim, "\u2502"), f.color(yellow, TerminalText(finding.Description)))
+		f.printDetail(w, "", TerminalText(finding.Description), yellow)
 	}
 	if f.Verbose && finding.Remediation != "" {
-		fmt.Fprintf(w, "      %s %s %s\n", f.color(dim, "\u2502"), f.color(dim, "Fix:"), f.color(cyan, TerminalText(finding.Remediation)))
+		f.printDetail(w, "Fix: ", TerminalText(finding.Remediation), cyan)
 	}
+	f.printAlsoMatched(w, finding)
+}
+
+// printFindingHead prints the icon, rule ID, rule name and location of a
+// finding in aligned columns. Rule IDs are never cut, so they can be pasted
+// into `aguara explain`. A rule name longer than its column is printed in
+// full: on a terminal the location then moves to its own line and long
+// text wraps at the terminal width; elsewhere the line simply runs longer.
+func (f *TerminalFormatter) printFindingHead(w io.Writer, finding scanner.Finding) {
+	f.writeFindingHead(w, finding, "    ")
+}
+
+// WriteFindingLine writes the one-line summary of a finding (icon, rule ID,
+// rule name, location) the way the scan report lays it out, followed by
+// the "+N more on this line" hint when deduplication merged other findings
+// into it. indent is the leading indentation.
+func (f *TerminalFormatter) WriteFindingLine(w io.Writer, finding scanner.Finding, indent string) {
+	f.writeFindingHead(w, finding, indent)
+	f.printAlsoMatched(w, finding)
+}
+
+func (f *TerminalFormatter) writeFindingHead(w io.Writer, finding scanner.Finding, indent string) {
+	icon := f.severityIcon(finding.Severity)
+	ruleID := TerminalText(finding.RuleID)
+	idCell := fmt.Sprintf("%-*s", ruleIDWidth, ruleID)
+	name := oneLine(TerminalText(finding.RuleName))
+	loc := fmt.Sprintf("%s:%d", TerminalText(finding.FilePath), finding.Line)
+	locStyled := f.color(cyan, loc)
+	if finding.InCodeBlock {
+		loc += " [code]"
+		locStyled += " " + f.color(dim, "[code]")
+	}
+	if f.Verbose && finding.Confidence > 0 {
+		conf := fmt.Sprintf("[%d%%]", int(finding.Confidence*100))
+		loc += " " + conf
+		locStyled += " " + f.color(dim, conf)
+	}
+
+	// Display columns before the name: indent, icon, space, ID cell, space.
+	nameCol := len(indent) + 2 + displayWidth(idCell) + 1
+	if displayWidth(name) <= nameWidth {
+		line := nameCol + nameWidth + 1 + displayWidth(loc)
+		if f.Width <= 0 || line <= f.Width {
+			fmt.Fprintf(w, "%s%s %s %s %s\n", indent, icon, f.color(bold, idCell), fmt.Sprintf("%-*s", nameWidth, name), locStyled)
+			return
+		}
+	} else if f.Width <= 0 {
+		fmt.Fprintf(w, "%s%s %s %s %s\n", indent, icon, f.color(bold, idCell), name, locStyled)
+		return
+	}
+	// Terminal output that does not fit: wrap the name under its column
+	// and put the location on the next line, aligned with the name.
+	pad := strings.Repeat(" ", nameCol)
+	nameLines := wrapText(name, max(f.Width-nameCol, 20))
+	fmt.Fprintf(w, "%s%s %s %s\n", indent, icon, f.color(bold, idCell), nameLines[0])
+	for _, l := range nameLines[1:] {
+		fmt.Fprintf(w, "%s%s\n", pad, l)
+	}
+	if nameCol+displayWidth(loc) <= f.Width {
+		fmt.Fprintf(w, "%s%s\n", pad, locStyled)
+		return
+	}
+	// A long rule ID pushes the name column far right; the location then
+	// starts under the rule ID instead, and a path longer than the line
+	// is split rather than cut.
+	locPad := strings.Repeat(" ", len(indent)+2)
+	for _, l := range wrapText(loc, max(f.Width-len(locPad), 20)) {
+		fmt.Fprintf(w, "%s%s\n", locPad, f.color(cyan, l))
+	}
+}
+
+// printDetail prints one "│ " detail line (evidence, description, fix),
+// wrapped at the terminal width when output goes to a terminal.
+func (f *TerminalFormatter) printDetail(w io.Writer, label, text, code string) {
+	const prefix = "      "
+	bar := f.color(dim, "\u2502")
+	text = oneLine(text)
+	if f.Width <= 0 {
+		if label != "" {
+			fmt.Fprintf(w, "%s%s %s%s\n", prefix, bar, f.color(dim, label), f.color(code, text))
+			return
+		}
+		fmt.Fprintf(w, "%s%s %s\n", prefix, bar, f.color(code, text))
+		return
+	}
+	avail := max(f.Width-len(prefix)-2-displayWidth(label), 20)
+	for i, l := range wrapText(text, avail) {
+		lead := label
+		if i > 0 {
+			lead = strings.Repeat(" ", displayWidth(label))
+		}
+		if lead != "" {
+			fmt.Fprintf(w, "%s%s %s%s\n", prefix, bar, f.color(dim, lead), f.color(code, l))
+			continue
+		}
+		fmt.Fprintf(w, "%s%s %s\n", prefix, bar, f.color(code, l))
+	}
+}
+
+// printAlsoMatched names the findings deduplication merged into this one,
+// so a single-line input does not hide what else matched it.
+func (f *TerminalFormatter) printAlsoMatched(w io.Writer, finding scanner.Finding) {
+	if len(finding.AlsoMatched) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(finding.AlsoMatched))
+	for _, m := range finding.AlsoMatched {
+		ids = append(ids, TerminalText(m.RuleID))
+	}
+	f.printDetail(w, "", fmt.Sprintf("+%d more on this line: %s", len(ids), strings.Join(ids, ", ")), dim)
 }
 
 func (f *TerminalFormatter) printTopFiles(w io.Writer, findings []scanner.Finding) {
@@ -281,10 +369,14 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	sep := f.separator()
 	fmt.Fprintf(w, "\n%s\n", f.color(dim, sep))
 
+	rules := fmt.Sprintf("%d pattern rules", result.RulesLoaded)
+	if f.Detections > 0 {
+		rules = fmt.Sprintf("%d detections", f.Detections)
+	}
 	parts := []string{
 		filesScannedLabel(result),
 		fmt.Sprintf("%d findings", len(result.Findings)),
-		fmt.Sprintf("%d rules", result.RulesLoaded),
+		rules,
 	}
 	if result.RiskScore > 0 {
 		parts = append(parts, fmt.Sprintf("risk: %.1f/100", result.RiskScore))
@@ -302,11 +394,81 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		}
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
+	if line := SuppressionLine(result.Suppressed); line != "" {
+		for _, l := range wrapText(line, f.Width-2) {
+			fmt.Fprintf(w, "  %s\n", f.color(dim, l))
+		}
+	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 
 	if rule := topRuleID(result.Findings); rule != "" {
 		fmt.Fprintf(w, "  %s\n", f.color(dim, "Next: aguara explain "+TerminalText(rule)))
 	}
+	if !f.Verbose && hasBelowCritical(result.Findings) {
+		fmt.Fprintf(w, "  %s\n", f.color(dim, "Run with -v to show evidence and fixes for every finding."))
+	}
+}
+
+// RulesLabel describes the rules a scan ran: "259 detections (191 pattern
+// rules)" when the catalog size is known, else "191 pattern rules". A
+// detection is any catalog rule, pattern or analyzer-emitted; pattern rules
+// are the compiled YAML rules that rules_loaded counts.
+func RulesLabel(detections, patternRules int) string {
+	if detections > 0 {
+		return fmt.Sprintf("%d detections (%d pattern rules)", detections, patternRules)
+	}
+	return fmt.Sprintf("%d pattern rules", patternRules)
+}
+
+// SuppressionLine summarizes what the report does not list separately:
+// findings merged into another on the same line and findings removed by
+// filters. Empty when nothing was suppressed.
+func SuppressionLine(s *types.SuppressionSummary) string {
+	if s == nil {
+		return ""
+	}
+	var parts []string
+	add := func(n int, text string) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, text))
+		}
+	}
+	add(s.Deduplicated, "merged into findings on the same line")
+	add(s.BelowMinSeverity, "below the minimum severity")
+	add(s.DisabledRules, "from disabled rules")
+	add(s.ToolExemptions, "exempt for the tool")
+	add(s.InlineDirectives, "suppressed by inline directives")
+	if len(parts) == 0 && s.ExcludedFiles == 0 {
+		return ""
+	}
+	line := "not listed separately: " + strings.Join(parts, " \u00b7 ")
+	if len(parts) == 0 {
+		line = ""
+	}
+	if s.ExcludedFiles > 0 {
+		files := fmt.Sprintf("%d %s excluded by ignore patterns", s.ExcludedFiles, plural(s.ExcludedFiles, "file", "files"))
+		if line == "" {
+			return files
+		}
+		line += " \u00b7 " + files
+	}
+	return line
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+func hasBelowCritical(findings []scanner.Finding) bool {
+	for _, f := range findings {
+		if f.Severity < scanner.SeverityCritical {
+			return true
+		}
+	}
+	return false
 }
 
 // NothingScannedMessage explains a scan that evaluated zero files, in
@@ -395,6 +557,52 @@ func filterBySeverity(findings []scanner.Finding, sev scanner.Severity) []scanne
 		}
 	}
 	return result
+}
+
+// oneLine replaces layout characters that would break a terminal line.
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	return strings.ReplaceAll(s, "\t", " ")
+}
+
+// displayWidth is the number of columns s occupies, counting one per rune.
+func displayWidth(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+// wrapText splits s into lines of at most width columns, breaking at
+// spaces and splitting words longer than a line. It always returns at
+// least one line.
+func wrapText(s string, width int) []string {
+	if width <= 0 || displayWidth(s) <= width {
+		return []string{s}
+	}
+	var lines []string
+	var cur []rune
+	for _, word := range strings.Fields(s) {
+		runes := []rune(word)
+		for len(runes) > 0 {
+			switch {
+			case len(cur) == 0 && len(runes) <= width:
+				cur = append(cur, runes...)
+				runes = nil
+			case len(cur) == 0:
+				lines = append(lines, string(runes[:width]))
+				runes = runes[width:]
+			case len(cur)+1+len(runes) <= width:
+				cur = append(append(cur, ' '), runes...)
+				runes = nil
+			default:
+				lines = append(lines, string(cur))
+				cur = nil
+			}
+		}
+	}
+	if len(cur) > 0 || len(lines) == 0 {
+		lines = append(lines, string(cur))
+	}
+	return lines
 }
 
 func truncate(s string, maxLen int) string {
