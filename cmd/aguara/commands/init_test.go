@@ -140,6 +140,9 @@ func TestInitWorkflowStructure(t *testing.T) {
 			require.Contains(t, step.With["upload-sarif"], "github.event.pull_request.head.repo.full_name == github.repository",
 				"fork pull requests cannot write to code scanning")
 			require.Contains(t, step.With["upload-sarif"], "vars.AGUARA_UPLOAD_SARIF")
+			// The SARIF must not land in the checkout, where the audit
+			// step would scan it as a JSON file.
+			require.Equal(t, "${{ runner.temp }}/aguara-results.sarif", step.With["output"])
 		case step.Uses != "":
 			require.Regexp(t, sha, step.Uses, "third-party actions are pinned to a commit SHA")
 			if strings.HasPrefix(step.Uses, "actions/checkout@") {
@@ -153,7 +156,10 @@ func TestInitWorkflowStructure(t *testing.T) {
 		}
 	}
 	require.Contains(t, run, "aguara audit . --ci --project-policy ignore")
+	require.Contains(t, run, `>"$RUNNER_TEMP/aguara-audit.txt"`, "the audit report is written outside the checkout it scans")
 	require.Contains(t, summary, "&lt;", "the report is HTML-escaped inside <pre>")
+	require.Contains(t, summary, `head -c 200000 "$RUNNER_TEMP/aguara-audit.txt" | sed`,
+		"escaping can grow the text five times; the summary must stay under 1 MiB")
 	require.NotContains(t, workflowTemplateV2, "pull-requests:")
 	require.NotContains(t, workflowTemplateV2, "github-script")
 	require.NotContains(t, workflowTemplateV2, "createComment")
@@ -178,19 +184,71 @@ func TestInitWorkflowSummaryEscapesReport(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, script)
-	dir := t.TempDir()
+	checkout, runnerTemp := t.TempDir(), t.TempDir()
 	report := "  ✖ PROMPT_INJECTION_001  x.md:1 </pre><img src=x onerror=alert(1)> & `code`\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "aguara-audit.txt"), []byte(report), 0o644))
-	summary := filepath.Join(dir, "summary.md")
-	c := exec.Command(bash, "-e", "-o", "pipefail", "-c", script)
-	c.Dir = dir
-	c.Env = append(os.Environ(), "GITHUB_STEP_SUMMARY="+summary)
-	out, err := c.CombinedOutput()
-	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.WriteFile(filepath.Join(runnerTemp, "aguara-audit.txt"), []byte(report), 0o644))
+	summary := filepath.Join(runnerTemp, "summary.md")
+	runSummary := func() {
+		t.Helper()
+		c := exec.Command(bash, "-e", "-o", "pipefail", "-c", script)
+		c.Dir = checkout
+		c.Env = append(os.Environ(), "GITHUB_STEP_SUMMARY="+summary, "RUNNER_TEMP="+runnerTemp)
+		out, err := c.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	}
+	runSummary()
 	got, err := os.ReadFile(summary)
 	require.NoError(t, err)
 	require.Contains(t, string(got), "&lt;/pre&gt;&lt;img src=x onerror=alert(1)&gt; &amp; `code`")
 	require.Equal(t, 1, strings.Count(string(got), "</pre>"))
+
+	// A report of any size, even one made only of characters that grow
+	// five times when escaped, stays under the 1 MiB summary limit.
+	require.NoError(t, os.WriteFile(filepath.Join(runnerTemp, "aguara-audit.txt"), bytes.Repeat([]byte("&"), 2<<20), 0o644))
+	require.NoError(t, os.WriteFile(summary, nil, 0o644))
+	runSummary()
+	info, err := os.Stat(summary)
+	require.NoError(t, err)
+	require.Less(t, info.Size(), int64(1<<20))
+}
+
+// The audit and summary steps write nothing into the checkout they scan,
+// so a scan later in the job never reads the job's own reports.
+func TestInitWorkflowWritesNothingIntoTheCheckout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	var wf workflowDoc
+	require.NoError(t, yaml.Unmarshal([]byte(workflowTemplateV2), &wf))
+	bin := t.TempDir()
+	stub := "#!/bin/sh\necho \"stub report for $*\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "aguara"), []byte(stub), 0o755))
+	checkout, runnerTemp := t.TempDir(), t.TempDir()
+	summary := filepath.Join(runnerTemp, "summary.md")
+	ran := 0
+	for _, step := range wf.Jobs["aguara"].Steps {
+		if step.Run == "" {
+			continue
+		}
+		ran++
+		c := exec.Command(bash, "-e", "-o", "pipefail", "-c", step.Run)
+		c.Dir = checkout
+		c.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GITHUB_STEP_SUMMARY="+summary, "RUNNER_TEMP="+runnerTemp)
+		out, err := c.CombinedOutput()
+		require.NoError(t, err, "%s: %s", step.Name, out)
+	}
+	require.Equal(t, 2, ran)
+	entries, err := os.ReadDir(checkout)
+	require.NoError(t, err)
+	require.Empty(t, entries, "no report is written into the scanned checkout")
+	got, err := os.ReadFile(summary)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "stub report for audit . --ci --project-policy ignore")
 }
 
 // The scaffold must not advertise settings nothing reads, and every

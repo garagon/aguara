@@ -406,6 +406,12 @@ exit "$status"
 // comment earlier scaffolds posted on every push, which needed write
 // permission fork pull requests do not get.
 //
+// Every report the job writes (the action's SARIF, the audit report) goes
+// to $RUNNER_TEMP, never into the checkout: the audit scans the checkout,
+// and a SARIF file there would be read as JSON, so a finding that a
+// Markdown fence lowers in its source file would come back at full
+// severity and fail the gate.
+//
 // Third-party actions are pinned to a full commit SHA, the Aguara action
 // to its release tag (checked by .github/scripts/check-version-pins.sh).
 // The project-policy flag is explicit so the result does not depend on
@@ -448,6 +454,8 @@ jobs:
           path: .
           # Pin the Aguara binary as well as the action.
           version: v0.29.0
+          # Outside the checkout, so the audit below does not scan it.
+          output: ${{ runner.temp }}/aguara-results.sarif
           # Fork pull requests cannot write to code scanning. Set the
           # repository variable AGUARA_UPLOAD_SARIF to false where code
           # scanning is not available. A failed upload never fails the job.
@@ -457,9 +465,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          aguara audit . --ci --project-policy ignore --no-color --no-update-check >aguara-audit.txt 2>&1
+          aguara audit . --ci --project-policy ignore --no-color --no-update-check >"$RUNNER_TEMP/aguara-audit.txt" 2>&1
           status=$?
-          cat aguara-audit.txt
+          cat "$RUNNER_TEMP/aguara-audit.txt"
           exit "$status"
 
       - name: Write job summary
@@ -469,9 +477,11 @@ jobs:
           {
             echo "## Aguara audit"
             echo
-            if [ -s aguara-audit.txt ]; then
+            if [ -s "$RUNNER_TEMP/aguara-audit.txt" ]; then
               echo "<pre>"
-              head -c 900000 aguara-audit.txt | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+              # Escaping can grow the text up to five times; the job
+              # summary is limited to 1 MiB.
+              head -c 200000 "$RUNNER_TEMP/aguara-audit.txt" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
               echo "</pre>"
             else
               echo "The audit did not run or wrote no report; see the job log."
