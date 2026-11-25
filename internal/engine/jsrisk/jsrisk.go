@@ -4930,19 +4930,28 @@ func newJSLexicalView(content []byte) jsLexicalView {
 }
 
 // jsLexer holds what the lexical passes over one file share: whether the
-// file is TypeScript, which enables the postfix non-null reading. A jsLexer
-// belongs to one Analyze call.
+// file is TypeScript, which enables the postfix non-null reading, and the
+// paren stack, reused from pass to pass so a file allocates it once. A
+// jsLexer belongs to one Analyze call; passes run one after another and
+// never nest, so the stack is never shared by two live passes.
 type jsLexer struct {
 	typescript bool
+	open32     []int32
+	open       []int
 }
 
 func (lx *jsLexer) context(buf []byte) *regexContext {
 	rc := newRegexContext(buf)
 	rc.typescript = lx.typescript
+	rc.open32, rc.open = lx.open32[:0], lx.open[:0]
 	return rc
 }
 
-func (lx *jsLexer) release(*regexContext) {}
+func (lx *jsLexer) release(rc *regexContext) {
+	if rc != nil {
+		lx.open32, lx.open = rc.open32[:0], rc.open[:0]
+	}
+}
 
 func (lx *jsLexer) strip(content []byte) []byte {
 	var rc *regexContext

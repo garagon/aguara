@@ -527,3 +527,25 @@ func TestBangAfterDefaultAndForAwaitKeepsRegexReading(t *testing.T) {
 		}
 	}
 }
+
+// The lexical passes over one file share one paren stack: once the first
+// pass has grown it, later passes reuse its backing array instead of
+// allocating their own.
+func TestLexerReusesParenStackAcrossPasses(t *testing.T) {
+	src := []byte(strings.Repeat("(", 4096) + ")/1\n")
+	lx := &jsLexer{}
+	lx.view(src)
+	if cap(lx.open32) < 4096 {
+		t.Fatalf("stack capacity after the first pass = %d, want at least 4096", cap(lx.open32))
+	}
+	first := &lx.open32[:1][0]
+	lx.view(src)
+	lx.interiors(src)
+	if &lx.open32[:1][0] != first {
+		t.Fatal("a later pass allocated a new paren stack")
+	}
+	allocs := testing.AllocsPerRun(5, func() { lx.interiors(src) })
+	if allocs > 4 {
+		t.Fatalf("a pass over a warmed lexer made %.0f allocations", allocs)
+	}
+}
