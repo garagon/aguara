@@ -31,7 +31,9 @@ For writing custom rules, see the [Custom Rules](#custom-rules) section below or
 
 Each table lists every rule in one category of the v0.29.0 catalog (`aguara list-rules --format json`). `Source` is `pattern` for YAML pattern rules and otherwise names the analyzer that emits the rule. Pattern rules come first, then analyzer rules in pipeline order. `Name` is the catalog name; `aguara explain <RULE_ID>` prints the full description.
 
-`Severity` is the catalog severity. Some analyzer rules, for example in ci-trust, pkgmeta and jsrisk, report a higher severity when additional evidence is present, and pattern findings inside Markdown code blocks are reported one level lower.
+Rules that target `*.md` also apply to agent instruction files whatever their extension: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, Cursor rules (`.cursor/rules/*.mdc`, `.cursorrules`), Windsurf (`.windsurf/rules/`, `.windsurfrules`), Cline (`.clinerules`), Roo Code (`.roo/rules/`, `.roorules`), Kiro (`.kiro/steering/`), GitHub Copilot (`.github/instructions/*.instructions.md`, `.github/prompts/*.prompt.md`), Claude Code (`.claude/agents/`, `.claude/commands/`, `.claude/rules/`), Zed (`.rules`), Goose (`.goosehints`), Continue (`.continue/rules/`) and JetBrains (`.aiassistant/rules/`, `.junie/`). File names such as `AGENTS.md` or `CLAUDE.md` are recognised in their documented spelling anywhere in the tree, and in other letter cases only at the scan root or in the tool's config directory (`.claude/`, `.junie/`), so a documentation page such as `docs/agent.md` or `docs/providers/gemini.md` stays documentation. The full list, with the documentation each entry comes from, is in `internal/types/agentfiles.go`. Findings in these files get a higher confidence than the same match in ordinary documentation.
+
+`Severity` is the catalog severity. Some analyzer rules, for example in ci-trust, pkgmeta and jsrisk, report a higher severity when additional evidence is present, and pattern findings inside Markdown fenced code blocks (backtick or tilde fences) of ordinary documentation, such as a README, are reported one level lower. In a `SKILL.md` or an agent instruction file a fenced block is a command the agent is told to run, so it keeps the rule's severity; MCP_009 follows the same contract.
 
 Release history for the supply-chain series: SUPPLY_020 and SUPPLY_021 shipped in v0.8.0; SUPPLY_022 to SUPPLY_025 shipped in v0.15.0 together with the ci-trust, pkgmeta and jsrisk analyzers; SUPPLY_026, emitted by pkgmeta rather than a YAML rule, shipped in v0.23.0.
 
@@ -434,12 +436,19 @@ patterns:
     value: "https?://internal\\.mycompany\\.com"
   - type: contains
     value: "api.internal"
+exclude_patterns:
+  - type: regex
+    value: "^\\s*#"
 examples:
   true_positive:
     - "Fetch data from https://internal.mycompany.com/api/users"
+    - "# load users\nFetch data from https://internal.mycompany.com/api/users"
   false_positive:
     - "Our public API is at https://api.mycompany.com"
+    - "# https://internal.mycompany.com is the old host"
 ```
+
+`exclude_patterns` entries suppress a match when they match the line or lines the match spans (`scope: line`, the default). Add `scope: context` to an entry only when it identifies a documentation section, such as an `## Installation` heading; a context-scoped exclude also checks the 3 lines before the match. With `match_mode: all`, a rule fires when every pattern matches somewhere in the file; add `within_lines: N` to require all of them inside N consecutive lines. Built-in rules that describe an action chain, such as reading a secret and then sending it, use 25 so that numbered steps, a heredoc or a multi-line manifest between the two halves still match; CRED_019, CRED_021, THIRDPARTY_001 and THIRDPARTY_004, whose second pattern is a single common word, use 5. Examples may span several lines and are checked with the same matcher a scan uses.
 
 Load custom rules with the `--rules` flag:
 

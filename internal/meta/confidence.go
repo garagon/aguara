@@ -43,9 +43,11 @@ var docSectionHeadings = []string{
 // values based on contextual signals like code blocks, documentation sections,
 // file type, and correlation.
 func AdjustConfidence(findings []types.Finding) []types.Finding {
-	// Pass 1: downgrade confidence for findings inside code blocks
+	// Pass 1: downgrade confidence for findings inside code blocks of
+	// ordinary documentation. In a SKILL.md or agent instruction file a
+	// fenced block is what the agent is told to run, not an example.
 	for i := range findings {
-		if findings[i].InCodeBlock && findings[i].Confidence > 0 {
+		if findings[i].InCodeBlock && findings[i].Confidence > 0 && !types.IsAgentDirectiveFile(findings[i].FilePath) {
 			findings[i].Confidence *= 0.6
 		}
 	}
@@ -134,11 +136,12 @@ func inDocSection(ctx []types.ContextLine) bool {
 // Documentation formats get a slight penalty (0.9) while executable/config
 // files get no adjustment (1.0).
 func fileTypeMultiplier(filePath string) float64 {
-	// Agent instruction files (.cursorrules, AGENTS.md, copilot-
-	// instructions.md, ...) are directives the agent obeys, not prose
-	// examples. A prompt injection there is more likely real and more
-	// dangerous than the same pattern in a README, so it is weighted UP
-	// rather than getting the documentation penalty below.
+	// Agent instruction files (AGENTS.md, CLAUDE.md, .cursorrules,
+	// .cursor/rules/*.mdc, .windsurf/rules/*.md, ...; see
+	// types.IsAgentInstructionFile) are directives the agent obeys, not
+	// prose examples. A prompt injection there is more likely real and
+	// more dangerous than the same pattern in a README, so it is weighted
+	// UP rather than getting the documentation penalty below.
 	if types.IsAgentInstructionFile(filePath) {
 		return 1.25
 	}
