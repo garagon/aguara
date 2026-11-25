@@ -304,14 +304,14 @@ func TestTerminalFormatterVerboseConfidence(t *testing.T) {
 	result := &types.ScanResult{
 		Findings: []types.Finding{
 			{
-				RuleID:     "C1",
-				RuleName:   "Critical Rule",
-				Severity:   types.SeverityCritical,
-				Category:   "test",
-				FilePath:   "a.md",
-				Line:       1,
+				RuleID:      "C1",
+				RuleName:    "Critical Rule",
+				Severity:    types.SeverityCritical,
+				Category:    "test",
+				FilePath:    "a.md",
+				Line:        1,
 				MatchedText: "bad",
-				Confidence: 0.85,
+				Confidence:  0.85,
 			},
 			{
 				RuleID:     "H1",
@@ -514,8 +514,11 @@ func TestSARIFFormatterEmpty(t *testing.T) {
 	require.Equal(t, "2.1.0", parsed["version"])
 	runs := parsed["runs"].([]any)
 	run := runs[0].(map[string]any)
-	// Results should be null/nil (no findings)
-	require.Nil(t, run["results"])
+	// An empty run still has arrays: the SARIF schema rejects null for
+	// results and rules.
+	require.Equal(t, []any{}, run["results"])
+	driver := run["tool"].(map[string]any)["driver"].(map[string]any)
+	require.Equal(t, []any{}, driver["rules"])
 }
 
 // TestSARIFFormatterRedactsSensitiveMatch covers the v0.16.1 audit P1: a
