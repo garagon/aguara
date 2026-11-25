@@ -325,11 +325,14 @@ func helperReferences(line string) []string {
 //   - a path followed by `:` and more text is a URL scheme or a host
 //     (`bash https://...`, `scp host:path`); a colon followed by a space or
 //     the end of the line is sentence punctuation and is accepted;
-//   - a path opened by a quote must close with the same quote right after
-//     it: `bash "scripts/my setup.sh"` names a file with a space, never
-//     `scripts/my`. A backtick before `./` opens a Markdown code span around
-//     the whole command (`./scripts/setup --force`) and is not an operand
-//     quote.
+//   - an interpreter operand opened by a quote must close with the same
+//     quote right after it: `bash "scripts/my setup.sh"` names a file with
+//     a space, never `scripts/my`;
+//   - a quote before a direct `./path` may instead wrap the whole command
+//     line (`"./scripts/setup.sh --force"`): the path is followed by a space
+//     and the quote closes later on the line. An unclosed quote never
+//     resolves. A backtick before `./` opens a Markdown code span around the
+//     whole command (`./scripts/setup --force`) and is accepted.
 //
 // direct reports a directHelperRe match, whose capture follows `./`.
 func standaloneReference(line string, start, end int, direct bool) bool {
@@ -345,7 +348,13 @@ func standaloneReference(line string, start, end int, direct bool) bool {
 	}
 	switch q := line[open]; q {
 	case '"', '\'':
-		return end < len(line) && line[end] == q
+		if end < len(line) && line[end] == q {
+			return true
+		}
+		// A quote before `./` that closes later on the line, after the path
+		// and a space, wraps a whole command line: `"./scripts/setup.sh --force"`.
+		return direct && end < len(line) && (line[end] == ' ' || line[end] == '\t') &&
+			strings.IndexByte(line[end+1:], q) >= 0
 	case '`':
 		if direct {
 			return true
