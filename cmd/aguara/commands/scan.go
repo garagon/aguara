@@ -322,6 +322,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		RulesLoaded: len(res.Compiled),
 		Target:      "(auto-discovered)",
 		ToolName:    flagToolName,
+		Suppressed:  &types.SuppressionSummary{},
 	}
 
 	start := time.Now()
@@ -338,6 +339,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		aggregate.FilesScanned += result.FilesScanned
 		aggregate.Verdict = max(aggregate.Verdict, result.Verdict)
 		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
+		aggregate.Suppressed.Add(result.Suppressed)
 		if len(result.TargetPolicy.InlineSuppressed) > 0 {
 			// Single-file scans report the base name; keep the full path.
 			aggregate.TargetPolicy.InlineSuppressed = append(aggregate.TargetPolicy.InlineSuppressed, path)

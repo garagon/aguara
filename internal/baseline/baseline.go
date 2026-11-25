@@ -17,14 +17,11 @@
 package baseline
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/garagon/aguara/internal/safefile"
@@ -46,7 +43,7 @@ const FingerprintKey = "aguara/v1"
 // baselineable, so a fingerprint is only ever computed from MatchedText
 // that is not redacted.
 func Baselineable(f types.Finding) bool {
-	return !f.Sensitive && f.Category != "credential-leak"
+	return types.Fingerprintable(f)
 }
 
 // Fingerprint is a stable, redaction-safe identifier for a finding.
@@ -63,29 +60,23 @@ type Fingerprint string
 // of the same rule in the same file distinct, so baselining one
 // occurrence does not silence a genuinely new one. Only call on
 // Baselineable findings.
+//
+// The algorithm lives in types.FindingFingerprint so the JSON `fingerprint`
+// field, SARIF partialFingerprints and baseline files share one value.
 func ComputeFingerprint(f types.Finding) Fingerprint {
-	h := sha256.New()
-	// NUL separators so field boundaries cannot be forged by content.
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s",
-		f.RuleID, f.Analyzer, slashPath(f.FilePath), normalizeSnippet(f.MatchedText))
-	return Fingerprint(hex.EncodeToString(h.Sum(nil)))
+	return Fingerprint(types.FindingFingerprint(f))
 }
 
-// slashPath normalizes path separators to forward slashes
-// unconditionally (filepath.ToSlash semantics, but cross-OS: it also
-// rewrites backslashes when run on a non-Windows host). This makes a
-// baseline written on Windows match a scan run on Linux/macOS CI for the
-// same logical file.
-func slashPath(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
-}
-
-// normalizeSnippet collapses runs of whitespace to a single space and
-// trims the ends, so cosmetic reindentation of a matched line does not
-// change the fingerprint.
-func normalizeSnippet(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
+// Baseline states recorded on findings when a baseline is applied.
+const (
+	// StateNew marks a baselineable finding the baseline does not contain.
+	StateNew = "new"
+	// StateBaselined marks a finding the baseline accepted; it does not gate.
+	StateBaselined = "baselined"
+	// StateNonBaselineable marks a finding that can never be baselined
+	// (Sensitive or credential-leak); it always gates.
+	StateNonBaselineable = "non_baselineable"
+)
 
 // Set is the collection of fingerprints loaded from a baseline file.
 type Set struct {
@@ -177,21 +168,29 @@ func Write(path string, findings []types.Finding, toolVersion string) (written, 
 // Baselineable findings whose fingerprint is in the set are suppressed
 // from the gate; non-baselineable findings always remain in the gate and
 // are counted separately so users understand they are never silenced.
+//
+// Apply also records each finding's BaselineState (StateNew,
+// StateBaselined or StateNonBaselineable) in findings itself, so the
+// report that still lists every finding says which ones the baseline
+// accepted.
 func Apply(findings []types.Finding, set *Set, path string) (gate []types.Finding, summary types.BaselineSummary) {
 	summary = types.BaselineSummary{Applied: true, Path: path, Total: len(findings)}
-	for _, f := range findings {
-		if !Baselineable(f) {
+	for i := range findings {
+		if !Baselineable(findings[i]) {
 			// Always reported; counted separately, never folded into New.
 			summary.NonBaselineable++
-			gate = append(gate, f)
+			findings[i].BaselineState = StateNonBaselineable
+			gate = append(gate, findings[i])
 			continue
 		}
-		if set.Contains(ComputeFingerprint(f)) {
+		if set.Contains(ComputeFingerprint(findings[i])) {
 			summary.Baselined++
+			findings[i].BaselineState = StateBaselined
 			continue
 		}
 		summary.New++
-		gate = append(gate, f)
+		findings[i].BaselineState = StateNew
+		gate = append(gate, findings[i])
 	}
 	// GateCount is everything that still counts toward the CI threshold:
 	// genuinely new baselineable findings plus the always-reported

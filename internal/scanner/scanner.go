@@ -279,6 +279,9 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	if result.Suppressed != nil {
+		result.Suppressed.ExcludedFiles = discovery.ExcludedByIgnoreFile + discovery.ExcludedByCallerPatterns
+	}
 	return result, nil
 }
 
@@ -313,6 +316,8 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		// suppressedBy records files whose inline directives removed
 		// findings, so callers can report that target policy applied.
 		suppressedBy = map[string]bool{}
+		// inlineSuppressed counts the findings those directives removed.
+		inlineSuppressed int
 	)
 	recordFailure := func(err error) {
 		mu.Lock()
@@ -375,6 +380,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 							if len(kept) < len(results) {
 								mu.Lock()
 								suppressedBy[target.RelPath] = true
+								inlineSuppressed += len(results) - len(kept)
 								mu.Unlock()
 							}
 							results = kept
@@ -417,7 +423,8 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	for i := range findings {
 		findings[i].DecisionImpact = rulemeta.DecisionImpactFor(findings[i].RuleID)
 	}
-	findings = s.postProcess(findings)
+	suppressed := &types.SuppressionSummary{InlineDirectives: inlineSuppressed}
+	findings = s.postProcess(findings, suppressed)
 
 	verdict := computeVerdict(findings)
 	if (s.scanProfile != ProfileStrict || len(s.profileEnforced) > 0) && len(findings) > 0 {
@@ -456,6 +463,7 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 		RiskScore:    riskScore,
 		ToolName:     s.toolName,
 		Duration:     time.Since(start),
+		Suppressed:   suppressed,
 		TargetPolicy: policy,
 	}, nil
 }
@@ -504,7 +512,8 @@ func (s *Scanner) applySeverityOverride(f *Finding) {
 }
 
 // postProcess deduplicates, scores, correlates, filters, and sorts findings.
-func (s *Scanner) postProcess(findings []Finding) []Finding {
+// It adds to sum the findings each filtering step removed.
+func (s *Scanner) postProcess(findings []Finding, sum *types.SuppressionSummary) []Finding {
 	if len(findings) == 0 {
 		return nil
 	}
@@ -514,6 +523,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 	// (GHA_*, TOXIC_*, RUGPULL_001, etc.) receive the same suppression the
 	// compiled rule list already gives pattern rules.
 	if len(s.disabledRules) > 0 {
+		before := len(findings)
 		kept := findings[:0]
 		for _, f := range findings {
 			if !s.disabledRules[strings.ToUpper(f.RuleID)] {
@@ -521,6 +531,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 			}
 		}
 		findings = kept
+		sum.DisabledRules += before - len(findings)
 		if len(findings) == 0 {
 			return nil
 		}
@@ -534,15 +545,20 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 
 	// Apply tool exemptions before dedup/scoring (removes definite false positives)
 	if s.toolName != "" {
+		before := len(findings)
 		findings = applyToolExemptions(s.toolName, findings, s.toolScopedRules)
+		sum.ToolExemptions += before - len(findings)
 	}
+	beforeDedup := len(findings)
 	findings = meta.DeduplicateWithMode(findings, s.deduplicateMode)
+	sum.Deduplicated += beforeDedup - len(findings)
 	findings = meta.ScoreFindings(findings)
 	groups := meta.Correlate(findings)
 	findings = flattenGroups(groups)
 	findings = meta.AdjustConfidence(findings)
 
 	if s.minSeverity > SeverityInfo {
+		before := len(findings)
 		var filtered []Finding
 		for _, f := range findings {
 			if f.Severity >= s.minSeverity {
@@ -550,6 +566,7 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 			}
 		}
 		findings = filtered
+		sum.BelowMinSeverity += before - len(findings)
 	}
 
 	// Dedup and correlation iterate maps, so the slice arrives in a

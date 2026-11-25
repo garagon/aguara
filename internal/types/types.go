@@ -5,6 +5,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -114,10 +115,73 @@ type Finding struct {
 	// "credential-leak" category (MCP_007, NLP_CRED_EXFIL_COMBO, TOXIC_*
 	// cred-bound) can still opt into redaction.
 	Sensitive bool `json:"sensitive,omitempty"`
+	// AlsoMatched lists the findings that full deduplication merged into
+	// this one because they were reported on the same file and line, in a
+	// deterministic order (severity, highest first, then rule ID). It names
+	// their rules only and never carries their matched text. Same-rule
+	// duplicates are not listed; ScanResult.Suppressed counts every merge.
+	AlsoMatched []MergedFinding `json:"also_matched,omitempty"`
+	// BaselineState is set when a baseline was applied to the result:
+	// "new", "baselined" or "non_baselineable".
+	BaselineState string `json:"baseline_state,omitempty"`
 
 	// Source ranges are scan-local redaction metadata, never serialized. A
 	// joined match can contain evidence from more than its displayed Line.
 	evidenceRanges []redactionRange
+}
+
+// MergedFinding identifies a finding that deduplication merged into the
+// reported finding on the same file and line.
+type MergedFinding struct {
+	RuleID   string   `json:"rule_id"`
+	Severity Severity `json:"severity"`
+	Category string   `json:"category"`
+}
+
+// MarshalJSON adds severity_label next to the numeric severity.
+func (m MergedFinding) MarshalJSON() ([]byte, error) {
+	type alias MergedFinding
+	return json.Marshal(struct {
+		alias
+		SeverityLabel string `json:"severity_label"`
+	}{alias(m), m.Severity.String()})
+}
+
+// MarshalJSON adds the output-only fields of the finding contract:
+// severity_label (the name of the numeric severity, which stays a number)
+// and fingerprint (the value baselines and SARIF partialFingerprints use,
+// omitted for findings that have none because their matched text is
+// redacted). Confidence and score are rounded here, at the output boundary,
+// so float noise from repeated multiplication (0.9900000000000001) does not
+// reach reports; the in-memory values are unchanged.
+func (f Finding) MarshalJSON() ([]byte, error) {
+	type alias Finding
+	a := alias(f)
+	a.Confidence = RoundConfidence(a.Confidence)
+	a.Score = RoundScore(a.Score)
+	fp := ""
+	if Fingerprintable(f) {
+		fp = FindingFingerprint(f)
+	}
+	return json.Marshal(struct {
+		alias
+		SeverityLabel string `json:"severity_label"`
+		Fingerprint   string `json:"fingerprint,omitempty"`
+	}{a, f.Severity.String(), fp})
+}
+
+// RoundConfidence rounds a 0-1 confidence to 4 decimal places for output.
+func RoundConfidence(v float64) float64 { return roundTo(v, 1e4) }
+
+// RoundScore rounds a 0-100 score or risk score to 2 decimal places for
+// output.
+func RoundScore(v float64) float64 { return roundTo(v, 1e2) }
+
+func roundTo(v, scale float64) float64 {
+	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	return math.Round(v*scale) / scale
 }
 
 // AddEvidenceRange records source lines contributing to MatchedText. Analyzers
@@ -344,9 +408,59 @@ type ScanResult struct {
 	// empty result is distinguishable from a clean one; it is omitted
 	// when nil, which keeps existing library results unchanged.
 	Coverage *ScanCoverage `json:"coverage,omitempty"`
+	// Suppressed counts what the scan evaluated but did not report as a
+	// separate finding, so a short report is distinguishable from one where
+	// filters removed findings. Set by the scanner.
+	Suppressed *SuppressionSummary `json:"suppressed,omitempty"`
 	// TargetPolicy records target-owned policy that shaped this result.
 	// It is empty unless target policy was enabled, and not serialized.
 	TargetPolicy TargetPolicyUse `json:"-"`
+}
+
+// SuppressionSummary counts findings that were matched but not reported on
+// their own, by the step that removed them, plus the files that project or
+// caller policy excluded from the scan. The finding counts are disjoint:
+// each removed finding is counted once, by the first step that removed it.
+type SuppressionSummary struct {
+	// Deduplicated counts findings merged into another finding reported
+	// on the same file and line (see Finding.AlsoMatched).
+	Deduplicated int `json:"deduplicated"`
+	// BelowMinSeverity counts findings under the minimum severity filter.
+	BelowMinSeverity int `json:"below_min_severity"`
+	// DisabledRules counts analyzer findings removed because their rule is
+	// disabled. Disabled pattern rules do not run, so they are not counted.
+	DisabledRules int `json:"disabled_rules"`
+	// ToolExemptions counts findings removed by built-in tool exemptions
+	// or tool-scoped rule overrides.
+	ToolExemptions int `json:"tool_exemptions"`
+	// InlineDirectives counts findings removed by aguara-ignore directives
+	// in the scanned files (applied only when project policy is trusted).
+	InlineDirectives int `json:"inline_directives"`
+	// ExcludedFiles counts files, not findings: entries excluded from the
+	// walk by .aguaraignore or the caller's ignore patterns.
+	ExcludedFiles int `json:"excluded_files"`
+}
+
+// Findings returns the number of findings the summary counts, excluding
+// ExcludedFiles, which counts files.
+func (s *SuppressionSummary) Findings() int {
+	if s == nil {
+		return 0
+	}
+	return s.Deduplicated + s.BelowMinSeverity + s.DisabledRules + s.ToolExemptions + s.InlineDirectives
+}
+
+// Add accumulates other into s, for callers that merge several results.
+func (s *SuppressionSummary) Add(other *SuppressionSummary) {
+	if s == nil || other == nil {
+		return
+	}
+	s.Deduplicated += other.Deduplicated
+	s.BelowMinSeverity += other.BelowMinSeverity
+	s.DisabledRules += other.DisabledRules
+	s.ToolExemptions += other.ToolExemptions
+	s.InlineDirectives += other.InlineDirectives
+	s.ExcludedFiles += other.ExcludedFiles
 }
 
 // TargetPolicyUse records which exclusion and suppression policy changed
@@ -383,17 +497,21 @@ type ScanCoverage struct {
 // scans. The normalization covers every ScanResult producer (the
 // Scanner, the CLI's aggregate runAutoScan, library callers that
 // construct results directly) without each one needing to remember
-// the contract.
+// the contract. It also adds verdict_label next to the numeric verdict
+// and rounds risk_score to 2 decimal places.
 func (r ScanResult) MarshalJSON() ([]byte, error) {
 	if r.Findings == nil {
 		r.Findings = []Finding{}
 	}
+	r.RiskScore = RoundScore(r.RiskScore)
 	type Alias ScanResult
 	return json.Marshal(struct {
 		Alias
-		DurationMS int64 `json:"duration_ms"`
+		VerdictLabel string `json:"verdict_label"`
+		DurationMS   int64  `json:"duration_ms"`
 	}{
-		Alias:      Alias(r),
-		DurationMS: r.Duration.Milliseconds(),
+		Alias:        Alias(r),
+		VerdictLabel: r.Verdict.String(),
+		DurationMS:   r.Duration.Milliseconds(),
 	})
 }

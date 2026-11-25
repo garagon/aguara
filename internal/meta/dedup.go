@@ -4,6 +4,7 @@ package meta
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/garagon/aguara/internal/types"
 )
@@ -29,6 +30,13 @@ func Deduplicate(findings []types.Finding) []types.Finding {
 // DecisionImpact also carries forward conservatively: if any finding in a
 // collapsed group independently requires review, the visible survivor remains
 // review-impact even when a context rule wins the severity/confidence tie.
+//
+// The survivor of a cross-rule merge (pass 2) lists the findings it absorbed
+// in AlsoMatched: rule ID, severity and category only, never matched text,
+// sorted by severity (highest first), then rule ID and category. Which
+// finding survives and every other field of the survivor are unchanged.
+// The number of findings removed is len(findings) minus the length of the
+// result.
 func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) []types.Finding {
 	// Pass 1: same-rule dedup
 	byRule := make(map[string]types.Finding)
@@ -40,10 +48,12 @@ func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) [
 			if f.Severity > existing.Severity {
 				f.Sensitive = carrySensitive
 				f.DecisionImpact = carryImpact
+				f.AlsoMatched = mergeAbsorbed(f, existing)
 				byRule[k] = f
 			} else {
 				existing.Sensitive = carrySensitive
 				existing.DecisionImpact = carryImpact
+				existing.AlsoMatched = mergeAbsorbed(existing, f)
 				byRule[k] = existing
 			}
 		} else {
@@ -71,10 +81,12 @@ func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) [
 				(f.Severity == existing.Severity && f.Confidence == existing.Confidence && f.RuleID < existing.RuleID) {
 				f.Sensitive = carrySensitive
 				f.DecisionImpact = carryImpact
+				f.AlsoMatched = mergeAbsorbed(f, existing)
 				byLine[k] = f
 			} else {
 				existing.Sensitive = carrySensitive
 				existing.DecisionImpact = carryImpact
+				existing.AlsoMatched = mergeAbsorbed(existing, f)
 				byLine[k] = existing
 			}
 		} else {
@@ -87,6 +99,39 @@ func DeduplicateWithMode(findings []types.Finding, mode types.DeduplicateMode) [
 		result = append(result, f)
 	}
 	return result
+}
+
+// mergeAbsorbed returns the AlsoMatched list of survivor after it absorbs
+// loser: both existing lists plus loser itself, without entries for the
+// survivor's own rule, deduplicated and in a deterministic order.
+func mergeAbsorbed(survivor, loser types.Finding) []types.MergedFinding {
+	all := make([]types.MergedFinding, 0, len(survivor.AlsoMatched)+len(loser.AlsoMatched)+1)
+	all = append(all, survivor.AlsoMatched...)
+	all = append(all, loser.AlsoMatched...)
+	all = append(all, types.MergedFinding{RuleID: loser.RuleID, Severity: loser.Severity, Category: loser.Category})
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Severity != all[j].Severity {
+			return all[i].Severity > all[j].Severity
+		}
+		if all[i].RuleID != all[j].RuleID {
+			return all[i].RuleID < all[j].RuleID
+		}
+		return all[i].Category < all[j].Category
+	})
+	out := all[:0]
+	for _, m := range all {
+		if m.RuleID == survivor.RuleID {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1] == m {
+			continue
+		}
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // mergeSensitive returns true if either finding in a dedup group carries the
