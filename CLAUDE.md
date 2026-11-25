@@ -115,12 +115,13 @@ After every file has been analyzed, the cross-file accumulator group set by `Reg
 
 Since v0.28.0, files in the scanned project cannot silently change what a security review sees unless the caller trusts them. Project-owned policy means `.aguara.yml`, `.aguaraignore` and inline `aguara-ignore` directives.
 
-- `scan` defaults to `--project-policy auto`: trusted for a local scan, ignored with `--ci` and with `--auto`.
+- `scan` defaults to `--project-policy auto`: trusted for a local scan, ignored with `--ci`, with `--auto` and when a CI environment is detected (`detectedCIVar`: `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, ...). In a detected CI environment without `--ci`, a `fail_on` in `.aguara.yml` still applies when `--fail-on` is not passed (a threshold can only add a gate), and one stderr notice names the variable, what was not applied and the applied `fail_on`.
+- A trusted run prints a stderr notice naming the project policy that changed the result (`noteProjectPolicy`): config keys that took effect (a `disable_rules` or `rule_overrides` file entry only when it passed validation and the caller's `--disable-rule` did not already cover it), an `.aguaraignore` that excluded something, files with inline suppressions.
 - `audit` ignores project policy by default (`--project-policy trust` opts in).
 - The GitHub Action passes `--project-policy ignore`.
 - The library ignores `.aguaraignore` and inline directives unless `WithTrustedTargetPolicy()` is set, and never reads `.aguara.yml`.
 
-When project policy is ignored, `.aguara.yml` is not loaded at all. Caller-supplied flags and options (`--disable-rule`, `--rules`, `WithIgnorePatterns`, ...) still apply.
+When project policy is ignored, `.aguara.yml` is not applied or validated (no unknown-key or rule-ID warnings); in a detected CI environment only its `fail_on` is read, and an invalid `fail_on` is an error. Caller-supplied flags and options (`--disable-rule`, `--rules`, `WithIgnorePatterns`, ...) still apply.
 
 ### Import Cycle Constraint
 
