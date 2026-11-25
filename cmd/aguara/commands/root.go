@@ -15,7 +15,7 @@ var (
 	flagFormat        string
 	flagOutput        string
 	flagWorkers       int
-	flagRules         string
+	flagRules         []string
 	flagNoColor       bool
 	flagDisableRules  []string
 	flagNoUpdateCheck bool
@@ -77,7 +77,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "terminal", "Output format (terminal, json, sarif, markdown)")
 	rootCmd.PersistentFlags().StringVarP(&flagOutput, "output", "o", "", "Output file path (default: stdout)")
 	rootCmd.PersistentFlags().IntVar(&flagWorkers, "workers", 0, "Number of worker goroutines (default: NumCPU)")
-	rootCmd.PersistentFlags().StringVar(&flagRules, "rules", "", "Additional rules directory")
+	// StringArray, not StringSlice: a directory path may contain a comma.
+	rootCmd.PersistentFlags().StringArrayVar(&flagRules, "rules", nil, "Additional rules directory (repeatable)")
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable colored output")
 	rootCmd.PersistentFlags().StringSliceVar(&flagDisableRules, "disable-rule", nil, "Rule IDs to disable (comma-separated, repeatable)")
 	rootCmd.PersistentFlags().BoolVar(&flagNoUpdateCheck, "no-update-check", false, "Disable update check")

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -19,7 +20,6 @@ import (
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
-	"github.com/garagon/aguara/internal/rules/builtin"
 	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/state"
 	"github.com/garagon/aguara/internal/types"
@@ -62,6 +62,23 @@ const (
 
 	DecisionImpactContext = types.DecisionImpactContext
 	DecisionImpactReview  = types.DecisionImpactReview
+)
+
+// Configuration problems. NewScanner, the package-level scan functions and
+// ListRulesE return a *ConfigError for invalid rule configuration; each
+// ConfigProblem names the kind, rule ID, source and a message.
+type (
+	ConfigError       = types.ConfigError
+	ConfigProblem     = types.ConfigProblem
+	ConfigProblemKind = types.ConfigProblemKind
+)
+
+const (
+	ConfigProblemInvalidRule         = types.ConfigProblemInvalidRule
+	ConfigProblemDuplicateRuleID     = types.ConfigProblemDuplicateRuleID
+	ConfigProblemUnknownRuleID       = types.ConfigProblemUnknownRuleID
+	ConfigProblemInvalidSeverity     = types.ConfigProblemInvalidSeverity
+	ConfigProblemConflictingOverride = types.ConfigProblemConflictingOverride
 )
 
 // Re-export discover types so consumers don't need a separate import.
@@ -156,7 +173,9 @@ func ScanContent(ctx context.Context, content string, filename string, opts ...O
 
 // ScanContentAs scans inline content with tool context for false-positive reduction.
 // toolName identifies the tool that generated the content (e.g. "Bash", "Edit", "WebFetch").
-// When provided, built-in tool exemptions and scan profiles can reduce false positives.
+// When provided, built-in tool exemptions and tool-scoped WithRuleOverrides
+// entries remove findings that are false positives for that tool (tool names
+// match case-insensitively).
 // Text detection uses NFKC normalization; npm manifest parsing retains original syntax.
 func ScanContentAs(ctx context.Context, content string, filename string, toolName string, opts ...Option) (*ScanResult, error) {
 	return scanContentInternal(ctx, content, filename, toolName, opts)
@@ -188,25 +207,6 @@ func scanContentInternal(ctx context.Context, content string, filename string, t
 	return result, nil
 }
 
-// catalogOverridesFromCfg projects the public RuleOverride map
-// onto the catalog's narrower Override shape. Tool-scoping fields
-// (ApplyToTools / ExemptTools) are not relevant to list-rules /
-// explain output, so the projection drops them; the scanner still
-// sees them via the existing rule-overrides pipeline.
-func catalogOverridesFromCfg(in map[string]RuleOverride) map[string]rulecatalog.Override {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]rulecatalog.Override, len(in))
-	for id, o := range in {
-		out[id] = rulecatalog.Override{
-			Severity: o.Severity,
-			Disabled: o.Disabled,
-		}
-	}
-	return out
-}
-
 // ListRules returns all available detection rules. Includes BOTH
 // YAML-driven pattern rules AND analyzer-emitted rules (ci-trust,
 // pkgmeta, jsrisk, nlp, toxicflow, rugpull), so a finding's
@@ -214,40 +214,70 @@ func catalogOverridesFromCfg(in map[string]RuleOverride) map[string]rulecatalog.
 // filters; WithDisabledRules and WithRuleOverrides drop / mutate
 // rules so a policy UI built on top of ListRules sees the same
 // set the scanner will consult.
+//
+// ListRules returns nil when the options are invalid (for example, a
+// custom rules directory that cannot be read or a custom rule that does
+// not compile). Use ListRulesE to get the reason.
 func ListRules(opts ...Option) []RuleInfo {
-	cfg := applyOpts(opts)
-	cat, err := rulecatalog.Build(rulecatalog.Options{
-		CustomRulesDir: cfg.customRulesDir,
-		Category:       cfg.category,
-		DisableRuleIDs: cfg.disabledRules,
-		Overrides:      catalogOverridesFromCfg(cfg.ruleOverrides),
-	})
+	infos, err := ListRulesE(opts...)
 	if err != nil {
 		return nil
 	}
+	return infos
+}
+
+// ListRulesE is ListRules with an error result. Invalid rule configuration
+// is reported as a *ConfigError (unless WithLenientConfig is set); a custom
+// rules directory that cannot be loaded is reported as an ordinary error.
+func ListRulesE(opts ...Option) ([]RuleInfo, error) {
+	cfg := applyOpts(opts)
+	res, err := resolveConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cat := res.Catalog(cfg.category)
 	infos := make([]RuleInfo, len(cat))
 	for i, r := range cat {
 		infos[i] = ruleInfoFromMetadata(r)
 	}
-	return infos
+	return infos, nil
 }
 
 // ExplainRule returns detailed information about a specific rule.
 // Resolves both YAML rules and analyzer-emitted rules (a finding
 // with RuleID "JS_DNS_TXT_EXFIL_001" or "GHA_PWN_REQUEST_001"
 // can be explained the same way as a pattern rule).
+//
+// Only WithCustomRules and WithLenientConfig affect the lookup. An unknown
+// ID returns an error matching errors.Is(err, ErrRuleNotFound). Problems
+// loading the custom rules are returned as such (a *ConfigError for a rule
+// that does not compile or reuses an ID), not reported as "not found".
 func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
-	id = strings.ToUpper(strings.TrimSpace(id))
+	id = rulecatalog.CanonicalID(id)
 	cfg := applyOpts(opts)
-	r, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: cfg.customRulesDir,
-	}, id)
+	res, err := resolveConfig(&scanConfig{
+		customRulesDirs: cfg.customRulesDirs,
+		lenientConfig:   cfg.lenientConfig,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("rule %q not found", id)
+		return nil, err
 	}
-
-	return ruleDetailFromMetadata(*r), nil
+	for _, r := range res.Catalog("") {
+		if strings.EqualFold(r.ID, id) {
+			return ruleDetailFromMetadata(r), nil
+		}
+	}
+	return nil, &ruleNotFoundError{id: id}
 }
+
+// ErrRuleNotFound is matched (with errors.Is) by the error ExplainRule and
+// Scanner.ExplainRule return for a rule ID that is not in the catalog.
+var ErrRuleNotFound = rulecatalog.ErrRuleNotFound
+
+type ruleNotFoundError struct{ id string }
+
+func (e *ruleNotFoundError) Error() string { return fmt.Sprintf("rule %q not found", e.id) }
+func (e *ruleNotFoundError) Unwrap() error { return ErrRuleNotFound }
 
 // Scanner holds a pre-compiled scanner that can be reused across scans.
 // Build once with NewScanner at startup, then call ScanContent/Scan for
@@ -255,59 +285,44 @@ func ExplainRule(id string, opts ...Option) (*RuleDetail, error) {
 // automatons are built once and shared, eliminating per-request overhead.
 // Thread-safe: multiple goroutines can call methods concurrently.
 type Scanner struct {
-	compiled   []*rules.CompiledRule
+	resolution *rulecatalog.Resolution
 	catalog    []rulemeta.Rule
-	toolScoped map[string]scanner.ToolScopedRule
 	matcher    *pattern.Matcher
 	cfg        *scanConfig
-}
-
-func compileOverrides(in map[string]RuleOverride) map[string]rules.RuleOverride {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]rules.RuleOverride, len(in))
-	for id, ovr := range in {
-		out[id] = rules.RuleOverride{
-			Severity: ovr.Severity, Disabled: ovr.Disabled,
-			ApplyToTools: ovr.ApplyToTools, ExemptTools: ovr.ExemptTools,
-		}
-	}
-	return out
 }
 
 // NewScanner creates a pre-compiled scanner with the given options. Reusable
 // scanners treat target-owned ignore policy as untrusted by default. Call once
 // at startup and reuse for all subsequent scans.
+//
+// Invalid rule configuration (a custom rule that does not compile or reuses
+// an existing rule ID, an unknown rule ID in WithDisabledRules or
+// WithRuleOverrides, an invalid override severity, conflicting tool scopes)
+// returns a *ConfigError listing every problem; use errors.As to read them.
+// WithLenientConfig skips such problems instead.
 func NewScanner(opts ...Option) (*Scanner, error) {
 	cfg := applyOpts(opts)
 	if cfg.targetPolicy == nil {
 		enabled := false
 		cfg.targetPolicy = &enabled
 	}
-	cr, err := loadAndCompile(cfg)
+	res, err := resolveConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	// Pattern overrides are already reflected in cr.compiled. Only carry
-	// the migrated rule's override into its analyzer catalog entry.
-	var migratedOverrides map[string]rulecatalog.Override
-	if override, ok := cfg.ruleOverrides["MCP_009"]; ok {
-		migratedOverrides = map[string]rulecatalog.Override{
-			"MCP_009": {Severity: override.Severity, Disabled: override.Disabled},
-		}
-	}
-	catalog := rulecatalog.FromCompiled(cr.compiled, rulecatalog.Options{
-		DisableRuleIDs: cfg.disabledRules,
-		Overrides:      migratedOverrides,
-	})
 	return &Scanner{
-		compiled:   cr.compiled,
-		catalog:    catalog,
-		toolScoped: cr.toolScopedRules,
-		matcher:    pattern.NewMatcher(cr.compiled),
+		resolution: res,
+		catalog:    res.Catalog(""),
+		matcher:    pattern.NewMatcher(res.Compiled),
 		cfg:        cfg,
 	}, nil
+}
+
+// ConfigProblems returns the configuration problems this scanner skipped
+// because WithLenientConfig was set. Without that option NewScanner fails on
+// any problem, so the result is empty.
+func (sc *Scanner) ConfigProblems() []ConfigProblem {
+	return append([]ConfigProblem(nil), sc.resolution.Problems...)
 }
 
 // ScanContent scans inline content using the pre-compiled scanner.
@@ -334,7 +349,7 @@ func (sc *Scanner) scanContent(ctx context.Context, content string, filename str
 	if err != nil {
 		return nil, err
 	}
-	result.RulesLoaded = len(sc.compiled)
+	result.RulesLoaded = len(sc.resolution.Compiled)
 	return result, nil
 }
 
@@ -359,7 +374,7 @@ func (sc *Scanner) Scan(ctx context.Context, path string) (*ScanResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	result.RulesLoaded = len(sc.compiled)
+	result.RulesLoaded = len(sc.resolution.Compiled)
 	return result, nil
 }
 
@@ -376,13 +391,13 @@ func (sc *Scanner) ListRules() []RuleInfo {
 // ExplainRule returns detailed information about a pattern or analyzer rule
 // active in this scanner.
 func (sc *Scanner) ExplainRule(id string) (*RuleDetail, error) {
-	id = strings.ToUpper(strings.TrimSpace(id))
+	id = rulecatalog.CanonicalID(id)
 	for _, r := range sc.catalog {
 		if strings.EqualFold(r.ID, id) {
 			return ruleDetailFromMetadata(r), nil
 		}
 	}
-	return nil, fmt.Errorf("rule %q not found", id)
+	return nil, &ruleNotFoundError{id: id}
 }
 
 func ruleInfoFromMetadata(r rulemeta.Rule) RuleInfo {
@@ -414,56 +429,67 @@ func ruleDetailFromMetadata(r rulemeta.Rule) *RuleDetail {
 
 // RulesLoaded returns the number of compiled rules in this scanner.
 func (sc *Scanner) RulesLoaded() int {
-	return len(sc.compiled)
+	return len(sc.resolution.Compiled)
 }
 
 // buildInternalScanner creates a lightweight scanner.Scanner reusing the
 // cached pattern matcher. NLP/ToxicFlow analyzers and the cross-file
 // accumulator are created fresh (they're stateless and cheap).
 func (sc *Scanner) buildInternalScanner(toolName string) (*scanner.Scanner, error) {
-	s := scanner.New(sc.cfg.workers)
-	s.SetMinSeverity(sc.cfg.minSeverity)
-	s.SetRedaction(sc.cfg.redact)
-	if sc.cfg.targetPolicy != nil {
-		s.SetProjectPolicyEnabled(*sc.cfg.targetPolicy)
-	}
-	if len(sc.cfg.ignorePatterns) > 0 {
-		s.SetIgnorePatterns(sc.cfg.ignorePatterns)
-	}
-	if sc.cfg.maxFileSize > 0 {
-		s.SetMaxFileSize(sc.cfg.maxFileSize)
-	}
 	tn := sc.cfg.toolName
 	if toolName != "" {
 		tn = toolName
 	}
-	if tn != "" {
-		s.SetToolName(tn)
+	return newPipeline(sc.cfg, sc.resolution, sc.matcher, tn)
+}
+
+// newPipeline wires a scanner.Scanner for one scan: the given pattern
+// matcher first, then the default analyzer set owned by internal/engine (so
+// the CLI and both library paths always register the same pipeline), then
+// rug-pull when a state directory is configured.
+func newPipeline(cfg *scanConfig, res *rulecatalog.Resolution, matcher *pattern.Matcher, toolName string) (*scanner.Scanner, error) {
+	s := scanner.New(cfg.workers)
+	s.SetMinSeverity(cfg.minSeverity)
+	s.SetRedaction(cfg.redact)
+	if cfg.targetPolicy != nil {
+		s.SetProjectPolicyEnabled(*cfg.targetPolicy)
 	}
-	if sc.cfg.scanProfile != ProfileStrict {
-		s.SetScanProfile(sc.cfg.scanProfile)
+	if len(cfg.ignorePatterns) > 0 {
+		s.SetIgnorePatterns(cfg.ignorePatterns)
 	}
-	if len(sc.toolScoped) > 0 {
-		s.SetToolScopedRules(sc.toolScoped)
+	if cfg.maxFileSize > 0 {
+		s.SetMaxFileSize(cfg.maxFileSize)
 	}
-	if len(sc.cfg.disabledRules) > 0 {
-		s.SetDisabledRules(sc.cfg.disabledRules)
+	if toolName != "" {
+		s.SetToolName(toolName)
 	}
-	if sc.cfg.deduplicateMode != 0 {
-		s.SetDeduplicateMode(sc.cfg.deduplicateMode)
+	if cfg.scanProfile != ProfileStrict {
+		s.SetScanProfile(cfg.scanProfile)
+	}
+	if len(res.Enforced) > 0 {
+		s.SetProfileEnforcedRules(res.Enforced)
+	}
+	if toolScoped := res.ToolScopedRules(); len(toolScoped) > 0 {
+		s.SetToolScopedRules(toolScoped)
+	}
+	if len(res.Disabled) > 0 {
+		s.SetDisabledRules(res.Disabled)
+	}
+	if severities := res.SeverityOverrides(); len(severities) > 0 {
+		s.SetSeverityOverrides(severities)
+	}
+	if cfg.deduplicateMode != 0 {
+		s.SetDeduplicateMode(cfg.deduplicateMode)
 	}
 
-	// Reuse pre-compiled pattern matcher (the expensive part: regex + AC automaton)
-	s.RegisterAnalyzer(sc.matcher)
-	// The default analyzer set (ci-trust, pkgmeta, jsrisk, pyrisk,
-	// rsbuild, pnpm-policy, NLP, toxicflow + the cross-file accumulator)
-	// is owned by internal/engine so the CLI and both library paths
-	// always register the same pipeline.
-	engine.RegisterDefaults(s, compileOverrides(sc.cfg.ruleOverrides))
+	// The matcher holds the expensive part (regex + Aho-Corasick automaton)
+	// and is safe to share across scans.
+	s.RegisterAnalyzer(matcher)
+	engine.RegisterDefaults(s, res.Overrides)
 
 	// Rug-pull: fresh state store per scan for thread safety
-	if sc.cfg.stateDir != "" {
-		statePath := filepath.Join(sc.cfg.stateDir, "state.json")
+	if cfg.stateDir != "" {
+		statePath := filepath.Join(cfg.stateDir, "state.json")
 		store := state.New(statePath)
 		if err := store.Load(); err != nil {
 			return nil, fmt.Errorf("loading state from %s: %w", statePath, err)
@@ -488,107 +514,68 @@ func applyOpts(opts []Option) *scanConfig {
 	return cfg
 }
 
-type compileResult struct {
-	compiled        []*rules.CompiledRule
-	toolScopedRules map[string]scanner.ToolScopedRule
-}
-
-// loadAndCompile loads built-in (and optionally custom) rules, compiles them,
-// and applies overrides/filters. Used by all public functions.
-func loadAndCompile(cfg *scanConfig) (*compileResult, error) {
-	rawRules, err := rules.LoadFromFS(builtin.FS())
+// resolveConfig loads and validates the rule configuration in cfg. Problems
+// are returned as a *ConfigError unless the caller opted into lenient
+// handling, in which case they stay readable on the resolution.
+func resolveConfig(cfg *scanConfig) (*rulecatalog.Resolution, error) {
+	res, err := rulecatalog.Resolve(cfg.ruleInput())
 	if err != nil {
-		return nil, fmt.Errorf("loading built-in rules: %w", err)
+		return nil, err
 	}
-
-	if cfg.customRulesDir != "" {
-		custom, err := rules.LoadFromDir(cfg.customRulesDir)
-		if err != nil {
-			return nil, fmt.Errorf("loading custom rules from %s: %w", cfg.customRulesDir, err)
-		}
-		rawRules = append(rawRules, custom...)
+	if len(res.Problems) > 0 && !cfg.lenientConfig {
+		return nil, &ConfigError{Problems: append([]ConfigProblem(nil), res.Problems...)}
 	}
-
-	compiled, compileErrs := rules.CompileAll(rawRules)
-	_ = compileErrs // non-fatal: invalid rules are skipped
-
-	var toolScoped map[string]scanner.ToolScopedRule
-	if len(cfg.ruleOverrides) > 0 {
-		overrides := compileOverrides(cfg.ruleOverrides)
-		compiled, _ = rules.ApplyOverrides(compiled, overrides)
-		// Collect tool-scoped overrides for runtime filtering
-		for id, ovr := range overrides {
-			if len(ovr.ApplyToTools) > 0 || len(ovr.ExemptTools) > 0 {
-				if toolScoped == nil {
-					toolScoped = make(map[string]scanner.ToolScopedRule)
-				}
-				toolScoped[id] = scanner.ToolScopedRule{
-					ApplyToTools: ovr.ApplyToTools,
-					ExemptTools:  ovr.ExemptTools,
-				}
-			}
-		}
-	}
-
-	if len(cfg.disabledRules) > 0 {
-		disabled := make(map[string]bool, len(cfg.disabledRules))
-		for _, id := range cfg.disabledRules {
-			disabled[strings.ToUpper(strings.TrimSpace(id))] = true
-		}
-		compiled = rules.FilterByIDs(compiled, disabled)
-	}
-
-	return &compileResult{compiled: compiled, toolScopedRules: toolScoped}, nil
+	return res, nil
 }
 
-// buildScanner creates a fully wired Scanner with all standard analyzers.
+// ruleInput describes the caller's rule options for validation. Overrides
+// are emitted in canonical-ID order, followed by the case-variant keys that
+// conflicted within one WithRuleOverrides map, so Resolve reports those
+// conflicts and keeps the earlier entry deterministically.
+func (c *scanConfig) ruleInput() rulecatalog.Input {
+	in := rulecatalog.Input{CustomRulesDirs: c.customRulesDirs}
+	for _, id := range c.disabledRules {
+		in.Disabled = append(in.Disabled, rulecatalog.Ref{ID: id, Source: "WithDisabledRules"})
+	}
+	for _, id := range c.profileEnforced {
+		in.Enforced = append(in.Enforced, rulecatalog.Ref{ID: id, Source: "WithProfileEnforcedRules"})
+	}
+	ids := make([]string, 0, len(c.ruleOverrides))
+	for id := range c.ruleOverrides {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	entries := make([]overrideEntry, 0, len(ids)+len(c.overrideConflicts))
+	for _, id := range ids {
+		entries = append(entries, c.ruleOverrides[id])
+	}
+	entries = append(entries, c.overrideConflicts...)
+	for _, entry := range entries {
+		ovr := entry.override
+		in.Overrides = append(in.Overrides, rulecatalog.OverrideRef{
+			ID:     entry.key,
+			Source: "WithRuleOverrides",
+			Override: rules.RuleOverride{
+				Severity:     ovr.Severity,
+				Disabled:     ovr.Disabled,
+				ApplyToTools: ovr.ApplyToTools,
+				ExemptTools:  ovr.ExemptTools,
+			},
+		})
+	}
+	return in
+}
+
+// buildScanner creates a fully wired Scanner for the package-level scan
+// functions.
 func buildScanner(cfg *scanConfig) (*scanner.Scanner, []*rules.CompiledRule, error) {
-	cr, err := loadAndCompile(cfg)
+	res, err := resolveConfig(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	s := scanner.New(cfg.workers)
-	s.SetMinSeverity(cfg.minSeverity)
-	s.SetRedaction(cfg.redact)
-	if cfg.targetPolicy != nil {
-		s.SetProjectPolicyEnabled(*cfg.targetPolicy)
+	s, err := newPipeline(cfg, res, pattern.NewMatcher(res.Compiled), cfg.toolName)
+	if err != nil {
+		return nil, nil, err
 	}
-	if len(cfg.ignorePatterns) > 0 {
-		s.SetIgnorePatterns(cfg.ignorePatterns)
-	}
-	if cfg.maxFileSize > 0 {
-		s.SetMaxFileSize(cfg.maxFileSize)
-	}
-	if cfg.toolName != "" {
-		s.SetToolName(cfg.toolName)
-	}
-	if cfg.scanProfile != ProfileStrict {
-		s.SetScanProfile(cfg.scanProfile)
-	}
-	if len(cr.toolScopedRules) > 0 {
-		s.SetToolScopedRules(cr.toolScopedRules)
-	}
-	if len(cfg.disabledRules) > 0 {
-		s.SetDisabledRules(cfg.disabledRules)
-	}
-	if cfg.deduplicateMode != 0 {
-		s.SetDeduplicateMode(cfg.deduplicateMode)
-	}
-
-	s.RegisterAnalyzer(pattern.NewMatcher(cr.compiled))
-	engine.RegisterDefaults(s, compileOverrides(cfg.ruleOverrides))
-
-	// Enable rug-pull detection when stateDir is provided
-	if cfg.stateDir != "" {
-		statePath := filepath.Join(cfg.stateDir, "state.json")
-		store := state.New(statePath)
-		if err := store.Load(); err != nil {
-			return nil, nil, fmt.Errorf("loading state from %s: %w", statePath, err)
-		}
-		s.RegisterAnalyzer(rugpull.New(store))
-		s.SetStateStore(store)
-	}
-
-	return s, cr.compiled, nil
+	return s, res.Compiled, nil
 }

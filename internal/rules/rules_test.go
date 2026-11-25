@@ -130,7 +130,7 @@ exclude_patterns:
     value: heading
     scope: context
 `), 0o600))
-	raws, err := rules.LoadFromDir(dir)
+	raws, _, err := rules.LoadFromDir(dir)
 	require.NoError(t, err)
 	compiled, errs := rules.CompileAll(raws)
 	require.Empty(t, errs)
@@ -148,7 +148,7 @@ patterns:
     value: x
     scope: context
 `), 0o600))
-	_, err = rules.LoadFromDir(dir)
+	_, _, err = rules.LoadFromDir(dir)
 	require.Error(t, err)
 }
 
@@ -187,7 +187,7 @@ patterns:
   - type: contains
     value: b
 `), 0o600))
-	raws, err := rules.LoadFromDir(dir)
+	raws, _, err := rules.LoadFromDir(dir)
 	require.NoError(t, err)
 	require.Equal(t, 4, raws[0].WithinLines)
 }

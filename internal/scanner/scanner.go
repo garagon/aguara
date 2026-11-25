@@ -38,8 +38,10 @@ type Scanner struct {
 	onProgress           func(current, total int)
 	toolName             string
 	scanProfile          ScanProfile
+	profileEnforced      map[string]bool
 	toolScopedRules      map[string]ToolScopedRule
 	disabledRules        map[string]bool
+	severityOverrides    map[string]Severity
 	deduplicateMode      DeduplicateMode
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
@@ -112,9 +114,36 @@ func (s *Scanner) SetScanProfile(profile ScanProfile) {
 	s.scanProfile = profile
 }
 
+// SetProfileEnforcedRules sets the rule IDs (case-insensitive) whose
+// findings block under every profile except ProfileMinimal, which flags
+// them, regardless of severity. The caller validates the IDs; see
+// applyProfile for the verdicts.
+func (s *Scanner) SetProfileEnforcedRules(ids []string) {
+	if len(ids) == 0 {
+		s.profileEnforced = nil
+		return
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.ToUpper(strings.TrimSpace(id)); id != "" {
+			m[id] = true
+		}
+	}
+	s.profileEnforced = m
+}
+
 // SetToolScopedRules sets per-rule tool filtering from user configuration.
+// Rule IDs are matched case-insensitively.
 func (s *Scanner) SetToolScopedRules(rules map[string]ToolScopedRule) {
-	s.toolScopedRules = rules
+	if len(rules) == 0 {
+		s.toolScopedRules = nil
+		return
+	}
+	normalized := make(map[string]ToolScopedRule, len(rules))
+	for id, scoped := range rules {
+		normalized[strings.ToUpper(strings.TrimSpace(id))] = scoped
+	}
+	s.toolScopedRules = normalized
 }
 
 // IsRuleDisabled reports the scanner-wide rule-ID filter to analyzers that
@@ -147,6 +176,27 @@ func (s *Scanner) SetDisabledRules(ids []string) {
 		return
 	}
 	s.disabledRules = m
+}
+
+// SetSeverityOverrides replaces the severity of every finding whose rule ID
+// (case-insensitive) has an entry, whichever analyzer emitted it. As with a
+// pattern rule's own severity, a finding inside a Markdown code block in
+// ordinary documentation is lowered one level from the override; in
+// SKILL.md and agent instruction files (types.IsAgentDirectiveFile) it keeps
+// the override's full severity. Overrides apply after the
+// disabled-rule filter and before tool exemptions, dedup, scoring and the
+// minimum-severity filter, so they behave exactly like a changed rule
+// severity.
+func (s *Scanner) SetSeverityOverrides(overrides map[string]Severity) {
+	if len(overrides) == 0 {
+		s.severityOverrides = nil
+		return
+	}
+	m := make(map[string]Severity, len(overrides))
+	for id, sev := range overrides {
+		m[strings.ToUpper(strings.TrimSpace(id))] = sev
+	}
+	s.severityOverrides = m
 }
 
 // SetDeduplicateMode sets how findings on the same line are deduplicated.
@@ -334,8 +384,8 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []*Target) (*ScanResu
 	findings = s.postProcess(findings)
 
 	verdict := computeVerdict(findings)
-	if s.scanProfile != ProfileStrict && len(findings) > 0 {
-		verdict = applyProfile(s.scanProfile, findings)
+	if (s.scanProfile != ProfileStrict || len(s.profileEnforced) > 0) && len(findings) > 0 {
+		verdict = applyProfile(s.scanProfile, findings, s.profileEnforced)
 	}
 
 	// Persist state (rug-pull hashes) if configured
@@ -390,6 +440,22 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 		}
 	}
 
+	if len(s.severityOverrides) > 0 {
+		for i := range findings {
+			sev, ok := s.severityOverrides[strings.ToUpper(findings[i].RuleID)]
+			if !ok {
+				continue
+			}
+			// Same contract as the pattern matcher: only ordinary
+			// documentation lowers a fenced finding; in SKILL.md and agent
+			// instruction files the fenced block is what the agent runs.
+			if findings[i].InCodeBlock && !types.IsAgentDirectiveFile(findings[i].FilePath) {
+				sev = types.DowngradeSeverity(sev)
+			}
+			findings[i].Severity = sev
+		}
+	}
+
 	// Apply tool exemptions before dedup/scoring (removes definite false positives)
 	if s.toolName != "" {
 		findings = applyToolExemptions(s.toolName, findings, s.toolScopedRules)
@@ -410,17 +476,51 @@ func (s *Scanner) postProcess(findings []Finding) []Finding {
 		findings = filtered
 	}
 
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Severity != findings[j].Severity {
-			return findings[i].Severity > findings[j].Severity
-		}
-		if findings[i].FilePath != findings[j].FilePath {
-			return findings[i].FilePath < findings[j].FilePath
-		}
-		return findings[i].Line < findings[j].Line
-	})
+	// Dedup and correlation iterate maps, so the slice arrives in a
+	// different order on every run. The comparator is a total order on
+	// post-dedup findings, which makes the result independent of that
+	// order (and of worker scheduling).
+	SortFindings(findings)
 
 	return findings
+}
+
+// SortFindings orders findings the way every scan result is ordered: by
+// severity (highest first), then file, line, column, rule ID and analyzer.
+// Callers that merge several results (such as scan --auto) use it to keep
+// the same order.
+func SortFindings(findings []Finding) {
+	sort.SliceStable(findings, func(i, j int) bool {
+		return findingLess(findings[i], findings[j])
+	})
+}
+
+// findingLess orders findings by severity (highest first), then file, line,
+// column, rule ID and analyzer. The remaining fields only break ties between
+// findings that dedup would normally have merged.
+func findingLess(a, b Finding) bool {
+	if a.Severity != b.Severity {
+		return a.Severity > b.Severity
+	}
+	if a.FilePath != b.FilePath {
+		return a.FilePath < b.FilePath
+	}
+	if a.Line != b.Line {
+		return a.Line < b.Line
+	}
+	if a.Column != b.Column {
+		return a.Column < b.Column
+	}
+	if a.RuleID != b.RuleID {
+		return a.RuleID < b.RuleID
+	}
+	if a.Analyzer != b.Analyzer {
+		return a.Analyzer < b.Analyzer
+	}
+	if a.MatchedText != b.MatchedText {
+		return a.MatchedText < b.MatchedText
+	}
+	return a.RuleName < b.RuleName
 }
 
 func flattenGroups(groups []meta.CorrelationGroup) []Finding {

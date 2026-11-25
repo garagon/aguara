@@ -2,11 +2,13 @@ package rulecatalog_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/rules"
+	"github.com/garagon/aguara/internal/scanner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -199,7 +201,7 @@ func TestFindByIDBuildErrorDistinctFromNotFound(t *testing.T) {
 	// explain.go's mapping (which only maps ErrRuleNotFound)
 	// surfaces the real error.
 	_, err := rulecatalog.FindByID(rulecatalog.Options{
-		CustomRulesDir: "/definitely/not/a/real/dir/" + t.Name(),
+		CustomRulesDirs: []string{"/definitely/not/a/real/dir/" + t.Name()},
 	}, "PROMPT_INJECTION_001")
 	require.Error(t, err)
 	require.False(t, errors.Is(err, rulecatalog.ErrRuleNotFound),
@@ -266,14 +268,13 @@ func TestAnalyzerMetadataMatchesEmittedSeverityAndCategory(t *testing.T) {
 	}
 }
 
-func TestBuildOverridesDisableAndSeverityYAMLOnly(t *testing.T) {
+func TestBuildOverridesDisableAndSeverityAllRules(t *testing.T) {
 	// Catalog-level test for the override path the aguara public
-	// API wires to. The scanner's rules.ApplyOverrides only
-	// operates on YAML compiled rules, so the catalog mirrors
-	// that contract: Overrides DROP / REMAP YAML rules but DO
-	// NOT touch analyzer rules. A divergence would mean a policy
-	// UI built on ListRules disagrees with what the scanner
-	// emits for analyzer findings.
+	// API wires to. The scanner applies overrides to pattern and
+	// analyzer findings alike, so the catalog does too: Overrides
+	// DROP / REMAP both kinds of rule. A divergence would mean a
+	// policy UI built on ListRules disagrees with what the scanner
+	// emits.
 
 	// YAML rule -- Disabled drops it from the listing.
 	disabled, err := rulecatalog.Build(rulecatalog.Options{
@@ -303,27 +304,59 @@ func TestBuildOverridesDisableAndSeverityYAMLOnly(t *testing.T) {
 	}
 	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must upper-case + apply to YAML rules")
 
-	// Analyzer rule -- Disabled is IGNORED. The scanner does not
-	// apply RuleOverrides to analyzer findings, so the catalog
-	// must not pretend it does. Users who want to suppress an
-	// analyzer rule should use WithDisabledRules instead.
-	notDropped, err := rulecatalog.Build(rulecatalog.Options{
+	// Analyzer rule -- Disabled drops it, like a YAML rule.
+	dropped, err := rulecatalog.Build(rulecatalog.Options{
 		Overrides: map[string]rulecatalog.Override{
 			"JS_DNS_TXT_EXFIL_001": {Disabled: true},
 		},
 	})
 	require.NoError(t, err)
-	var found bool
-	for _, r := range notDropped {
+	for _, r := range dropped {
+		require.NotEqual(t, "JS_DNS_TXT_EXFIL_001", r.ID,
+			"Overrides{Disabled:true} must drop analyzer rules")
+	}
+
+	// Analyzer rule -- Severity is remapped, like a YAML rule.
+	analyzerRemapped, err := rulecatalog.Build(rulecatalog.Options{
+		Overrides: map[string]rulecatalog.Override{
+			"js_dns_txt_exfil_001": {Severity: "low"},
+		},
+	})
+	require.NoError(t, err)
+	got = ""
+	for _, r := range analyzerRemapped {
 		if r.ID == "JS_DNS_TXT_EXFIL_001" {
-			found = true
-			require.Equal(t, "HIGH", r.Severity,
-				"analyzer rule severity must NOT be touched by Overrides; scanner does not apply them to analyzer findings")
+			got = r.Severity
 			break
 		}
 	}
-	require.True(t, found,
-		"analyzer rule must survive Overrides{Disabled:true}; the scanner does not honour overrides for analyzer findings, so the catalog must not either")
+	require.Equal(t, "LOW", got, "Overrides{Severity: ...} must apply to analyzer rules")
+}
+
+// TestBuiltinRuleTablesReferenceCatalogRules fails when a built-in table
+// that drives scanner behaviour names a rule ID the built-in catalog does
+// not contain. Such an entry never matches a finding, so it silently does
+// nothing; the scan profiles once depended on IDs from a consumer's own rule
+// pack in exactly this way and reported CRITICAL findings as clean. Add any
+// new built-in rule table (exemptions, profile lists, ...) here.
+func TestBuiltinRuleTablesReferenceCatalogRules(t *testing.T) {
+	cat, err := rulecatalog.Build(rulecatalog.Options{})
+	require.NoError(t, err)
+	ids := make(map[string]bool, len(cat))
+	for _, r := range cat {
+		ids[r.ID] = true
+	}
+	tables := map[string][]string{}
+	for id := range scanner.BuiltinToolExemptions {
+		tables["scanner.BuiltinToolExemptions"] = append(tables["scanner.BuiltinToolExemptions"], id)
+	}
+	require.NotEmpty(t, tables["scanner.BuiltinToolExemptions"])
+	for table, refs := range tables {
+		for _, id := range refs {
+			require.Truef(t, ids[id], "%s names %q, which is not in the built-in catalog", table, id)
+			require.Equalf(t, strings.ToUpper(id), id, "%s key %q must be upper-case; lookups use canonical IDs", table, id)
+		}
+	}
 }
 
 func TestEveryAnalyzerEmittedIDHasCatalogEntry(t *testing.T) {

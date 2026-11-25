@@ -8,8 +8,9 @@ Kubernetes container paths, not proven escalation or host access. Privilege
 commands remain under SUPPLY_007; MCP_009 broad grants are unchanged. Aliases,
 templates and ambiguous structures keep legacy matching rather than receiving
 this classification. Disabling the new ID hides the observation without bringing
-back a SUPPLY_007 finding for the same declaration. Like other new analyzer rules,
-it supports `--disable-rule`, not the legacy YAML severity-override mechanism.
+back a SUPPLY_007 finding for the same declaration. Like every rule, it can be
+disabled with `--disable-rule` and changed through `rule_overrides` severity and
+`disabled` settings.
 
 MCP_009 uses the `mcp-capability` parser to distinguish broad grants from
 capability drops and denies. It reads literal scalar/list values and
@@ -18,8 +19,9 @@ Markdown fenced examples. Explicit privilege requests in prose remain covered.
 It does not resolve YAML aliases or merge keys, ambiguous duplicate fields, or
 arbitrary configuration fragments embedded in prose. Inputs requiring this
 analysis are bounded to 2 MiB and a 100,000-node traversal budget; exceeding a
-budget reports an analyzer error, not a clean result. MCP_009 retains its
-severity/disable override support despite moving out of the pattern catalog.
+budget reports an analyzer error, not a clean result. Like every rule, pattern
+or analyzer-emitted, MCP_009 accepts `rule_overrides` severity and `disabled`
+settings.
 
 Use `aguara list-rules` to list all rules from the CLI, or `aguara explain <RULE_ID>` for details on a specific rule.
 
@@ -455,5 +457,10 @@ Load custom rules with the `--rules` flag:
 ```bash
 aguara scan .claude/skills/ --rules ./my-rules/
 ```
+
+Repeat `--rules` to load several directories (`--rules ./team-rules/ --rules ./my-rules/`).
+The directory may be a symbolic link. Inside it, symlinked rule files are read
+from their target; symlinked subdirectories are not followed and are reported
+as a configuration problem.
 
 See the [Contributing Guide](CONTRIBUTING.md) for more details on rule structure and testing.

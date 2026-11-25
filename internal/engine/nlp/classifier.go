@@ -103,6 +103,22 @@ var categoryKeywords = map[InstructionCategory][]weightedKeyword{
 	},
 }
 
+// categoryOrder fixes the iteration order over categoryKeywords. Map
+// iteration is randomized, which made Classify pick a different winner on
+// every run when two categories tied on score. With a fixed order the
+// earliest category in this list wins a tie.
+var categoryOrder = []InstructionCategory{
+	CategoryFileSystemRead,
+	CategoryFileSystemWrite,
+	CategoryNetworkRequest,
+	CategoryCredentialAccess,
+	CategoryProcessExecution,
+	CategoryDataTransmission,
+	CategoryInstructionOverride,
+	CategoryRoleSwitching,
+	CategorySecrecyRequest,
+}
+
 // ClassifyResult holds the classification output for a text.
 type ClassifyResult struct {
 	Category InstructionCategory
@@ -120,8 +136,8 @@ func Classify(text string) ClassifyResult {
 	var bestCat InstructionCategory
 	var bestScore float64
 
-	for cat, keywords := range categoryKeywords {
-		rawScore, hitPositions := scoreCategory(lower, keywords)
+	for _, cat := range categoryOrder {
+		rawScore, hitPositions := scoreCategory(lower, categoryKeywords[cat])
 		if rawScore == 0 {
 			continue
 		}
@@ -136,7 +152,7 @@ func Classify(text string) ClassifyResult {
 	return ClassifyResult{Category: bestCat, Score: bestScore}
 }
 
-// ClassifyAll returns all categories with non-zero scores.
+// ClassifyAll returns all categories with non-zero scores, in categoryOrder.
 // Applies the same proximity weighting as Classify.
 func ClassifyAll(text string) []ClassifyResult {
 	lower := strings.ToLower(text)
@@ -145,8 +161,8 @@ func ClassifyAll(text string) []ClassifyResult {
 
 	var results []ClassifyResult
 
-	for cat, keywords := range categoryKeywords {
-		rawScore, hitPositions := scoreCategory(lower, keywords)
+	for _, cat := range categoryOrder {
+		rawScore, hitPositions := scoreCategory(lower, categoryKeywords[cat])
 		if rawScore == 0 {
 			continue
 		}
