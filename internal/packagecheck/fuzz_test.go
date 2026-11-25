@@ -235,6 +235,61 @@ func checkPythonRefs(t *testing.T, source string, refs []PackageRef) {
 	}
 }
 
+// FuzzParseDependencyManifests runs every dependency-manifest reader on
+// the same input: they only decide whether a manifest declares
+// dependencies and which exact pins it has, so one target covers them
+// all within the nightly budget. Each must not panic, and every pin must
+// carry an ecosystem, a name and a version.
+func FuzzParseDependencyManifests(f *testing.F) {
+	for _, s := range []string{
+		`{"dependencies":{"left-pad":"1.3.0","a":"npm:b@2.0.0"},"workspaces":["p/*"]}`,
+		`{"require":{"php":">=8","vendor/pkg":"v1.2.3"},"require-dev":{"x/y":"1.0.0@beta"}}`,
+		"[project]\ndependencies = [\"flask==3.0.0\"]\n[tool.poetry.dependencies]\na = \"1.0\"\n[tool.uv.workspace]\nmembers = [\"x\"]\n",
+		"[packages]\nflask = \"==3.0.0\"\nb = { version = \"===1.0\" }\n",
+		"[workspace]\n[dependencies]\nserde = \"=1.0.0\"\n[dependencies.x]\nversion = \"=2.0.0\"\n",
+		"setup(install_requires=['a'])\n",
+		"[options]\ninstall_requires =\n    flask==3.0.0\n",
+		"gem \"rails\", \"7.1.3\"\ngemspec\n",
+		"dependencies:\n  - numpy\n  - pip:\n    - flask==3.0.0\n",
+		"a: &a [*a]\n",
+	} {
+		f.Add([]byte(s))
+	}
+	readers := []struct {
+		name  string
+		parse func([]byte) (manifestInfo, error)
+	}{
+		{"package.json", parsePackageJSONManifest},
+		{"composer.json", parseComposerManifest},
+		{"pyproject.toml", parsePyprojectManifest},
+		{"Pipfile", parsePipfileManifest},
+		{"Cargo.toml", parseCargoManifest},
+		{"setup.py", parseSetupPyManifest},
+		{"setup.cfg", parseSetupCfgManifest},
+		{"Gemfile", parseGemfileManifest},
+		{"environment.yml", func(data []byte) (manifestInfo, error) {
+			info, _, err := parseCondaEnvironment(data)
+			return info, err
+		}},
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, r := range readers {
+			info, err := r.parse(data)
+			if err != nil {
+				continue
+			}
+			if len(info.pins) > info.deps {
+				t.Errorf("%s: %d pins for %d dependencies", r.name, len(info.pins), info.deps)
+			}
+			for _, p := range info.pins {
+				if p.Ecosystem == "" || p.Name == "" || p.Version == "" {
+					t.Errorf("%s: incomplete pin %+v", r.name, p)
+				}
+			}
+		}
+	})
+}
+
 func FuzzParseNuGet(f *testing.F) {
 	fuzzLockfile(f, intel.EcosystemNuGet, "packages.lock.json", ParseNuGet,
 		`{"version":1,"dependencies":{"net8.0":{"Newtonsoft.Json":{"type":"Direct","resolved":"13.0.1"}}}}`,

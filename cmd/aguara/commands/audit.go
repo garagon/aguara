@@ -603,7 +603,30 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 		// No dependency files at all keeps the package side as before.
 		return
 	}
-	files := unsupportedEvidenceNames(cov.UnsupportedEvidence, result.Target)
+	_, _, manifests := splitUnsupported(cov.UnsupportedEvidence)
+	if len(manifests) > 0 {
+		// A manifest that declares dependencies without an evaluated
+		// lockfile: whatever an install resolves was never checked.
+		names := unsupportedEvidenceNames(manifests, result.Target)
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "manifest_without_lockfile",
+			Severity: "warning",
+			Message:  "These manifests declare dependencies, but no lockfile for their ecosystem was evaluated, so an install would resolve versions this audit did not check: " + names + ".",
+		})
+		escalateForCoverage(t,
+			"Dependency manifests have no evaluated lockfile, so the audit cannot clear dependency installation.",
+			"Generate or commit a lockfile for "+names+", then run the audit again.")
+	}
+	var others []packagecheck.UnsupportedEvidence
+	for _, u := range cov.UnsupportedEvidence {
+		if !u.IsManifest() {
+			others = append(others, u)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	files := unsupportedEvidenceNames(others, result.Target)
 	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
 	summary := "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
 	if cov.Evaluated() {
@@ -678,13 +701,15 @@ func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (messa
 }
 
 // auditCoverageIncomplete reports whether triage raised a coverage reason:
-// nothing was scanned, some dependency files could not be evaluated, or
-// some entries are not pinned to one version.
+// nothing was scanned, some dependency files could not be evaluated, some
+// entries are not pinned to one version, or a manifest has no evaluated
+// lockfile.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
 		hasTriageReason(t.Reasons, "partial_dependency_coverage") ||
-		hasTriageReason(t.Reasons, "unpinned_dependency_evidence")
+		hasTriageReason(t.Reasons, "unpinned_dependency_evidence") ||
+		hasTriageReason(t.Reasons, "manifest_without_lockfile")
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {

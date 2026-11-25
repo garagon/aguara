@@ -37,15 +37,34 @@ type EvidenceSummary struct {
 	Unpinned int `json:"unpinned,omitempty"`
 }
 
-// UnsupportedEvidence is one dependency file Aguara recognizes by name
-// but does not parse.
+// UnsupportedEvidence is one dependency file whose packages the check did
+// not evaluate: a format Aguara does not parse, an ecosystem it has no
+// intelligence for, a requirements file under a name it does not read,
+// or a manifest that declares dependencies without an evaluated lockfile.
 type UnsupportedEvidence struct {
 	// Path is the file as discovery saw it (joined to the checked root).
 	Path string `json:"path"`
-	// Kind names the file format, e.g. "deno.lock" or "requirements.txt".
+	// Kind names the file format, e.g. "deno.lock", "requirements.txt"
+	// or "package.json".
 	Kind string `json:"kind"`
 	// Ecosystem is the package ecosystem the file describes.
 	Ecosystem string `json:"ecosystem"`
+	// Reason says why the file was not evaluated: one of the Reason*
+	// constants (format_not_parsed, no_package_intelligence,
+	// requirements_name_not_read, manifest_without_lockfile).
+	Reason string `json:"reason,omitempty"`
+	// NestedManifests counts, for a workspace root, the manifests below it
+	// that a lockfile at the root would cover (its members and any other
+	// project below it); they are not listed separately. Omitted when zero.
+	NestedManifests int `json:"nested_manifests,omitempty"`
+	// ExactPinsChecked counts the entries of the file (and of its
+	// workspace members) that pin one exact registry version, which were
+	// matched against exact-version intelligence. The rest of the file
+	// was not evaluated. Omitted when zero.
+	ExactPinsChecked int `json:"exact_pins_checked,omitempty"`
+
+	// pins are the exact pins MatchPins checks.
+	pins []PackageRef
 }
 
 // NoIntel reports whether Aguara has no malicious-package intelligence
@@ -54,6 +73,44 @@ type UnsupportedEvidence struct {
 // format.
 func (u UnsupportedEvidence) NoIntel() bool {
 	return u.Ecosystem != "" && intel.CanonicaliseEcosystem(u.Ecosystem) == ""
+}
+
+// PinCount is the number of exact pins MatchPins would check for the entry.
+func (u UnsupportedEvidence) PinCount() int { return len(u.pins) }
+
+// MatchPins matches the exact pins of the listed entries against the
+// matcher's exact-version and all-versions intelligence and returns the
+// hits, one per (file, line, package, version), with each entry's
+// ExactPinsChecked set. Only what a pin names is checked; everything else
+// in those files stays unevaluated.
+func MatchPins(m *intel.Matcher, entries []UnsupportedEvidence) []Hit {
+	hits := []Hit{}
+	if m == nil {
+		return hits
+	}
+	seen := map[hitKey]bool{}
+	for i := range entries {
+		entries[i].ExactPinsChecked = len(entries[i].pins)
+		for _, ref := range entries[i].pins {
+			key := hitKey{name: ref.Ecosystem + "\x00" + ref.Name, version: ref.Version, path: ref.Path, line: ref.Line}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			matches := m.MatchPackage(intel.MatchInput{
+				Ecosystem:         ref.Ecosystem,
+				Name:              ref.Name,
+				Version:           ref.Version,
+				Path:              ref.Path,
+				ArbitraryEquality: ref.ArbitraryEquality,
+			})
+			if len(matches) == 0 {
+				continue
+			}
+			hits = append(hits, Hit{Ref: ref, Record: matches[0].Record, AdvisoryIDs: advisoryIDs(matches)})
+		}
+	}
+	return hits
 }
 
 // MarshalJSON keeps every array as `[]` rather than `null` when empty.

@@ -260,6 +260,13 @@ type checkPlan struct {
 	// in the coverage block so an unread lockfile cannot pass as a
 	// clean check. Scoped to the requested ecosystems when explicit.
 	unsupported []packagecheck.UnsupportedEvidence
+	// manifests are the dependency manifests found under the root
+	// (package.json, pyproject.toml, Cargo.toml, ...). Those that declare
+	// dependencies no lockfile covers are added to the coverage block.
+	manifests []packagecheck.Manifest
+	// discoveryRoot is the directory the unsupported and manifest walk
+	// started from; lockfile coverage stops there.
+	discoveryRoot string
 }
 
 // intelEcosystems returns the OSV bucket IDs the plan needs intel
@@ -655,16 +662,19 @@ func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan
 }
 
 // discoverUnsupported records dependency files under root that no parser
-// reads. Explicit --ecosystem plans only report those ecosystems.
+// reads, and the dependency manifests there. Explicit --ecosystem plans
+// only report those ecosystems.
 func (p *checkPlan) discoverUnsupported(root string, ecosystems []string) error {
 	if !statDir(root) {
 		return nil
 	}
-	found, err := packagecheck.DiscoverUnsupported(root, ecosystems)
+	found, err := packagecheck.DiscoverUnevaluated(root, ecosystems)
 	if err != nil {
 		return fmt.Errorf("check: discover %s: %w", root, err)
 	}
-	p.unsupported = found
+	p.unsupported = found.Unsupported
+	p.manifests = found.Manifests
+	p.discoveryRoot = root
 	return nil
 }
 
@@ -886,7 +896,46 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		result = mergeCheckResults(parts, plan.rootPath)
 	}
 	result.Coverage = checkCoverage(plan, result, run)
+	// Files listed as not evaluated can still pin exact versions: a
+	// package.json without a lockfile that pins a compromised release
+	// installs it. Those pins are matched; the rest of the file stays
+	// unevaluated.
+	pins := 0
+	for _, u := range result.Coverage.UnsupportedEvidence {
+		pins += u.PinCount()
+	}
+	if pins > 0 {
+		for _, hit := range packagecheck.MatchPins(incident.MatcherForOverride(override), result.Coverage.UnsupportedEvidence) {
+			result.Findings = append(result.Findings, pinFinding(hit))
+		}
+	}
 	return result, nil
+}
+
+// pinFinding reports an exact pin in a file that was not otherwise
+// evaluated (a manifest without a lockfile, a requirements file under a
+// name discovery does not read) that matches malicious-package
+// intelligence.
+func pinFinding(hit packagecheck.Hit) incident.Finding {
+	ecoToken := osvIDToEcoToken[hit.Ref.Ecosystem]
+	switch hit.Ref.Ecosystem {
+	case intel.EcosystemNPM:
+		ecoToken = ecoNPM
+	case intel.EcosystemPyPI:
+		ecoToken = ecoPythonLock
+	}
+	title, _ := ecosystemFindingText(ecoToken, hit)
+	remediation := fmt.Sprintf("Remove or change the %s pin in %s so no affected release is selected, without installing the compromised version, then generate a lockfile and check again. Rotate credentials reachable from environments and CI runs that installed it.",
+		hit.Ref.Name, filepath.Base(hit.Ref.Path))
+	return incident.Finding{
+		Severity:    incident.SevCritical,
+		Title:       title,
+		Detail:      hit.Record.Summary,
+		Path:        hit.Ref.Path,
+		Line:        hit.Ref.Line,
+		Remediation: remediation,
+		AdvisoryIDs: hit.AdvisoryIDs,
+	}
 }
 
 // runPackagecheckPlan runs the packagecheck Runner against every

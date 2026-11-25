@@ -59,6 +59,10 @@ func checkCoverage(plan checkPlan, result *incident.CheckResult, run *packageche
 			unsupported = append(unsupported, u)
 		}
 	}
+	// Manifests that declare dependencies no lockfile covers: an install
+	// would resolve versions the check never saw.
+	locks := packagecheck.CoveringLockfiles(plan.packagecheckTargets, unsupported)
+	unsupported = append(unsupported, packagecheck.ManifestsWithoutLockfile(plan.discoveryRoot, plan.manifests, locks)...)
 	includes := []packagecheck.UnresolvedInclude{}
 	if run != nil {
 		includes = append(includes, run.UnresolvedIncludes...)
@@ -97,13 +101,19 @@ func noPackageFindingsLine(st output.Style, c *packagecheck.Coverage) string {
 	case c == nil || c.Evaluated():
 		return st.OK("No known-compromised packages or persistence artifacts found.")
 	case len(c.UnsupportedEvidence) > 0:
-		unparsed, noIntel := splitUnsupported(c.UnsupportedEvidence)
-		msg := "No packages were checked: the dependency files found are in formats Aguara cannot parse or ecosystems it has no package intelligence for."
+		unparsed, noIntel, manifests := splitUnsupported(c.UnsupportedEvidence)
+		var msg string
 		switch {
+		case len(unparsed) == 0 && len(noIntel) == 0:
+			msg = "No resolved versions were checked: the dependency manifests found have no lockfile, so an install would resolve versions nothing checked."
+		case len(manifests) > 0:
+			msg = "No resolved versions were checked: the dependency files found are manifests without a lockfile, formats Aguara cannot parse, or ecosystems it has no package intelligence for."
 		case len(noIntel) == 0:
 			msg = "No packages were checked: every dependency file found is in a format Aguara cannot parse."
 		case len(unparsed) == 0:
 			msg = "No packages were checked: Aguara has no package intelligence for the ecosystems of the dependency files found."
+		default:
+			msg = "No packages were checked: the dependency files found are in formats Aguara cannot parse or ecosystems it has no package intelligence for."
 		}
 		return st.SeverityIcon("MEDIUM") + " " + st.Yellow(msg)
 	default:
@@ -129,16 +139,43 @@ func noExactVersions(c *packagecheck.Coverage) bool {
 }
 
 // splitUnsupported separates files Aguara cannot parse from files of
-// ecosystems it has no package intelligence for.
-func splitUnsupported(evidence []packagecheck.UnsupportedEvidence) (unparsed, noIntel []packagecheck.UnsupportedEvidence) {
+// ecosystems it has no package intelligence for and from manifests that
+// have no evaluated lockfile.
+func splitUnsupported(evidence []packagecheck.UnsupportedEvidence) (unparsed, noIntel, manifests []packagecheck.UnsupportedEvidence) {
 	for _, u := range evidence {
-		if u.NoIntel() {
+		switch {
+		case u.IsManifest():
+			manifests = append(manifests, u)
+		case u.NoIntel():
 			noIntel = append(noIntel, u)
-		} else {
+		default:
 			unparsed = append(unparsed, u)
 		}
 	}
-	return unparsed, noIntel
+	return unparsed, noIntel, manifests
+}
+
+// pinsChecked sums the exact pins matched in evidence.
+func pinsChecked(evidence []packagecheck.UnsupportedEvidence) int {
+	n := 0
+	for _, u := range evidence {
+		n += u.ExactPinsChecked
+	}
+	return n
+}
+
+// pinsNote is the terminal suffix for exact pins checked in files that
+// were otherwise not evaluated.
+func pinsNote(evidence []packagecheck.UnsupportedEvidence) string {
+	n := pinsChecked(evidence)
+	if n == 0 {
+		return ""
+	}
+	where := "in them"
+	if len(evidence) == 1 {
+		where = "in it"
+	}
+	return fmt.Sprintf("; %d exact %s %s %s checked", n, plural(n, "pin", "pins"), where, plural(n, "was", "were"))
 }
 
 // noIntelEcosystems lists the distinct ecosystems of evidence, in order.
@@ -177,21 +214,25 @@ func packageCoverageLine(c *packagecheck.Coverage) string {
 
 // unsupportedEvidenceLines lists dependency files that were found but not
 // evaluated, relative to root when possible: one line for formats Aguara
-// cannot parse and one for ecosystems it has no package intelligence
-// for. Empty when there are none.
+// cannot parse, one for ecosystems it has no package intelligence for,
+// and one for manifests without a lockfile. Empty when there are none.
 func unsupportedEvidenceLines(c *packagecheck.Coverage, root string) []string {
 	if c == nil || len(c.UnsupportedEvidence) == 0 {
 		return nil
 	}
-	unparsed, noIntel := splitUnsupported(c.UnsupportedEvidence)
+	unparsed, noIntel, manifests := splitUnsupported(c.UnsupportedEvidence)
 	var lines []string
 	if len(unparsed) > 0 {
-		lines = append(lines, fmt.Sprintf("Not evaluated: %s (dependency %s Aguara cannot parse; no packages in %s were checked)",
-			listedPaths(unparsed, root), plural(len(unparsed), "file", "files"), plural(len(unparsed), "it", "them")))
+		lines = append(lines, fmt.Sprintf("Not evaluated: %s (dependency %s Aguara cannot parse; no packages in %s were checked%s)",
+			listedPaths(unparsed, root), plural(len(unparsed), "file", "files"), plural(len(unparsed), "it", "them"), pinsNote(unparsed)))
 	}
 	if len(noIntel) > 0 {
-		lines = append(lines, fmt.Sprintf("Not evaluated: %s (Aguara has no package intelligence for %s; no packages in %s were checked)",
-			listedPaths(noIntel, root), output.TerminalText(noIntelEcosystems(noIntel)), plural(len(noIntel), "it", "them")))
+		lines = append(lines, fmt.Sprintf("Not evaluated: %s (Aguara has no package intelligence for %s; no packages in %s were checked%s)",
+			listedPaths(noIntel, root), output.TerminalText(noIntelEcosystems(noIntel)), plural(len(noIntel), "it", "them"), pinsNote(noIntel)))
+	}
+	if len(manifests) > 0 {
+		lines = append(lines, fmt.Sprintf("Not evaluated: %s (dependency %s without a lockfile; the versions an install would resolve were not checked%s)",
+			listedPaths(manifests, root), plural(len(manifests), "manifest", "manifests"), pinsNote(manifests)))
 	}
 	return lines
 }
@@ -223,7 +264,12 @@ func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root 
 			break
 		}
 		name := displayPath(root, u.Path)
-		if u.NoIntel() {
+		switch {
+		case u.IsManifest() && u.NestedManifests > 0:
+			name += fmt.Sprintf(" (%s workspace root, %d more %s below it)", u.Ecosystem, u.NestedManifests, plural(u.NestedManifests, "manifest", "manifests"))
+		case u.IsManifest():
+			name += " (" + u.Ecosystem + ")"
+		case u.NoIntel():
 			name += " (Aguara has no package intelligence for " + u.Ecosystem + ")"
 		}
 		names = append(names, name)

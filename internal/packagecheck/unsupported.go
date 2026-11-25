@@ -26,6 +26,18 @@ func (f unsupportedFormat) matches(path string) bool {
 	return ok
 }
 
+// reason is the coverage reason an entry of this format carries.
+func (f unsupportedFormat) reason() string {
+	switch {
+	case f.Ecosystem == intel.EcosystemPyPI:
+		return ReasonRequirementsNameNotRead
+	case intel.CanonicaliseEcosystem(f.Ecosystem) == "":
+		return ReasonNoPackageIntelligence
+	default:
+		return ReasonFormatNotParsed
+	}
+}
+
 // unsupportedFormats is the single list of dependency files that are
 // reported as found-but-not-evaluated. These files pin (or commonly pin)
 // the packages a project installs, so a check that skips them must say
@@ -37,18 +49,23 @@ func (f unsupportedFormat) matches(path string) bool {
 // whose path discovery returned as a parsed target, so a file is never
 // reported as both read and unsupported.
 //
-// Manifests without resolved versions (package.json without a lockfile,
-// pyproject.toml, Pipfile, requirements.in, setup.py, Cargo.toml,
-// Gemfile, composer.json) are not listed: they do not pin what an
-// install resolves. Neither is a conda environment.yml: the name is
-// common outside conda, and its conda-channel packages have no
-// intelligence here.
+// Manifests without resolved versions (package.json, pyproject.toml,
+// Pipfile, requirements.in, setup.py, setup.cfg, Cargo.toml, Gemfile,
+// composer.json) and conda environment files are handled by
+// manifestSpecs: they are listed only when they declare dependencies
+// that no lockfile covers.
 var unsupportedFormats = []unsupportedFormat{
 	// PyPI: pip requirements files that discovery does not pick up by
 	// name (it reads requirements*.txt and constraints*.txt). They are
-	// reported only when no read requirements file includes them.
-	{Pattern: "*-requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
-	{Pattern: "*_requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	// reported only when they parse as pip requirements and name a
+	// requirement or an include, and no read requirements file includes
+	// them. The content check keeps prose and word lists that fail pip's
+	// grammar out; names such as prereqs.txt are not patterns here.
+	{Pattern: "*requirements*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "reqs*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "*-reqs*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "*_reqs*.txt", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
+	{Pattern: "*.pip", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
 	{Pattern: "*.txt", Dir: "requirements", Kind: "requirements.txt", Ecosystem: intel.EcosystemPyPI},
 	// npm
 	{Pattern: "npm-shrinkwrap.json", Kind: "npm-shrinkwrap.json", Ecosystem: intel.EcosystemNPM},
@@ -65,6 +82,13 @@ var unsupportedFormats = []unsupportedFormat{
 	{Pattern: "mix.lock", Kind: "mix.lock", Ecosystem: "Hex"},
 }
 
+// Unevaluated is what a discovery walk found besides the files it reads:
+// dependency files in formats it does not read, and dependency manifests.
+type Unevaluated struct {
+	Unsupported []UnsupportedEvidence
+	Manifests   []Manifest
+}
+
 // DiscoverUnsupported walks root like Discover and returns the
 // dependency files listed in unsupportedFormats. When ecosystems is
 // non-empty only those ecosystems are reported. It skips exactly the
@@ -73,7 +97,19 @@ var unsupportedFormats = []unsupportedFormat{
 // installed tree. A directory is never skipped for a marker file it
 // contains: a planted pyvenv.cfg must not hide the files beside it.
 func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidence, error) {
-	out := []UnsupportedEvidence{}
+	found, err := DiscoverUnevaluated(root, ecosystems)
+	if err != nil {
+		return nil, err
+	}
+	return found.Unsupported, nil
+}
+
+// DiscoverUnevaluated is DiscoverUnsupported plus the dependency manifests
+// under root (see manifestSpecs), found in the same walk. Manifests are
+// read with bounded, non-executing parsers; whether a lockfile covers them
+// is decided by ManifestsWithoutLockfile.
+func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) {
+	out := Unevaluated{Unsupported: []UnsupportedEvidence{}, Manifests: []Manifest{}}
 	if hasNodeModulesAncestor(root) || isPythonInstallRoot(root) {
 		return out, nil
 	}
@@ -81,6 +117,7 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 	for _, eco := range ecosystems {
 		want[eco] = true
 	}
+	parsed := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Same policy as Discover: an unreadable nested directory
@@ -96,6 +133,10 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 			}
 			return nil
 		}
+		if m, ok := readManifestAt(path, want, &parsed); ok {
+			out.Manifests = append(out.Manifests, m)
+			return nil
+		}
 		for _, f := range unsupportedFormats {
 			if len(want) > 0 && !want[f.Ecosystem] {
 				continue
@@ -103,39 +144,59 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 			if !f.matches(path) {
 				continue
 			}
-			if f.Ecosystem == intel.EcosystemPyPI && (isRequirementsSource(d.Name()) || !namesRequirements(path)) {
-				// Discovery reads it by name, or it is not a pip
-				// requirements file that names anything to install.
-				break
+			entry := UnsupportedEvidence{Path: path, Kind: f.Kind, Ecosystem: f.Ecosystem, Reason: f.reason()}
+			if f.Ecosystem == intel.EcosystemPyPI {
+				if isRequirementsSource(d.Name()) {
+					// Discovery reads it by name.
+					break
+				}
+				pins, ok := namesRequirements(path)
+				if !ok {
+					// Not a pip requirements file that names anything
+					// to install.
+					break
+				}
+				entry.pins = pins
 			}
-			out = append(out, UnsupportedEvidence{Path: path, Kind: f.Kind, Ecosystem: f.Ecosystem})
+			out.Unsupported = append(out.Unsupported, entry)
 			break
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return Unevaluated{}, err
 	}
 	return out, nil
 }
 
 // namesRequirements reports whether path parses as a pip requirements
 // file and names at least one requirement (pinned or a range) or
-// include. A range-only file is reported too: read by name, the same
-// content would make the audit review its unpinned entries, so the file
-// name must not decide the outcome. A .txt that is prose fails to parse
-// and is not reported.
-func namesRequirements(path string) bool {
+// include, and returns its exact pins. A range-only file is reported too:
+// read by name, the same content would make the audit review its
+// unpinned entries, so the file name must not decide the outcome. A .txt
+// that is prose fails to parse and is not reported.
+func namesRequirements(path string) ([]PackageRef, bool) {
 	file, err := parseRequirementsFile(path)
 	if err != nil {
-		return false
+		return nil, false
 	}
+	names := false
+	var pins []PackageRef
 	for _, item := range file.items {
-		if item.include != "" || item.ref != nil {
-			return true
+		if item.include != "" {
+			names = true
+		}
+		if item.ref == nil {
+			continue
+		}
+		names = true
+		if item.ref.Version != "" && !item.ref.Unpinned && len(pins) < maxManifestEntries {
+			pin := *item.ref
+			pin.Path, pin.Source = path, filepath.Base(path)
+			pins = append(pins, pin)
 		}
 	}
-	return false
+	return pins, names
 }
 
 // isPythonInstallRoot reports a root that is itself an installed-package

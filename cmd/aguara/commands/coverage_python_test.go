@@ -21,15 +21,39 @@ func unsupportedRelPaths(t *testing.T, dir string, result *AuditResult) []string
 
 // A pip requirements file under a name discovery does not read is
 // reported as unsupported evidence, so the audit asks for review instead
-// of proceeding on a malicious pin it never checked.
+// of proceeding on versions it never checked as a project's own.
 func TestAuditReportsUnreadPythonRequirementsNames(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"dev-requirements.txt", "test_requirements.txt", "requirements/dev.txt"} {
+	for _, name := range []string{"dev-requirements.txt", "test_requirements.txt", "requirements/dev.txt",
+		"dev-reqs.txt", "reqs.txt", "test_reqs.txt", "requirements.pip", "requirements/base.pip"} {
+		t.Run(name, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{name: "flask==3.0.0\npytest>=7\n"})
+			result := auditToFile(t, dir)
+			require.Equal(t, []string{name}, unsupportedRelPaths(t, dir, result))
+			require.Equal(t, "requirements_name_not_read", result.Coverage.UnsupportedEvidence[0].Reason)
+			require.Equal(t, 1, result.Coverage.UnsupportedEvidence[0].ExactPinsChecked)
+			require.Equal(t, "review", result.Triage.Decision)
+			requireTriageReason(t, result.Triage, "dependency_evidence_not_evaluated")
+			require.False(t, result.Plan.CanInstallDependencies)
+			require.Equal(t, "pass", result.Verdict.Status)
+		})
+	}
+}
+
+// An exact pin in such a file is matched against intelligence: a
+// compromised release it pins is a finding, not only a review.
+func TestAuditMatchesPinsInUnreadPythonRequirementsNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"dev-requirements.txt", "dev-reqs.txt", "requirements.pip"} {
 		t.Run(name, func(t *testing.T) {
 			dir := projectWith(t, map[string]string{name: "litellm==1.82.7\n"})
 			result := auditToFile(t, dir)
 			require.Equal(t, []string{name}, unsupportedRelPaths(t, dir, result))
-			require.Equal(t, "review", result.Triage.Decision)
+			require.Equal(t, "stop", result.Triage.Decision)
+			require.Equal(t, 1, result.Verdict.CheckCriticals)
+			require.Len(t, result.Check.Findings, 1)
+			require.Equal(t, filepath.Join(dir, filepath.FromSlash(name)), result.Check.Findings[0].Path)
+			require.Equal(t, 1, result.Check.Findings[0].Line)
 			requireTriageReason(t, result.Triage, "dependency_evidence_not_evaluated")
 			require.False(t, result.Plan.CanInstallDependencies)
 		})
@@ -80,7 +104,7 @@ func TestUnincludedRequirementsDirFileIsPartialCoverage(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := projectWith(t, map[string]string{
 		"requirements.txt":     "flask==3.0.0\n",
-		"requirements/dev.txt": "litellm==1.82.7\n",
+		"requirements/dev.txt": "pytest==8.2.0\n",
 	})
 	result := auditToFile(t, dir)
 	require.Equal(t, []string{"requirements/dev.txt"}, unsupportedRelPaths(t, dir, result))
