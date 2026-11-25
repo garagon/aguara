@@ -107,8 +107,9 @@ func (a *Analyzer) ObserveFindings(relPath string, findings []types.Finding) {
 // behaviorAnalyzers are the per-file analyzers that report what helper code
 // does (a bound flow, a payload shape, a persistence write) rather than
 // which capability it uses. Their HIGH findings are chain evidence; a HIGH
-// pattern finding is not, because ordinary helpers trip capability rules
-// (a test runner through a child process, a sudo chmod in an installer).
+// pattern finding in a capability category is not, because ordinary helpers
+// trip capability rules (a test runner started through a child process, a
+// privileged permission change in an installer).
 var behaviorAnalyzers = map[string]bool{
 	rulemeta.AnalyzerJSRisk:     true,
 	rulemeta.AnalyzerPyRisk:     true,
@@ -116,26 +117,38 @@ var behaviorAnalyzers = map[string]bool{
 	rulemeta.AnalyzerScriptRisk: true,
 }
 
+// Catalog categories the predicate reads (see `aguara list-rules`).
+const (
+	categoryCredentialLeak   = "credential-leak"
+	categoryExfiltration     = "exfiltration"
+	categorySupplyChainExfil = "supply-chain-exfil"
+)
+
 // isChainEvidence decides whether one helper finding makes a mandatory
 // helper a hidden high-risk behavior:
-//   - a sensitive or credential-leak finding never is: it reports exposed
-//     material, not behavior, and it is the class teams most often baseline;
+//   - a credential-leak finding never is: it reports material present in the
+//     file, not something the helper does;
 //   - a CRITICAL finding from any analyzer is;
-//   - a HIGH finding is only when a behavior analyzer reported it.
+//   - a HIGH finding is when a behavior analyzer reported it, or when it is an
+//     exfiltration or supply-chain-exfil finding from any analyzer;
+//   - nothing else is.
 //
-// The correlator's own findings are never evidence.
+// Findings flagged Sensitive (their matched text is redacted) count like any
+// other: the chain keeps only the rule ID, severity and line, never matched
+// text. The correlator's own findings are never evidence.
 func isChainEvidence(f types.Finding) bool {
 	if f.RuleID == "" || f.RuleID == RuleForcedHelperRisk || f.Analyzer == AnalyzerName {
 		return false
 	}
-	if f.Sensitive || f.Category == "credential-leak" {
+	if f.Category == categoryCredentialLeak {
 		return false
 	}
 	switch {
 	case f.Severity >= types.SeverityCritical:
 		return true
 	case f.Severity == types.SeverityHigh:
-		return behaviorAnalyzers[f.Analyzer]
+		return behaviorAnalyzers[f.Analyzer] ||
+			f.Category == categoryExfiltration || f.Category == categorySupplyChainExfil
 	default:
 		return false
 	}
