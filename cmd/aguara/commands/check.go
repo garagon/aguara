@@ -998,8 +998,14 @@ func mergeCheckResults(parts []*incident.CheckResult, rootPath string) *incident
 // remediation) pair for a Hit. The wording stays close to the
 // ecosystem's native tooling so the user can copy-paste the
 // remediation into their package manager without translation.
+//
+// The title names every advisory that matched, the same IDs the finding's
+// advisory_ids array lists.
 func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remediation string) {
 	name, version, id := hit.Ref.Name, hit.Ref.Version, hit.Record.ID
+	if len(hit.AdvisoryIDs) > 0 {
+		id = strings.Join(hit.AdvisoryIDs, ", ")
+	}
 	switch ecoToken {
 	case ecoPythonLock:
 		return pythonLockFindingText(hit)
