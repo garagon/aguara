@@ -103,9 +103,9 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 			if !f.matches(path) {
 				continue
 			}
-			if f.Ecosystem == intel.EcosystemPyPI && (isRequirementsSource(d.Name()) || !pinsRequirements(path)) {
+			if f.Ecosystem == intel.EcosystemPyPI && (isRequirementsSource(d.Name()) || !namesRequirements(path)) {
 				// Discovery reads it by name, or it is not a pip
-				// requirements file that pins anything.
+				// requirements file that names anything to install.
 				break
 			}
 			out = append(out, UnsupportedEvidence{Path: path, Kind: f.Kind, Ecosystem: f.Ecosystem})
@@ -119,17 +119,19 @@ func DiscoverUnsupported(root string, ecosystems []string) ([]UnsupportedEvidenc
 	return out, nil
 }
 
-// pinsRequirements reports whether path parses as a pip requirements
-// file and pins at least one exact version or includes another file.
-// Those are dependency evidence an install would use; a .txt that is
-// prose, or a list of ranges like a manifest, is not reported.
-func pinsRequirements(path string) bool {
+// namesRequirements reports whether path parses as a pip requirements
+// file and names at least one requirement (pinned or a range) or
+// include. A range-only file is reported too: read by name, the same
+// content would make the audit review its unpinned entries, so the file
+// name must not decide the outcome. A .txt that is prose fails to parse
+// and is not reported.
+func namesRequirements(path string) bool {
 	file, err := parseRequirementsFile(path)
 	if err != nil {
 		return false
 	}
 	for _, item := range file.items {
-		if item.include != "" || (item.ref != nil && !item.ref.Unpinned) {
+		if item.include != "" || item.ref != nil {
 			return true
 		}
 	}

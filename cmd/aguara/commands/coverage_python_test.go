@@ -36,6 +36,24 @@ func TestAuditReportsUnreadPythonRequirementsNames(t *testing.T) {
 	}
 }
 
+// The file name must not decide the outcome: the same range-only content
+// reviews whether discovery reads the file by name (requirements-dev.txt,
+// unpinned entries) or not (dev-requirements.txt, unsupported evidence).
+func TestRangeOnlyPipFileReviewsWhateverItsName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for name, reason := range map[string]string{
+		"requirements-dev.txt": "unpinned_dependency_evidence",
+		"dev-requirements.txt": "dependency_evidence_not_evaluated",
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, map[string]string{name: "pytest>=7\n"}))
+			require.Equal(t, "review", result.Triage.Decision)
+			requireTriageReason(t, result.Triage, reason)
+			require.False(t, result.Plan.CanInstallDependencies)
+		})
+	}
+}
+
 // A requirements file that is read through an include from a discovered
 // requirements.txt was evaluated: it is not unsupported evidence, and a
 // malicious pin in it is a finding.

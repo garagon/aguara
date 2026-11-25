@@ -94,9 +94,11 @@ func TestDiscoverUnsupportedSkipsInstalledRoots(t *testing.T) {
 }
 
 // Discovery reads requirements*.txt and constraints*.txt by name. pip
-// files under other names pin dependencies just the same, so they are
-// reported when they pin a version or include another file; prose .txt
-// files and range-only lists (like manifests) are not.
+// files under other names install dependencies just the same, so they
+// are reported when they name a requirement (pinned or a range) or an
+// include: the file name must not decide the outcome. Prose .txt files
+// fail to parse and are not reported, and neither are empty or
+// comment-only files, nor pip files under other patterns.
 func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
@@ -104,8 +106,11 @@ func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 		"services/api/test_requirements.txt": "coverage==7.5.1\n",
 		"requirements/dev.txt":               "black==24.4.2\n",
 		"requirements/prod.txt":              "-r base.txt\n",
-		"requirements/notes.txt":             "Install the tools listed below before running the suite.\n",
 		"tox-requirements.txt":               "pytest>=7\n",
+		"requirements/notes.txt":             "Install the tools listed below before running the suite.\n",
+		"docs_requirements.txt":              "# nothing yet\n",
+		"dev-reqs.txt":                       "pytest==8.2.0\n", // other names are not listed
+		"requirements.pip":                   "pytest==8.2.0\n",
 		"requirements/requirements-ci.txt":   "ruff==0.4.4\n", // read by discovery
 		"requirements.in":                    "flask==3.0.0\n",
 		"pyproject.toml":                     "[project]\ndependencies = [\"flask==3.0.0\"]\n",
@@ -124,6 +129,7 @@ func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 		"services/api/test_requirements.txt": "requirements.txt/PyPI",
 		"requirements/dev.txt":               "requirements.txt/PyPI",
 		"requirements/prod.txt":              "requirements.txt/PyPI",
+		"tox-requirements.txt":               "requirements.txt/PyPI",
 	}, unsupportedByPath(t, root, got))
 }
 
@@ -140,7 +146,7 @@ func TestUnsupportedFormatsAreNotParsed(t *testing.T) {
 			}
 			path := filepath.Join(root, filepath.FromSlash(name))
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-			// Python entries are reported only when they pin something.
+			// Python entries are reported only when they name a requirement.
 			require.NoError(t, os.WriteFile(path, []byte("flask==3.0.0\n"), 0o644))
 			targets, err := Discover(root, nil)
 			require.NoError(t, err)
