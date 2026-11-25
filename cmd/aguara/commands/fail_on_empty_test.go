@@ -64,5 +64,6 @@ func TestAutoScanWithoutConfigsHonorsFormatAndFailOnEmpty(t *testing.T) {
 	require.Contains(t, string(data), `"files_scanned": 0`)
 
 	err = runCLI(t, "scan", "--auto", "--fail-on-empty", "-o", filepath.Join(t.TempDir(), "r"))
-	requireUsageError(t, err, "no files were scanned")
+	requireUsageError(t, err, "no files were scanned", "no MCP client configurations were found")
+	require.NotContains(t, err.Error(), "path", "--auto takes no path to check")
 }

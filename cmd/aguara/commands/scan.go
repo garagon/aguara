@@ -361,7 +361,11 @@ func runAutoScan(cmd *cobra.Command) error {
 		return err
 	}
 	if flagFailOnEmpty && aggregate.FilesScanned == 0 {
-		return errNothingScanned
+		// --auto takes no path, so point at discovery instead.
+		if len(paths) == 0 {
+			return errors.New("no files were scanned and --fail-on-empty is set; no MCP client configurations were found")
+		}
+		return errors.New("no files were scanned and --fail-on-empty is set; none of the discovered MCP client configurations could be read")
 	}
 
 	return checkFailOnThreshold(aggregate)
