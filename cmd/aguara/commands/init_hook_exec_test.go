@@ -23,6 +23,7 @@ func stubScanner(t *testing.T) (bin, record string) {
 	record = filepath.Join(dir, "record")
 	script := `#!/bin/sh
 [ "$1" = scan ] || exit 3
+echo "notice: applied policy owned by the scanned project: $2/.aguaraignore (pass --project-policy ignore to scan without it)" >&2
 printf '%s\n' "$*" >"` + record + `.args"
 (cd "$2" && find . -type f -print0) >"` + record + `"
 if grep -rq MALICIOUS "$2"; then
@@ -105,6 +106,11 @@ func TestPreCommitHookScansStagedContent(t *testing.T) {
 	args, err := os.ReadFile(record + ".args")
 	require.NoError(t, err)
 	require.Contains(t, string(args), "--fail-on high")
+	// Notices name repository paths, not the temporary copy, and do not
+	// suggest a flag the hook does not take.
+	require.Contains(t, out, "notice: applied policy owned by the scanned project: .aguaraignore\n")
+	require.NotContains(t, out, "aguara-pre-commit.")
+	require.NotContains(t, out, "--project-policy")
 
 	// Malicious content staged, then the work tree copy reverted.
 	writeRepoFile(t, repo, "SKILL.md", "MALICIOUS staged\n")
