@@ -342,12 +342,12 @@ func computeMetricsWith(lx *jsLexer, content []byte) *metrics {
 	// code, not inside a string ("fetch('x')") or a regex (/fetch\(/).
 	// Streamed so a file full of stringified `fetch(` examples does not
 	// force materializing every match.
-	if loc := firstCodeTokenIndex(view, networkSinkRe); loc >= 0 {
+	if loc := firstCodeTokenIndex(view, lx.dialect(networkSinkRe)); loc >= 0 {
 		m.HasNetworkSink = true
 		m.LineNetworkSink = lineOf(code, loc)
 	}
 	if !m.HasNetworkSink {
-		if line := findNetworkAliasSink(code); line > 0 {
+		if line := findNetworkAliasSink(lx, code); line > 0 {
 			m.HasNetworkSink = true
 			m.LineNetworkSink = line
 		}
@@ -686,7 +686,7 @@ func collectChildProcessCalls(lx *jsLexer, content []byte) []cpCallSite {
 	// Only names that are ACTUALLY bound from child_process count as
 	// receivers; an unrelated local variable called `cp` does not.
 	aliases := map[string]bool{}
-	for _, m := range childProcessAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(childProcessAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		if insideStringInterior(sr, m[2]) {
 			continue
 		}
@@ -1366,9 +1366,9 @@ func fsDataArg(code []byte, firstArgEndIdx int, stringRanges [][2]int) []byte {
 // real fs / fs-extra / fs/promises import, so a local `writer.writeFileSync`
 // or a stringified example is not counted. Shared by the DNS-TXT envs.txt
 // staging check and the host-trust tamper detector.
-func collectFSWriteCalls(stripped []byte, stringRanges [][2]int) []fsWriteCall {
+func collectFSWriteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) []fsWriteCall {
 	fsBindings := collectModuleBindings(stripped, stringRanges,
-		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+		lx.dialect(fsModuleAliasRe), fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
 	var calls []fsWriteCall
 	add := func(matchEnd int) {
 		openParen := matchEnd - 1
@@ -1851,7 +1851,7 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 	view := m.lexer.view(content)
 	code := view.Code
 	stringRanges := view.StringRanges
-	fsCalls := collectFSWriteCalls(code, stringRanges)
+	fsCalls := collectFSWriteCalls(m.lexer, code, stringRanges)
 
 	// Shell content is the bound command string (exec/execSync first arg,
 	// shelljs.exec, or the -c script of a spawn/execa shell). KNOWN LIMITS
@@ -2305,13 +2305,13 @@ func isBroadHomePathArg(parg []byte, osBindings moduleBindings) bool {
 // ranges; the path token / os.homedir() target is read from there.
 func collectFSDeleteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) []fsDeleteCall {
 	fsBindings := collectModuleBindings(stripped, stringRanges,
-		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+		lx.dialect(fsModuleAliasRe), fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
 	fsExtraBindings := collectModuleBindings(stripped, stringRanges,
-		fsExtraAliasRe, fsExtraAliasESMRe, fsExtraDestructureRe, fsExtraDestructureESMRe, fsExtraAliasESMCombinedRe)
+		lx.dialect(fsExtraAliasRe), fsExtraAliasESMRe, fsExtraDestructureRe, fsExtraDestructureESMRe, fsExtraAliasESMCombinedRe)
 	// Aliases bound to fs/promises (or fs.promises): async-only, so a *Sync
 	// method on them does not exist.
 	fsPromisesAliases := map[string]bool{}
-	for _, re := range []*regexp.Regexp{fsPromisesAliasRequireRe, fsPromisesAliasDotRe, fsPromisesAliasESMRe, fsPromisesAliasESMCombinedRe} {
+	for _, re := range []*regexp.Regexp{lx.dialect(fsPromisesAliasRequireRe), fsPromisesAliasDotRe, fsPromisesAliasESMRe, fsPromisesAliasESMCombinedRe} {
 		for _, mt := range re.FindAllSubmatchIndex(stripped, -1) {
 			if insideStringInterior(stringRanges, mt[0]) {
 				continue
@@ -2452,7 +2452,7 @@ func collectFSDeleteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) [
 	}
 	// rimraf(path), bound from the rimraf import (default or named).
 	rimrafAliases := map[string]bool{}
-	for _, mm := range rimrafAliasRe.FindAllSubmatchIndex(stripped, -1) {
+	for _, mm := range lx.dialect(rimrafAliasRe).FindAllSubmatchIndex(stripped, -1) {
 		if insideStringInterior(stringRanges, mm[2]) {
 			continue
 		}
@@ -3084,7 +3084,7 @@ func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding
 
 	// 1. fs / fs-extra / rimraf delete calls.
 	osBindings := collectModuleBindings(code, stringRanges,
-		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
+		m.lexer.dialect(osModuleAliasRe), osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
 	for _, c := range collectFSDeleteCalls(m.lexer, code, stringRanges) {
 		// A broad home wipe targets a populated directory tree; only a
 		// recursive method (rm/fs.rm with recursive, fs-extra remove, rimraf)
@@ -3172,7 +3172,7 @@ func collectShelljsExecCalls(lx *jsLexer, code []byte) []cpCallSite {
 		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 	}
 	aliases := map[string]bool{}
-	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
+	for _, mm := range lx.dialect(shelljsAliasAssignRe).FindAllSubmatchIndex(code, -1) {
 		if insideStringInterior(sr, mm[2]) {
 			continue
 		}
@@ -3202,9 +3202,9 @@ func collectShelljsExecCalls(lx *jsLexer, code []byte) []cpCallSite {
 // import statements so an unrelated object named `h` does not trip
 // the rule. Returns 0 when no alias has been imported or no aliased
 // call appears.
-func findNetworkAliasSink(content []byte) int {
+func findNetworkAliasSink(lx *jsLexer, content []byte) int {
 	aliases := map[string]bool{}
-	for _, m := range httpModuleAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(httpModuleAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		aliases[string(content[m[2]:m[3]])] = true
 	}
 	for _, m := range httpModuleAliasESMRe.FindAllSubmatchIndex(content, -1) {
@@ -3213,7 +3213,7 @@ func findNetworkAliasSink(content []byte) int {
 	if len(aliases) == 0 {
 		return 0
 	}
-	for _, m := range identifierHTTPMethodCallRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(identifierHTTPMethodCallRe).FindAllSubmatchIndex(content, -1) {
 		if aliases[string(content[m[2]:m[3]])] {
 			return lineOf(content, m[2])
 		}
@@ -3483,6 +3483,33 @@ var networkSinkRe = regexp.MustCompile(
 // JavaScript the same bytes would be a chained comparison, which real code
 // does not write, so the network-sink signal is unchanged for .js files.
 const tsCallTypeArgs = `(?:<(?:[^<>()\n]|<[^<>()\n]*>){1,120}>\s*)?`
+
+// typeScriptOnlyPatterns accept TypeScript forms next to the JavaScript
+// ones: call type arguments (tsCallTypeArgs) and the `import x =
+// require('m')` binding (an `import` alternative next to const, let and
+// var). Neither form is valid JavaScript, and each alternative slows the
+// pattern on every file, so JavaScript targets use javaScriptVariants, the
+// same patterns without them (jsLexer.dialect).
+var typeScriptOnlyPatterns = []*regexp.Regexp{
+	networkSinkRe, identifierHTTPMethodCallRe, httpModuleAliasAssignRe, childProcessAliasAssignRe,
+	shelljsAliasAssignRe, dnsAliasAssignRe, rimrafAliasRe, fsExtraAliasRe, fsModuleAliasRe,
+	fsPromisesAliasRequireRe, osModuleAliasRe,
+}
+
+var javaScriptVariants = func() map[*regexp.Regexp]*regexp.Regexp {
+	variants := make(map[*regexp.Regexp]*regexp.Regexp, len(typeScriptOnlyPatterns))
+	for _, re := range typeScriptOnlyPatterns {
+		variants[re] = regexp.MustCompile(javaScriptPattern(re.String()))
+	}
+	return variants
+}()
+
+// javaScriptPattern removes the TypeScript-only alternatives from a
+// pattern's source.
+func javaScriptPattern(src string) string {
+	src = strings.ReplaceAll(src, tsCallTypeArgs, "")
+	return strings.ReplaceAll(src, "|import)", ")")
+}
 
 // httpModuleAliasAssignRe captures local names bound to the http,
 // https, or net modules via require, e.g.
@@ -5273,6 +5300,17 @@ type jsLexer struct {
 	braces     []braceKind
 }
 
+// dialect returns re for TypeScript targets and, for JavaScript targets,
+// the variant of re without TypeScript-only alternatives when it has one.
+func (lx *jsLexer) dialect(re *regexp.Regexp) *regexp.Regexp {
+	if !lx.typescript {
+		if js, ok := javaScriptVariants[re]; ok {
+			return js
+		}
+	}
+	return re
+}
+
 func (lx *jsLexer) context(buf []byte) *regexContext {
 	rc := newRegexContext(buf)
 	rc.typescript = lx.typescript
@@ -5674,7 +5712,7 @@ func findDNSTXTSink(lx *jsLexer, rawContent []byte) int {
 	// alias.
 	aliases := map[string]bool{}
 	resolverCtorNames := map[string]bool{}
-	for _, mt := range dnsAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, mt := range lx.dialect(dnsAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		if insideStringInterior(stringRanges, mt[0]) {
 			continue
 		}
@@ -6273,7 +6311,7 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// the envs.txt token must fall INSIDE that range (the path argument).
 	// Presence in the data position of the call, or in an unrelated
 	// statement, does not register. Shared with the host-trust tamper rule.
-	fsCalls := collectFSWriteCalls(stripped, stringRanges)
+	fsCalls := collectFSWriteCalls(m.lexer, stripped, stringRanges)
 	if len(fsCalls) > 0 {
 		for _, loc := range envsTxtTokenRe.FindAllIndex(stripped, -1) {
 			for _, c := range fsCalls {
@@ -6295,7 +6333,7 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// unrelated tmpdir call.
 	hasArchive := false
 	osBindingsDNS := collectModuleBindings(stripped, stringRanges,
-		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
+		m.lexer.dialect(osModuleAliasRe), osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
 	var archiveTmpPositions []int
 	for _, mt := range archiveTmpReceiverRe.FindAllSubmatchIndex(stripped, -1) {
 		if insideStringInterior(stringRanges, mt[2]) {
