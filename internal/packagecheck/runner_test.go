@@ -301,9 +301,8 @@ func TestRunner_MultiEcosystemSyntheticSnapshotHitsEach(t *testing.T) {
 
 func TestRunner_ComposerVPrefixAliasMatchesBareOSVVersion(t *testing.T) {
 	// composer.lock ships "v3.5.0"; the OSV record carries
-	// "3.5.0". The runner's versionAliases helper queries both
-	// forms so the match still fires. Locking the contract here
-	// catches a regression that would drop the alias path.
+	// "3.5.0". The matcher compares Composer's normalized form of
+	// both, so the match still fires.
 	snap := intel.Snapshot{
 		SchemaVersion: intel.CurrentSchemaVersion,
 		Records: []intel.Record{{

@@ -15,6 +15,13 @@ type MatchInput struct {
 	Name      string
 	Version   string
 	Path      string
+	// ArbitraryEquality marks a PyPI version taken from a `===`
+	// requirement. pip compares it as a case-insensitive string against
+	// each candidate's normalized version (PEP 440 "Arbitrary equality";
+	// packaging's Specifier._compare_arbitrary), not with PEP 440 version
+	// equality, so `===1.0` selects 1.0 but not 1.0.0. Ignored for other
+	// ecosystems.
+	ArbitraryEquality bool
 }
 
 // Match is the resolved result of a MatchPackage hit. Record is a
@@ -197,9 +204,10 @@ func unionVersions(a, b []string) []string {
 //   - Name normalisation is ecosystem-specific:
 //   - npm: case-sensitive, scope preserved.
 //   - PyPI: PEP 503 -- lower-case and collapse [-_.]+ to a single '-'.
-//   - Version must appear in Record.Versions exactly (PyPI: equal
-//     under PEP 440 normalisation). Ranges are evaluated for npm
-//     only; records with no Versions cannot match elsewhere.
+//   - Version must appear in Record.Versions exactly, or equal one of
+//     them under the ecosystem's own version equality (PyPI, Go,
+//     Packagist and NuGet; see versionMatches). Ranges are evaluated
+//     for npm only; records with no Versions cannot match elsewhere.
 //   - Withdrawn records were excluded at index time and never appear.
 //
 // The result preserves the in.Path on every Match so terminal output
@@ -228,6 +236,10 @@ func (m *Matcher) MatchPackage(in MatchInput) []Match {
 		// means a record carrying both Versions and Ranges does not
 		// produce two Match entries for one installed version.
 		switch {
+		case in.ArbitraryEquality && normalizeEcosystem(in.Ecosystem) == EcosystemPyPI:
+			if !arbitraryVersionMatches(*rec, in.Version) {
+				continue
+			}
 		case versionMatches(*rec, in.Version):
 		case allowRanges && rangeMatches(*rec, in.Version):
 		default:
@@ -419,16 +431,54 @@ func PEP503Normalize(name string) string {
 	return out
 }
 
-// versionMatches reports whether v is in rec.Versions. The check is
-// a literal equality so callers that prefix with `v` (Go module
-// style) or pad with leading zeroes do not silently match. The OSV
-// importer is responsible for producing canonicalised version
-// strings.
-//
-// PyPI is the exception: PEP 440 defines version equality on the
-// normalised form with zero-padded release segments, so "1.0" and
-// "1.0.0", or "1.0rc1" and "1.0-RC1", name the same release. Every
-// PyPI caller (installed trees, lockfiles, requirement pins) goes
+// arbitraryVersionMatches reports whether a `===spec` requirement selects
+// one of rec.Versions the way pip does: the candidate's normalized
+// version string (str(Version(candidate))) equals spec, ignoring case. A
+// candidate that is not a valid PEP 440 version is compared as written,
+// which is what pip did while it still accepted legacy versions.
+func arbitraryVersionMatches(rec Record, spec string) bool {
+	if spec == "" {
+		return false
+	}
+	for _, candidate := range rec.Versions {
+		s, ok := PEP440String(candidate)
+		if !ok {
+			s = candidate
+		}
+		if strings.EqualFold(s, spec) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanonicalVersion returns the form a version compares in for ecosystems
+// with their own version equality (PyPI, Go, Packagist, NuGet); ok is
+// false when the ecosystem compares literally or v is not a valid version
+// in its grammar.
+func CanonicalVersion(ecosystem, v string) (string, bool) {
+	return canonicalVersion(normalizeEcosystem(ecosystem), v)
+}
+
+// VersionsEqual reports whether a lockfile version names the release an
+// advisory lists as advisory, under the same per-ecosystem equality
+// MatchPackage applies.
+func VersionsEqual(ecosystem, advisory, lockfile string) bool {
+	return versionMatches(Record{Ecosystem: ecosystem, Versions: []string{advisory}}, lockfile)
+}
+
+// versionMatches reports whether v names one of rec.Versions. Literal
+// equality always matches. Ecosystems whose tooling treats several
+// spellings as one release then compare canonical forms (see
+// canonicalVersion): PEP 440 equality for PyPI ("1.0" and "1.0.0"), the
+// Go module version with or without its leading "v" and "+incompatible"
+// suffix, Composer's normalized version for Packagist ("v1.2.3" and
+// "1.2.3"), and NuGet's normalized version ("1.0" and "1.0.0.0"). Both
+// sides are canonicalised at comparison time, so intelligence that spells
+// a version either way matches every lockfile spelling of it, and a
+// refresh cannot reintroduce a spelling mismatch. Input that is not a
+// valid version in the ecosystem's grammar is compared literally only.
+// Every caller (installed trees, lockfiles, requirement pins) goes
 // through this one comparison. An empty version never matches; only
 // all-versions entries can match a package whose version is unknown.
 func versionMatches(rec Record, v string) bool {
@@ -440,15 +490,23 @@ func versionMatches(rec Record, v string) bool {
 			return true
 		}
 	}
-	if normalizeEcosystem(rec.Ecosystem) != EcosystemPyPI {
-		return false
+	eco := normalizeEcosystem(rec.Ecosystem)
+	if eco == EcosystemPackagist && strings.HasPrefix(v, "v") {
+		// The runner used to retry a Packagist lookup with one leading
+		// "v" removed, literally. Keep that so no spelling that matched
+		// then stops matching, even one Composer itself would reject.
+		for _, candidate := range rec.Versions {
+			if candidate == v[1:] {
+				return true
+			}
+		}
 	}
-	canonical, ok := PEP440Canonical(v)
+	canonical, ok := canonicalVersion(eco, v)
 	if !ok {
 		return false
 	}
 	for _, candidate := range rec.Versions {
-		if c, ok := PEP440Canonical(candidate); ok && c == canonical {
+		if c, ok := canonicalVersion(eco, candidate); ok && c == canonical {
 			return true
 		}
 	}

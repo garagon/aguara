@@ -35,6 +35,23 @@ var pep440Pattern = regexp.MustCompile(`(?i)^\s*v?` +
 // ok is false for input that is not a valid PEP 440 version; callers
 // fall back to literal comparison in that case.
 func PEP440Canonical(v string) (string, bool) {
+	return pep440Format(v, true)
+}
+
+// PEP440String returns the normalized string form of a version, the one
+// the packaging library's str(Version(v)) produces: spelling variants
+// normalised, leading zeros dropped, and release components kept as
+// written, so "1.0.0" stays "1.0.0" and "1.0-RC1" becomes "1.0rc1". pip
+// compares an arbitrary-equality (`===`) requirement against this form of
+// each candidate's version. ok is false for input that is not a valid
+// PEP 440 version.
+func PEP440String(v string) (string, bool) {
+	return pep440Format(v, false)
+}
+
+// pep440Format renders a parsed version; trimZeros drops trailing zero
+// release components for equality comparison.
+func pep440Format(v string, trimZeros bool) (string, bool) {
 	if len(v) > maxPEP440Length {
 		return "", false
 	}
@@ -51,7 +68,7 @@ func PEP440Canonical(v string) (string, bool) {
 	for i := range release {
 		release[i] = trimLeadingZeros(release[i])
 	}
-	for len(release) > 1 && release[len(release)-1] == "0" {
+	for trimZeros && len(release) > 1 && release[len(release)-1] == "0" {
 		release = release[:len(release)-1]
 	}
 	b.WriteString(strings.Join(release, "."))

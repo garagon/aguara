@@ -21,7 +21,7 @@ func TestParseRuby_OnlyTopLevelSpecsFromGEMSection(t *testing.T) {
 		"rails":           "7.1.3",
 		"rack":            "3.0.8",
 		"compromised-gem": "2.0.0",
-		"nokogiri":        "1.16.2-arm64-darwin",
+		"nokogiri":        "1.16.2",
 	}
 	if len(refs) != len(want) {
 		t.Fatalf("refs = %d, want %d (refs=%+v)", len(refs), len(want), refs)
@@ -82,10 +82,11 @@ func TestParseRuby_IgnoresGITAndOtherSections(t *testing.T) {
 	}
 }
 
-func TestParseRuby_PreservesPlatformSpecificVersion(t *testing.T) {
-	// `nokogiri (1.16.2-arm64-darwin)` is a valid installed gem
-	// with a platform suffix. The parser must keep the full
-	// version string intact.
+func TestParseRuby_PlatformGemReadsGemVersion(t *testing.T) {
+	// `nokogiri (1.16.2-arm64-darwin)` is the arm64-darwin build of
+	// nokogiri 1.16.2. Bundler's lockfile parser reads the version as
+	// the text before the first "-", and advisories list the RubyGems
+	// version without a platform, so the ref carries 1.16.2.
 	refs, _ := ParseRuby(Target{
 		Ecosystem: intel.EcosystemRubyGems,
 		Path:      filepath.Join("testdata", "ruby-compromised", "Gemfile.lock"),
@@ -97,8 +98,31 @@ func TestParseRuby_PreservesPlatformSpecificVersion(t *testing.T) {
 			got = r.Version
 		}
 	}
-	if got != "1.16.2-arm64-darwin" {
-		t.Errorf("nokogiri version = %q, want 1.16.2-arm64-darwin", got)
+	if got != "1.16.2" {
+		t.Errorf("nokogiri version = %q, want 1.16.2", got)
+	}
+}
+
+func TestParseRuby_PlatformVariantsOfOneVersionAreOneRef(t *testing.T) {
+	// A lockfile resolved for several platforms lists one spec per
+	// platform build of the same release; they are one dependency.
+	path := filepath.Join(t.TempDir(), "Gemfile.lock")
+	writeFile(t, path, "GEM\n  remote: https://rubygems.org/\n  specs:\n"+
+		"    nokogiri (1.16.2)\n      mini_portile2 (~> 2.8.2)\n"+
+		"    nokogiri (1.16.2-arm64-darwin)\n"+
+		"    nokogiri (1.16.2-x86_64-linux)\n"+
+		"    nokogiri (1.16.3-x86_64-linux)\n\n"+
+		"PLATFORMS\n  arm64-darwin\n  ruby\n  x86_64-linux\n")
+	refs, err := ParseRuby(Target{Ecosystem: intel.EcosystemRubyGems, Path: path, Source: "Gemfile.lock"})
+	if err != nil {
+		t.Fatalf("ParseRuby: %v", err)
+	}
+	var got []string
+	for _, r := range refs {
+		got = append(got, r.Name+" "+r.Version)
+	}
+	if len(got) != 2 || got[0] != "nokogiri 1.16.2" || got[1] != "nokogiri 1.16.3" {
+		t.Errorf("refs = %v, want [nokogiri 1.16.2, nokogiri 1.16.3]", got)
 	}
 }
 

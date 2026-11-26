@@ -40,3 +40,31 @@ func TestPackageFindingsListAdvisoryIDs(t *testing.T) {
 	require.Len(t, warningOnly.Findings, 1)
 	require.NotContains(t, warningOnly.Findings[0], "advisory_ids")
 }
+
+// A finding's title names the same advisories as its advisory_ids array,
+// in every ecosystem and for installed trees as well as lockfiles.
+// @duckdb/node-api 1.3.3 is listed by two embedded advisories.
+func TestPackageFindingTitlesNameEveryAdvisoryID(t *testing.T) {
+	isolatePythonCheck(t, "")
+	project := t.TempDir()
+	lock := `{"lockfileVersion":3,"packages":{"":{"name":"x"},"node_modules/@duckdb/node-api":{"version":"1.3.3"}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(project, "package-lock.json"), []byte(lock), 0o644))
+	installed := filepath.Join(project, "node_modules", "@duckdb", "node-api")
+	require.NoError(t, os.MkdirAll(installed, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(installed, "package.json"), []byte(`{"name":"@duckdb/node-api","version":"1.3.3"}`), 0o644))
+
+	var result struct {
+		Findings []struct {
+			Title       string   `json:"title"`
+			AdvisoryIDs []string `json:"advisory_ids"`
+		} `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(checkToFileRaw(t, project), &result))
+	require.Len(t, result.Findings, 2, "lockfile entry and installed copy")
+	for _, f := range result.Findings {
+		require.ElementsMatch(t, []string{"GHSA-w62p-hx95-gf2c", "MAL-2025-46992"}, f.AdvisoryIDs, f.Title)
+		for _, id := range f.AdvisoryIDs {
+			require.Contains(t, f.Title, id)
+		}
+	}
+}

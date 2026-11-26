@@ -48,8 +48,8 @@ func TestParseComposer_RuntimeAndDevPackages(t *testing.T) {
 
 func TestParseComposer_PreservesRawVersionPrefix(t *testing.T) {
 	// composer.lock often carries `v` prefixes (v3.5.0). The
-	// parser preserves the raw lockfile string; the runner's
-	// versionAliases helper is what queries the bare form too.
+	// parser preserves the raw lockfile string; the matcher
+	// compares Composer's normalized form of both spellings.
 	refs, err := ParseComposer(Target{
 		Ecosystem: intel.EcosystemPackagist,
 		Path:      filepath.Join("testdata", "composer-compromised", "composer.lock"),
@@ -93,23 +93,5 @@ func TestParseComposer_SkipsMissingFields(t *testing.T) {
 	}
 	if len(refs) != 1 || refs[0].Name != "ok/pkg" {
 		t.Errorf("expected one ok/pkg ref, got %+v", refs)
-	}
-}
-
-func TestVersionAliases_ComposerStripsVPrefix(t *testing.T) {
-	got := versionAliases(intel.EcosystemPackagist, "v3.5.0")
-	if len(got) != 2 || got[0] != "v3.5.0" || got[1] != "3.5.0" {
-		t.Errorf("aliases = %v, want [v3.5.0 3.5.0]", got)
-	}
-}
-
-func TestVersionAliases_NonComposerReturnsRawOnly(t *testing.T) {
-	got := versionAliases(intel.EcosystemCargo, "1.2.3")
-	if len(got) != 1 || got[0] != "1.2.3" {
-		t.Errorf("aliases = %v, want [1.2.3]", got)
-	}
-	got = versionAliases(intel.EcosystemGo, "v1.2.3")
-	if len(got) != 1 || got[0] != "v1.2.3" {
-		t.Errorf("Go aliases = %v, want [v1.2.3] (Go preserves the v)", got)
 	}
 }

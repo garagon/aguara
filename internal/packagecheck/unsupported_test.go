@@ -98,7 +98,9 @@ func TestDiscoverUnsupportedSkipsInstalledRoots(t *testing.T) {
 // are reported when they name a requirement (pinned or a range) or an
 // include: the file name must not decide the outcome. Prose .txt files
 // fail to parse and are not reported, and neither are empty or
-// comment-only files, nor pip files under other patterns.
+// comment-only files, nor text files under names that are not pip
+// conventions. Manifests (requirements.in, pyproject.toml, Pipfile,
+// environment.yml) are not unsupported formats; see DiscoverUnevaluated.
 func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
@@ -107,10 +109,16 @@ func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 		"requirements/dev.txt":               "black==24.4.2\n",
 		"requirements/prod.txt":              "-r base.txt\n",
 		"tox-requirements.txt":               "pytest>=7\n",
+		"devrequirements.txt":                "pytest==8.2.0\n",
+		"dev-reqs.txt":                       "pytest==8.2.0\n",
+		"reqs.txt":                           "pytest==8.2.0\n",
+		"test_reqs.txt":                      "pytest==8.2.0\n",
+		"requirements.pip":                   "pytest==8.2.0\n",
+		"requirements/base.pip":              "django==5.0\n",
 		"requirements/notes.txt":             "Install the tools listed below before running the suite.\n",
 		"docs_requirements.txt":              "# nothing yet\n",
-		"dev-reqs.txt":                       "pytest==8.2.0\n", // other names are not listed
-		"requirements.pip":                   "pytest==8.2.0\n",
+		"prereqs.txt":                        "git\nmake\n", // not a pip naming convention
+		"notes.pip":                          "Read the notes before installing.\n",
 		"requirements/requirements-ci.txt":   "ruff==0.4.4\n", // read by discovery
 		"requirements.in":                    "flask==3.0.0\n",
 		"pyproject.toml":                     "[project]\ndependencies = [\"flask==3.0.0\"]\n",
@@ -130,7 +138,16 @@ func TestDiscoverUnsupportedPythonRequirementsNames(t *testing.T) {
 		"requirements/dev.txt":               "requirements.txt/PyPI",
 		"requirements/prod.txt":              "requirements.txt/PyPI",
 		"tox-requirements.txt":               "requirements.txt/PyPI",
+		"devrequirements.txt":                "requirements.txt/PyPI",
+		"dev-reqs.txt":                       "requirements.txt/PyPI",
+		"reqs.txt":                           "requirements.txt/PyPI",
+		"test_reqs.txt":                      "requirements.txt/PyPI",
+		"requirements.pip":                   "requirements.txt/PyPI",
+		"requirements/base.pip":              "requirements.txt/PyPI",
 	}, unsupportedByPath(t, root, got))
+	for _, u := range got {
+		require.Equal(t, ReasonRequirementsNameNotRead, u.Reason, u.Path)
+	}
 }
 
 // Every unsupported format must stay out of the parsed set. Adding a
