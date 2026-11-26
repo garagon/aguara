@@ -355,8 +355,8 @@ func parseNuGetProps(path string) (centralVersions, error) {
 			if seen[name+"\x00"+v] {
 				continue
 			}
-			if len(seen) >= maxManifestEntries {
-				return out, fmt.Errorf("parse Directory.Packages.props: more than %d package versions", maxManifestEntries)
+			if len(seen) >= maxLockfileEntries {
+				return out, fmt.Errorf("parse Directory.Packages.props: more than %d package versions", maxLockfileEntries)
 			}
 			seen[name+"\x00"+v] = true
 			out.versions[name] = append(out.versions[name], v)

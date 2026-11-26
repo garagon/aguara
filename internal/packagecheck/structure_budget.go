@@ -44,8 +44,8 @@ const (
 )
 
 // maxLockfileEntries bounds the package references one dependency file
-// may produce, the same bound the Python lockfiles have
-// (maxPythonLockEntries). Real lockfiles hold a few thousand packages. A
+// may produce, in every format, and the dependencies and pins counted in
+// one dependency manifest. Real lockfiles hold a few thousand packages. A
 // variable so tests can lower it.
 var maxLockfileEntries = 100_000
 

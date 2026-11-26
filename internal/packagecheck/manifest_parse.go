@@ -26,9 +26,6 @@ const (
 	// manifests are a few kilobytes; a larger file is reported as not
 	// evaluated instead of being read.
 	maxDependencyManifestBytes int64 = 4 << 20
-	// maxManifestEntries bounds the dependencies and pins counted in one
-	// manifest.
-	maxManifestEntries = 100_000
 	// maxManifestLineBytes bounds one line of a line-oriented manifest.
 	maxManifestLineBytes = 1 << 20
 	// maxCondaYAMLNodes bounds the YAML nodes walked in one conda
@@ -68,8 +65,8 @@ func (m manifestInfo) declares() bool { return m.deps > 0 || m.unknown }
 // addDep counts one registry dependency; group is "" for a dependency a
 // plain install pulls.
 func (m *manifestInfo) addDep(name, group string) error {
-	if m.deps >= maxManifestEntries {
-		return fmt.Errorf("more than %d dependencies", maxManifestEntries)
+	if m.deps >= maxLockfileEntries {
+		return fmt.Errorf("more than %d dependencies", maxLockfileEntries)
 	}
 	m.deps++
 	if name = intel.PEP503Normalize(strings.TrimSpace(name)); name != "" {
@@ -83,7 +80,7 @@ func (m *manifestInfo) addDep(name, group string) error {
 }
 
 func (m *manifestInfo) addPin(ref PackageRef) {
-	if len(m.pins) < maxManifestEntries {
+	if len(m.pins) < maxLockfileEntries {
 		m.pins = append(m.pins, ref)
 	}
 }
@@ -342,8 +339,8 @@ func (c *tomlDepCollector) get(key, name string, line int, group string) (*tomlM
 	if d, ok := c.deps[key]; ok {
 		return d, nil
 	}
-	if len(c.order) >= maxManifestEntries {
-		return nil, fmt.Errorf("more than %d dependencies", maxManifestEntries)
+	if len(c.order) >= maxLockfileEntries {
+		return nil, fmt.Errorf("more than %d dependencies", maxLockfileEntries)
 	}
 	d := &tomlManifestDep{name: name, line: line, group: group}
 	c.deps[key] = d

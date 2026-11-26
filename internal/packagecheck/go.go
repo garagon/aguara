@@ -210,11 +210,11 @@ func readGoMod(target Target) (goModFile, error) {
 				mod.requires = append(mod.requires, ref)
 			}
 		case "replace":
-			if r, ok := parseReplaceLine(body); ok && len(mod.replaces) < maxManifestEntries {
+			if r, ok := parseReplaceLine(body); ok && len(mod.replaces) < maxLockfileEntries {
 				mod.replaces = append(mod.replaces, r)
 			}
 		case "exclude":
-			if fields := strings.Fields(body); len(fields) == 2 && len(mod.excludes) < maxManifestEntries {
+			if fields := strings.Fields(body); len(fields) == 2 && len(mod.excludes) < maxLockfileEntries {
 				mod.excludes[[2]string{unquoteGoModToken(fields[0]), unquoteGoModToken(fields[1])}] = true
 			}
 		}

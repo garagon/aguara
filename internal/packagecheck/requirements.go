@@ -527,8 +527,8 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 				}
 			}
 		}
-		if len(out.items)+len(items) > maxPythonLockEntries {
-			return fmt.Errorf("more than %d entries", maxPythonLockEntries)
+		if len(out.items)+len(items) > maxLockfileEntries {
+			return fmt.Errorf("more than %d entries", maxLockfileEntries)
 		}
 		out.items = append(out.items, items...)
 		return nil
