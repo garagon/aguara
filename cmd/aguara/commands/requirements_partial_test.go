@@ -48,6 +48,33 @@ func gateAudit(t *testing.T, dir string) (*AuditResult, error) {
 	return &res, err
 }
 
+// A direct reference to a PyPI file with no white space around "@" is
+// read like `name @ url`, as pip reads it.
+func TestDirectReferenceWithoutSpacesDoesNotHideAPin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
+	const whl = "https://files.pythonhosted.org/packages/aa/bb/num2words-0.5.15-py3-none-any.whl"
+	for _, line := range []string{
+		"num2words@" + whl,
+		"num2words[extra]@" + whl,
+		"num2words@" + whl + "#sha256=00",
+		"num2words@" + whl + " ; python_version >= '3'",
+		"num2words@" + whl + " --hash=sha256:00",
+		"num2words@https://files.pythonhosted.org/packages/aa/bb/num2words-0.5.15.tar.gz",
+		"Num2Words@" + whl,
+	} {
+		t.Run(line, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{"requirements.txt": line + "\n"})
+			check, err := gateCheck(t, dir)
+			require.ErrorIs(t, err, ErrThresholdExceeded, "check --ci exits 1")
+			requireCriticalFor(t, check.Findings, "0.5.15")
+			audit, err := gateAudit(t, dir)
+			require.ErrorIs(t, err, ErrThresholdExceeded, "audit --ci exits 1")
+			require.Equal(t, "stop", audit.Triage.Decision)
+		})
+	}
+}
+
 // pip accepts an unambiguous prefix of a long option. A compromised pin
 // beside such an option is still read and fails both gates.
 func TestAbbreviatedPipOptionsDoNotHideAPin(t *testing.T) {

@@ -834,6 +834,15 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 	if s == "" {
 		return nil, nil
 	}
+	// `name@url` and `name[x]@url` without white space are direct
+	// references, as `name @ url` is, not a bare URL.
+	first, tail := s, ""
+	if i := strings.IndexAny(s, " \t;"); i >= 0 {
+		first, tail = s[:i], s[i:]
+	}
+	if m := directRefNoSpace.FindStringSubmatch(first); m != nil {
+		s = m[1] + m[2] + " @ " + m[3] + tail
+	}
 	if looksLikeRequirementPath(s) {
 		first := s
 		if i := strings.IndexAny(s, " \t;"); i >= 0 {
@@ -906,6 +915,9 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 	return ref, nil
 }
 
+// directRefNoSpace is a first token `name@url` or `name[extras]@url`.
+var directRefNoSpace = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(\[[^\]]*\])?@(.+)$`)
+
 // salvagedPin is how a requirement starts when it pins one release: a
 // PEP 508 name, optional extras, an optional "(" and an == or === pin.
 var (
@@ -920,11 +932,11 @@ var (
 // when the start pins nothing.
 func salvageExactPin(text string) *PackageRef {
 	text = strings.TrimSpace(text)
-	if first, _, _ := strings.Cut(text, " "); looksLikeRequirementPath(first) {
-		return pythonHostedRef("", strings.TrimRight(first, ";"))
-	}
 	if m := salvagedDirectRef.FindStringSubmatch(text); m != nil {
 		return pythonHostedRef(m[1], strings.TrimRight(m[2], ";"))
+	}
+	if first, _, _ := strings.Cut(text, " "); looksLikeRequirementPath(first) {
+		return pythonHostedRef("", strings.TrimRight(first, ";"))
 	}
 	m := salvagedPin.FindStringSubmatch(text)
 	if m == nil {
