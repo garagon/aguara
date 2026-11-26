@@ -6,8 +6,6 @@ import (
 	"io"
 	"reflect"
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -353,7 +351,7 @@ func redactValue(v string) string {
 	if strings.Contains(v, "-") {
 		v = inlineFlag.ReplaceAllStringFunc(v, func(m string) string {
 			p := inlineFlag.FindStringSubmatch(m)
-			if strings.HasPrefix(p[4], "--") || p[4] == redactedPlaceholder || !sensitiveName(strings.TrimLeft(p[2], "-")) {
+			if strings.HasPrefix(p[4], "--") || unquoted(p[4]) == redactedPlaceholder || !sensitiveName(strings.TrimLeft(p[2], "-")) {
 				return m
 			}
 			return p[1] + p[2] + p[3] + redactedPlaceholder
@@ -362,7 +360,7 @@ func redactValue(v string) string {
 	if strings.Contains(v, "=") {
 		v = inlineAssignment.ReplaceAllStringFunc(v, func(m string) string {
 			p := inlineAssignment.FindStringSubmatch(m)
-			if p[3] == redactedPlaceholder || !sensitiveEnvName(p[2]) {
+			if unquoted(p[3]) == redactedPlaceholder || !sensitiveEnvName(p[2]) {
 				return m
 			}
 			return p[1] + p[2] + "=" + redactedPlaceholder
@@ -526,7 +524,11 @@ func redactArgValue(a string) string {
 // redactCommand redacts a server command. A command given as one string
 // with arguments (env VAR=value program, docker run -e ...) is split like
 // a shell would, for redaction only, and its words are redacted as
-// arguments; the original text is kept when nothing in it is secret.
+// arguments in place: a changed word keeps its original quoting when the
+// word was quoted as a whole, and gets single quotes otherwise, so the
+// displayed command means the same. Unchanged text is kept as written. An
+// unterminated quote (or a trailing backslash) masks everything from it to
+// the end.
 func redactCommand(cmd string) string {
 	if red, ok := redactJSON(cmd); ok {
 		return red
@@ -534,64 +536,133 @@ func redactCommand(cmd string) string {
 	if !strings.ContainsAny(cmd, " \t") {
 		return redactValue(cmd)
 	}
-	words, ok := shellSplit(cmd)
-	if !ok {
-		return redactValue(cmd)
+	words, open := shellWords(cmd)
+	values := make([]string, 0, len(words)+1)
+	for _, w := range words {
+		values = append(values, w.value)
 	}
-	red := redactArgs(words)
-	if slices.Equal(red, words) {
-		return redactValue(cmd)
+	if open != nil {
+		// The open word is what precedes the quote, then the masked rest,
+		// so the rules for its context (the value after --api-key, a
+		// NAME= prefix) still apply to it.
+		values = append(values, open.value+redactedPlaceholder)
 	}
-	for i, w := range red {
-		if w == "" || strings.ContainsAny(w, " \t\"'\\") {
-			red[i] = strconv.Quote(w)
+	red := redactArgs(values)
+	var b strings.Builder
+	last := 0
+	for i, w := range words {
+		b.WriteString(cmd[last:w.start])
+		if red[i] == values[i] {
+			b.WriteString(cmd[w.start:w.end])
+		} else {
+			b.WriteString(quoteLike(cmd[w.start:w.end], red[i]))
 		}
+		last = w.end
 	}
-	return strings.Join(red, " ")
+	if open != nil {
+		b.WriteString(cmd[last:open.start])
+		if i := len(words); red[i] == values[i] {
+			b.WriteString(cmd[open.start:open.end])
+		}
+		b.WriteString(redactedPlaceholder)
+		return redactValue(b.String())
+	}
+	b.WriteString(cmd[last:])
+	return redactValue(b.String())
 }
 
-// shellSplit splits s into words at unquoted blanks, honoring single
-// quotes, double quotes and backslash escapes. It reports false for an
-// unterminated quote.
-func shellSplit(s string) ([]string, bool) {
-	var words []string
+// shellWord is one word of a command line: its byte span in the original
+// text and its value after quote removal.
+type shellWord struct {
+	start, end int
+	value      string
+}
+
+// shellWords splits s into words at unquoted blanks, honoring single
+// quotes, double quotes and backslash escapes. When a quote is not closed,
+// or the text ends with a backslash, it also returns the open word: its
+// start, the offset of that quote or backslash as end, and its value up to
+// there; otherwise open is nil.
+func shellWords(s string) (words []shellWord, open *shellWord) {
 	var cur strings.Builder
-	inWord := false
+	start, openAt := -1, -1
 	var quote rune
 	escaped := false
-	for _, r := range s {
+	var prefix string
+	for i, r := range s {
 		switch {
 		case escaped:
 			cur.WriteRune(r)
 			escaped = false
+			continue
 		case r == '\\' && quote != '\'':
-			escaped, inWord = true, true
+			escaped = true
+			if start < 0 {
+				start = i
+			}
+			openAt, prefix = i, cur.String()
+			continue
 		case quote != 0:
 			if r == quote {
 				quote = 0
 			} else {
 				cur.WriteRune(r)
 			}
+			continue
 		case r == '\'' || r == '"':
-			quote, inWord = r, true
-		case r == ' ' || r == '\t' || r == '\n':
-			if inWord {
-				words = append(words, cur.String())
-				cur.Reset()
-				inWord = false
+			quote = r
+			if start < 0 {
+				start = i
 			}
-		default:
-			cur.WriteRune(r)
-			inWord = true
+			openAt, prefix = i, cur.String()
+			continue
+		case r == ' ' || r == '\t' || r == '\n':
+			if start >= 0 {
+				words = append(words, shellWord{start: start, end: i, value: cur.String()})
+				cur.Reset()
+				start = -1
+			}
+			continue
+		}
+		cur.WriteRune(r)
+		if start < 0 {
+			start = i
 		}
 	}
 	if quote != 0 || escaped {
-		return nil, false
+		return words, &shellWord{start: start, end: openAt, value: prefix}
 	}
-	if inWord {
-		words = append(words, cur.String())
+	if start >= 0 {
+		words = append(words, shellWord{start: start, end: len(s), value: cur.String()})
 	}
-	return words, true
+	return words, nil
+}
+
+// quoteLike renders a redacted word for the command line. A word that was
+// one quoted string keeps that quote when the new value allows it; any
+// other word whose value needs quoting gets single quotes.
+func quoteLike(orig, value string) string {
+	if n := len(orig); n >= 2 && (orig[0] == '"' || orig[0] == '\'') && orig[n-1] == orig[0] && !strings.ContainsRune(orig[1:n-1], rune(orig[0])) {
+		if orig[0] == '"' && !strings.ContainsAny(value, "\"\\$`") {
+			return `"` + value + `"`
+		}
+		if orig[0] == '\'' && !strings.Contains(value, "'") {
+			return "'" + value + "'"
+		}
+	}
+	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`|&;<>()*?[]#~{}!") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// unquoted strips one pair of surrounding quotes, for comparing a matched
+// value with the placeholder.
+func unquoted(s string) string {
+	if n := len(s); n >= 2 && (s[0] == '"' || s[0] == '\'') && s[n-1] == s[0] {
+		return s[1 : n-1]
+	}
+	return s
 }
 
 // headerFlags take an HTTP header as their value (mcp-remote, curl).
