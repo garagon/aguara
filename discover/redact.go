@@ -1332,10 +1332,9 @@ func redactArgsAt(args []string, depth int) ([]string, []bool) {
 		case (state == nextSecret || state == nextCredential) && strings.HasPrefix(a, "="):
 			out[i] = "=" + redactedPlaceholder
 			continue
-		case state == nextSecret && !strings.HasPrefix(a, "--"),
-			state == nextCredential && !optionWord.MatchString(a):
-			// After a scheme word only an option (--hostname) is not the
-			// credential; a credential can start with "--".
+		case (state == nextSecret || state == nextCredential) && !optionWord.MatchString(a):
+			// Only an option (--verbose, --hostname) is not the value; a
+			// value or credential can start with "--".
 			out[i] = redactedPlaceholder
 			continue
 		case state == nextHeader && !strings.HasPrefix(a, "--"):

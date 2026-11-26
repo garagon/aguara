@@ -322,3 +322,20 @@ func TestArgumentListSplitSecrets(t *testing.T) {
 		t.Fatalf("only %d split lists checked", cases)
 	}
 }
+
+// After a sensitive flag, a value that starts with "--" but is not an
+// option name is the value; a real option stays visible.
+func TestSensitiveFlagValueThatStartsWithDashes(t *testing.T) {
+	for _, tc := range []struct{ in, want []string }{
+		{[]string{"--api-key", "--Xa9_qzS3cretC1"}, []string{"--api-key", redactedPlaceholder}},
+		{[]string{"--password", "--verbose", "--port", "8080"}, []string{"--password", "--verbose", "--port", "8080"}},
+		{[]string{"--token", "--host=x.example", "run"}, []string{"--token", "--host=x.example", "run"}},
+	} {
+		if got := redactArgs(tc.in); strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+			t.Errorf("redactArgs(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if got := redactCommand("tool --api-key --Xa9_qzS3cretC1 --verbose"); got != "tool --api-key [REDACTED] --verbose" {
+		t.Errorf("command = %q", got)
+	}
+}
