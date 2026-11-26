@@ -47,3 +47,13 @@ func TestSubstitutionBodiesAreCommandLines(t *testing.T) {
 		}
 	}
 }
+
+// In plain text, a word after Bearer, Basic or Token is a credential, so
+// fish's set -x TOKEN value is a hit.
+func TestPlainTokenWordIsAHit(t *testing.T) {
+	for _, v := range []string{"set -x TOKEN qzS3cret04", "set -gx GITHUB_TOKEN qzS3cret04", "token qzS3cret04"} {
+		if got := redactEnv(map[string]string{"SETUP": v})["SETUP"]; got != redactedPlaceholder {
+			t.Errorf("redactEnv(%q) = %q, want the whole value masked", v, got)
+		}
+	}
+}

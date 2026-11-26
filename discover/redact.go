@@ -124,8 +124,11 @@ var (
 	// textUserinfo finds a user:password@ part after a scheme even when the
 	// password holds characters a URL cannot, such as a blank or a quote.
 	textUserinfo = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@]*:[^/@]*@`)
-	// textAuthScheme finds a credential after an HTTP authorization scheme.
-	textAuthScheme = regexp.MustCompile(`(?i)(?:\b(?:bearer|basic)|(?:^|:)\s*token)\s+\S`)
+	// textAuthScheme finds a credential after an authorization scheme or
+	// the word token (fish's set -x TOKEN value too).
+	textAuthScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic|token)\s+\S`)
+	// fishSet is fish's set [flags] NAME value.
+	fishSet = regexp.MustCompile(`(?:^|[\s;&|()])set\s+(?:-[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+\S`)
 	// wholeURL is a value that is one URL: a scheme and no blanks.
 	wholeURL = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 	// headerArg matches a "Name: value" header such as the --header value
@@ -370,8 +373,8 @@ func redactConnectionString(v string) string {
 // plainHit reports whether any redaction rule matches anywhere in v: a
 // known token format, a credential after an authorization scheme, a URL
 // with userinfo, a query, a fragment or a credential-like path segment, a
-// sensitive name with a value (sensitivePairIn), or a sensitive member of
-// JSON text.
+// sensitive name with a value (sensitivePairIn), fish's set NAME value
+// with a sensitive name, or a sensitive member of JSON text.
 func plainHit(v string) bool {
 	if secretShapes.MatchString(v) || textAuthScheme.MatchString(v) || textUserinfo.MatchString(v) {
 		return true
@@ -381,6 +384,11 @@ func plainHit(v string) bool {
 	}
 	if sensitivePairIn(v) {
 		return true
+	}
+	for _, m := range fishSet.FindAllStringSubmatch(v, -1) {
+		if sensitiveEnvName(m[1]) {
+			return true
+		}
 	}
 	if strings.Contains(v, `"`) {
 		for _, p := range jsonPair.FindAllStringSubmatch(v, -1) {
