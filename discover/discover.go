@@ -2,6 +2,7 @@ package discover
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/output"
@@ -54,6 +55,22 @@ type ClientResult struct {
 // Result holds the full discovery output.
 type Result struct {
 	Clients []ClientResult `json:"clients"`
+	// Unreadable lists client configurations that exist but could not be
+	// read: a named pipe or device at a configuration path, a file over
+	// the size limit, or a permission error. Their servers are unknown.
+	// Absent configurations and files that do not parse are not listed.
+	Unreadable []UnreadableConfig `json:"unreadable,omitempty"`
+}
+
+// UnreadableConfig is a client configuration Scan could not read.
+type UnreadableConfig struct {
+	Client string `json:"client"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	// Mode is the file's type when it is not a regular file, else zero.
+	Mode os.FileMode `json:"-"`
+	// Err is the read error.
+	Err error `json:"-"`
 }
 
 // TotalServers returns the total number of MCP servers found.
@@ -123,6 +140,9 @@ func Scan() (*Result, error) {
 			case client.Name == "openclaw":
 				cr, oerr := scanOpenClawConfig(path)
 				if oerr != nil {
+					if u, ok := unreadable(client.Name, path, oerr); ok {
+						result.Unreadable = append(result.Unreadable, u)
+					}
 					continue
 				}
 				if len(cr.Servers) > 0 {
@@ -138,6 +158,9 @@ func Scan() (*Result, error) {
 			}
 
 			if err != nil {
+				if u, ok := unreadable(client.Name, path, err); ok {
+					result.Unreadable = append(result.Unreadable, u)
+				}
 				continue
 			}
 			if len(servers) > 0 {

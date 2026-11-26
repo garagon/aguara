@@ -180,9 +180,9 @@ func resolvedRoot(path string) string {
 // maxIgnoreFileBytes bounds a target's .aguaraignore, like .aguara.yml.
 const maxIgnoreFileBytes = 1 << 20
 
-// skipKind names why an entry with this mode is not scanned, or returns ""
+// SkipKind names why an entry with this mode is not scanned, or returns ""
 // for a regular file.
-func skipKind(mode os.FileMode) string {
+func SkipKind(mode os.FileMode) string {
 	switch {
 	case mode.IsRegular():
 		return ""
@@ -261,7 +261,7 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		// opening a pipe or device can block or never end. They are listed
 		// as skipped unless an exclusion covers them anyway; as before, a
 		// pattern that matches one is not counted as an exclusion.
-		if kind := skipKind(info.Mode()); kind != "" {
+		if kind := SkipKind(info.Mode()); kind != "" {
 			if !isBinaryExt(path) && !td.matchesIgnore(relPath) {
 				entry := types.SkippedFile{Path: relPath, Kind: kind}
 				if kind == types.SkippedSymlink {

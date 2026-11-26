@@ -2,7 +2,9 @@ package discover
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/garagon/aguara/internal/safefile"
 )
@@ -17,7 +19,37 @@ const maxConfigBytes = 512 << 20
 // a named pipe or device found at a configuration path is not read, because
 // reading it could block or never end.
 func readConfig(path string) ([]byte, error) {
-	return safefile.ReadRegular(path, true, maxConfigBytes)
+	data, err := safefile.ReadRegular(path, true, maxConfigBytes)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, &configReadError{err: err}
+	}
+	return data, err
+}
+
+// configReadError is a configuration that exists but could not be read, as
+// opposed to one that is absent or does not parse.
+type configReadError struct{ err error }
+
+func (e *configReadError) Error() string { return e.err.Error() }
+func (e *configReadError) Unwrap() error { return e.err }
+
+// unreadable describes a configuration that could not be read, or returns
+// false for any other error (absent, or not valid configuration).
+func unreadable(client, path string, err error) (UnreadableConfig, bool) {
+	var readErr *configReadError
+	if !errors.As(err, &readErr) {
+		return UnreadableConfig{}, false
+	}
+	u := UnreadableConfig{Client: client, Path: path, Reason: "could not be read", Err: readErr.err}
+	var notRegular *safefile.NotRegularError
+	switch {
+	case errors.As(err, &notRegular):
+		u.Mode = notRegular.Mode
+		u.Reason = "is a " + safefile.DescribeMode(notRegular.Mode) + ", not a regular file"
+	case errors.Is(err, safefile.ErrTooLarge):
+		u.Reason = fmt.Sprintf("exceeds the %d-byte limit", maxConfigBytes)
+	}
+	return u, true
 }
 
 // mcpConfigJSON represents the common structure of MCP client config files.

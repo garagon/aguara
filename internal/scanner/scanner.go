@@ -352,7 +352,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 			}
 			continue
 		}
-		if kind := skipKind(info.Mode()); kind != "" {
+		if kind := SkipKind(info.Mode()); kind != "" {
 			entry := types.SkippedFile{Path: relPath, Kind: kind}
 			if kind == types.SkippedSymlink {
 				entry.Resolves = linkResolution(linkRoot, absPath)

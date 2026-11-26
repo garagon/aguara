@@ -199,6 +199,16 @@ func stageRank(stage string) int {
 	}
 }
 
+// FailureOf returns the failure an error from IncompleteScanError
+// describes, for callers that assemble a result themselves (scan --auto).
+func FailureOf(err error) (ScanFailure, bool) {
+	var f *scanFailure
+	if errors.As(err, &f) {
+		return f.failure, true
+	}
+	return ScanFailure{}, false
+}
+
 // asScanFailure returns err as recorded by IncompleteScanError, wrapping
 // any other error as a failure of stage at path.
 func asScanFailure(err error, stage, path string) *scanFailure {

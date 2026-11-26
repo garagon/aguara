@@ -48,7 +48,8 @@ func TestCheckNPM_ManifestOverStructureBudgetFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := incident.CheckNPM(incident.CheckOptions{Path: nm})
-	if err == nil || !strings.Contains(err.Error(), "node limit") {
+	// Rejected by the structure budget: the node or the member limit.
+	if err == nil || !(strings.Contains(err.Error(), "node limit") || strings.Contains(err.Error(), "members")) {
 		t.Fatalf("padded manifest accepted: %v", err)
 	}
 }

@@ -374,6 +374,25 @@ func runAutoScan(cmd *cobra.Command) error {
 	// The first incomplete configuration's error is the command's error;
 	// the other configurations are still scanned and reported.
 	var incompleteErr error
+	// A configuration that exists but could not be read is not silence:
+	// a named pipe or device is listed as skipped, any other read error
+	// makes the scan incomplete.
+	for _, u := range discovered.Unreadable {
+		fmt.Fprintf(os.Stderr, "warning: MCP client configuration %s %s; it was not scanned\n", output.TerminalText(u.Path), u.Reason)
+		if u.Mode != 0 {
+			aggregate.Skipped = append(aggregate.Skipped, types.SkippedFile{Path: u.Path, Kind: scanner.SkipKind(u.Mode)})
+			continue
+		}
+		err := scanner.IncompleteScanError("read target", u.Path, "", u.Err)
+		if incompleteErr == nil {
+			incompleteErr = err
+		}
+		if f, ok := scanner.FailureOf(err); ok {
+			aggregate.Errors = append(aggregate.Errors, f)
+		}
+		aggregate.Incomplete = true
+		aggregate.FailedOperations++
+	}
 	for i, path := range paths {
 		if sp != nil {
 			sp.Update(fmt.Sprintf("Scanning config %d/%d...", i+1, len(paths)))
@@ -414,6 +433,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		noteProjectPolicy(cmd, cfg, res, aggregate)
 	}
 
+	scanner.SortSkipped(aggregate.Skipped)
 	if incompleteErr != nil {
 		if len(aggregate.Errors) > types.MaxReportedFailures {
 			aggregate.Errors = aggregate.Errors[:types.MaxReportedFailures]

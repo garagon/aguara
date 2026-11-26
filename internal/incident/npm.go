@@ -71,11 +71,12 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 	// so the CLI can pass a refreshed local snapshot without
 	// touching package-level state.
 	matcher := matcherFor(opts)
-	packages, err := readInstalledNPMPackages(root)
+	packages, unread, err := readInstalledNPMPackages(root)
 	if err != nil {
 		return nil, err
 	}
 	result.PackagesRead = len(packages)
+	result.Findings = append(result.Findings, unreadManifestFindings(unread)...)
 	// npmFindings counts findings emitted by the npm package-match
 	// step only. Mirrors the per-ecosystem accounting the
 	// packagecheck path uses for its six ecosystems.
@@ -171,10 +172,15 @@ func resolveNPMRoot(p string) (string, error) {
 //
 // A manifest larger than maxInstalledManifestBytes is an error rather than
 // a package left out: padding a package.json must not hide the package.
-func readInstalledNPMPackages(root string) ([]NPMPackage, error) {
-	var pkgs []NPMPackage
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// A manifest that is not a readable regular file, and a directory that
+// cannot be listed, are returned in unread so the check can say they were
+// not evaluated.
+func readInstalledNPMPackages(root string) (pkgs []NPMPackage, unread []unreadManifest, err error) {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if path != root {
+				unread = append(unread, unreadManifest{path: path, reason: "could not be listed"})
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -186,9 +192,13 @@ func readInstalledNPMPackages(root string) ([]NPMPackage, error) {
 		if !isInstalledPackageManifest(path, root) {
 			return nil
 		}
-		pkg, err := readNPMPackage(path)
+		pkg, reason, err := readNPMPackage(path)
 		if err != nil {
 			return err
+		}
+		if reason != "" {
+			unread = append(unread, unreadManifest{path: path, reason: reason})
+			return nil
 		}
 		if pkg.Name != "" && pkg.Version != "" {
 			pkgs = append(pkgs, pkg)
@@ -196,9 +206,45 @@ func readInstalledNPMPackages(root string) ([]NPMPackage, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pkgs, nil
+	return pkgs, unread, nil
+}
+
+// unreadManifest is an installed package.json, or a directory under
+// node_modules, that the check could not read.
+type unreadManifest struct {
+	path, reason string
+}
+
+// maxUnreadFindings bounds the WARNING findings for unread manifests; the
+// rest are counted in one more finding.
+const maxUnreadFindings = 100
+
+// unreadManifestFindings turns unread manifests into WARNING findings: the
+// packages they describe were not checked.
+func unreadManifestFindings(unread []unreadManifest) []Finding {
+	var findings []Finding
+	for i, u := range unread {
+		if i == maxUnreadFindings {
+			findings = append(findings, Finding{
+				Severity: SevWarning,
+				Title:    fmt.Sprintf("%d more installed package manifests or directories could not be read; their packages were not checked", len(unread)-maxUnreadFindings),
+			})
+			break
+		}
+		dir, what := filepath.Dir(u.path), "Installed package manifest "+u.path
+		if u.reason == "could not be listed" {
+			dir, what = u.path, "Directory "+u.path
+		}
+		findings = append(findings, Finding{
+			Severity:    SevWarning,
+			Title:       fmt.Sprintf("%s %s; its packages were not checked", what, u.reason),
+			Path:        dir,
+			Remediation: "Inspect this package directory by hand: only a readable regular package.json can be checked against package intelligence.",
+		})
+	}
+	return findings
 }
 
 // maxInstalledManifestBytes bounds one installed package.json, matching the
@@ -276,28 +322,31 @@ func isInstalledPackageManifest(path, root string) bool {
 // version fields. Returns a zero-value NPMPackage if the file is
 // malformed, missing those fields, unreadable or too large.
 func parseNPMPackage(path string) NPMPackage {
-	pkg, _ := readNPMPackage(path)
+	pkg, _, _ := readNPMPackage(path)
 	return pkg
 }
 
 // readNPMPackage is parseNPMPackage with the size limit as an error. The
 // read follows a symbolic link (package managers link installed trees) but
-// never blocks on a named pipe or device, which are left out like any
-// unreadable manifest.
-func readNPMPackage(path string) (NPMPackage, error) {
-	pkg := NPMPackage{Dir: filepath.Dir(path)}
+// never blocks on a named pipe or device. A manifest that cannot be read
+// returns why in unread, so the caller can report it.
+func readNPMPackage(path string) (pkg NPMPackage, unread string, err error) {
+	pkg = NPMPackage{Dir: filepath.Dir(path)}
 	data, readErr := safefile.ReadRegular(path, true, maxInstalledManifestBytes)
-	if errors.Is(readErr, safefile.ErrTooLarge) {
-		return pkg, fmt.Errorf("npm check: %s exceeds %d-byte limit", path, maxInstalledManifestBytes)
-	}
-	if readErr != nil {
-		return pkg, nil // unreadable or not a regular file: left out, as before
+	var notRegular *safefile.NotRegularError
+	switch {
+	case errors.Is(readErr, safefile.ErrTooLarge):
+		return pkg, "", fmt.Errorf("npm check: %s exceeds %d-byte limit", path, maxInstalledManifestBytes)
+	case errors.As(readErr, &notRegular):
+		return pkg, "is a " + safefile.DescribeMode(notRegular.Mode) + ", not a regular file", nil
+	case readErr != nil:
+		return pkg, "could not be read", nil
 	}
 	// Millions of padding keys would cost gigabytes to decode; like an
 	// oversized manifest, that fails the check instead of hiding the
 	// package.
 	if err := packagecheck.CheckJSONNodeBudget(data, "package.json"); err != nil {
-		return pkg, fmt.Errorf("npm check: %s: %w", path, err)
+		return pkg, "", fmt.Errorf("npm check: %s: %w", path, err)
 	}
 	var manifest struct {
 		Name    string `json:"name"`
@@ -306,9 +355,9 @@ func readNPMPackage(path string) (NPMPackage, error) {
 	if jsonfields.Decode(data,
 		jsonfields.Field{Name: "name", To: &manifest.Name},
 		jsonfields.Field{Name: "version", To: &manifest.Version}) != nil {
-		return pkg, nil
+		return pkg, "", nil // malformed: not a package, as before
 	}
 	pkg.Name = manifest.Name
 	pkg.Version = manifest.Version
-	return pkg, nil
+	return pkg, "", nil
 }

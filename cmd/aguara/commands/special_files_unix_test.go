@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
+	"github.com/garagon/aguara/internal/scanner"
 	"github.com/garagon/aguara/internal/types"
 )
 
@@ -149,18 +150,44 @@ func TestScanStateBaselineAndConfigSpecialFiles(t *testing.T) {
 	require.NoError(t, runCLIWithin(t, "scan", pipeDir, "--project-policy", "trust", "--format", "json", "-o", report))
 }
 
-func TestScanAutoIgnoresSpecialClientConfig(t *testing.T) {
+// A client configuration that is a named pipe, or a link to an endless
+// device, is never read; it was dropped without a word and is now listed
+// as skipped. One that cannot be read at all makes the scan incomplete.
+func TestScanAutoReportsUnreadableClientConfigs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Chdir(t.TempDir())
-	mkfifoOrSkip(t, filepath.Join(home, ".cursor", "mcp.json"))
-	require.NoError(t, os.Symlink("/dev/zero", filepath.Join(home, ".claude.json")))
+	pipe := filepath.Join(home, ".cursor", "mcp.json")
+	mkfifoOrSkip(t, pipe)
+	zero := filepath.Join(home, ".claude.json")
+	require.NoError(t, os.Symlink("/dev/zero", zero))
 	out := filepath.Join(t.TempDir(), "auto.json")
-	require.NoError(t, runCLIWithin(t, "scan", "--auto", "--format", "json", "-o", out))
+	var err error
+	stderr := captureStderrBytes(t, func() { err = runCLIWithin(t, "scan", "--auto", "--format", "json", "-o", out) })
+	require.NoError(t, err)
+	require.Contains(t, string(stderr), "is a named pipe, not a regular file; it was not scanned")
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)
-	require.Contains(t, string(data), `"files_scanned": 0`)
+	var r skippedReport
+	require.NoError(t, json.Unmarshal(data, &r))
+	require.Zero(t, r.FilesScanned)
+	require.ElementsMatch(t, []types.SkippedFile{{Path: pipe, Kind: types.SkippedNamedPipe}, {Path: zero, Kind: types.SkippedDevice}}, r.Skipped)
+
+	require.NoError(t, os.Remove(zero))
+	require.NoError(t, os.WriteFile(zero, []byte(`{"mcpServers":{}}`), 0o600))
+	require.NoError(t, os.Chmod(zero, 0))
+	t.Cleanup(func() { _ = os.Chmod(zero, 0o600) })
+	if f, err := os.Open(zero); err == nil {
+		_ = f.Close()
+		return // permissions not enforced (running as root)
+	}
+	err = runCLIWithin(t, "scan", "--auto", "--format", "json", "-o", out)
+	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	data, err = os.ReadFile(out)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"complete": false`)
+	require.Contains(t, string(data), `"reason": "io"`)
 }
 
 func TestCheckSkipsSpecialInstalledManifests(t *testing.T) {
