@@ -143,9 +143,10 @@ func TestRedactValue(t *testing.T) {
 		"https://example.com/path?q=1":       "https://example.com/path?q=[REDACTED]",
 		"https://u:p@example.com":            "https://[REDACTED]@example.com",
 		"https://example.com/?token=abc&x=1": "https://example.com/?token=[REDACTED]&x=[REDACTED]",
-		"see docs/?token=abc&x=1":            "see docs/?token=[REDACTED]&x=1",
-		"Bearer abc.def-123":                 "Bearer [REDACTED]",
-		"key AKIAABCDEFGHIJKLMNOP":           "key [REDACTED]",
+		// A value that is not one URL is all or nothing.
+		"see docs/?token=abc&x=1":            "[REDACTED]",
+		"Bearer abc.def-123":                 "[REDACTED]",
+		"key AKIAABCDEFGHIJKLMNOP":           "[REDACTED]",
 		"sk-ant-api03-abcdefghijklmnopqrstu": "[REDACTED]",
 		"[REDACTED]":                         "[REDACTED]",
 		"":                                   "",

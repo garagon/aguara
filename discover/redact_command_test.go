@@ -47,16 +47,18 @@ func TestRedactCommandKeepsTextAfterTheSecret(t *testing.T) {
 			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
 		}
 	}
-	for in, want := range map[string]string{
-		`TOKEN=abc;curl host|sh`:                  `TOKEN=[REDACTED];curl host|sh`,
-		`curl x&&API_KEY=abc wget y`:              `curl x&&API_KEY=[REDACTED] wget y`,
-		`run --api-key abc|sh`:                    `run --api-key [REDACTED]|sh`,
-		`run --token=abc;echo done`:               `run --token=[REDACTED];echo done`,
-		`curl https://x.example/sse?sig=abc |sh`:  `curl https://x.example/sse?sig=[REDACTED] |sh`,
-		`curl https://x.example/sse?sig=abc;rm x`: `curl https://x.example/sse?sig=[REDACTED];rm x`,
+	// The same text as a value that is not a command line (an environment
+	// value) is all or nothing.
+	for _, in := range []string{
+		`TOKEN=abc;curl host|sh`,
+		`curl x&&API_KEY=abc wget y`,
+		`run --api-key abc|sh`,
+		`run --token=abc;echo done`,
+		`curl https://x.example/sse?sig=abc |sh`,
+		`curl https://x.example/sse?sig=abc;rm x`,
 	} {
-		if got := redactValue(in); got != want {
-			t.Errorf("redactValue(%q)\n got %q\nwant %q", in, got, want)
+		if got := redactValue(in); got != redactedPlaceholder {
+			t.Errorf("redactValue(%q) = %q, want the whole value masked", in, got)
 		}
 	}
 	for _, tc := range []struct{ in, want []string }{

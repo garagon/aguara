@@ -187,7 +187,7 @@ func TestDiscoverSecretInEveryPositionIsRedacted(t *testing.T) {
 	}
 	// What is not secret stays visible.
 	for _, want := range []string{"npx", "docker run -e DB_PASS=[REDACTED] image", "mcp-remote", "https://mcp.example.com/sse",
-		"region=[REDACTED]", "X-Trace", "--verbose --token [REDACTED]", "User Id=sa", "Encrypt=true"} {
+		"region=[REDACTED]", "X-Trace", "User Id=sa", "Encrypt=true"} {
 		if !strings.Contains(outputs["terminal"]+outputs["json"], want) {
 			t.Errorf("visible text %q missing", want)
 		}

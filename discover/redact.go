@@ -117,15 +117,14 @@ func redactHeader(name, value string) string {
 }
 
 var (
-	// authScheme matches the credential after an HTTP authorization scheme.
-	authScheme = regexp.MustCompile(`(?i)\b(bearer|basic|token)(\s+)[A-Za-z0-9._~+/=-]{4,}`)
-	// queryParam matches one name=value pair of a query outside a URL; the
-	// value ends at a blank, a quote or a shell operator.
-	queryParam = regexp.MustCompile("([?&])([^=&#\\s]+)=([^&#\\s;|()<>`\"']*)")
-	// urlPattern matches a URL with a scheme inside text, up to a blank, a
-	// quote, a shell operator or "&&"; a single "&" stays a query
-	// separator.
-	urlPattern = regexp.MustCompile("[A-Za-z][A-Za-z0-9+.-]*://(?:[^\\s\"'<>;|()`&]|&[^\\s\"'<>;|()`&])+")
+	// textURL matches a URL with a scheme inside text, up to a blank or a
+	// quote.
+	textURL = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
+	// textUserinfo finds a user:password@ part after a scheme even when the
+	// password holds characters a URL cannot, such as a blank or a quote.
+	textUserinfo = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@]*:[^/@]*@`)
+	// textAuthScheme finds a credential after an HTTP authorization scheme.
+	textAuthScheme = regexp.MustCompile(`(?i)(?:\b(?:bearer|basic)|(?:^|:)\s*token)\s+\S`)
 	// wholeURL is a value that is one URL: a scheme and no blanks.
 	wholeURL = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 	// headerArg matches a "Name: value" header such as the --header value
@@ -134,24 +133,20 @@ var (
 	// assignment matches a NAME=value argument such as the one after
 	// docker's -e.
 	assignment = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$`)
+	// psEnv matches PowerShell's $env:NAME, $env:NAME= and
+	// $env:NAME = value (the name, the "=" with its blanks, the value).
+	psEnv = regexp.MustCompile(`^(\$(?i:env):([A-Za-z_][A-Za-z0-9_]*))(\s*=\s*)?(.*)$`)
 	// connSegment matches one Name=value segment of a semicolon-separated
 	// connection string.
 	connSegment = regexp.MustCompile(`(^|;)(\s*)([A-Za-z][A-Za-z0-9 _.-]*?)(\s*=\s*)([^;]*)`)
 	// connPart is the start of a Name=value segment of a connection string.
 	connPart = regexp.MustCompile(`^\s*[A-Za-z][A-Za-z0-9 _.-]*\s*=`)
-	// jsonPair matches a "name": "value" member of JSON embedded in a value.
+	// jsonPair matches a "name": "value" member of JSON in text.
 	jsonPair = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"(\s*:\s*)"((?:[^"\\]|\\.)*)"`)
-	// inlineFlag matches a --name=value or --name value option inside a
-	// value such as an environment variable holding extra arguments. An
-	// unquoted value ends at a blank or a shell operator and never starts
-	// with "--", so a flag without a value does not hide the next flag.
-	inlineFlag = regexp.MustCompile(`(^|[\s;&|()<>])(--?[A-Za-z][A-Za-z0-9_-]*)(=|\s+)("[^"]*"|'[^']*'|-?[^\s;&|<>()-][^\s;&|<>()]*)`)
-	// inlineAssignment matches a NAME=value word inside a value, such as
-	// the env prefix of a command line or PowerShell's $env:NAME=value. An
-	// unquoted value ends at a blank or a shell operator.
-	inlineAssignment = regexp.MustCompile(`(^|[\s;&|()<>])((?i:\$env:)?[A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|<>()]+)`)
 	// winOption matches a Windows-style /name:value or /name=value option.
 	winOption = regexp.MustCompile(`^/([A-Za-z][A-Za-z0-9_-]*)([:=])(.*)$`)
+	// flagToken is a flag name: one or two dashes and a name.
+	flagToken = regexp.MustCompile(`^--?[A-Za-z][A-Za-z0-9_.-]*$`)
 )
 
 // Name rules. A name (environment variable, flag, header, query or JSON
@@ -276,7 +271,7 @@ func redactURL(u string) string {
 	if wholeURL.MatchString(u) {
 		return redactURLParts(u)
 	}
-	return urlPattern.ReplaceAllStringFunc(u, redactURLParts)
+	return textURL.ReplaceAllStringFunc(u, redactURLParts)
 }
 
 func redactURLParts(u string) string {
@@ -327,74 +322,121 @@ func redactParam(p string) string {
 	return name + "=" + redactedPlaceholder
 }
 
-// redactValue removes secret-shaped parts of a value and keeps the rest:
-// URL userinfo, query and fragment values, sensitive query parameters,
-// Password= and similar segments of connection strings, sensitive members
-// of embedded JSON, sensitive options inside the value, the credential
-// after an authorization scheme, and known token formats.
+// redactValue redacts a value that is not a command line: an environment
+// value under a name that is not sensitive, a shown header value, the URL
+// of a remote server, a string inside JSON, or an argument read as one
+// value. A value with a grammar is redacted by its parts: one URL (its
+// userinfo, query, fragment and credential-like path segments), JSON
+// (redactJSON), or a connection string whose every ";" part is Name=value
+// (its sensitive parts). Any other value is all or nothing: when any rule
+// matches anywhere in it (plainHit), the whole value is replaced, so no
+// part of a secret that holds an operator, an escape or a quote is shown.
 func redactValue(v string) string {
-	return redactText(v, true)
-}
-
-// redactText is redactValue; with urls false it leaves URLs alone, for a
-// command line whose words, URLs included, were redacted one by one.
-func redactText(v string, urls bool) string {
 	if v == "" || v == redactedPlaceholder {
 		return v
 	}
 	if red, ok := redactJSON(v); ok {
 		return red
 	}
-	if urls {
-		v = redactURL(v)
-	}
-	if strings.ContainsAny(v, "?&") {
-		v = queryParam.ReplaceAllStringFunc(v, func(m string) string {
-			p := queryParam.FindStringSubmatch(m)
-			if p[3] == "" || p[3] == redactedPlaceholder || !sensitiveName(p[2]) {
-				return m
-			}
-			return p[1] + p[2] + "=" + redactedPlaceholder
-		})
+	if wholeURL.MatchString(v) {
+		if textUserinfo.MatchString(v) && types.SanitizeURLUserinfo(v, redactedPlaceholder+"@") == v {
+			// A password the URL reader cannot delimit.
+			return redactedPlaceholder
+		}
+		return secretShapes.ReplaceAllString(redactURL(v), redactedPlaceholder)
 	}
 	if connectionString(v) {
-		v = connSegment.ReplaceAllStringFunc(v, func(m string) string {
-			p := connSegment.FindStringSubmatch(m)
-			if p[5] == "" || strings.HasPrefix(strings.TrimSpace(p[5]), redactedPlaceholder) || !sensitiveEnvName(p[3]) {
-				return m
-			}
-			return p[1] + p[2] + p[3] + p[4] + redactedPlaceholder
-		})
+		return redactConnectionString(v)
+	}
+	if plainHit(v) {
+		return redactedPlaceholder
+	}
+	return v
+}
+
+// redactConnectionString masks the value of each part whose name is
+// sensitive or whose value has a hit of its own.
+func redactConnectionString(v string) string {
+	return connSegment.ReplaceAllStringFunc(v, func(m string) string {
+		p := connSegment.FindStringSubmatch(m)
+		if p[5] == "" || !sensitiveEnvName(p[3]) && !plainHit(p[5]) {
+			return m
+		}
+		return p[1] + p[2] + p[3] + p[4] + redactedPlaceholder
+	})
+}
+
+// plainHit reports whether any redaction rule matches anywhere in v: a
+// known token format, a credential after an authorization scheme, a URL
+// with userinfo, a query, a fragment or a credential-like path segment, a
+// sensitive name with a value (sensitivePairIn), or a sensitive member of
+// JSON text.
+func plainHit(v string) bool {
+	if secretShapes.MatchString(v) || textAuthScheme.MatchString(v) || textUserinfo.MatchString(v) {
+		return true
+	}
+	if strings.Contains(v, "://") && redactURL(v) != v {
+		return true
+	}
+	if sensitivePairIn(v) {
+		return true
 	}
 	if strings.Contains(v, `"`) {
-		v = jsonPair.ReplaceAllStringFunc(v, func(m string) string {
-			p := jsonPair.FindStringSubmatch(m)
-			if p[3] == "" || !sensitiveEnvName(p[1]) {
-				return m
+		for _, p := range jsonPair.FindAllStringSubmatch(v, -1) {
+			if p[3] != "" && sensitiveEnvName(p[1]) {
+				return true
 			}
-			return `"` + p[1] + `"` + p[2] + `"` + redactedPlaceholder + `"`
-		})
+		}
 	}
-	if strings.Contains(v, "-") {
-		v = inlineFlag.ReplaceAllStringFunc(v, func(m string) string {
-			p := inlineFlag.FindStringSubmatch(m)
-			if strings.HasPrefix(p[4], "--") || unquoted(p[4]) == redactedPlaceholder || !sensitiveName(strings.TrimLeft(p[2], "-")) {
-				return m
+	return false
+}
+
+// isNameByte reports whether c can be part of a name in text.
+func isNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-'
+}
+
+// sensitivePairIn reports whether v holds a sensitive name followed by a
+// value anywhere: NAME=value or NAME = value (also $env:NAME = value and
+// ?name=value), Name: value and /name:value, --flag=value or --flag value.
+// Names before "=" follow the environment-name rule; flags and names before
+// ":" follow the precise rule, so --keyboard us is not a hit.
+func sensitivePairIn(v string) bool {
+	for i := 0; i < len(v); {
+		if !isNameByte(v[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(v) && isNameByte(v[j]) {
+			j++
+		}
+		name, rest := v[i:j], v[j:]
+		i = j
+		bare := strings.TrimLeft(name, "-")
+		if bare == "" {
+			continue
+		}
+		flag := len(bare) < len(name)
+		after := strings.TrimLeft(rest, " \t")
+		switch {
+		case strings.HasPrefix(after, "=") || strings.HasPrefix(after, ":"):
+			value := strings.TrimLeft(after[1:], " \t")
+			if value == "" || strings.HasPrefix(value, "//") || after[0] == '=' && value[0] == '=' {
+				continue
 			}
-			return p[1] + p[2] + p[3] + redactedPlaceholder
-		})
-	}
-	if strings.Contains(v, "=") {
-		v = inlineAssignment.ReplaceAllStringFunc(v, func(m string) string {
-			p := inlineAssignment.FindStringSubmatch(m)
-			if unquoted(p[3]) == redactedPlaceholder || !sensitiveEnvName(p[2]) {
-				return m
+			if flag || after[0] == ':' {
+				if sensitiveName(bare) {
+					return true
+				}
+			} else if sensitiveEnvName(bare) {
+				return true
 			}
-			return p[1] + p[2] + "=" + redactedPlaceholder
-		})
+		case flag && len(after) < len(rest) && after != "" && !strings.HasPrefix(after, "--") && len(bare) > 1 && sensitiveName(bare):
+			return true
+		}
 	}
-	v = authScheme.ReplaceAllString(v, "${1}${2}"+redactedPlaceholder)
-	return secretShapes.ReplaceAllString(v, redactedPlaceholder)
+	return false
 }
 
 // connectionString reports whether v reads as a semicolon-separated
@@ -542,16 +584,24 @@ func maskJSONNode(n any, depth int) (any, bool) {
 }
 
 // redactArgValue redacts one argument, or the value of a --flag=value
-// argument: a sensitive "Name: value" header, a sensitive NAME=value
-// assignment, a Windows-style /name:value option whose name is sensitive
+// argument: a sensitive "Name: value" header, PowerShell's $env:NAME =
+// value or a NAME=value assignment with a sensitive name (only the value
+// is replaced; the value of another NAME=value is redacted by
+// redactValue), a Windows-style /name:value option whose name is sensitive
 // or is /p (a password in many Windows tools; /p:Name=Value is read as an
-// assignment), and anything redactValue removes.
+// assignment), and otherwise the whole argument as one value (redactValue).
 func redactArgValue(a string) string {
 	if m := headerArg.FindStringSubmatch(a); m != nil && m[2] != "" && !strings.HasPrefix(m[2], "//") && sensitiveName(m[1]) {
 		return m[1] + ": " + redactedPlaceholder
 	}
-	if m := assignment.FindStringSubmatch(a); m != nil && m[2] != "" && sensitiveEnvName(m[1]) {
-		return m[1] + "=" + redactedPlaceholder
+	if m := psEnv.FindStringSubmatch(a); m != nil && m[3] != "" && m[4] != "" && sensitiveEnvName(m[2]) {
+		return m[1] + m[3] + redactedPlaceholder
+	}
+	if m := assignment.FindStringSubmatch(a); m != nil && m[2] != "" {
+		if sensitiveEnvName(m[1]) {
+			return m[1] + "=" + redactedPlaceholder
+		}
+		return m[1] + "=" + redactValue(m[2])
 	}
 	if m := winOption.FindStringSubmatch(a); m != nil && m[3] != "" {
 		switch {
@@ -560,6 +610,7 @@ func redactArgValue(a string) string {
 		case strings.EqualFold(m[1], "p") || sensitiveName(m[1]):
 			return "/" + m[1] + m[2] + redactedPlaceholder
 		}
+		return "/" + m[1] + m[2] + redactValue(m[3])
 	}
 	return redactValue(a)
 }
@@ -572,13 +623,15 @@ func redactArgValue(a string) string {
 // never takes the next command as its value. Only the bytes of a word that
 // change are rewritten, in place, so quoting, operators and all other text
 // are kept as written. An unterminated quote (or a trailing backslash)
-// masks everything from it to the end.
+// masks everything from it to the end. The
+// rebuilt line is not read again: the words cover all of it, and only a
+// known token format that is still present is masked, as a last check.
 func redactCommand(cmd string) string {
 	if red, ok := redactJSON(cmd); ok {
 		return red
 	}
-	if !strings.ContainsAny(cmd, " \t\n"+shellOperatorChars) {
-		return redactValue(cmd)
+	if !strings.ContainsAny(cmd, shellSyntax) {
+		return redactArgValue(cmd)
 	}
 	words, open := shellWords(cmd)
 	values := make([]string, 0, len(words)+1)
@@ -616,10 +669,10 @@ func redactCommand(cmd string) string {
 			b.WriteString(cmd[open.start:open.end])
 		}
 		b.WriteString(redactedPlaceholder)
-		return redactText(b.String(), false)
+		return secretShapes.ReplaceAllString(b.String(), redactedPlaceholder)
 	}
 	b.WriteString(cmd[last:])
-	return redactText(b.String(), false)
+	return secretShapes.ReplaceAllString(b.String(), redactedPlaceholder)
 }
 
 // shellOperatorChars end a word outside quotes, like a blank: the shell
@@ -752,7 +805,7 @@ func rewriteWord(s string, w shellWord, red string) string {
 	for changed := true; changed; {
 		changed = false
 		for _, rg := range w.regions {
-			inside := rg.quote != '\\' && lo > rg.start && hi < rg.end
+			inside := (rg.quote == '\'' || rg.quote == '"') && lo > rg.start && hi < rg.end
 			if inside || hi <= rg.start || lo >= rg.end {
 				continue
 			}
@@ -768,7 +821,7 @@ func rewriteWord(s string, w shellWord, red string) string {
 	escaped := false
 	for _, rg := range w.regions {
 		switch {
-		case rg.quote != '\\' && lo > rg.start && hi < rg.end:
+		case (rg.quote == '\'' || rg.quote == '"') && lo > rg.start && hi < rg.end:
 			ctx = rg.quote
 		case rg.quote == '\\' && rg.start >= lo && rg.end <= hi:
 			escaped = true
@@ -810,15 +863,6 @@ func quoteLike(orig, value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// unquoted strips one pair of surrounding quotes, for comparing a matched
-// value with the placeholder.
-func unquoted(s string) string {
-	if n := len(s); n >= 2 && (s[0] == '"' || s[0] == '\'') && s[n-1] == s[0] {
-		return s[1 : n-1]
-	}
-	return s
-}
-
 // headerFlags take an HTTP header as their value (mcp-remote, curl).
 var headerFlags = map[string]bool{"--header": true, "--headers": true, "-H": true, "-header": true}
 
@@ -843,52 +887,79 @@ func takesScript(a string) bool {
 	return (len(a) <= 5 && scriptFlag.MatchString(a)) || strings.EqualFold(a, "-command") || strings.EqualFold(a, "/c") || strings.EqualFold(a, "/k")
 }
 
-// redactScript redacts a command line given as one argument: one word is
-// redacted as an argument, anything with blanks or shell operators as a
-// command.
+// redactScript redacts a command line given as one argument: a plain word
+// is redacted as an argument, anything with blanks, quotes, escapes,
+// substitutions or shell operators as a command.
 func redactScript(a string) string {
-	if !strings.ContainsAny(a, " \t\n"+shellOperatorChars) {
+	if !strings.ContainsAny(a, shellSyntax) {
 		return redactArgValue(a)
 	}
 	return redactCommand(a)
 }
 
-// redactArgs redacts a server's command-line arguments. The value of a
-// flag whose name suggests a secret is replaced, whether it follows the
-// flag (--api-key x, also a value starting with a single dash) or is
-// joined to it (--token=x); a header given to --header or -H keeps only
-// its name unless its value is never a secret; a --flag=value whose value
-// is a sensitive NAME=value assignment (--env=API_KEY=...) and a separate
-// NAME=value argument (-e DB_PASS=...) are redacted too, as are
-// secret-shaped values anywhere. The argument after -c (and -lc, /c, /k,
-// -Command) is a command line and is redacted as one. Commands, package
-// names and other arguments stay visible.
+// shellSyntax are the characters that make a string more than one plain
+// word for a shell.
+const shellSyntax = " \t\n'\"\\`$" + shellOperatorChars
+
+// argNext is what an argument makes of the one after it.
+type argNext int
+
+const (
+	nextAny      argNext = iota
+	nextSecret           // the value of a sensitive flag, or the credential after Bearer
+	nextHeader           // the value of --header or -H
+	nextScript           // a command line, after -c, /c, /k or -Command
+	nextPSEquals         // after $env:NAME with a sensitive NAME: "=" or "=value"
+)
+
+// redactArgs redacts a server's command-line arguments, which are words:
+// only the secret part of a word is replaced. The value of a flag whose
+// name suggests a secret is replaced, whether it follows the flag
+// (--api-key x, also a value starting with a single dash) or is joined to
+// it (--token=x); a header given to --header or -H keeps only its name
+// unless its value is never a secret; a sensitive NAME=value or
+// $env:NAME = value keeps its name; the word after Bearer or Basic (or
+// Token after a word ending in ":") is a credential; the argument after
+// -c (and -lc, /c, /k, -Command) is a command line and is redacted as one.
+// Any other word is redacted as one value (redactArgValue). Commands,
+// package names and other arguments stay visible.
 func redactArgs(args []string) []string {
 	if args == nil {
 		return nil
 	}
 	out := make([]string, len(args))
-	valueIsSecret, valueIsHeader, valueIsScript := false, false, false
+	next := nextAny
 	for i, a := range args {
-		secret, header, script := valueIsSecret, valueIsHeader, valueIsScript
-		valueIsSecret, valueIsHeader, valueIsScript = false, false, false
+		state := next
+		next = nextAny
 		switch {
-		case secret && !strings.HasPrefix(a, "--"):
+		case state == nextSecret && !strings.HasPrefix(a, "--"):
 			out[i] = redactedPlaceholder
 			continue
-		case header && !strings.HasPrefix(a, "--"):
+		case state == nextHeader && !strings.HasPrefix(a, "--"):
 			out[i] = redactHeaderArg(a)
 			continue
-		case script && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
+		case state == nextScript && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
 			out[i] = redactScript(a)
+			continue
+		case state == nextPSEquals && a == "=":
+			out[i], next = a, nextSecret
+			continue
+		case state == nextPSEquals && strings.HasPrefix(a, "="):
+			out[i] = "=" + redactedPlaceholder
 			continue
 		}
 		if a == "--" || !strings.HasPrefix(a, "-") {
-			out[i] = redactArgValue(a)
-			valueIsScript = takesScript(a)
+			out[i], next = redactWord(a, i > 0 && strings.HasSuffix(args[i-1], ":"))
 			continue
 		}
 		name, value, hasValue := strings.Cut(a, "=")
+		if !flagToken.MatchString(name) {
+			// Text that starts with a dash but is not a flag, such as one
+			// argument holding several options: one value.
+			out[i] = redactValue(a)
+			continue
+		}
 		flag := strings.TrimLeft(name, "-")
 		switch {
 		case hasValue && headerFlags[name]:
@@ -898,17 +969,43 @@ func redactArgs(args []string) []string {
 		case hasValue:
 			out[i] = name + "=" + redactArgValue(value)
 		case headerFlags[a]:
-			valueIsHeader = true
-			out[i] = a
+			out[i], next = a, nextHeader
 		default:
-			// A one-letter flag cannot be known to be secret; its value is
-			// still redacted when it looks like a token.
-			valueIsSecret = len(flag) > 1 && sensitiveName(flag)
-			valueIsScript = !valueIsSecret && takesScript(a)
 			out[i] = redactValue(a)
+			switch {
+			case len(flag) > 1 && sensitiveName(flag):
+				// A one-letter flag cannot be known to be secret; its value
+				// is still redacted when it holds a secret.
+				next = nextSecret
+			case takesScript(a):
+				next = nextScript
+			}
 		}
 	}
 	return out
+}
+
+// redactWord redacts an argument that is not a flag and says what it
+// makes of the next one.
+func redactWord(a string, afterColon bool) (string, argNext) {
+	if m := psEnv.FindStringSubmatch(a); m != nil && sensitiveEnvName(m[2]) {
+		switch {
+		case m[3] != "" && m[4] != "":
+			return m[1] + m[3] + redactedPlaceholder, nextAny
+		case m[3] != "":
+			return a, nextSecret
+		case m[4] == "":
+			return a, nextPSEquals
+		}
+	}
+	out := redactArgValue(a)
+	switch {
+	case takesScript(a):
+		return out, nextScript
+	case strings.EqualFold(a, "bearer") || strings.EqualFold(a, "basic") || afterColon && strings.EqualFold(a, "token"):
+		return out, nextSecret
+	}
+	return out, nextAny
 }
 
 // redactHeaders keeps every header name and masks every value, except the

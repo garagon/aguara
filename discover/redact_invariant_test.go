@@ -5,29 +5,24 @@ import (
 	"testing"
 )
 
-// Redaction may only replace secret values. For every secret position,
+// Command-line mode replaces only the secret. For every secret position,
 // built from a marker plus non-secret text (programs, flags, paths, URLs
 // and shell operators) placed before and after it, the marker is gone and
-// the text around it is shown exactly as written, in each place a command
-// line is printed: the command string, the script after -c (and -lc, /c,
-// -Command), a quoted -c script inside a command string, an environment
-// value, and an argument list.
+// the text around it is shown exactly as written, wherever a command line
+// is printed: the command string, the script after -c (and -lc, /c,
+// -Command), a quoted script inside a command string, and an argument
+// list. A value that is not a command line is all or nothing instead (see
+// TestPlainTextNeverShowsPartOfASecret).
 //
-// Where a value cannot be delimited, the secret wins and the smallest span
-// that holds it is masked. Those cases are not generated here; each has its
-// own test below:
+// The word is the unit: what the shell reads as one word with the secret
+// is masked with it. Those cases are not generated here; each has its own
+// test below:
 //   - a whole argument that is a sensitive NAME=value, or the argument after
 //     a sensitive flag, is masked whole, because in an argument list the
 //     value is the entire argument;
-//   - in a value whose every ";"-separated part is Name=value (a
-//     connection string), a sensitive part is masked to the next ";";
-//   - a URL in text runs to a blank, a quote, a shell operator or "&&", so
-//     text joined to a secret query value by a single "&" is read as part
-//     of the query and masked; a value without blanks that starts with a
-//     URL is one URL;
-//   - the word after an authorization scheme (Bearer, Basic, Token) is a
-//     credential;
-//   - an unterminated quote masks everything from the quote to the end.
+//   - the word after Bearer or Basic is the credential;
+//   - an unterminated quote or a trailing backslash masks everything from
+//     it to the end.
 func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 	const marker = "Mk7secretQz"
 	type form struct {
@@ -102,15 +97,6 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 							cmd := `bash -lc "` + line + `"`
 							check(t, f.name+" in a double-quoted script", cmd, redactCommand(cmd), `bash -lc "`+before, after+`"`)
 						}
-						// In text, a single "&" right after a URL is a query
-						// separator, and a value without blanks that starts
-						// with a URL is one URL (see above).
-						singleAmp := strings.HasPrefix(op2, "&") && !strings.HasPrefix(op2, "&&")
-						oneURL := !strings.ContainsAny(line, " \t\n")
-						if !f.url || !singleAmp && !oneURL {
-							env := redactEnv(map[string]string{"SETUP": line})["SETUP"]
-							check(t, f.name+" in an environment value", line, env, before, after)
-						}
 					}
 				}
 				if f.argv == nil {
@@ -154,21 +140,17 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 	}
 }
 
-// The cases where the secret cannot be delimited: the smallest span that
-// holds it is masked.
-func TestRedactionMasksUndelimitedValues(t *testing.T) {
+// What the shell reads as one word with the secret is masked with it.
+func TestRedactionMasksTheWholeWord(t *testing.T) {
 	for in, want := range map[string]string{
-		// A connection string: the value runs to the next ";".
-		"Server=db;User Id=sa;Password=correct horse && more;Encrypt=true": "Server=db;User Id=sa;Password=[REDACTED];Encrypt=true",
-		// A single "&" after a secret query value belongs to the query.
-		"curl https://x.example/sse?sig=abc&wget": "curl https://x.example/sse?sig=[REDACTED]&[REDACTED]",
-		// One URL without blanks: ";" separates query parameters.
-		"https://x.example/sse?sig=abc;rm": "https://x.example/sse?sig=[REDACTED];[REDACTED]",
-		// The word after an authorization scheme is the credential.
-		"Authorization: Bearer abc123 && curl x": "Authorization: Bearer [REDACTED] && curl x",
+		"echo Authorization: Bearer abc123 && curl x": "echo Authorization: Bearer [REDACTED] && curl x",
+		`tool --api-key ab\;cd && echo done`:          "tool --api-key [REDACTED] && echo done",
+		"tool --api-key 'ab;cd' && echo done":         "tool --api-key '[REDACTED]' && echo done",
+		`env TOKEN=ab\ cd node x`:                     "env TOKEN=[REDACTED] node x",
+		"tool --token 'abc":                           "tool --token [REDACTED]",
 	} {
-		if got := redactValue(in); got != want {
-			t.Errorf("redactValue(%q)\n got %q\nwant %q", in, got, want)
+		if got := redactCommand(in); got != want {
+			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
 		}
 	}
 }
