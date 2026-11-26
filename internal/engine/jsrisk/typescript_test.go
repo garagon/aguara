@@ -1,6 +1,7 @@
 package jsrisk
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -231,6 +232,36 @@ func TestTypeScriptGenericCallTypeArgumentsAreNetworkSinks(t *testing.T) {
 	for _, content := range cases {
 		if !hasRule(analyze(t, "client.ts", content), RuleCISecretHarvest) {
 			t.Errorf("expected JS_CI_SECRET_HARVEST_001 for %q", content)
+		}
+	}
+}
+
+// JavaScript targets match the module binding and network sink patterns
+// without their TypeScript-only alternatives, which valid JavaScript never
+// uses; TypeScript targets keep them.
+func TestTypeScriptOnlyAlternativesApplyToTypeScript(t *testing.T) {
+	for _, re := range typeScriptOnlyPatterns {
+		js := javaScriptVariants[re]
+		if js == nil || js.String() == re.String() {
+			t.Fatalf("pattern has no TypeScript-only alternative to drop: %s", re)
+		}
+	}
+	ts, js := &jsLexer{typescript: true}, &jsLexer{}
+	for _, tc := range []struct {
+		re         *regexp.Regexp
+		typeScript string
+		plain      string
+	}{
+		{networkSinkRe, "await fetch<Response>('https://x.example')", "await fetch('https://x.example')"},
+		{identifierHTTPMethodCallRe, "client.post<Reply>(url)", "client.post(url)"},
+		{childProcessAliasAssignRe, "import cp = require('child_process');", "const cp = require('child_process');"},
+		{fsModuleAliasRe, "import fs = require('fs');", "const fs = require('fs');"},
+	} {
+		if !ts.dialect(tc.re).MatchString(tc.typeScript) || js.dialect(tc.re).MatchString(tc.typeScript) {
+			t.Errorf("%q: the TypeScript form must match in TypeScript only", tc.typeScript)
+		}
+		if !ts.dialect(tc.re).MatchString(tc.plain) || !js.dialect(tc.re).MatchString(tc.plain) {
+			t.Errorf("%q: the JavaScript form must match in both dialects", tc.plain)
 		}
 	}
 }

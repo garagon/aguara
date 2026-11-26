@@ -342,12 +342,12 @@ func computeMetricsWith(lx *jsLexer, content []byte) *metrics {
 	// code, not inside a string ("fetch('x')") or a regex (/fetch\(/).
 	// Streamed so a file full of stringified `fetch(` examples does not
 	// force materializing every match.
-	if loc := firstCodeTokenIndex(view, networkSinkRe); loc >= 0 {
+	if loc := firstCodeTokenIndex(view, lx.dialect(networkSinkRe)); loc >= 0 {
 		m.HasNetworkSink = true
 		m.LineNetworkSink = lineOf(code, loc)
 	}
 	if !m.HasNetworkSink {
-		if line := findNetworkAliasSink(code); line > 0 {
+		if line := findNetworkAliasSink(lx, code); line > 0 {
 			m.HasNetworkSink = true
 			m.LineNetworkSink = line
 		}
@@ -686,7 +686,7 @@ func collectChildProcessCalls(lx *jsLexer, content []byte) []cpCallSite {
 	// Only names that are ACTUALLY bound from child_process count as
 	// receivers; an unrelated local variable called `cp` does not.
 	aliases := map[string]bool{}
-	for _, m := range childProcessAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(childProcessAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		if insideStringInterior(sr, m[2]) {
 			continue
 		}
@@ -1366,9 +1366,9 @@ func fsDataArg(code []byte, firstArgEndIdx int, stringRanges [][2]int) []byte {
 // real fs / fs-extra / fs/promises import, so a local `writer.writeFileSync`
 // or a stringified example is not counted. Shared by the DNS-TXT envs.txt
 // staging check and the host-trust tamper detector.
-func collectFSWriteCalls(stripped []byte, stringRanges [][2]int) []fsWriteCall {
+func collectFSWriteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) []fsWriteCall {
 	fsBindings := collectModuleBindings(stripped, stringRanges,
-		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+		lx.dialect(fsModuleAliasRe), fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
 	var calls []fsWriteCall
 	add := func(matchEnd int) {
 		openParen := matchEnd - 1
@@ -1851,7 +1851,7 @@ func detectHostTamper(path string, m *metrics, content []byte) []types.Finding {
 	view := m.lexer.view(content)
 	code := view.Code
 	stringRanges := view.StringRanges
-	fsCalls := collectFSWriteCalls(code, stringRanges)
+	fsCalls := collectFSWriteCalls(m.lexer, code, stringRanges)
 
 	// Shell content is the bound command string (exec/execSync first arg,
 	// shelljs.exec, or the -c script of a spawn/execa shell). KNOWN LIMITS
@@ -2305,13 +2305,13 @@ func isBroadHomePathArg(parg []byte, osBindings moduleBindings) bool {
 // ranges; the path token / os.homedir() target is read from there.
 func collectFSDeleteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) []fsDeleteCall {
 	fsBindings := collectModuleBindings(stripped, stringRanges,
-		fsModuleAliasRe, fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
+		lx.dialect(fsModuleAliasRe), fsModuleAliasESMRe, fsDestructureRe, fsDestructureESMRe, fsModuleAliasESMCombinedRe)
 	fsExtraBindings := collectModuleBindings(stripped, stringRanges,
-		fsExtraAliasRe, fsExtraAliasESMRe, fsExtraDestructureRe, fsExtraDestructureESMRe, fsExtraAliasESMCombinedRe)
+		lx.dialect(fsExtraAliasRe), fsExtraAliasESMRe, fsExtraDestructureRe, fsExtraDestructureESMRe, fsExtraAliasESMCombinedRe)
 	// Aliases bound to fs/promises (or fs.promises): async-only, so a *Sync
 	// method on them does not exist.
 	fsPromisesAliases := map[string]bool{}
-	for _, re := range []*regexp.Regexp{fsPromisesAliasRequireRe, fsPromisesAliasDotRe, fsPromisesAliasESMRe, fsPromisesAliasESMCombinedRe} {
+	for _, re := range []*regexp.Regexp{lx.dialect(fsPromisesAliasRequireRe), fsPromisesAliasDotRe, fsPromisesAliasESMRe, fsPromisesAliasESMCombinedRe} {
 		for _, mt := range re.FindAllSubmatchIndex(stripped, -1) {
 			if insideStringInterior(stringRanges, mt[0]) {
 				continue
@@ -2452,7 +2452,7 @@ func collectFSDeleteCalls(lx *jsLexer, stripped []byte, stringRanges [][2]int) [
 	}
 	// rimraf(path), bound from the rimraf import (default or named).
 	rimrafAliases := map[string]bool{}
-	for _, mm := range rimrafAliasRe.FindAllSubmatchIndex(stripped, -1) {
+	for _, mm := range lx.dialect(rimrafAliasRe).FindAllSubmatchIndex(stripped, -1) {
 		if insideStringInterior(stringRanges, mm[2]) {
 			continue
 		}
@@ -3084,7 +3084,7 @@ func detectWiperTripwire(path string, m *metrics, content []byte) *types.Finding
 
 	// 1. fs / fs-extra / rimraf delete calls.
 	osBindings := collectModuleBindings(code, stringRanges,
-		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
+		m.lexer.dialect(osModuleAliasRe), osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
 	for _, c := range collectFSDeleteCalls(m.lexer, code, stringRanges) {
 		// A broad home wipe targets a populated directory tree; only a
 		// recursive method (rm/fs.rm with recursive, fs-extra remove, rimraf)
@@ -3172,7 +3172,7 @@ func collectShelljsExecCalls(lx *jsLexer, code []byte) []cpCallSite {
 		sites = append(sites, cpCallSite{Start: loc[0], ArgsStart: loc[1]})
 	}
 	aliases := map[string]bool{}
-	for _, mm := range shelljsAliasAssignRe.FindAllSubmatchIndex(code, -1) {
+	for _, mm := range lx.dialect(shelljsAliasAssignRe).FindAllSubmatchIndex(code, -1) {
 		if insideStringInterior(sr, mm[2]) {
 			continue
 		}
@@ -3202,9 +3202,9 @@ func collectShelljsExecCalls(lx *jsLexer, code []byte) []cpCallSite {
 // import statements so an unrelated object named `h` does not trip
 // the rule. Returns 0 when no alias has been imported or no aliased
 // call appears.
-func findNetworkAliasSink(content []byte) int {
+func findNetworkAliasSink(lx *jsLexer, content []byte) int {
 	aliases := map[string]bool{}
-	for _, m := range httpModuleAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(httpModuleAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		aliases[string(content[m[2]:m[3]])] = true
 	}
 	for _, m := range httpModuleAliasESMRe.FindAllSubmatchIndex(content, -1) {
@@ -3213,7 +3213,7 @@ func findNetworkAliasSink(content []byte) int {
 	if len(aliases) == 0 {
 		return 0
 	}
-	for _, m := range identifierHTTPMethodCallRe.FindAllSubmatchIndex(content, -1) {
+	for _, m := range lx.dialect(identifierHTTPMethodCallRe).FindAllSubmatchIndex(content, -1) {
 		if aliases[string(content[m[2]:m[3]])] {
 			return lineOf(content, m[2])
 		}
@@ -3483,6 +3483,33 @@ var networkSinkRe = regexp.MustCompile(
 // JavaScript the same bytes would be a chained comparison, which real code
 // does not write, so the network-sink signal is unchanged for .js files.
 const tsCallTypeArgs = `(?:<(?:[^<>()\n]|<[^<>()\n]*>){1,120}>\s*)?`
+
+// typeScriptOnlyPatterns accept TypeScript forms next to the JavaScript
+// ones: call type arguments (tsCallTypeArgs) and the `import x =
+// require('m')` binding (an `import` alternative next to const, let and
+// var). Neither form is valid JavaScript, and each alternative slows the
+// pattern on every file, so JavaScript targets use javaScriptVariants, the
+// same patterns without them (jsLexer.dialect).
+var typeScriptOnlyPatterns = []*regexp.Regexp{
+	networkSinkRe, identifierHTTPMethodCallRe, httpModuleAliasAssignRe, childProcessAliasAssignRe,
+	shelljsAliasAssignRe, dnsAliasAssignRe, rimrafAliasRe, fsExtraAliasRe, fsModuleAliasRe,
+	fsPromisesAliasRequireRe, osModuleAliasRe,
+}
+
+var javaScriptVariants = func() map[*regexp.Regexp]*regexp.Regexp {
+	variants := make(map[*regexp.Regexp]*regexp.Regexp, len(typeScriptOnlyPatterns))
+	for _, re := range typeScriptOnlyPatterns {
+		variants[re] = regexp.MustCompile(javaScriptPattern(re.String()))
+	}
+	return variants
+}()
+
+// javaScriptPattern removes the TypeScript-only alternatives from a
+// pattern's source.
+func javaScriptPattern(src string) string {
+	src = strings.ReplaceAll(src, tsCallTypeArgs, "")
+	return strings.ReplaceAll(src, "|import)", ")")
+}
 
 // httpModuleAliasAssignRe captures local names bound to the http,
 // https, or net modules via require, e.g.
@@ -4004,13 +4031,10 @@ var archiveTokenRe = regexp.MustCompile(`tar\.gz|\.gzip\b|\bnt-`)
 //
 // jsRegexLiteralStartingChars lists the characters that, when they
 // are the most recent non-whitespace token before a `/`, indicate
-// the `/` opens a regex literal rather than a division operator.
-// Plus a small set of keywords handled separately in
-// couldBeRegexStart. The list is conservative — it accepts as
-// "regex context" anything that cannot be the left operand of a
-// division. A few rare ambiguous cases (e.g. `++ / pattern /`) are
-// treated as division; in practice that only matters when a payload
-// uses such forms deliberately to evade comment stripping.
+// the `/` opens a regex literal rather than a division operator:
+// punctuation and operators after which an expression starts. A `}`,
+// a `)`, an identifier or keyword, and `++` / `--` depend on what
+// precedes them and are handled in regexStartsAt.
 var jsRegexLiteralStartingChars = map[byte]bool{
 	'=': true, '(': true, '[': true, '{': true, ',': true, ';': true,
 	':': true, '?': true, '!': true, '|': true, '&': true, '^': true,
@@ -4026,11 +4050,30 @@ var jsRegexLiteralStartingChars = map[byte]bool{
 // regex literal (`return`, `typeof`, etc.).
 //
 // This form builds a fresh regexContext for one question and is meant
-// for tests and one-off callers. The lexer walkers keep one regexContext
-// per pass so paren matching stays linear over the whole file.
+// for tests and one-off callers. It has no brace context, so a slash
+// right after a `}` reads as a division. The lexer walkers keep one
+// regexContext per pass, which tracks braces and keeps paren matching
+// linear over the whole file.
 func couldBeRegexStart(content []byte, i int) bool {
 	return newRegexContext(content).regexStartsAt(i)
 }
+
+// braceKind is what a `{` read as code opened, as far as a slash after the
+// matching `}` is concerned.
+type braceKind uint8
+
+const (
+	// braceStatement is a block, a function or class body, a switch body
+	// or a declaration body. A statement can start after its `}`, so a
+	// slash there starts a regex literal: `if (x) {} /re/.test(s)`.
+	braceStatement braceKind = iota
+	// braceExpression is an object literal, a destructuring pattern, an
+	// import or export list, a type literal or a function expression body.
+	// Its `}` ends an operand, so a slash after it is a division.
+	braceExpression
+	// braceSubstitution is the `${` of a template literal.
+	braceSubstitution
+)
 
 // regexContext answers couldBeRegexStart questions for one walker pass
 // over buf. The walker asks about slashes in increasing order and never
@@ -4048,10 +4091,19 @@ func couldBeRegexStart(content []byte, i int) bool {
 // and released when the pass ends. There is no depth cap: a cap would
 // change which '(' matches a ')' and with it the regex reading.
 //
+// Braces are tracked alongside, from the brace events the walker reports
+// for the bytes it reads as code (openBrace, closeBrace, openSubstitution,
+// closeSubstitution). Each `{` is classified when it is read, from the
+// token before it (braceKindAt), and pushed on a stack of one byte per
+// open brace; its `}` pops it. A slash right after that `}` is a regex
+// literal when the brace opened a statement-level body and a division when
+// it closed an expression. Classifying a `{` looks back over the
+// whitespace before it and over at most one paren header and two
+// keyword-length words, each of which ends at a distinct token, so the
+// brace work is linear in the file too (TestLexerBraceWorkIsLinear).
+//
 // typescript enables the postfix non-null reading (bangIsNonNullAssertion).
-// It is off for JavaScript targets, where a `!` is always logical negation,
-// so a JavaScript file gets exactly the reading it had before TypeScript
-// support.
+// It is off for JavaScript targets, where a `!` is always logical negation.
 type regexContext struct {
 	buf        []byte
 	typescript bool
@@ -4067,12 +4119,22 @@ type regexContext struct {
 	memoStart   int
 
 	restarts int // times a question went backwards and the stack was rebuilt
+
+	braces    []braceKind // kinds of the braces open at the walker's position
+	lastClose int         // offset of the last `}` read as code, -1 before the first
+	lastKind  braceKind   // what that `}` closed
+	steps     int         // bytes examined and stack operations for braces (tests bound it)
+
+	// findOpen, when set, replaces the forward paren stack. Tests set it to
+	// a backward scan to check the stack against.
+	findOpen func(buf []byte, closeParen int) int
 }
 
 func newRegexContext(buf []byte) *regexContext {
-	return &regexContext{buf: buf, memoClose: -1}
+	return &regexContext{buf: buf, memoClose: -1, lastClose: -1}
 }
 
+// regexStartsAt reports whether the `/` at offset i starts a regex literal.
 func (r *regexContext) regexStartsAt(i int) bool {
 	content := r.buf
 	j := i - 1
@@ -4091,25 +4153,32 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	if c == '!' && r.typescript && r.bangIsNonNullAssertion(j) {
 		return false
 	}
+	// `x++ / 2` and `x-- / 2` divide: a postfix update ends an operand. A
+	// prefix update (`++` after an operator, a keyword or a line break)
+	// leaves an expression to come.
+	if (c == '+' || c == '-') && j > 0 && content[j-1] == c {
+		k := j - 2
+		for k >= 0 && (content[k] == ' ' || content[k] == '\t' || content[k] == '\r') {
+			k--
+		}
+		return !r.operandEndsAt(k, true)
+	}
 	if jsRegexLiteralStartingChars[c] {
 		return true
+	}
+	// After a `}`, what the brace opened decides: a statement can start
+	// after a block or a declaration body, while an object literal or a
+	// function expression is an operand.
+	if c == '}' {
+		return r.lastClose == j && r.lastKind == braceStatement
 	}
 	// `)` preceding the `/` can be either:
 	//   - the closing of a function call: `f() / x` is division;
 	//   - the closing of a control-flow header: `if (x) /regex/`
 	//     is a regex literal. Find the matching `(` and inspect the
-	//     keyword before it. `if`, `while`, `for`, `switch`, `catch`
-	//     signal control-flow. An unmatched `)` reads as division.
+	//     keyword before it. An unmatched `)` reads as division.
 	if c == ')' {
-		keyword, _, matched := r.parenHeader(j)
-		if !matched {
-			return false
-		}
-		switch keyword {
-		case "if", "while", "for", "switch", "catch":
-			return true
-		}
-		return false
+		return r.closesStatementHeader(j)
 	}
 	// Identifier / keyword preceding the `/`. Walk back over
 	// identifier characters and check against a small list of
@@ -4117,57 +4186,512 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	if !isJSIdentifierByte(c) {
 		return false
 	}
-	switch keywordEndingAt(content, j+1) {
-	case "return", "typeof", "instanceof", "in", "delete",
-		"void", "new", "throw", "yield", "await", "case", "do":
+	word := keywordEndingAt(content, j+1)
+	start := j + 1 - len(word)
+	if word == "" || r.afterDot(start) {
+		// A property name is an operand whatever it is called:
+		// `stats.new / total`, `cfg?.default / 2`.
+		return false
+	}
+	switch word {
+	case "return", "typeof", "instanceof", "in", "delete", "void", "new", "throw",
+		"yield", "await", "case", "do", "else", "default":
+		return true
+	case "of":
+		// `of` is the for-of keyword only right after the loop binding
+		// (`for (const m of /re/g.exec(s))`); anywhere else it is a variable.
+		return r.sameLineOperandBefore(start)
+	}
+	return false
+}
+
+// closesStatementHeader reports whether the `)` at closeParen ends the
+// header of a statement (`if (...)`, `while (...)`, `for (...)`,
+// `for await (...)`, `with (...)`, `switch (...)`, `catch (...)`), after
+// which a statement or block follows rather than an operator.
+func (r *regexContext) closesStatementHeader(closeParen int) bool {
+	keyword, start, matched := r.parenHeader(closeParen)
+	if !matched || keyword == "" || r.afterDot(start) {
+		// A method call such as `arr.with(...)`, `p.catch(...)` or
+		// `Symbol.for(...)` is an operand.
+		return false
+	}
+	switch keyword {
+	case "if", "while", "for", "switch", "catch", "with":
+		return true
+	case "await":
+		return keywordBefore(r.buf, start) == "for"
+	}
+	return false
+}
+
+// operandEndsAt reports whether the token whose last byte is at offset j
+// ends an operand: an identifier (keywords after which an expression
+// starts excepted, but a property name after `.` or `?.` always counts), a
+// closing quote or backtick, a `]`, a `)` that does not end a statement
+// header, or a `}` that closed an expression. ofKeyword allows one look
+// further back to tell the for-of keyword from a variable named `of`.
+func (r *regexContext) operandEndsAt(j int, ofKeyword bool) bool {
+	if j < 0 {
+		return false
+	}
+	c := r.buf[j]
+	switch {
+	case c == ']', c == '\'', c == '"', c == '`':
+		return true
+	case c == ')':
+		_, _, matched := r.parenHeader(j)
+		return matched && !r.closesStatementHeader(j)
+	case c == '}':
+		return r.lastClose == j && r.lastKind == braceExpression
+	case isJSIdentifierByte(c):
+		word := keywordEndingAt(r.buf, j+1)
+		start := j + 1 - len(word)
+		if word == "" || r.afterDot(start) {
+			return true
+		}
+		switch word {
+		case "return", "typeof", "instanceof", "in", "delete", "void", "new", "throw",
+			"yield", "await", "case", "default", "do", "else":
+			return false
+		case "of":
+			// After an operand `of` can only be the for-of keyword.
+			return ofKeyword && !r.sameLineOperandBefore(start)
+		}
 		return true
 	}
 	return false
 }
 
+// skipSpaceBack returns the offset of the last byte at or before k that is
+// not whitespace, line breaks included, or -1.
+func (r *regexContext) skipSpaceBack(k int) int {
+	for k >= 0 {
+		switch r.buf[k] {
+		case ' ', '\t', '\r', '\n':
+			k--
+			r.steps++
+			continue
+		}
+		break
+	}
+	return k
+}
+
+// afterDot reports whether the identifier starting at start is a property
+// name: a private name (`#default`), or the token before it is a `.`
+// (which covers `?.`), on the same line or at the end of the line above.
+// A period ending a line that holds `//` before it is taken to end a line
+// comment (left in place when the pass reads raw bytes), so it does not
+// turn `return` or `default` on the next line into a property name.
+func (r *regexContext) afterDot(start int) bool {
+	if start > 0 && r.buf[start-1] == '#' {
+		// A private name: `this.#default`.
+		return true
+	}
+	k := start - 1
+	crossed := false
+	for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r' || r.buf[k] == '\n') {
+		crossed = crossed || r.buf[k] == '\n'
+		k--
+		r.steps++
+	}
+	if k < 0 || r.buf[k] != '.' {
+		return false
+	}
+	if crossed {
+		// `cfg.\ndefault` is a property; the period that ends a line
+		// comment (left in place when the pass reads raw bytes) is not.
+		ls := bytes.LastIndexByte(r.buf[:k], '\n') + 1
+		r.steps += k - ls
+		if bytes.Contains(r.buf[ls:k], []byte("//")) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameLineOperandBefore reports whether an operand ends right before the
+// identifier at start on the same line. A line break in between starts a
+// new statement (ASI), so `of` there is a variable.
+func (r *regexContext) sameLineOperandBefore(start int) bool {
+	k := start - 1
+	for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r') {
+		k--
+		r.steps++
+	}
+	if k >= 0 && r.buf[k] == '\n' {
+		return false
+	}
+	return r.operandEndsAt(k, false)
+}
+
 // bangIsNonNullAssertion reports whether the `!` at position bang is a
 // TypeScript postfix non-null assertion (`total! / n`, `xs[0]! / 2`,
-// `f()! / 2`), after which a `/` is division. It is consulted for
-// TypeScript targets only. The `!` must touch the end of an operand: an
-// identifier that is not a keyword after which an expression starts, a
-// `]`, or a `)` that does not close a statement header. Everything else
-// keeps the logical-negation reading, so a regex literal after it stays a
-// regex literal: `return!/re/`, `export default!/re/`, `if (x)!/re/`,
+// `f()! / 2`, `cfg.default! / 2`, `'7'! / 2`), after which a `/` is
+// division. It is consulted for TypeScript targets only. The `!` must touch
+// the end of an operand (operandEndsAt). Everything else keeps the
+// logical-negation reading, so a regex literal after it stays a regex
+// literal: `return!/re/`, `export default!/re/`, `if (x)!/re/`,
 // `for await (const x of y)!/re/`, `=> !/re/`, `label: !/re/`, an operator
-// or a comma before the `!`, and a `!` separated from the operand by a
-// space or a line break.
+// or a comma before the `!`, a block `{}` before it, and a `!` separated
+// from the operand by a space or a line break.
 func (r *regexContext) bangIsNonNullAssertion(bang int) bool {
 	if bang == 0 {
 		return false
 	}
-	c := r.buf[bang-1]
-	switch {
-	case c == ']':
-		return true
-	case c == ')':
-		keyword, start, matched := r.parenHeader(bang - 1)
-		if !matched {
-			return false
+	return r.operandEndsAt(bang-1, true)
+}
+
+// openBrace records a `{` read as code at offset i.
+func (r *regexContext) openBrace(i int) {
+	r.braces = append(r.braces, r.braceKindAt(i))
+	r.steps++
+}
+
+// openSubstitution records the `${` of a template literal whose `{` is at
+// offset i.
+func (r *regexContext) openSubstitution(int) {
+	r.braces = append(r.braces, braceSubstitution)
+	r.steps++
+}
+
+// closeBrace records a `}` read as code at offset i that does not end a
+// template substitution. An unmatched `}` counts as closing a statement.
+func (r *regexContext) closeBrace(i int) {
+	kind := braceStatement
+	if n := len(r.braces); n > 0 && r.braces[n-1] != braceSubstitution {
+		kind = r.braces[n-1]
+		r.braces = r.braces[:n-1]
+	}
+	r.lastClose, r.lastKind = i, kind
+	r.steps++
+}
+
+// closeSubstitution records the `}` that ends a template substitution,
+// with any brace left open inside it.
+func (r *regexContext) closeSubstitution(int) {
+	for n := len(r.braces); n > 0; n-- {
+		kind := r.braces[n-1]
+		r.braces = r.braces[:n-1]
+		r.steps++
+		if kind == braceSubstitution {
+			break
 		}
-		switch keyword {
-		case "if", "while", "for", "switch", "catch", "with":
-			return false
-		case "await":
-			// `for await (...)` is a loop header; `await (p)!` is an operand.
-			if keywordBefore(r.buf, start) == "for" {
-				return false
+	}
+}
+
+// enclosingKind is the kind of the innermost open brace: the statement
+// level outside any brace, and an expression inside a substitution.
+func (r *regexContext) enclosingKind() braceKind {
+	if n := len(r.braces); n > 0 {
+		if r.braces[n-1] == braceSubstitution {
+			return braceExpression
+		}
+		return r.braces[n-1]
+	}
+	return braceStatement
+}
+
+// braceKindAt classifies the `{` at offset i from the token before it.
+func (r *regexContext) braceKindAt(i int) braceKind {
+	j := r.skipSpaceBack(i - 1)
+	if j < 0 {
+		return braceStatement
+	}
+	switch c := r.buf[j]; {
+	case c == ')':
+		return r.braceAfterParen(j)
+	case c == '>':
+		// `=> {` opens an arrow function body.
+		if j > 0 && r.buf[j-1] == '=' {
+			return braceStatement
+		}
+		// In TypeScript a type argument list can end a generic name, which
+		// then decides as it would without the list: `class G<T> {`,
+		// `(): Promise<T> {`. Any other `>` is a comparison or a shift, or
+		// ends an angle-bracket assertion (`<T>{}`): an operand follows, so
+		// a slash after the `}` stays a division.
+		if r.typescript {
+			if lt := r.typeArgumentsStart(j); lt > 0 {
+				if k := r.skipSpaceBack(lt - 1); k >= 0 && isJSIdentifierByte(r.buf[k]) {
+					return r.braceAfterWord(k, i)
+				}
 			}
 		}
-		return true
-	case isJSIdentifierByte(c):
-		switch keywordEndingAt(r.buf, bang) {
-		case "return", "typeof", "instanceof", "in", "of", "delete", "void", "new",
-			"throw", "yield", "await", "case", "default", "do", "else":
-			return false
+		return braceExpression
+	case c == '{':
+		return r.enclosingKind()
+	case c == ':':
+		// A label or a case/default clause opens a block; a property
+		// value, a ternary alternative or a type annotation is an
+		// expression.
+		if r.enclosingKind() == braceStatement && r.colonOpensBlock(j) {
+			return braceStatement
 		}
+		return braceExpression
+	case c == ';', c == '}', c == ']', c == '\'', c == '"', c == '`':
+		// A new statement, a TypeScript return type (`(): string[] {`) or
+		// declaration name (`declare module 'm' {`).
+		return braceStatement
+	case c == '/' && j > 0 && r.buf[j-1] == '*':
+		// After a block comment the lexer reads unmasked.
+		return braceStatement
+	case isJSIdentifierByte(c):
+		return r.braceAfterWord(j, i)
+	}
+	// An operator or punctuation: an expression starts.
+	return braceExpression
+}
+
+// braceAfterWord classifies a `{` at brace whose previous token is the
+// identifier or keyword ending at j.
+func (r *regexContext) braceAfterWord(j, brace int) braceKind {
+	word := keywordEndingAt(r.buf, j+1)
+	start := j + 1 - len(word)
+	if word == "" {
+		// A name longer than any keyword: walk all of it.
+		start = r.identStart(j)
+	}
+	// A dotted name (`React.Component`, TypeScript `ns.T`) is decided by
+	// what precedes all of it.
+	qs := start
+	if r.afterDot(start) {
+		qs = r.qualifiedNameStart(start)
+	}
+	if p := r.skipSpaceBack(qs - 1); p >= 0 && r.buf[p] == ':' {
+		// TypeScript return type: the parameter list decides.
+		if q := r.skipSpaceBack(p - 1); q >= 0 && r.buf[q] == ')' {
+			return r.braceAfterParen(q)
+		}
+		return braceExpression
+	}
+	if p := r.skipSpaceBack(qs - 1); p >= 0 && keywordEndingAt(r.buf, p+1) == "extends" {
+		return r.classBeforeExtends(p + 1 - len("extends"))
+	}
+	if qs != start || r.afterDot(start) {
+		// A property name in any other place is not a statement shape the
+		// classifier can confirm.
+		return braceExpression
+	}
+	switch word {
+	case "return", "yield":
+		// `return\n{` returns nothing and opens a block.
+		if bytes.IndexByte(r.buf[j+1:brace], '\n') >= 0 {
+			return braceStatement
+		}
+		return braceExpression
+	case "void":
+		return braceExpression
+	case "typeof", "instanceof", "in", "of", "new", "delete", "throw", "case", "await",
+		"default", "extends", "as", "satisfies", "keyof", "import", "export", "const", "let", "var":
+		return braceExpression
+	case "class":
+		// `class {`: a class body, expression or declaration by position.
+		return r.declarationOrExpression(start)
+	}
+	// `class Name {`.
+	if k := r.skipSpaceBack(start - 1); k >= 0 && keywordEndingAt(r.buf, k+1) == "class" {
+		return r.declarationOrExpression(k + 1 - len("class"))
+	}
+	// else, try, finally, do, static and, in TypeScript, return types and
+	// interface, enum or namespace names.
+	return braceStatement
+}
+
+// braceAfterParen classifies a `{` that follows the `)` at closeParen:
+// a statement header or a function, method or arrow parameter list. A
+// function expression body ends an operand; every other body ends a
+// statement.
+func (r *regexContext) braceAfterParen(closeParen int) braceKind {
+	keyword, start, matched := r.parenHeader(closeParen)
+	if !matched {
+		return braceStatement
+	}
+	if keyword == "function" {
+		return r.declarationOrExpression(start)
+	}
+	nameStart := start
+	if keyword == "" && start > 0 && isJSIdentifierByte(r.buf[start-1]) {
+		// A name longer than any keyword: walk all of it.
+		nameStart = r.identStart(start - 1)
+	}
+	if keyword != "" || nameStart < start {
+		// `function name(`, `function* name(`.
+		k := r.skipSpaceBack(nameStart - 1)
+		if k >= 0 && r.buf[k] == '*' {
+			k = r.skipSpaceBack(k - 1)
+		}
+		if k >= 0 && keywordEndingAt(r.buf, k+1) == "function" {
+			return r.declarationOrExpression(k + 1 - len("function"))
+		}
+		// `class extends mixin(Base) {`, `class A extends ns.mixin(B) {`.
+		if k = r.skipSpaceBack(r.qualifiedNameStart(nameStart) - 1); k >= 0 && keywordEndingAt(r.buf, k+1) == "extends" {
+			return r.classBeforeExtends(k + 1 - len("extends"))
+		}
+	}
+	return braceStatement
+}
+
+// qualifiedNameStart returns where the dotted name that ends with the
+// identifier starting at start begins: `React.Component` for `Component`.
+// Each step walks one identifier, so the work is the length of the name.
+func (r *regexContext) qualifiedNameStart(start int) int {
+	for {
+		k := r.skipSpaceBack(start - 1)
+		if k < 1 || r.buf[k] != '.' || r.buf[k-1] == '.' {
+			return start
+		}
+		p := r.skipSpaceBack(k - 1)
+		if p < 0 || !isJSIdentifierByte(r.buf[p]) {
+			return start
+		}
+		start = r.identStart(p)
+	}
+}
+
+// maxTypeArgumentsLen bounds the look back from a `>` for the `<` of a
+// TypeScript type argument list.
+const maxTypeArgumentsLen = 128
+
+// typeArgumentsStart returns the offset of the `<` that opens the type
+// argument list ending with the `>` at gt, or -1. The look back stays on
+// the line, stops at `{`, `}`, `;` and a `=` that is not part of `=>`, and
+// covers at most maxTypeArgumentsLen bytes, so it ends at the previous
+// brace and the work stays linear.
+func (r *regexContext) typeArgumentsStart(gt int) int {
+	depth := 1
+	for k := gt - 1; k >= 0 && gt-k <= maxTypeArgumentsLen; k-- {
+		r.steps++
+		switch r.buf[k] {
+		case '>':
+			if k > 0 && r.buf[k-1] == '=' {
+				k-- // an arrow inside a function type
+				continue
+			}
+			depth++
+		case '<':
+			if depth--; depth == 0 {
+				return k
+			}
+		case '\n', '{', '}', ';', '=':
+			return -1
+		}
+	}
+	return -1
+}
+
+// identStart returns the offset where the identifier whose last byte is at
+// j starts.
+func (r *regexContext) identStart(j int) int {
+	s := j
+	for s > 0 && isJSIdentifierByte(r.buf[s-1]) {
+		s--
+		r.steps++
+	}
+	return s
+}
+
+// classBeforeExtends classifies a body whose heritage clause starts with the
+// `extends` keyword at ext: `class extends B {` or `class Name extends B {`
+// by the position of `class`, a TypeScript interface (`interface I<T>
+// extends J {`) as a declaration, anything else as an expression.
+func (r *regexContext) classBeforeExtends(ext int) braceKind {
+	k := r.skipSpaceBack(ext - 1)
+	if r.typescript && k >= 0 && r.buf[k] == '>' {
+		// `class A<T> extends B {`.
+		if lt := r.typeArgumentsStart(k); lt > 0 {
+			k = r.skipSpaceBack(lt - 1)
+		}
+	}
+	if k < 0 || !isJSIdentifierByte(r.buf[k]) {
+		return braceExpression
+	}
+	s := r.identStart(k)
+	if string(r.buf[s:k+1]) == "class" {
+		return r.declarationOrExpression(s)
+	}
+	if c := r.skipSpaceBack(s - 1); c >= 0 {
+		switch keywordEndingAt(r.buf, c+1) {
+		case "class":
+			return r.declarationOrExpression(c + 1 - len("class"))
+		case "interface":
+			return braceStatement
+		}
+	}
+	return braceExpression
+}
+
+// colonOpensBlock reports whether the `:` at colon ends a label or a case or
+// default clause, after which a `{` opens a block. Anything else (a
+// ternary alternative, a type annotation) is an expression.
+func (r *regexContext) colonOpensBlock(colon int) bool {
+	k := r.skipSpaceBack(colon - 1)
+	if k >= 0 && (r.buf[k] == '\'' || r.buf[k] == '"' || r.buf[k] == '`') {
+		// `case 'name': {`: the string's opening quote, on the same line.
+		for q := k - 1; q >= 0 && r.buf[q] != '\n'; q-- {
+			r.steps++
+			if r.buf[q] == r.buf[k] && (q == 0 || r.buf[q-1] != '\\') {
+				return keywordBefore(r.buf, q) == "case"
+			}
+		}
+		return false
+	}
+	if k < 0 || !isJSIdentifierByte(r.buf[k]) {
+		return false
+	}
+	s := r.identStart(k)
+	if r.afterDot(s) {
+		return false
+	}
+	if string(r.buf[s:k+1]) == "default" {
+		return true
+	}
+	p := r.skipSpaceBack(s - 1)
+	if p < 0 {
+		return true
+	}
+	if keywordEndingAt(r.buf, p+1) == "case" {
+		return true
+	}
+	switch r.buf[p] {
+	case ';', '{', '}':
 		return true
 	}
 	return false
+}
+
+// declarationOrExpression tells the body of a function or class expression
+// from a declaration's by the token before the `function` or `class`
+// keyword at fn (an `async` before it is skipped).
+func (r *regexContext) declarationOrExpression(fn int) braceKind {
+	k := r.skipSpaceBack(fn - 1)
+	if k >= 0 && keywordEndingAt(r.buf, k+1) == "async" {
+		k = r.skipSpaceBack(k - len("async"))
+	}
+	if k < 0 {
+		return braceStatement
+	}
+	switch c := r.buf[k]; {
+	case c == ';', c == '{', c == '}', c == ')':
+		return braceStatement
+	case c == ':':
+		if r.enclosingKind() == braceStatement && r.colonOpensBlock(k) {
+			return braceStatement
+		}
+		return braceExpression
+	case isJSIdentifierByte(c):
+		word := keywordEndingAt(r.buf, k+1)
+		switch word {
+		case "return", "typeof", "void", "new", "delete", "throw", "case", "in", "of",
+			"instanceof", "yield", "await", "extends":
+			if !r.afterDot(k + 1 - len(word)) {
+				return braceExpression
+			}
+		}
+		return braceStatement
+	}
+	return braceExpression
 }
 
 // keywordBefore returns the keyword-length identifier ending before offset
@@ -4212,6 +4736,9 @@ func (r *regexContext) parenHeader(closeParen int) (keyword string, start int, m
 // closeParen, or -1. It consumes buf up to closeParen, so the bytes before
 // closeParen must be final.
 func (r *regexContext) matchingOpen(closeParen int) int {
+	if r.findOpen != nil {
+		return r.findOpen(r.buf, closeParen)
+	}
 	if closeParen < r.cursor {
 		// Not reached by the walkers, which ask in increasing order. Start
 		// over so the answer stays exact.
@@ -4246,8 +4773,10 @@ func (r *regexContext) matchingOpen(closeParen int) int {
 }
 
 // maxKeywordLen is the length of the longest keyword the classifier checks
-// ("instanceof"). An identifier longer than that is not a keyword, so the
-// walk back over it stops early without changing any answer.
+// ("instanceof", "implements"). keywordEndingAt stops walking back over a
+// longer identifier and returns "", which callers read as "not a keyword";
+// where the name itself matters, such as a function or class name before
+// a body, they walk the whole identifier with identStart.
 const maxKeywordLen = 10
 
 func isJSIdentifierByte(b byte) bool {
@@ -4688,9 +5217,45 @@ func detectBunSecondStage(path string, m *metrics) *types.Finding {
 
 // regexClassifier answers whether the `/` at an offset of the buffer it was
 // built for starts a regex literal. The walkers ask in increasing offset
-// order and never change bytes behind the offset they ask about.
+// order and never change bytes behind the offset they ask about. They
+// report every brace they read as code, in order, so the classifier knows
+// what a `}` before a slash closed: openBrace for a `{`, openSubstitution
+// for the `{` of a template literal's `${`, closeSubstitution for the `}`
+// that ends it and closeBrace for any other `}`.
 type regexClassifier interface {
 	regexStartsAt(i int) bool
+	openBrace(i int)
+	closeBrace(i int)
+	openSubstitution(i int)
+	closeSubstitution(i int)
+}
+
+// A regex literal never contains a line break, and a quoted string only
+// contains one after a backslash. When the walker meets a line break
+// inside either, the slash or quote that opened it was misread, most
+// likely a division read as a regex literal or a quote inside a regex
+// literal read as code. The walker resynchronises so that a misreading
+// cannot hide the lines after it: a regex literal is read again from its
+// slash as a division, and a quoted string ends at the line break.
+// Re-reading is bounded: once the bytes read again in a pass reach the
+// size of the buffer, a regex literal also just ends at the line break.
+// Valid JavaScript and TypeScript never trigger either rule. Template
+// literals can span lines and are not resynchronised.
+
+// hasHashbang reports whether buf starts with a hashbang line
+// (`#!/usr/bin/env node`), which JavaScript and TypeScript read as a line
+// comment. Read as code, its slashes would open a regex literal.
+func hasHashbang(buf []byte) bool {
+	return len(buf) >= 2 && buf[0] == '#' && buf[1] == '!'
+}
+
+// escapeLen is how many bytes after the backslash at i an escape in a
+// string literal consumes: two for a CRLF line continuation, otherwise one.
+func escapeLen(buf []byte, i int) int {
+	if buf[i+1] == '\r' && i+2 < len(buf) && buf[i+2] == '\n' {
+		return 2
+	}
+	return 1
 }
 
 // jsStringInteriorsWith returns sorted, non-overlapping byte ranges
@@ -4727,8 +5292,13 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 	state := stCode
 	n := len(content)
 	startInterior := -1
+	regexStart, reread := -1, 0
 	var templateStack []int
-	for i := 0; i < n; i++ {
+	start := 0
+	if hasHashbang(content) {
+		state, start = stLineComment, 2
+	}
+	for i := start; i < n; i++ {
 		switch state {
 		case stCode:
 			if content[i] == '/' && i+1 < n {
@@ -4743,28 +5313,31 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 					continue
 				}
 				if regex.regexStartsAt(i) {
-					state = stRegex
+					state, regexStart = stRegex, i
 					continue
 				}
 			}
-			if len(templateStack) > 0 {
-				// Inside a ${...} expression of an outer template
-				// literal. Track brace depth so the matching `}`
-				// transitions back to stStringTemplate.
-				switch content[i] {
-				case '{':
+			switch content[i] {
+			case '{':
+				regex.openBrace(i)
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]++
-				case '}':
+				}
+			case '}':
+				// Inside a ${...} expression of an outer template
+				// literal, the `}` that brings the brace depth back
+				// to zero resumes the template.
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]--
 					if templateStack[len(templateStack)-1] == 0 {
 						templateStack = templateStack[:len(templateStack)-1]
+						regex.closeSubstitution(i)
 						state = stStringTemplate
 						startInterior = i + 1
 						continue
 					}
 				}
-			}
-			switch content[i] {
+				regex.closeBrace(i)
 			case '\'':
 				state = stStringSingle
 				startInterior = i + 1
@@ -4775,24 +5348,17 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				state = stStringTemplate
 				startInterior = i + 1
 			}
-		case stStringSingle:
+		case stStringSingle, stStringDouble:
 			if content[i] == '\\' && i+1 < n {
-				i++
+				i += escapeLen(content, i)
 				continue
 			}
-			if content[i] == '\'' {
-				if startInterior >= 0 && i > startInterior {
-					out = append(out, [2]int{startInterior, i})
-				}
-				startInterior = -1
-				state = stCode
+			quote := byte('\'')
+			if state == stStringDouble {
+				quote = '"'
 			}
-		case stStringDouble:
-			if content[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if content[i] == '"' {
+			// A line break ends a misread string (see escapeLen).
+			if content[i] == quote || content[i] == '\n' {
 				if startInterior >= 0 && i > startInterior {
 					out = append(out, [2]int{startInterior, i})
 				}
@@ -4819,6 +5385,7 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				}
 				startInterior = -1
 				templateStack = append(templateStack, 1)
+				regex.openSubstitution(i + 1)
 				state = stCode
 				i++ // skip `{`
 				continue
@@ -4839,16 +5406,32 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 				i++
 				state = stCode
 			}
-		case stRegex:
-			if content[i] == '\\' && i+1 < n {
+		case stRegex, stRegexCharClass:
+			c := content[i]
+			if c == '\n' || c == '\\' && i+1 < n && content[i+1] == '\n' {
+				// A line break inside a regex literal: the slash was a
+				// division. Read again from it, within the budget.
+				state = stCode
+				if reread += i - regexStart; reread <= n {
+					i = regexStart
+				}
+				continue
+			}
+			if c == '\\' && i+1 < n {
 				i++
 				continue
 			}
-			if content[i] == '[' {
+			if state == stRegexCharClass {
+				if c == ']' {
+					state = stRegex
+				}
+				continue
+			}
+			if c == '[' {
 				state = stRegexCharClass
 				continue
 			}
-			if content[i] == '/' {
+			if c == '/' {
 				state = stCode
 				for i+1 < n {
 					f := content[i+1]
@@ -4858,14 +5441,6 @@ func jsStringInteriorsWith(content []byte, classifier func([]byte) regexClassifi
 					}
 					break
 				}
-			}
-		case stRegexCharClass:
-			if content[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if content[i] == ']' {
-				state = stRegex
 			}
 		}
 	}
@@ -4927,25 +5502,38 @@ func newJSLexicalView(content []byte) jsLexicalView {
 
 // jsLexer holds what the lexical passes over one file share: whether the
 // file is TypeScript, which enables the postfix non-null reading, and the
-// paren stack, reused from pass to pass so a file allocates it once. A
-// jsLexer belongs to one Analyze call; passes run one after another and
-// never nest, so the stack is never shared by two live passes.
+// paren and brace stacks, reused from pass to pass so a file allocates
+// them once. A jsLexer belongs to one Analyze call; passes run one after
+// another and never nest, so the stacks are never shared by two live
+// passes.
 type jsLexer struct {
 	typescript bool
 	open32     []int32
 	open       []int
+	braces     []braceKind
+}
+
+// dialect returns re for TypeScript targets and, for JavaScript targets,
+// the variant of re without TypeScript-only alternatives when it has one.
+func (lx *jsLexer) dialect(re *regexp.Regexp) *regexp.Regexp {
+	if !lx.typescript {
+		if js, ok := javaScriptVariants[re]; ok {
+			return js
+		}
+	}
+	return re
 }
 
 func (lx *jsLexer) context(buf []byte) *regexContext {
 	rc := newRegexContext(buf)
 	rc.typescript = lx.typescript
-	rc.open32, rc.open = lx.open32[:0], lx.open[:0]
+	rc.open32, rc.open, rc.braces = lx.open32[:0], lx.open[:0], lx.braces[:0]
 	return rc
 }
 
 func (lx *jsLexer) release(rc *regexContext) {
 	if rc != nil {
-		lx.open32, lx.open = rc.open32[:0], rc.open[:0]
+		lx.open32, lx.open, lx.braces = rc.open32[:0], rc.open[:0], rc.braces[:0]
 	}
 }
 
@@ -5161,8 +5749,14 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 	)
 	state := stCode
 	n := len(out)
+	regexStart, reread := -1, 0
 	var templateStack []int
-	for i := 0; i < n; i++ {
+	start := 0
+	if hasHashbang(out) {
+		state, start = stLineComment, 2
+		out[0], out[1] = ' ', ' '
+	}
+	for i := start; i < n; i++ {
 		switch state {
 		case stCode:
 			if out[i] == '/' && i+1 < n {
@@ -5181,25 +5775,28 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 					continue
 				}
 				if regex.regexStartsAt(i) {
-					state = stRegex
+					state, regexStart = stRegex, i
 					out[i] = ' '
 					continue
 				}
 			}
-			if len(templateStack) > 0 {
-				switch out[i] {
-				case '{':
+			switch out[i] {
+			case '{':
+				regex.openBrace(i)
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]++
-				case '}':
+				}
+			case '}':
+				if len(templateStack) > 0 {
 					templateStack[len(templateStack)-1]--
 					if templateStack[len(templateStack)-1] == 0 {
 						templateStack = templateStack[:len(templateStack)-1]
+						regex.closeSubstitution(i)
 						state = stStringTemplate
 						continue
 					}
 				}
-			}
-			switch out[i] {
+				regex.closeBrace(i)
 			case '\'':
 				state = stStringSingle
 			case '"':
@@ -5207,20 +5804,17 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			case '`':
 				state = stStringTemplate
 			}
-		case stStringSingle:
+		case stStringSingle, stStringDouble:
 			if out[i] == '\\' && i+1 < n {
-				i++
+				i += escapeLen(out, i)
 				continue
 			}
-			if out[i] == '\'' {
-				state = stCode
+			quote := byte('\'')
+			if state == stStringDouble {
+				quote = '"'
 			}
-		case stStringDouble:
-			if out[i] == '\\' && i+1 < n {
-				i++
-				continue
-			}
-			if out[i] == '"' {
+			// A line break ends a misread string (see escapeLen).
+			if out[i] == quote || out[i] == '\n' {
 				state = stCode
 			}
 		case stStringTemplate:
@@ -5230,6 +5824,7 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			}
 			if out[i] == '$' && i+1 < n && out[i+1] == '{' {
 				templateStack = append(templateStack, 1)
+				regex.openSubstitution(i + 1)
 				state = stCode
 				i++ // skip `{`
 				continue
@@ -5254,23 +5849,38 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 			if out[i] != '\n' {
 				out[i] = ' '
 			}
-		case stRegex:
-			if out[i] == '\\' && i+1 < n {
-				if out[i+1] != '\n' {
-					out[i+1] = ' '
+		case stRegex, stRegexCharClass:
+			c := out[i]
+			if c == '\n' || c == '\\' && i+1 < n && out[i+1] == '\n' {
+				// A line break inside a regex literal: the slash was a
+				// division. Restore the bytes blanked since the slash and
+				// read again from it, within the budget; past the budget
+				// the literal ends at the line break.
+				state = stCode
+				if reread += i - regexStart; reread <= n {
+					copy(out[regexStart:i], content[regexStart:i])
+					i = regexStart
 				}
+				continue
+			}
+			if c == '\\' && i+1 < n {
 				out[i] = ' '
+				out[i+1] = ' '
 				i++
 				continue
 			}
-			if out[i] == '[' {
-				state = stRegexCharClass
-				out[i] = ' '
+			out[i] = ' '
+			if state == stRegexCharClass {
+				if c == ']' {
+					state = stRegex
+				}
 				continue
 			}
-			if out[i] == '/' {
+			switch c {
+			case '[':
+				state = stRegexCharClass
+			case '/':
 				state = stCode
-				out[i] = ' '
 				for i+1 < n {
 					f := out[i+1]
 					if (f >= 'a' && f <= 'z') || (f >= 'A' && f <= 'Z') {
@@ -5280,27 +5890,6 @@ func stripJSCommentsWith(content []byte, classifier func([]byte) regexClassifier
 					}
 					break
 				}
-				continue
-			}
-			if out[i] != '\n' {
-				out[i] = ' '
-			}
-		case stRegexCharClass:
-			if out[i] == '\\' && i+1 < n {
-				if out[i+1] != '\n' {
-					out[i+1] = ' '
-				}
-				out[i] = ' '
-				i++
-				continue
-			}
-			if out[i] == ']' {
-				state = stRegex
-				out[i] = ' '
-				continue
-			}
-			if out[i] != '\n' {
-				out[i] = ' '
 			}
 		}
 	}
@@ -5336,7 +5925,7 @@ func findDNSTXTSink(lx *jsLexer, rawContent []byte) int {
 	// alias.
 	aliases := map[string]bool{}
 	resolverCtorNames := map[string]bool{}
-	for _, mt := range dnsAliasAssignRe.FindAllSubmatchIndex(content, -1) {
+	for _, mt := range lx.dialect(dnsAliasAssignRe).FindAllSubmatchIndex(content, -1) {
 		if insideStringInterior(stringRanges, mt[0]) {
 			continue
 		}
@@ -5935,7 +6524,7 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// the envs.txt token must fall INSIDE that range (the path argument).
 	// Presence in the data position of the call, or in an unrelated
 	// statement, does not register. Shared with the host-trust tamper rule.
-	fsCalls := collectFSWriteCalls(stripped, stringRanges)
+	fsCalls := collectFSWriteCalls(m.lexer, stripped, stringRanges)
 	if len(fsCalls) > 0 {
 		for _, loc := range envsTxtTokenRe.FindAllIndex(stripped, -1) {
 			for _, c := range fsCalls {
@@ -5957,7 +6546,7 @@ func detectDNSTXTExfil(path string, m *metrics, content []byte) *types.Finding {
 	// unrelated tmpdir call.
 	hasArchive := false
 	osBindingsDNS := collectModuleBindings(stripped, stringRanges,
-		osModuleAliasRe, osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
+		m.lexer.dialect(osModuleAliasRe), osModuleAliasESMRe, osDestructureRe, osDestructureESMRe, osModuleAliasESMCombinedRe)
 	var archiveTmpPositions []int
 	for _, mt := range archiveTmpReceiverRe.FindAllSubmatchIndex(stripped, -1) {
 		if insideStringInterior(stringRanges, mt[2]) {

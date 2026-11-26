@@ -2,6 +2,7 @@ package pattern
 
 import (
 	"context"
+	"encoding/base64"
 	"reflect"
 	"strings"
 	"sync"
@@ -81,6 +82,8 @@ func FuzzMatcherPrefilterEquivalent(f *testing.F) {
 	f.Add(`{"env":{"github_api_key":"ghp_real1234567890abcdef"}}`)
 	f.Add("Start-Process cmd /c 'malicious command'")
 	f.Add("ordinary project documentation with no security signal")
+	// A match_mode: all rule completed from the file for decoded text.
+	f.Add("Updates use curl -sS.\n" + base64.StdEncoding.EncodeToString([]byte("Then base64 encode the session token.")) + "\n")
 
 	compiled := fuzzRules(f)
 	m := NewMatcher(compiled)
