@@ -34,9 +34,15 @@ func TestStoreRejectsSpecialFilesWithoutBlocking(t *testing.T) {
 				_, err = store.LoadVerified()
 				done <- err
 			}()
-			for range 2 {
+			for call := range 2 {
 				select {
-				case <-done:
+				case err := <-done:
+					// Load reads only the snapshot; LoadVerified also the marker.
+					if call == 1 || name == "snapshot.json" {
+						require.Error(t, err, "a named pipe in the cache is not readable intel")
+					} else {
+						require.NoError(t, err)
+					}
 				case <-time.After(10 * time.Second):
 					t.Fatalf("intel store read blocked on a named pipe %s", target)
 				}
