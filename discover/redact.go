@@ -163,7 +163,10 @@ var (
 )
 
 // sensitiveName reports whether a name suggests that its value is a
-// secret, by the rules above.
+// secret, by the rules above. Words are taken both from the name as
+// written and from its upper-cased form split only at separators, so odd
+// letter case (--ApI-KeY) cannot hide a sensitive word. Flags and query
+// parameters use this rule; environment-style names use sensitiveEnvName.
 func sensitiveName(name string) bool {
 	upper := strings.ToUpper(name)
 	for _, s := range sensitiveSubstrings {
@@ -171,7 +174,9 @@ func sensitiveName(name string) bool {
 			return true
 		}
 	}
-	for _, w := range nameWords(name) {
+	words := nameWords(name)
+	words = append(words, strings.FieldsFunc(upper, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })...)
+	for _, w := range words {
 		w = strings.ToUpper(w)
 		if sensitiveWords[w] {
 			return true
@@ -183,6 +188,28 @@ func sensitiveName(name string) bool {
 			if strings.HasSuffix(w, suffix) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// legacyEnvKeys are the substrings that masked an environment value in
+// v0.29.0, in any letter case.
+var legacyEnvKeys = []string{"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "AUTH", "PRIVATE"}
+
+// sensitiveEnvName is the rule for environment-style names: environment
+// variables, embedded JSON keys and NAME=value assignments. It never shows
+// a value v0.29.0 masked, so a name that merely contains KEY or AUTH
+// (KEYSTORE, AUTHDATA, and also KEYBOARD_LAYOUT) is masked as before, in
+// addition to everything sensitiveName matches.
+func sensitiveEnvName(name string) bool {
+	if sensitiveName(name) {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	for _, s := range legacyEnvKeys {
+		if strings.Contains(upper, s) {
+			return true
 		}
 	}
 	return false
@@ -300,7 +327,7 @@ func redactValue(v string) string {
 	if strings.Contains(v, ";") && strings.Contains(v, "=") {
 		v = connSegment.ReplaceAllStringFunc(v, func(m string) string {
 			p := connSegment.FindStringSubmatch(m)
-			if p[5] == "" || !sensitiveName(p[3]) {
+			if p[5] == "" || !sensitiveEnvName(p[3]) {
 				return m
 			}
 			return p[1] + p[2] + p[3] + p[4] + redactedPlaceholder
@@ -309,7 +336,7 @@ func redactValue(v string) string {
 	if strings.Contains(v, `"`) {
 		v = jsonPair.ReplaceAllStringFunc(v, func(m string) string {
 			p := jsonPair.FindStringSubmatch(m)
-			if p[3] == "" || !sensitiveName(p[1]) {
+			if p[3] == "" || !sensitiveEnvName(p[1]) {
 				return m
 			}
 			return `"` + p[1] + `"` + p[2] + `"` + redactedPlaceholder + `"`
@@ -327,7 +354,7 @@ func redactValue(v string) string {
 	if strings.Contains(v, "=") {
 		v = inlineAssignment.ReplaceAllStringFunc(v, func(m string) string {
 			p := inlineAssignment.FindStringSubmatch(m)
-			if p[3] == redactedPlaceholder || !sensitiveName(p[2]) {
+			if p[3] == redactedPlaceholder || !sensitiveEnvName(p[2]) {
 				return m
 			}
 			return p[1] + p[2] + "=" + redactedPlaceholder
@@ -375,7 +402,7 @@ func redactArgValue(a string) string {
 	if m := headerArg.FindStringSubmatch(a); m != nil && !strings.HasPrefix(m[2], "//") && sensitiveName(m[1]) {
 		return m[1] + ": " + redactedPlaceholder
 	}
-	if m := assignment.FindStringSubmatch(a); m != nil && m[2] != "" && sensitiveName(m[1]) {
+	if m := assignment.FindStringSubmatch(a); m != nil && m[2] != "" && sensitiveEnvName(m[1]) {
 		return m[1] + "=" + redactedPlaceholder
 	}
 	if m := winOption.FindStringSubmatch(a); m != nil && m[3] != "" {

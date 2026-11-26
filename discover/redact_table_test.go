@@ -61,7 +61,10 @@ var secretPositions = []struct {
 
 // Names that only contain the letters of a sensitive word, and short
 // flags whose meaning cannot be known, keep their values visible unless a
-// value itself looks like a token.
+// value itself looks like a token. Environment names are the exception
+// for KEY and AUTH: a name that contains them anywhere (Keyboard, Monkey)
+// is masked, as v0.29.0 did, because environment values are the field most
+// likely to hold a secret.
 func TestDiscoverHarmlessNamesStayVisible(t *testing.T) {
 	srv := MCPServer{
 		Name:    "visible",
@@ -70,7 +73,7 @@ func TestDiscoverHarmlessNamesStayVisible(t *testing.T) {
 		Env: map[string]string{
 			"Compass": "north", "Keyboard": "dvorak", "Monkey": "george", "Signal": "sigterm",
 			"Bypass": "proxy-off", "Passport": "booking", "PASSTHROUGH": "on", "DESIGN": "flat",
-			"Monkey_Token_Look": "x", "Hotkey": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+			"Monkey_Token_Look": "x", "Compass_Value": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 		},
 	}
 	red := (&Result{Clients: []ClientResult{{Client: "cursor", Servers: []MCPServer{srv}}}}).Redacted().Clients[0].Servers[0]
@@ -80,16 +83,21 @@ func TestDiscoverHarmlessNamesStayVisible(t *testing.T) {
 	if got := strings.Join(red.Args, " "); got != "--keyboard us -a plainvalue /user:alice --authority example.org" {
 		t.Errorf("args = %q", got)
 	}
-	for _, name := range []string{"Compass", "Keyboard", "Monkey", "Signal", "Bypass", "Passport", "PASSTHROUGH", "DESIGN"} {
+	for _, name := range []string{"Compass", "Signal", "Bypass", "Passport", "PASSTHROUGH", "DESIGN"} {
 		if red.Env[name] != srv.Env[name] {
 			t.Errorf("env %s = %q, want it visible", name, red.Env[name])
+		}
+	}
+	for _, name := range []string{"Keyboard", "Monkey"} {
+		if red.Env[name] != "***REDACTED***" {
+			t.Errorf("env %s = %q, want it masked as in v0.29.0", name, red.Env[name])
 		}
 	}
 	if red.Env["Monkey_Token_Look"] != "***REDACTED***" {
 		t.Errorf("a TOKEN word still counts: %q", red.Env["Monkey_Token_Look"])
 	}
-	if red.Env["Hotkey"] != "[REDACTED]" {
-		t.Errorf("a token-shaped value is redacted under a harmless name: %q", red.Env["Hotkey"])
+	if red.Env["Compass_Value"] != "[REDACTED]" {
+		t.Errorf("a token-shaped value is redacted under a harmless name: %q", red.Env["Compass_Value"])
 	}
 }
 
