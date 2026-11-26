@@ -418,14 +418,20 @@ const (
 // Where a skipped symbolic link resolves, found without reading the
 // target's content.
 const (
-	LinkInside   = "inside"   // to a file or directory inside the scan target, which the scan covers itself
+	LinkInside   = "inside"   // to a file or directory inside the scan target that the scan reads itself
+	LinkExcluded = "excluded" // to a part of the scan target the scan does not read (see SkippedFile.Resolves)
 	LinkOutside  = "outside"  // to something outside the scan target, which the scan did not read
 	LinkDangling = "dangling" // to nothing (or the link cannot be resolved)
 )
 
 // SkippedFile is an entry a scan did not read because it is not a
 // regular file. Path is relative to the scan target. Resolves is set for
-// symbolic links (Kind SkippedSymlink) to one of the Link* values.
+// symbolic links (Kind SkippedSymlink) to one of the Link* values. A link
+// is LinkInside only when the scan reads what it reaches: LinkExcluded
+// marks a link to a file the scan skips (a binary extension, a path under
+// .git, node_modules or .aguara, an ignore pattern, the size limit, or a
+// file that is not regular) or to a directory the scan does not enter or
+// whose content an ignore pattern excludes.
 type SkippedFile struct {
 	Path     string `json:"path"`
 	Kind     string `json:"kind"`
@@ -434,8 +440,9 @@ type SkippedFile struct {
 
 // HidesContent reports whether the entry may stand for content no scan
 // read: a named pipe, socket, device or irregular file, or a symbolic
-// link that is dangling or resolves outside the scan target. A link that
-// resolves inside the target points at content the scan covers itself.
+// link that is dangling, resolves outside the scan target or resolves to
+// a part of it the scan does not read. A link that resolves inside the
+// target points at content the scan reads itself.
 func (s SkippedFile) HidesContent() bool {
 	if s.Kind == SkippedSymlink {
 		return s.Resolves != LinkInside

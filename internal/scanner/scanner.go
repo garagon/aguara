@@ -315,6 +315,9 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 	var skipped []types.SkippedFile
 	var failures []*scanFailure
 	linkRoot := resolvedRoot(root)
+	// Changed files are read without ignore patterns; links among them are
+	// resolved by the same rules.
+	links := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true}
 	for _, relPath := range relPaths {
 		absPath := filepath.Join(root, relPath)
 		// Lstat so a symlink committed to the repository is not resolved:
@@ -355,7 +358,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 		if kind := SkipKind(info.Mode()); kind != "" {
 			entry := types.SkippedFile{Path: relPath, Kind: kind}
 			if kind == types.SkippedSymlink {
-				entry.Resolves = linkResolution(linkRoot, absPath)
+				entry.Resolves = links.linkResolution(linkRoot, absPath)
 			}
 			skipped = append(skipped, entry)
 			continue

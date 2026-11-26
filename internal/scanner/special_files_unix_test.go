@@ -91,6 +91,21 @@ func TestScanSkipsSpecialFilesWithoutBlocking(t *testing.T) {
 	require.Equal(t, want, r.Skipped)
 }
 
+// A link to a named pipe inside the target reaches nothing the scan reads.
+func TestScanLinkToSpecialFileInsideIsExcluded(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ok.md"), []byte("ok\n"), 0o600))
+	mkfifo(t, filepath.Join(dir, "pipe"))
+	require.NoError(t, os.Symlink("pipe", filepath.Join(dir, "SKILL.md")))
+	s := scanner.New(1)
+	r, err := scanWithin(t, func(ctx context.Context) (*scanner.ScanResult, error) { return s.Scan(ctx, dir) })
+	require.NoError(t, err)
+	require.Equal(t, []types.SkippedFile{
+		{Path: "SKILL.md", Kind: types.SkippedSymlink, Resolves: types.LinkExcluded},
+		{Path: "pipe", Kind: types.SkippedNamedPipe},
+	}, r.Skipped)
+}
+
 func TestScanDoesNotListExcludedSpecialFiles(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ok.md"), []byte("ok\n"), 0o600))

@@ -116,6 +116,7 @@ const (
 // Where a skipped symbolic link resolves (SkippedFile.Resolves).
 const (
 	LinkInside   = types.LinkInside
+	LinkExcluded = types.LinkExcluded
 	LinkOutside  = types.LinkOutside
 	LinkDangling = types.LinkDangling
 )

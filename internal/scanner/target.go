@@ -153,10 +153,69 @@ type TargetDiscovery struct {
 	linkRoot       string // the scan target links are resolved against; the walked root when empty
 }
 
+// entryAction is what the walk does with one entry. Discover and
+// linkResolution both use classify, so a link is called inside only for
+// content the walk itself reads.
+type entryAction int
+
+const (
+	actionDescend  entryAction = iota // a directory the walk enters
+	actionSkipDir                     // a directory the walk never enters (.git, node_modules, .aguara)
+	actionRead                        // a regular file the walk reads
+	actionSpecial                     // a link, named pipe, socket or device: never read, listed as skipped
+	actionExcluded                    // a file a binary extension or an ignore pattern excludes
+	actionTooLarge                    // a regular file over the size limit: not read, a failure
+)
+
+// sizeLimit is the largest file the walk reads.
+func (td *TargetDiscovery) sizeLimit() int64 {
+	if td.MaxFileSize <= 0 {
+		return DefaultMaxFileSize
+	}
+	return td.MaxFileSize
+}
+
+// classify says what the walk does with the entry at relPath (relative to
+// the scan root, as findings name it) whose Lstat information is info.
+// record counts a matching ignore pattern as an exclusion, as the walk
+// does; link resolution classifies without counting.
+func (td *TargetDiscovery) classify(relPath string, info os.FileInfo, record bool) entryAction {
+	if info.IsDir() {
+		switch info.Name() {
+		case ".git", "node_modules", ".aguara":
+			return actionSkipDir
+		}
+		return actionDescend
+	}
+	if SkipKind(info.Mode()) != "" {
+		return actionSpecial
+	}
+	// Explicit exclusions take precedence over the file-size boundary.
+	if isBinaryExt(relPath) {
+		return actionExcluded
+	}
+	ignored := td.matchesIgnore(relPath)
+	if record {
+		ignored = td.isIgnored(relPath)
+	}
+	if ignored {
+		return actionExcluded
+	}
+	if info.Size() > td.sizeLimit() {
+		return actionTooLarge
+	}
+	return actionRead
+}
+
 // linkResolution says where the symbolic link at path resolves relative to
-// root (a resolved path): inside it, outside it, or nowhere. It only
-// resolves links; no file content is read.
-func linkResolution(root, path string) string {
+// root (a resolved path): to content the walk reads (inside), to a part of
+// the target the walk does not read (excluded: a file with a binary
+// extension, under .git, node_modules or .aguara, covered by an ignore
+// pattern, over the size limit or not a regular file, or a directory the
+// walk does not enter or whose content an ignore pattern covers), outside
+// the target, or nowhere (dangling). It resolves links and stats entries;
+// no file content is read.
+func (td *TargetDiscovery) linkResolution(root, path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return types.LinkDangling
@@ -165,7 +224,33 @@ func linkResolution(root, path string) string {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return types.LinkOutside
 	}
-	return types.LinkInside
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return types.LinkDangling
+	}
+	if rel != "." {
+		// Every directory on the way must be one the walk enters. The
+		// resolved path holds no links, so each step is a directory.
+		parts := strings.Split(rel, string(filepath.Separator))
+		for i := range parts[:len(parts)-1] {
+			dirRel := filepath.Join(parts[:i+1]...)
+			dirInfo, err := os.Lstat(filepath.Join(root, dirRel))
+			if err != nil {
+				return types.LinkDangling
+			}
+			if td.classify(dirRel, dirInfo, false) != actionDescend || td.ignoredSubtree(dirRel, false) {
+				return types.LinkExcluded
+			}
+		}
+	}
+	switch action := td.classify(rel, info, false); {
+	case action == actionRead:
+		return types.LinkInside
+	case action == actionDescend && !td.ignoredSubtree(rel, false):
+		return types.LinkInside
+	default:
+		return types.LinkExcluded
+	}
 }
 
 // resolvedRoot returns path with symbolic links resolved, or path itself
@@ -223,25 +308,17 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		linkRoot = resolvedRoot(root)
 	}
 
-	limit := td.MaxFileSize
-	if limit <= 0 {
-		limit = DefaultMaxFileSize
-	}
-
 	var targets []*Target
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if info != nil && info.IsDir() {
-			base := info.Name()
-			if base == ".git" || base == "node_modules" || base == ".aguara" {
-				return filepath.SkipDir
-			}
-		}
 		relPath, _ := filepath.Rel(root, path)
 		if td.relPrefix != "" {
 			relPath = filepath.Join(td.relPrefix, relPath)
 		}
+		if info != nil && info.IsDir() && td.classify(relPath, info, false) == actionSkipDir {
+			return filepath.SkipDir
+		}
 		if err != nil {
-			if td.isIgnoredSubtree(relPath) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
+			if td.ignoredSubtree(relPath, true) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
 				return nil
 			}
 			if path == root {
@@ -256,30 +333,27 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		if info.IsDir() {
 			return nil
 		}
-		// Symbolic links (never followed, to prevent path traversal), named
-		// pipes, sockets and devices hold no file content to scan, and
-		// opening a pipe or device can block or never end. They are listed
-		// as skipped unless an exclusion covers them anyway; as before, a
-		// pattern that matches one is not counted as an exclusion.
-		if kind := SkipKind(info.Mode()); kind != "" {
+		switch td.classify(relPath, info, true) {
+		case actionSpecial:
+			// Symbolic links (never followed, to prevent path traversal),
+			// named pipes, sockets and devices hold no file content to scan,
+			// and opening a pipe or device can block or never end. They are
+			// listed as skipped unless an exclusion covers them anyway; as
+			// before, a pattern that matches one is not counted as an
+			// exclusion.
 			if !isBinaryExt(path) && !td.matchesIgnore(relPath) {
+				kind := SkipKind(info.Mode())
 				entry := types.SkippedFile{Path: relPath, Kind: kind}
 				if kind == types.SkippedSymlink {
-					entry.Resolves = linkResolution(linkRoot, path)
+					entry.Resolves = td.linkResolution(linkRoot, path)
 				}
 				td.Skipped = append(td.Skipped, entry)
 			}
 			return nil
-		}
-		// Explicit exclusions take precedence over the file-size boundary.
-		if isBinaryExt(path) {
+		case actionExcluded:
 			return nil
-		}
-		if td.isIgnored(relPath) {
-			return nil
-		}
-		if info.Size() > limit {
-			td.Failures = append(td.Failures, IncompleteScanError("read target", relPath, "", &fileSizeError{limit: limit}))
+		case actionTooLarge:
+			td.Failures = append(td.Failures, IncompleteScanError("read target", relPath, "", &fileSizeError{limit: td.sizeLimit()}))
 			return nil
 		}
 		targets = append(targets, &Target{
@@ -346,21 +420,22 @@ func (td *TargetDiscovery) recordExclusion(i int) {
 	}
 }
 
-// Only skip an unreadable subtree when every descendant is excluded. A file
-// glob matching the directory's name alone says nothing about its contents.
-func (td *TargetDiscovery) isIgnoredSubtree(relPath string) bool {
+// ignoredSubtree reports whether an ignore pattern excludes every entry
+// under the directory relPath: only then is an unreadable subtree skipped,
+// or a link to the directory said to reach nothing the walk reads. A file
+// glob matching the directory's name alone says nothing about its
+// contents. record counts the exclusion, as for isIgnored.
+func (td *TargetDiscovery) ignoredSubtree(relPath string, record bool) bool {
 	relPath = filepath.ToSlash(relPath)
 	if relPath == "." {
 		return false
 	}
 	for i, pattern := range td.IgnorePatterns {
-		if pattern == "*" || pattern == "**" {
-			td.recordExclusion(i)
-			return true
-		}
 		prefix, recursive := strings.CutSuffix(pattern, "/**")
-		if recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
-			td.recordExclusion(i)
+		if pattern == "*" || pattern == "**" || recursive && (relPath == prefix || strings.HasPrefix(relPath, prefix+"/")) {
+			if record {
+				td.recordExclusion(i)
+			}
 			return true
 		}
 	}

@@ -631,6 +631,8 @@ func hiddenSkippedNames(skipped []types.SkippedFile) string {
 		switch {
 		case s.Kind == types.SkippedSymlink && s.Resolves == types.LinkDangling:
 			why = "dangling symbolic link"
+		case s.Kind == types.SkippedSymlink && s.Resolves == types.LinkExcluded:
+			why = "symbolic link to content the scan skips"
 		case s.Kind == types.SkippedSymlink:
 			why = "symbolic link resolving outside the target"
 		}
