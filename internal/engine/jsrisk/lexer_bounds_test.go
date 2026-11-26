@@ -347,7 +347,8 @@ var lexerDifferentialPieces = []string{
 	"'(/'", "\")\"", "`${a(}`", "a!", "f()!", "xs[0]!", "(x)", "catch", "in", "do",
 	"<", ">", "&&", "||", ".", "%", "} ", "{}", "else", "default", "of", "=>", "++", "--",
 	"function", "function f()", "class A", ".default", "?.new", "const {", "with (", "for await (",
-	"'x'!", "`t`!", "\r\n",
+	"'x'!", "`t`!", "\r\n", ".catch(", "p.if (", "#do", ".\n", "// c.\n", "? 1 : {", "> {", "<T>", ": T {",
+	"class extends B", "function someLongName()",
 }
 
 // plainLexerPieces leaves out `!`, so snippets built from them read the
@@ -482,10 +483,11 @@ func checkDecisionsAgainstMain(t *testing.T, src []byte) {
 
 // intendedChange reports whether the slash at i follows one of the shapes
 // whose reading the brace-aware classifier changed: a `}`, `else`,
-// `default` or `of`, a property name spelled like a keyword, a postfix
-// `++` or `--`, a `with (...)` or `for await (...)` header and, in
-// TypeScript, a `!` after a property name, `of`, a closing quote or
-// backtick, or a `}`.
+// `default` or `of`, a property name spelled like a keyword (private names
+// and a dot at the end of the line above included), a postfix `++` or
+// `--`, a `with (...)` or `for await (...)` header, a method named like a
+// statement keyword (`p.catch(f)`) and, in TypeScript, a `!` after any of
+// these, a closing quote or backtick, or a `}`.
 func intendedChange(rc *regexContext, i int) bool {
 	buf := rc.buf
 	j := i - 1
@@ -506,24 +508,39 @@ func intendedChange(rc *regexContext, i int) bool {
 		}
 		return rc.afterDot(end - len(word))
 	}
+	// headerChanged reports whether the `)` at k closes a `with (...)` or
+	// `for await (...)` header or a method named like a statement keyword
+	// (`p.catch(f)`).
+	headerChanged := func(k int) bool {
+		open := backwardMatchingOpen(buf, k)
+		if open < 0 {
+			return false
+		}
+		word := keywordBefore(buf, open)
+		switch word {
+		case "with", "await":
+			return true
+		}
+		e := open - 1
+		for e >= 0 && (buf[e] == ' ' || buf[e] == '\t' || buf[e] == '\r' || buf[e] == '\n') {
+			e--
+		}
+		return word != "" && rc.afterDot(e+1-len(word))
+	}
 	switch c := buf[j]; {
 	case c == '}':
 		return true
 	case c == '+' || c == '-':
 		return j > 0 && buf[j-1] == c
 	case c == ')':
-		open := backwardMatchingOpen(buf, j)
-		if open < 0 {
-			return false
-		}
-		switch keywordBefore(buf, open) {
-		case "with", "await":
-			return true
-		}
+		return headerChanged(j)
 	case c == '!' && rc.typescript && j > 0:
 		p := buf[j-1]
 		if p == '\'' || p == '"' || p == '`' || p == '}' {
 			return true
+		}
+		if p == ')' {
+			return headerChanged(j - 1)
 		}
 		return isJSIdentifierByte(p) && wordChanged(j)
 	case isJSIdentifierByte(c):

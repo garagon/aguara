@@ -4200,7 +4200,7 @@ func (r *regexContext) regexStartsAt(i int) bool {
 	case "of":
 		// `of` is the for-of keyword only right after the loop binding
 		// (`for (const m of /re/g.exec(s))`); anywhere else it is a variable.
-		return r.operandEndsAt(r.skipSpaceBack(start-1), false)
+		return r.sameLineOperandBefore(start)
 	}
 	return false
 }
@@ -4211,7 +4211,9 @@ func (r *regexContext) regexStartsAt(i int) bool {
 // which a statement or block follows rather than an operator.
 func (r *regexContext) closesStatementHeader(closeParen int) bool {
 	keyword, start, matched := r.parenHeader(closeParen)
-	if !matched {
+	if !matched || keyword == "" || r.afterDot(start) {
+		// A method call such as `arr.with(...)`, `p.catch(...)` or
+		// `Symbol.for(...)` is an operand.
 		return false
 	}
 	switch keyword {
@@ -4254,7 +4256,7 @@ func (r *regexContext) operandEndsAt(j int, ofKeyword bool) bool {
 			return false
 		case "of":
 			// After an operand `of` can only be the for-of keyword.
-			return ofKeyword && !r.operandEndsAt(r.skipSpaceBack(start-1), false)
+			return ofKeyword && !r.sameLineOperandBefore(start)
 		}
 		return true
 	}
@@ -4277,17 +4279,51 @@ func (r *regexContext) skipSpaceBack(k int) int {
 }
 
 // afterDot reports whether the identifier starting at start is a property
-// name: the token before it on the same line is a `.` (which covers `?.`).
-// A line break is not crossed, so the period that ends a comment on the
-// line above (left in place when the pass reads raw bytes) does not turn
-// `return` or `default` into a property name.
+// name: a private name (`#default`), or the token before it is a `.`
+// (which covers `?.`), on the same line or at the end of the line above.
+// A period ending a line that holds `//` before it is taken to end a line
+// comment (left in place when the pass reads raw bytes), so it does not
+// turn `return` or `default` on the next line into a property name.
 func (r *regexContext) afterDot(start int) bool {
+	if start > 0 && r.buf[start-1] == '#' {
+		// A private name: `this.#default`.
+		return true
+	}
+	k := start - 1
+	crossed := false
+	for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r' || r.buf[k] == '\n') {
+		crossed = crossed || r.buf[k] == '\n'
+		k--
+		r.steps++
+	}
+	if k < 0 || r.buf[k] != '.' {
+		return false
+	}
+	if crossed {
+		// `cfg.\ndefault` is a property; the period that ends a line
+		// comment (left in place when the pass reads raw bytes) is not.
+		ls := bytes.LastIndexByte(r.buf[:k], '\n') + 1
+		r.steps += k - ls
+		if bytes.Contains(r.buf[ls:k], []byte("//")) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameLineOperandBefore reports whether an operand ends right before the
+// identifier at start on the same line. A line break in between starts a
+// new statement (ASI), so `of` there is a variable.
+func (r *regexContext) sameLineOperandBefore(start int) bool {
 	k := start - 1
 	for k >= 0 && (r.buf[k] == ' ' || r.buf[k] == '\t' || r.buf[k] == '\r') {
 		k--
 		r.steps++
 	}
-	return k >= 0 && r.buf[k] == '.'
+	if k >= 0 && r.buf[k] == '\n' {
+		return false
+	}
+	return r.operandEndsAt(k, false)
 }
 
 // bangIsNonNullAssertion reports whether the `!` at position bang is a
@@ -4367,16 +4403,33 @@ func (r *regexContext) braceKindAt(i int) braceKind {
 	case c == ')':
 		return r.braceAfterParen(j)
 	case c == '>':
-		// `=> {` opens an arrow function body; in TypeScript a type
-		// argument list (`class A<T> {`, `(): Promise<T> {`) precedes a
-		// declaration body.
-		return braceStatement
+		// `=> {` opens an arrow function body.
+		if j > 0 && r.buf[j-1] == '=' {
+			return braceStatement
+		}
+		// In TypeScript a type argument list can end a generic name, which
+		// then decides as it would without the list: `class G<T> {`,
+		// `(): Promise<T> {`. Any other `>` is a comparison or a shift, or
+		// ends an angle-bracket assertion (`<T>{}`): an operand follows, so
+		// a slash after the `}` stays a division.
+		if r.typescript {
+			if lt := r.typeArgumentsStart(j); lt > 0 {
+				if k := r.skipSpaceBack(lt - 1); k >= 0 && isJSIdentifierByte(r.buf[k]) {
+					return r.braceAfterWord(k, i)
+				}
+			}
+		}
+		return braceExpression
 	case c == '{':
 		return r.enclosingKind()
 	case c == ':':
-		// A property value in an object literal; a label, a case clause or
-		// a TypeScript annotation elsewhere.
-		return r.enclosingKind()
+		// A label or a case/default clause opens a block; a property
+		// value, a ternary alternative or a type annotation is an
+		// expression.
+		if r.enclosingKind() == braceStatement && r.colonOpensBlock(j) {
+			return braceStatement
+		}
+		return braceExpression
 	case c == ';', c == '}', c == ']', c == '\'', c == '"', c == '`':
 		// A new statement, a TypeScript return type (`(): string[] {`) or
 		// declaration name (`declare module 'm' {`).
@@ -4396,8 +4449,30 @@ func (r *regexContext) braceKindAt(i int) braceKind {
 func (r *regexContext) braceAfterWord(j, brace int) braceKind {
 	word := keywordEndingAt(r.buf, j+1)
 	start := j + 1 - len(word)
-	if word == "" || r.afterDot(start) {
-		return braceStatement
+	if word == "" {
+		// A name longer than any keyword: walk all of it.
+		start = r.identStart(j)
+	}
+	// A dotted name (`React.Component`, TypeScript `ns.T`) is decided by
+	// what precedes all of it.
+	qs := start
+	if r.afterDot(start) {
+		qs = r.qualifiedNameStart(start)
+	}
+	if p := r.skipSpaceBack(qs - 1); p >= 0 && r.buf[p] == ':' {
+		// TypeScript return type: the parameter list decides.
+		if q := r.skipSpaceBack(p - 1); q >= 0 && r.buf[q] == ')' {
+			return r.braceAfterParen(q)
+		}
+		return braceExpression
+	}
+	if p := r.skipSpaceBack(qs - 1); p >= 0 && keywordEndingAt(r.buf, p+1) == "extends" {
+		return r.classBeforeExtends(p + 1 - len("extends"))
+	}
+	if qs != start || r.afterDot(start) {
+		// A property name in any other place is not a statement shape the
+		// classifier can confirm.
+		return braceExpression
 	}
 	switch word {
 	case "return", "yield":
@@ -4407,10 +4482,6 @@ func (r *regexContext) braceAfterWord(j, brace int) braceKind {
 		}
 		return braceExpression
 	case "void":
-		// TypeScript `(): void {` is a return type before a body.
-		if k := r.skipSpaceBack(start - 1); k >= 0 && r.buf[k] == ':' {
-			return braceStatement
-		}
 		return braceExpression
 	case "typeof", "instanceof", "in", "of", "new", "delete", "throw", "case", "await",
 		"default", "extends", "as", "satisfies", "keyof", "import", "export", "const", "let", "var":
@@ -4440,17 +4511,154 @@ func (r *regexContext) braceAfterParen(closeParen int) braceKind {
 	if keyword == "function" {
 		return r.declarationOrExpression(start)
 	}
-	if keyword != "" {
+	nameStart := start
+	if keyword == "" && start > 0 && isJSIdentifierByte(r.buf[start-1]) {
+		// A name longer than any keyword: walk all of it.
+		nameStart = r.identStart(start - 1)
+	}
+	if keyword != "" || nameStart < start {
 		// `function name(`, `function* name(`.
-		k := r.skipSpaceBack(start - 1)
+		k := r.skipSpaceBack(nameStart - 1)
 		if k >= 0 && r.buf[k] == '*' {
 			k = r.skipSpaceBack(k - 1)
 		}
 		if k >= 0 && keywordEndingAt(r.buf, k+1) == "function" {
 			return r.declarationOrExpression(k + 1 - len("function"))
 		}
+		// `class extends mixin(Base) {`, `class A extends ns.mixin(B) {`.
+		if k = r.skipSpaceBack(r.qualifiedNameStart(nameStart) - 1); k >= 0 && keywordEndingAt(r.buf, k+1) == "extends" {
+			return r.classBeforeExtends(k + 1 - len("extends"))
+		}
 	}
 	return braceStatement
+}
+
+// qualifiedNameStart returns where the dotted name that ends with the
+// identifier starting at start begins: `React.Component` for `Component`.
+// Each step walks one identifier, so the work is the length of the name.
+func (r *regexContext) qualifiedNameStart(start int) int {
+	for {
+		k := r.skipSpaceBack(start - 1)
+		if k < 1 || r.buf[k] != '.' || r.buf[k-1] == '.' {
+			return start
+		}
+		p := r.skipSpaceBack(k - 1)
+		if p < 0 || !isJSIdentifierByte(r.buf[p]) {
+			return start
+		}
+		start = r.identStart(p)
+	}
+}
+
+// maxTypeArgumentsLen bounds the look back from a `>` for the `<` of a
+// TypeScript type argument list.
+const maxTypeArgumentsLen = 128
+
+// typeArgumentsStart returns the offset of the `<` that opens the type
+// argument list ending with the `>` at gt, or -1. The look back stays on
+// the line, stops at `{`, `}`, `;` and a `=` that is not part of `=>`, and
+// covers at most maxTypeArgumentsLen bytes, so it ends at the previous
+// brace and the work stays linear.
+func (r *regexContext) typeArgumentsStart(gt int) int {
+	depth := 1
+	for k := gt - 1; k >= 0 && gt-k <= maxTypeArgumentsLen; k-- {
+		r.steps++
+		switch r.buf[k] {
+		case '>':
+			if k > 0 && r.buf[k-1] == '=' {
+				k-- // an arrow inside a function type
+				continue
+			}
+			depth++
+		case '<':
+			if depth--; depth == 0 {
+				return k
+			}
+		case '\n', '{', '}', ';', '=':
+			return -1
+		}
+	}
+	return -1
+}
+
+// identStart returns the offset where the identifier whose last byte is at
+// j starts.
+func (r *regexContext) identStart(j int) int {
+	s := j
+	for s > 0 && isJSIdentifierByte(r.buf[s-1]) {
+		s--
+		r.steps++
+	}
+	return s
+}
+
+// classBeforeExtends classifies a body whose heritage clause starts with the
+// `extends` keyword at ext: `class extends B {` or `class Name extends B {`
+// by the position of `class`, a TypeScript interface (`interface I<T>
+// extends J {`) as a declaration, anything else as an expression.
+func (r *regexContext) classBeforeExtends(ext int) braceKind {
+	k := r.skipSpaceBack(ext - 1)
+	if r.typescript && k >= 0 && r.buf[k] == '>' {
+		// `class A<T> extends B {`.
+		if lt := r.typeArgumentsStart(k); lt > 0 {
+			k = r.skipSpaceBack(lt - 1)
+		}
+	}
+	if k < 0 || !isJSIdentifierByte(r.buf[k]) {
+		return braceExpression
+	}
+	s := r.identStart(k)
+	if string(r.buf[s:k+1]) == "class" {
+		return r.declarationOrExpression(s)
+	}
+	if c := r.skipSpaceBack(s - 1); c >= 0 {
+		switch keywordEndingAt(r.buf, c+1) {
+		case "class":
+			return r.declarationOrExpression(c + 1 - len("class"))
+		case "interface":
+			return braceStatement
+		}
+	}
+	return braceExpression
+}
+
+// colonOpensBlock reports whether the `:` at colon ends a label or a case or
+// default clause, after which a `{` opens a block. Anything else (a
+// ternary alternative, a type annotation) is an expression.
+func (r *regexContext) colonOpensBlock(colon int) bool {
+	k := r.skipSpaceBack(colon - 1)
+	if k >= 0 && (r.buf[k] == '\'' || r.buf[k] == '"' || r.buf[k] == '`') {
+		// `case 'name': {`: the string's opening quote, on the same line.
+		for q := k - 1; q >= 0 && r.buf[q] != '\n'; q-- {
+			r.steps++
+			if r.buf[q] == r.buf[k] && (q == 0 || r.buf[q-1] != '\\') {
+				return keywordBefore(r.buf, q) == "case"
+			}
+		}
+		return false
+	}
+	if k < 0 || !isJSIdentifierByte(r.buf[k]) {
+		return false
+	}
+	s := r.identStart(k)
+	if r.afterDot(s) {
+		return false
+	}
+	if string(r.buf[s:k+1]) == "default" {
+		return true
+	}
+	p := r.skipSpaceBack(s - 1)
+	if p < 0 {
+		return true
+	}
+	if keywordEndingAt(r.buf, p+1) == "case" {
+		return true
+	}
+	switch r.buf[p] {
+	case ';', '{', '}':
+		return true
+	}
+	return false
 }
 
 // declarationOrExpression tells the body of a function or class expression
@@ -4468,7 +4676,10 @@ func (r *regexContext) declarationOrExpression(fn int) braceKind {
 	case c == ';', c == '{', c == '}', c == ')':
 		return braceStatement
 	case c == ':':
-		return r.enclosingKind()
+		if r.enclosingKind() == braceStatement && r.colonOpensBlock(k) {
+			return braceStatement
+		}
+		return braceExpression
 	case isJSIdentifierByte(c):
 		word := keywordEndingAt(r.buf, k+1)
 		switch word {
@@ -4562,8 +4773,10 @@ func (r *regexContext) matchingOpen(closeParen int) int {
 }
 
 // maxKeywordLen is the length of the longest keyword the classifier checks
-// ("instanceof"). An identifier longer than that is not a keyword, so the
-// walk back over it stops early without changing any answer.
+// ("instanceof", "implements"). keywordEndingAt stops walking back over a
+// longer identifier and returns "", which callers read as "not a keyword";
+// where the name itself matters, such as a function or class name before
+// a body, they walk the whole identifier with identStart.
 const maxKeywordLen = 10
 
 func isJSIdentifierByte(b byte) bool {
