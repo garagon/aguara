@@ -964,12 +964,18 @@ func parseGemfileManifest(data []byte) (manifestInfo, error) {
 // -c constraints add none. An include that is not read (a URL, a path
 // outside root, a missing file), a local project or a skipped line leaves
 // the names unknown. Pins read from an include keep that file's path.
-func parseRequirementsInManifest(path, root string) (manifestInfo, error) {
+// Each include read is charged to budget (nil charges nothing); past it,
+// the manifest is unreadable.
+func parseRequirementsInManifest(path, root string, budget *discoveryBudget) (manifestInfo, error) {
 	var info manifestInfo
 	if root == "" {
 		root = filepath.Dir(path)
 	}
-	parsed, err := parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: path, Source: filepath.Base(path), Root: root}, newRequirementsCache())
+	cache := newRequirementsCache()
+	if budget != nil {
+		cache.charge = func(p string) bool { return budget.take(p, maxManifestBytes) }
+	}
+	parsed, err := parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: path, Source: filepath.Base(path), Root: root}, cache)
 	if err != nil {
 		return info, err
 	}

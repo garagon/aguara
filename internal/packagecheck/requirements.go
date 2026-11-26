@@ -90,6 +90,10 @@ var (
 // files is not re-read for each of them.
 type requirementsCache struct {
 	files map[string]*requirementsFile
+	// charge, when set, is asked before an included file is read and
+	// refuses the read once a budget is spent (the discovery walk charges
+	// the includes of a requirements.in to its read budget).
+	charge func(path string) bool
 }
 
 func newRequirementsCache() *requirementsCache {
@@ -218,6 +222,9 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 	w.visited[key] = true
 	file, ok := w.cache.files[key]
 	if !ok {
+		if depth > 0 && w.cache.charge != nil && !w.cache.charge(path) {
+			return fmt.Errorf("%s: the discovery read budget is spent", path)
+		}
 		file, err = parseRequirementsFile(path)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)

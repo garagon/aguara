@@ -341,7 +341,7 @@ func TestParseCondaEnvironment(t *testing.T) {
 func TestParseRequirementsInManifest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "requirements.in")
 	writeFile(t, path, "django>=5\nflask==3.0.0\n-c constraints.txt\n")
-	info, err := parseRequirementsInManifest(path, filepath.Dir(path))
+	info, err := parseRequirementsInManifest(path, filepath.Dir(path), nil)
 	require.NoError(t, err)
 	require.True(t, info.declares())
 	require.Equal(t, []string{"flask 3.0.0"}, pinSummary(info.pins))
@@ -703,6 +703,24 @@ func TestDiscoveryReadBudget(t *testing.T) {
 	budget = &discoveryBudget{files: maxManifestsParsed}
 	m, _ = readManifestAt(path, root, nil, budget)
 	require.True(t, m.Unreadable, "past the file count")
+
+	// The includes a requirements.in reads are charged too.
+	in := filepath.Join(root, "requirements.in")
+	const input, base = "-r base.in\n", "requests\nflask\n"
+	writeFile(t, in, input)
+	writeFile(t, filepath.Join(root, "base.in"), base)
+	budget = &discoveryBudget{bytes: maxDiscoveryReadBytes - int64(len(input)+len(base)) + 1}
+	m, ok = readManifestAt(in, root, nil, budget)
+	require.True(t, ok)
+	require.True(t, m.Unreadable, "the include would pass the budget")
+	require.True(t, m.Declares)
+
+	budget = &discoveryBudget{bytes: maxDiscoveryReadBytes - int64(len(input)+len(base))}
+	m, _ = readManifestAt(in, root, nil, budget)
+	require.False(t, m.Unreadable)
+	require.Equal(t, []string{"requests", "flask"}, m.DefaultDependencies)
+	require.Equal(t, maxDiscoveryReadBytes, budget.bytes)
+	require.Equal(t, 2, budget.files)
 }
 
 // The exact pins of a listed manifest are matched against intelligence;
