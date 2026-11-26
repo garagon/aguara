@@ -115,7 +115,7 @@ evaluated, the error is an `*IncompleteError` (`errors.As`): its `Result` holds
 the findings that were found, `Result.Incomplete` is true, `Result.Errors`
 lists what failed (path, stage, analyzer, reason) and `Result.Verdict` is never
 clean. Report or block on those findings; do not drop them. A canceled scan's
-error also matches the context's error. Only a failure to inspect the target,
+error also matches the context's error: compare with `errors.Is`, not `==`. Only a failure to inspect the target,
 resolve it or read its `.aguaraignore` returns no partial result.
 
 Consumers must bound inline inputs and execution resources themselves. A context
