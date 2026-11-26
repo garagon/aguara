@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -55,6 +56,11 @@ type manifestInfo struct {
 	// optional sets (extras, dependency groups, dev dependencies). Only
 	// Python manifests use them.
 	defaultNames, groupNames []string
+	// files are the requirements files, relative to the manifest, that
+	// it names as the source of dependencies it does not list itself
+	// (a setuptools file: directive, a file setup.py reads, the file
+	// pip-compile writes for a requirements.in).
+	files []string
 }
 
 func (m manifestInfo) declares() bool { return m.deps > 0 || m.unknown }
@@ -483,6 +489,19 @@ func parsePyprojectManifest(data []byte) (manifestInfo, error) {
 		switch {
 		case len(full) == 2 && full[0] == "project" && full[1] == "dependencies":
 			return forEachTOMLString(value, lines, line, func(s string, l int) error { return info.addPEP508(s, l, "") })
+		case len(full) == 5 && hasPrefixKeys(full, "tool", "setuptools", "dynamic", "dependencies") && full[4] == "file":
+			// setuptools reads the dynamic dependency list from these
+			// files (a string or a list of strings).
+			if value != nil && value.Kind == unstable.String {
+				info.files = append(info.files, string(value.Data))
+				return nil
+			}
+			return forEachTOMLString(value, lines, line, func(s string, _ int) error {
+				if len(info.files) < 100 {
+					info.files = append(info.files, s)
+				}
+				return nil
+			})
 		case len(full) == 2 && full[0] == "project" && full[1] == "dynamic":
 			_ = forEachTOMLString(value, lines, line, func(s string, _ int) error {
 				if s == "dependencies" || s == "optional-dependencies" {
@@ -711,44 +730,71 @@ func forEachManifestLine(data []byte, label string, fn func(line int, text strin
 	return nil
 }
 
-// setupPyDependencyKeyword finds the setuptools keywords that declare
-// installed dependencies.
-var setupPyDependencyKeyword = regexp.MustCompile(`\b(install_requires|extras_require)\b`)
-
-var (
-	// setupPyCall is a call of setup(), setuptools.setup() or similar.
-	setupPyCall = regexp.MustCompile(`\bsetup\s*\(`)
-	// setupPyKwargsUnpack is keyword unpacking (`**config`, `**dict(...)`,
-	// `**json.load(f)`), which can pass install_requires under a name the
-	// text never spells.
-	setupPyKwargsUnpack = regexp.MustCompile(`\*\*\s*[A-Za-z_({]`)
-)
-
 // parseSetupPyManifest never runs setup.py. setup() receives its
 // dependencies through the install_requires and extras_require keywords,
-// so a file whose code never names them, and never unpacks keyword
+// so a file whose code never passes them, and never unpacks keyword
 // arguments into a setup() call, declares none through setup.py (a shim
 // whose dependencies live in setup.cfg or pyproject.toml is covered by
-// those files). A file that names a keyword, or calls setup() and
-// unpacks keyword arguments (which may come from a computed dict or a
-// JSON file), is treated as declaring dependencies whose names and
-// versions are unknown; its pins are not read.
+// those files). Literal lists given to those keywords, directly or
+// through a name bound only to literal lists, are read like any other
+// manifest's (see scanSetupPy). Any other value, or keyword unpacking
+// into a setup() call (which may pass a computed dict or a JSON file),
+// leaves the dependency names unknown; the .txt and .in files the
+// script names are recorded as the files it may read them from.
 func parseSetupPyManifest(data []byte) (manifestInfo, error) {
 	var info manifestInfo
-	calls, unpacks := false, false
-	err := forEachManifestLine(data, "setup.py", func(_ int, text string) error {
-		code, _, _ := strings.Cut(text, "#")
-		if setupPyDependencyKeyword.MatchString(code) {
-			info.unknown = true
+	s := scanSetupPy(string(data))
+	info.files = s.files
+	unknownDefault, unknownGroups := false, false
+	add := func(items []pyStringItem, group string) error {
+		for _, it := range items {
+			if err := info.addPEP508(it.value, it.line, group); err != nil {
+				return err
+			}
 		}
-		calls = calls || setupPyCall.MatchString(code)
-		unpacks = unpacks || setupPyKwargsUnpack.MatchString(code)
 		return nil
-	})
-	if calls && unpacks {
-		info.unknown = true
 	}
-	return info, err
+	for _, v := range s.install {
+		lists, dicts, ok := s.resolve(v)
+		if !ok || len(dicts) > 0 {
+			unknownDefault = true
+			if err := add(v.listed, ""); err != nil {
+				return info, err
+			}
+			continue
+		}
+		for _, l := range lists {
+			if err := add(l, ""); err != nil {
+				return info, err
+			}
+		}
+	}
+	for _, v := range s.extras {
+		lists, dicts, ok := s.resolve(v)
+		if !ok || len(lists) > 0 {
+			unknownGroups = true
+			continue
+		}
+		for _, d := range dicts {
+			keys := make([]string, 0, len(d))
+			for k := range d {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if err := add(d[k], k); err != nil {
+					return info, err
+				}
+			}
+		}
+	}
+	if s.calls && s.unpacks {
+		unknownDefault = true
+	}
+	// Extras need not be pinned for a plain install, so unknown extras
+	// matter only when nothing else is declared.
+	info.unknown = info.unknown || unknownDefault || unknownGroups && len(info.defaultNames) == 0
+	return info, nil
 }
 
 // parseSetupCfgManifest reads the setuptools declarative configuration:
@@ -765,8 +811,16 @@ func parseSetupCfgManifest(data []byte) (manifestInfo, error) {
 		if value == "" || strings.HasPrefix(value, "#") || strings.HasPrefix(value, ";") {
 			return nil
 		}
-		if strings.HasPrefix(value, "file:") {
+		if rest, ok := strings.CutPrefix(value, "file:"); ok {
 			info.unknown = true
+			if section == "options" {
+				// install_requires = file: requirements.txt, other.txt
+				for _, f := range strings.Split(rest, ",") {
+					if f = strings.TrimSpace(f); f != "" && len(info.files) < 100 {
+						info.files = append(info.files, f)
+					}
+				}
+			}
 			return nil
 		}
 		group := ""
@@ -914,6 +968,10 @@ func parseRequirementsInManifest(path string) (manifestInfo, error) {
 		// A skipped line may name a dependency.
 		info.unknown = true
 	}
+	// pip-compile writes the compiled file beside the input, under the
+	// same name with .txt for .in, pinning everything it resolved,
+	// includes and local projects too.
+	info.files = []string{strings.TrimSuffix(filepath.Base(path), ".in") + ".txt"}
 	for _, item := range file.items {
 		if item.include != "" || item.local {
 			// An include or a local project: what it pulls in is not

@@ -283,6 +283,8 @@ func FuzzParseDependencyManifests(f *testing.F) {
 		"[packages]\nflask = \"==3.0.0\"\nb = { version = \"===1.0\" }\n",
 		"[workspace]\n[dependencies]\nserde = \"=1.0.0\"\n[dependencies.x]\nversion = \"=2.0.0\"\n",
 		"setup(install_requires=['a'])\n",
+		"R = ['a==1', \"b\" 'c']\nif x == R:\n    R += [f'{y}']\nsetup(install_requires=R, extras_require={'d': ('e',)}, **k)\nopen(os.path.join(h, 'r', 'q.txt'))\n'''x\\\n'''\n",
+		"[project]\ndynamic = [\"dependencies\"]\n[tool.setuptools.dynamic]\ndependencies = {file = [\"requirements.txt\"]}\n",
 		"[options]\ninstall_requires =\n    flask==3.0.0\n",
 		"gem \"rails\", \"7.1.3\"\ngemspec\n",
 		"dependencies:\n  - numpy\n  - pip:\n    - flask==3.0.0\n",
@@ -320,6 +322,9 @@ func FuzzParseDependencyManifests(f *testing.F) {
 				if p.Ecosystem == "" || p.Name == "" || p.Version == "" {
 					t.Errorf("%s: incomplete pin %+v", r.name, p)
 				}
+			}
+			if len(info.files) > 100 {
+				t.Errorf("%s: %d dependency files named", r.name, len(info.files))
 			}
 		}
 	})

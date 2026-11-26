@@ -59,6 +59,12 @@ type Manifest struct {
 	// file (setup.py, a dynamic list, an include, an unreadable file).
 	DefaultDependencies, GroupDependencies []string
 	DependencyNamesKnown                   bool
+	// DependencyFiles are the requirements files the manifest names as
+	// the source of dependencies its text does not list: a setuptools
+	// file: directive (pyproject.toml, setup.cfg), a .txt or .in file
+	// that setup.py names, or the file pip-compile writes for a
+	// requirements.in. Paths are joined to the manifest's directory.
+	DependencyFiles []string
 }
 
 // manifestSpec describes one manifest kind.
@@ -182,6 +188,9 @@ func readManifestAt(path string, want map[string]bool, parsed *int) (Manifest, b
 		m.Declares, m.Workspace = info.declares(), info.workspace
 		m.DefaultDependencies, m.GroupDependencies = info.defaultNames, info.groupNames
 		m.DependencyNamesKnown = !info.unknown
+		for _, f := range info.files {
+			m.DependencyFiles = append(m.DependencyFiles, filepath.Join(dir, filepath.FromSlash(f)))
+		}
 		for _, pin := range info.pins {
 			pin.Path, pin.Source = path, spec.kind
 			m.Pins = append(m.Pins, pin)
@@ -433,6 +442,9 @@ type requirementsGap struct {
 	// nothing.
 	unpinned int
 	noPins   bool
+	// notNamed: the manifest's dependency names are unknown and the
+	// manifest does not name the file as their source.
+	notNamed bool
 }
 
 // maxNotPinned bounds the names an entry lists.
@@ -454,18 +466,18 @@ const maxNotPinned = 20
 //     normally pins the default set. When a manifest declares only
 //     optional groups, those groups must be pinned instead, since they
 //     are all an install of it would pull.
-//   - When the names are unknown (setup.py, a dynamic list, an include, an
-//     unreadable manifest), the file covers it only if it has at least one
-//     exact registry pin and no entry without one exact version.
+//   - When some names are unknown (a computed setup.py list or keyword
+//     unpacking, a dynamic pyproject list, a setuptools file: directive, an
+//     include in a requirements.in, an unreadable manifest), the names
+//     that can be read must still be pinned, and the file covers the rest
+//     only if the manifest names it as their source (DependencyFiles) and
+//     it has at least one exact registry pin and no entry without one
+//     exact version. A pinned file the manifest does not name says
+//     nothing about what the manifest installs.
 func requirementsCover(r RequirementsEvidence, m *Manifest) requirementsGap {
 	gap := requirementsGap{file: r.Path}
 	if r.Local {
 		gap.local = true
-		return gap
-	}
-	if !m.DependencyNamesKnown {
-		gap.unpinned, gap.noPins = r.Unpinned, r.ExactPins == 0
-		gap.covered = r.Unpinned == 0 && r.ExactPins > 0
 		return gap
 	}
 	required := m.DefaultDependencies
@@ -485,7 +497,24 @@ func requirementsCover(r RequirementsEvidence, m *Manifest) requirementsGap {
 	if len(gap.notPinned) > maxNotPinned {
 		gap.notPinned = gap.notPinned[:maxNotPinned]
 	}
+	if !m.DependencyNamesKnown {
+		gap.notNamed = !m.namesDependencyFile(r.Path)
+		gap.unpinned, gap.noPins = r.Unpinned, r.ExactPins == 0
+		gap.covered = gap.covered && !gap.notNamed && r.Unpinned == 0 && r.ExactPins > 0
+	}
 	return gap
+}
+
+// namesDependencyFile reports whether the manifest names path as a source
+// of its dependencies; paths compare with symlinked directories resolved.
+func (m *Manifest) namesDependencyFile(path string) bool {
+	want := ResolvedPath(path)
+	for _, f := range m.DependencyFiles {
+		if ResolvedPath(f) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // describe says why the requirements file does not stand for the
@@ -500,6 +529,8 @@ func (g requirementsGap) describe(root string) string {
 		return name + " installs a local project (an editable or path entry), whose dependencies it does not pin"
 	case len(g.notPinned) > 0:
 		return name + " does not pin " + strings.Join(g.notPinned, ", ") + " with == or ==="
+	case g.notNamed:
+		return "the manifest's dependencies cannot all be read from it, and it does not name " + name + " as their source"
 	case g.noPins:
 		return name + " pins no exact version, and the manifest's dependencies cannot be read from it"
 	case g.unpinned > 0:

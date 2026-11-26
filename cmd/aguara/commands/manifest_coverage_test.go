@@ -144,6 +144,37 @@ func TestAuditNuGetCentralPackageManagement(t *testing.T) {
 	require.Equal(t, "pass", result.Verdict.Status)
 }
 
+// A pinned requirements file that pins nothing the manifest declares, or
+// that the manifest does not name as its dependency source, leaves the
+// manifest's install unchecked.
+func TestAuditPythonManifestNeedsItsOwnPins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for name, tc := range map[string]struct {
+		files    map[string]string
+		decision string
+	}{
+		"setup.py literal list": {map[string]string{
+			"setup.py": "from setuptools import setup\nsetup(name='demo', install_requires=['requests>=2'])\n", "requirements.txt": "black==24.1.0\n"}, "review"},
+		"dynamic dependencies": {map[string]string{
+			"pyproject.toml": "[project]\nname = \"demo\"\nversion = \"1\"\ndynamic = [\"dependencies\"]\n", "requirements.txt": "black==24.1.0\n"}, "review"},
+		"keyword unpacking": {map[string]string{
+			"setup.py": "import json\nfrom setuptools import setup\nsetup(**json.load(open('meta.json')))\n", "requirements.txt": "black==24.1.0\n"}, "review"},
+		"dynamic dependencies from the pinned file": {map[string]string{
+			"pyproject.toml":   "[project]\nname = \"demo\"\nversion = \"1\"\ndynamic = [\"dependencies\"]\n[tool.setuptools.dynamic]\ndependencies = {file = [\"requirements.txt\"]}\n",
+			"requirements.txt": "requests==2.31.0\n"}, "proceed"},
+		"setup.py literal list pinned": {map[string]string{
+			"setup.py": "from setuptools import setup\nsetup(name='demo', install_requires=['requests>=2'])\n", "requirements.txt": "requests==2.31.0\n"}, "proceed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, tc.files))
+			require.Equal(t, tc.decision, result.Triage.Decision, "%+v", result.Triage.Reasons)
+			if tc.decision == "review" {
+				requireTriageReason(t, result.Triage, "manifest_without_lockfile")
+			}
+		})
+	}
+}
+
 // The gaps that let NuGet references pass unchecked: a compromised
 // version in a conditional PackageVersion that a later one shadows, a
 // version from a property the project does not define, and central

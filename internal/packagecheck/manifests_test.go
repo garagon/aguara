@@ -251,7 +251,7 @@ func TestParseSetupPyManifest(t *testing.T) {
 	info, err = parseSetupPyManifest([]byte("setup(extras_require={'x': ['y']})\n"))
 	require.NoError(t, err)
 	require.True(t, info.declares())
-	require.Empty(t, info.pins, "setup.py is never evaluated, so its pins are not read")
+	require.Empty(t, info.pins, "an extra without a version pins nothing")
 }
 
 func TestParseSetupCfgManifest(t *testing.T) {
@@ -587,10 +587,12 @@ func TestRequirementsFileCoversPythonManifestOnlyWhenItPinsIt(t *testing.T) {
 			"requirements.txt": "pytest==8.2.0\n"}, true, "", nil},
 		{"only groups declared, not pinned", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
 			"requirements.txt": "black==24.4.2\n"}, false, "does not pin pytest", []string{"pytest"}},
-		{"setup.py with a fully pinned file", map[string]string{"setup.py": "setup(install_requires=open('r').read())\n", "requirements.txt": "requests==2.32.3\n"}, true, "", nil},
-		{"setup.py with an unpinned entry", map[string]string{"setup.py": "setup(install_requires=x)\n", "requirements.txt": "requests==2.32.3\nflask\n"},
+		{"setup.py reading a fully pinned file", map[string]string{"setup.py": "setup(install_requires=open('requirements.txt').read())\n", "requirements.txt": "requests==2.32.3\n"}, true, "", nil},
+		{"setup.py reading another file", map[string]string{"setup.py": "setup(install_requires=open('r').read())\n", "requirements.txt": "requests==2.32.3\n"},
+			false, "does not name requirements.txt as their source", nil},
+		{"setup.py with an unpinned entry", map[string]string{"setup.py": "setup(install_requires=open('requirements.txt').read())\n", "requirements.txt": "requests==2.32.3\nflask\n"},
 			false, "requirements.txt has entries without one exact version", nil},
-		{"setup.py with no pin", map[string]string{"setup.py": "setup(install_requires=x)\n", "requirements.txt": "-r other.txt\n", "other.txt": "# empty\n"},
+		{"setup.py with no pin", map[string]string{"setup.py": "setup(install_requires=open('requirements.txt').read())\n", "requirements.txt": "-r other.txt\n", "other.txt": "# empty\n"},
 			false, "requirements.txt pins no exact version", nil},
 		{"Pipfile packages pinned", map[string]string{"Pipfile": "[packages]\nrequests = \"*\"\n[dev-packages]\npytest = \"*\"\n", "requirements.txt": "requests==2.32.3\n"}, true, "", nil},
 		{"constraints alone", map[string]string{"pyproject.toml": project, "constraints.txt": "requests==2.32.3\nflask-login==0.6.3\n"}, false, "", nil},
