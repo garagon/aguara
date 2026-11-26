@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/garagon/aguara/internal/types"
 )
@@ -113,10 +114,15 @@ func redactHeader(name, value string) string {
 var (
 	// authScheme matches the credential after an HTTP authorization scheme.
 	authScheme = regexp.MustCompile(`(?i)\b(bearer|basic|token)(\s+)[A-Za-z0-9._~+/=-]{4,}`)
-	// queryParam matches one name=value pair of a query outside a URL.
-	queryParam = regexp.MustCompile(`([?&])([^=&#\s]+)=([^&#\s]*)`)
-	// urlPattern matches a URL with a scheme, up to whitespace or a quote.
-	urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
+	// queryParam matches one name=value pair of a query outside a URL; the
+	// value ends at a blank, a quote or a shell operator.
+	queryParam = regexp.MustCompile("([?&])([^=&#\\s]+)=([^&#\\s;|()<>`\"']*)")
+	// urlPattern matches a URL with a scheme inside text, up to a blank, a
+	// quote, a shell operator or "&&"; a single "&" stays a query
+	// separator.
+	urlPattern = regexp.MustCompile("[A-Za-z][A-Za-z0-9+.-]*://(?:[^\\s\"'<>;|()`&]|&[^\\s\"'<>;|()`&])+")
+	// wholeURL is a value that is one URL: a scheme and no blanks.
+	wholeURL = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 	// headerArg matches a "Name: value" header such as the --header value
 	// of an MCP proxy.
 	headerArg = regexp.MustCompile(`^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$`)
@@ -126,14 +132,19 @@ var (
 	// connSegment matches one Name=value segment of a semicolon-separated
 	// connection string.
 	connSegment = regexp.MustCompile(`(^|;)(\s*)([A-Za-z][A-Za-z0-9 _.-]*?)(\s*=\s*)([^;]*)`)
+	// connPart is the start of a Name=value segment of a connection string.
+	connPart = regexp.MustCompile(`^\s*[A-Za-z][A-Za-z0-9 _.-]*\s*=`)
 	// jsonPair matches a "name": "value" member of JSON embedded in a value.
 	jsonPair = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"(\s*:\s*)"((?:[^"\\]|\\.)*)"`)
 	// inlineFlag matches a --name=value or --name value option inside a
-	// value such as an environment variable holding extra arguments.
-	inlineFlag = regexp.MustCompile(`(^|\s)(--?[A-Za-z][A-Za-z0-9_-]*)(=|\s+)("[^"]*"|'[^']*'|\S+)`)
+	// value such as an environment variable holding extra arguments. An
+	// unquoted value ends at a blank or a shell operator and never starts
+	// with "--", so a flag without a value does not hide the next flag.
+	inlineFlag = regexp.MustCompile(`(^|[\s;&|()<>])(--?[A-Za-z][A-Za-z0-9_-]*)(=|\s+)("[^"]*"|'[^']*'|-?[^\s;&|<>()-][^\s;&|<>()]*)`)
 	// inlineAssignment matches a NAME=value word inside a value, such as
-	// the env prefix of a command line.
-	inlineAssignment = regexp.MustCompile(`(^|\s)([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)`)
+	// the env prefix of a command line or PowerShell's $env:NAME=value. An
+	// unquoted value ends at a blank or a shell operator.
+	inlineAssignment = regexp.MustCompile(`(^|[\s;&|()<>])((?i:\$env:)?[A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|<>()]+)`)
 	// winOption matches a Windows-style /name:value or /name=value option.
 	winOption = regexp.MustCompile(`^/([A-Za-z][A-Za-z0-9_-]*)([:=])(.*)$`)
 )
@@ -257,6 +268,9 @@ func nameWords(name string) []string {
 // token in the fragment). Credentials in the userinfo are removed too.
 func redactURL(u string) string {
 	u = types.SanitizeURLUserinfo(u, redactedPlaceholder+"@")
+	if wholeURL.MatchString(u) {
+		return redactURLParts(u)
+	}
 	return urlPattern.ReplaceAllStringFunc(u, redactURLParts)
 }
 
@@ -314,13 +328,21 @@ func redactParam(p string) string {
 // of embedded JSON, sensitive options inside the value, the credential
 // after an authorization scheme, and known token formats.
 func redactValue(v string) string {
+	return redactText(v, true)
+}
+
+// redactText is redactValue; with urls false it leaves URLs alone, for a
+// command line whose words, URLs included, were redacted one by one.
+func redactText(v string, urls bool) string {
 	if v == "" || v == redactedPlaceholder {
 		return v
 	}
 	if red, ok := redactJSON(v); ok {
 		return red
 	}
-	v = redactURL(v)
+	if urls {
+		v = redactURL(v)
+	}
 	if strings.ContainsAny(v, "?&") {
 		v = queryParam.ReplaceAllStringFunc(v, func(m string) string {
 			p := queryParam.FindStringSubmatch(m)
@@ -330,10 +352,10 @@ func redactValue(v string) string {
 			return p[1] + p[2] + "=" + redactedPlaceholder
 		})
 	}
-	if strings.Contains(v, ";") && strings.Contains(v, "=") {
+	if connectionString(v) {
 		v = connSegment.ReplaceAllStringFunc(v, func(m string) string {
 			p := connSegment.FindStringSubmatch(m)
-			if p[5] == "" || !sensitiveEnvName(p[3]) {
+			if p[5] == "" || strings.HasPrefix(strings.TrimSpace(p[5]), redactedPlaceholder) || !sensitiveEnvName(p[3]) {
 				return m
 			}
 			return p[1] + p[2] + p[3] + p[4] + redactedPlaceholder
@@ -368,6 +390,26 @@ func redactValue(v string) string {
 	}
 	v = authScheme.ReplaceAllString(v, "${1}${2}"+redactedPlaceholder)
 	return secretShapes.ReplaceAllString(v, redactedPlaceholder)
+}
+
+// connectionString reports whether v reads as a semicolon-separated
+// connection string: it has a ";" and every non-empty part is Name=value.
+// A shell line such as TOKEN=x;curl host does not.
+func connectionString(v string) bool {
+	if !strings.Contains(v, ";") {
+		return false
+	}
+	n := 0
+	for _, part := range strings.Split(v, ";") {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		if !connPart.MatchString(part) {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // maxJSONDepth bounds the nesting redactJSON walks; a deeper value is
@@ -504,7 +546,7 @@ func maskJSONNode(n any, depth int) (any, bool) {
 // or is /p (a password in many Windows tools; /p:Name=Value is read as an
 // assignment), and anything redactValue removes.
 func redactArgValue(a string) string {
-	if m := headerArg.FindStringSubmatch(a); m != nil && !strings.HasPrefix(m[2], "//") && sensitiveName(m[1]) {
+	if m := headerArg.FindStringSubmatch(a); m != nil && m[2] != "" && !strings.HasPrefix(m[2], "//") && sensitiveName(m[1]) {
 		return m[1] + ": " + redactedPlaceholder
 	}
 	if m := assignment.FindStringSubmatch(a); m != nil && m[2] != "" && sensitiveEnvName(m[1]) {
@@ -522,41 +564,49 @@ func redactArgValue(a string) string {
 }
 
 // redactCommand redacts a server command. A command given as one string
-// with arguments (env VAR=value program, docker run -e ...) is split like
-// a shell would, for redaction only, and its words are redacted as
-// arguments in place: a changed word keeps its original quoting when the
-// word was quoted as a whole, and gets single quotes otherwise, so the
-// displayed command means the same. Unchanged text is kept as written. An
-// unterminated quote (or a trailing backslash) masks everything from it to
-// the end.
+// with arguments (env VAR=value program, docker run -e ..., a -c script)
+// is split like a shell would, for redaction only. Unquoted blanks and the
+// shell operators ; & | < > ( ) end a word, and each command between
+// operators is redacted as an argument list, so a flag before an operator
+// never takes the next command as its value. Only the bytes of a word that
+// change are rewritten, in place, so quoting, operators and all other text
+// are kept as written. An unterminated quote (or a trailing backslash)
+// masks everything from it to the end.
 func redactCommand(cmd string) string {
 	if red, ok := redactJSON(cmd); ok {
 		return red
 	}
-	if !strings.ContainsAny(cmd, " \t") {
+	if !strings.ContainsAny(cmd, " \t\n"+shellOperatorChars) {
 		return redactValue(cmd)
 	}
 	words, open := shellWords(cmd)
 	values := make([]string, 0, len(words)+1)
+	boundary := make([]bool, 0, len(words)+1)
 	for _, w := range words {
 		values = append(values, w.value)
+		boundary = append(boundary, w.afterOp)
 	}
 	if open != nil {
 		// The open word is what precedes the quote, then the masked rest,
 		// so the rules for its context (the value after --api-key, a
 		// NAME= prefix) still apply to it.
 		values = append(values, open.value+redactedPlaceholder)
+		boundary = append(boundary, open.afterOp)
 	}
-	red := redactArgs(values)
+	red := make([]string, len(values))
+	for lo := 0; lo < len(values); {
+		hi := lo + 1
+		for hi < len(values) && !boundary[hi] {
+			hi++
+		}
+		copy(red[lo:hi], redactArgs(values[lo:hi]))
+		lo = hi
+	}
 	var b strings.Builder
 	last := 0
 	for i, w := range words {
 		b.WriteString(cmd[last:w.start])
-		if red[i] == values[i] {
-			b.WriteString(cmd[w.start:w.end])
-		} else {
-			b.WriteString(quoteLike(cmd[w.start:w.end], red[i]))
-		}
+		b.WriteString(rewriteWord(cmd, w, red[i]))
 		last = w.end
 	}
 	if open != nil {
@@ -565,92 +615,195 @@ func redactCommand(cmd string) string {
 			b.WriteString(cmd[open.start:open.end])
 		}
 		b.WriteString(redactedPlaceholder)
-		return redactValue(b.String())
+		return redactText(b.String(), false)
 	}
 	b.WriteString(cmd[last:])
-	return redactValue(b.String())
+	return redactText(b.String(), false)
+}
+
+// shellOperatorChars end a word outside quotes, like a blank: the shell
+// reads them as command separators, pipes, redirections and subshells.
+const shellOperatorChars = ";&|<>()"
+
+// unquotedSpecials cannot be written unquoted in a word without changing
+// how a shell splits it.
+const unquotedSpecials = " \t\n'\"\\$`" + shellOperatorChars
+
+// quoteRegion is a quoted string or a backslash escape inside a word, as a
+// byte span of the command line that includes the quotes or the backslash.
+type quoteRegion struct {
+	start, end int
+	quote      byte // '\'', '"' or '\\'
 }
 
 // shellWord is one word of a command line: its byte span in the original
-// text and its value after quote removal.
+// text, its value after quote removal, the offset in the text of each
+// byte of the value, its quoted and escaped spans, and whether a shell
+// operator or a newline separates it from the previous word.
 type shellWord struct {
 	start, end int
 	value      string
+	raw        []int
+	regions    []quoteRegion
+	afterOp    bool
 }
 
-// shellWords splits s into words at unquoted blanks, honoring single
-// quotes, double quotes and backslash escapes. When a quote is not closed,
-// or the text ends with a backslash, it also returns the open word: its
-// start, the offset of that quote or backslash as end, and its value up to
-// there; otherwise open is nil.
+// shellWords splits s into words at unquoted blanks and shell operators,
+// honoring single quotes, double quotes and backslash escapes. When a
+// quote is not closed, or the text ends with a backslash outside quotes,
+// it also returns the open word: its start, the offset of that quote or
+// backslash as end, and its value up to there; otherwise open is nil.
 func shellWords(s string) (words []shellWord, open *shellWord) {
-	var cur strings.Builder
-	start, openAt := -1, -1
-	var quote rune
-	escaped := false
-	var prefix string
-	for i, r := range s {
-		switch {
-		case escaped:
-			cur.WriteRune(r)
-			escaped = false
-			continue
-		case r == '\\' && quote != '\'':
-			escaped = true
-			if start < 0 {
-				start = i
-			}
-			openAt, prefix = i, cur.String()
-			continue
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			} else {
-				cur.WriteRune(r)
-			}
-			continue
-		case r == '\'' || r == '"':
-			quote = r
-			if start < 0 {
-				start = i
-			}
-			openAt, prefix = i, cur.String()
-			continue
-		case r == ' ' || r == '\t' || r == '\n':
-			if start >= 0 {
-				words = append(words, shellWord{start: start, end: i, value: cur.String()})
-				cur.Reset()
-				start = -1
-			}
-			continue
-		}
-		cur.WriteRune(r)
+	var cur []byte
+	var raw []int
+	var regions []quoteRegion
+	start, openAt, quoteStart := -1, -1, -1
+	var quote byte
+	afterOp := false
+	prefix := ""
+	begin := func(i int) {
 		if start < 0 {
 			start = i
 		}
 	}
-	if quote != 0 || escaped {
-		return words, &shellWord{start: start, end: openAt, value: prefix}
+	keep := func(from, to int) {
+		cur = append(cur, s[from:to]...)
+		for k := from; k < to; k++ {
+			raw = append(raw, k)
+		}
 	}
-	if start >= 0 {
-		words = append(words, shellWord{start: start, end: len(s), value: cur.String()})
+	flush := func(end int) {
+		if start >= 0 {
+			words = append(words, shellWord{start: start, end: end, value: string(cur), raw: raw, regions: regions, afterOp: afterOp})
+			cur, raw, regions, start, afterOp = nil, nil, nil, -1, false
+		}
 	}
+	for i := 0; i < len(s); {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		c := s[i]
+		switch {
+		case c == '\\' && quote != '\'':
+			begin(i)
+			if i+1 >= len(s) {
+				if quote == 0 {
+					openAt, prefix = i, string(cur)
+				}
+				return words, &shellWord{start: start, end: openAt, value: prefix, afterOp: afterOp}
+			}
+			_, n := utf8.DecodeRuneInString(s[i+1:])
+			keep(i+1, i+1+n)
+			regions = append(regions, quoteRegion{start: i, end: i + 1 + n, quote: '\\'})
+			i += 1 + n
+			continue
+		case quote != 0:
+			if c == quote {
+				regions = append(regions, quoteRegion{start: quoteStart, end: i + 1, quote: quote})
+				quote = 0
+			} else {
+				keep(i, i+size)
+			}
+		case c == '\'' || c == '"':
+			begin(i)
+			quote, quoteStart = c, i
+			openAt, prefix = i, string(cur)
+		case c == ' ' || c == '\t':
+			flush(i)
+		case c == '\n' || strings.IndexByte(shellOperatorChars, c) >= 0:
+			flush(i)
+			afterOp = true
+		default:
+			begin(i)
+			keep(i, i+size)
+		}
+		i += size
+	}
+	if quote != 0 {
+		return words, &shellWord{start: start, end: openAt, value: prefix, afterOp: afterOp}
+	}
+	flush(len(s))
 	return words, nil
 }
 
-// quoteLike renders a redacted word for the command line. A word that was
-// one quoted string keeps that quote when the new value allows it; any
-// other word whose value needs quoting gets single quotes.
+// rewriteWord renders word w of s with its value replaced by red. Only the
+// bytes that changed are rewritten: the new text goes where the old bytes
+// were, inside the same quotes or in the same unquoted text, widened to
+// any quoted or escaped span the change crosses, so the rest of the word
+// keeps its quoting. When the new text cannot be written there as it is,
+// the whole word is quoted by quoteLike.
+func rewriteWord(s string, w shellWord, red string) string {
+	orig := s[w.start:w.end]
+	v := w.value
+	if red == v {
+		return orig
+	}
+	p := 0
+	for p < len(v) && p < len(red) && v[p] == red[p] {
+		p++
+	}
+	q := 0
+	for q < len(v)-p && q < len(red)-p && v[len(v)-1-q] == red[len(red)-1-q] {
+		q++
+	}
+	if p == len(v)-q {
+		return quoteLike(orig, red)
+	}
+	lo, hi := w.raw[p], w.raw[len(v)-q-1]+1
+	for changed := true; changed; {
+		changed = false
+		for _, rg := range w.regions {
+			inside := rg.quote != '\\' && lo > rg.start && hi < rg.end
+			if inside || hi <= rg.start || lo >= rg.end {
+				continue
+			}
+			if rg.start < lo {
+				lo, changed = rg.start, true
+			}
+			if rg.end > hi {
+				hi, changed = rg.end, true
+			}
+		}
+	}
+	var ctx byte
+	escaped := false
+	for _, rg := range w.regions {
+		switch {
+		case rg.quote != '\\' && lo > rg.start && hi < rg.end:
+			ctx = rg.quote
+		case rg.quote == '\\' && rg.start >= lo && rg.end <= hi:
+			escaped = true
+		}
+	}
+	insert := red[p : len(red)-q]
+	var fits bool
+	switch ctx {
+	case '\'':
+		fits = !strings.Contains(insert, "'")
+	case '"':
+		fits = !strings.ContainsAny(insert, "\"\\`") && !(escaped && strings.Contains(insert, "$"))
+	default:
+		fits = !strings.ContainsAny(strings.ReplaceAll(insert, redactedPlaceholder, ""), unquotedSpecials)
+	}
+	if !fits {
+		return quoteLike(orig, red)
+	}
+	return s[w.start:lo] + insert + s[hi:w.end]
+}
+
+// quoteLike renders a redacted word for the command line when it cannot
+// be edited in place. A word that was one quoted string keeps that quote
+// when the new value allows it; a word that needs no quoting apart from
+// the placeholder stays unquoted; any other word gets single quotes.
 func quoteLike(orig, value string) string {
 	if n := len(orig); n >= 2 && (orig[0] == '"' || orig[0] == '\'') && orig[n-1] == orig[0] && !strings.ContainsRune(orig[1:n-1], rune(orig[0])) {
-		if orig[0] == '"' && !strings.ContainsAny(value, "\"\\$`") {
+		inner := orig[1 : n-1]
+		if orig[0] == '"' && !strings.ContainsAny(value, "\"\\`") && (!strings.Contains(value, "$") || !strings.Contains(inner, `\`)) {
 			return `"` + value + `"`
 		}
 		if orig[0] == '\'' && !strings.Contains(value, "'") {
 			return "'" + value + "'"
 		}
 	}
-	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`|&;<>()*?[]#~{}!") {
+	if value != "" && !strings.ContainsAny(strings.ReplaceAll(value, redactedPlaceholder, ""), unquotedSpecials) {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
@@ -678,6 +831,27 @@ func redactHeaderArg(a string) string {
 	return redactArgValue(a)
 }
 
+// scriptFlag is a shell option cluster that takes a command string: -c,
+// or -c combined with other one-letter options (-lc, -ec, -euc).
+var scriptFlag = regexp.MustCompile(`^-[a-z]{0,3}c[a-z]{0,3}$`)
+
+// takesScript reports whether the argument after a is a command line: -c
+// and its clusters for POSIX shells, -Command for PowerShell, and /c or /k
+// for cmd.
+func takesScript(a string) bool {
+	return (len(a) <= 5 && scriptFlag.MatchString(a)) || strings.EqualFold(a, "-command") || strings.EqualFold(a, "/c") || strings.EqualFold(a, "/k")
+}
+
+// redactScript redacts a command line given as one argument: one word is
+// redacted as an argument, anything with blanks or shell operators as a
+// command.
+func redactScript(a string) string {
+	if !strings.ContainsAny(a, " \t\n"+shellOperatorChars) {
+		return redactArgValue(a)
+	}
+	return redactCommand(a)
+}
+
 // redactArgs redacts a server's command-line arguments. The value of a
 // flag whose name suggests a secret is replaced, whether it follows the
 // flag (--api-key x, also a value starting with a single dash) or is
@@ -685,17 +859,18 @@ func redactHeaderArg(a string) string {
 // its name unless its value is never a secret; a --flag=value whose value
 // is a sensitive NAME=value assignment (--env=API_KEY=...) and a separate
 // NAME=value argument (-e DB_PASS=...) are redacted too, as are
-// secret-shaped values anywhere. Commands, package names and other
-// arguments stay visible.
+// secret-shaped values anywhere. The argument after -c (and -lc, /c, /k,
+// -Command) is a command line and is redacted as one. Commands, package
+// names and other arguments stay visible.
 func redactArgs(args []string) []string {
 	if args == nil {
 		return nil
 	}
 	out := make([]string, len(args))
-	valueIsSecret, valueIsHeader := false, false
+	valueIsSecret, valueIsHeader, valueIsScript := false, false, false
 	for i, a := range args {
-		secret, header := valueIsSecret, valueIsHeader
-		valueIsSecret, valueIsHeader = false, false
+		secret, header, script := valueIsSecret, valueIsHeader, valueIsScript
+		valueIsSecret, valueIsHeader, valueIsScript = false, false, false
 		switch {
 		case secret && !strings.HasPrefix(a, "--"):
 			out[i] = redactedPlaceholder
@@ -703,9 +878,13 @@ func redactArgs(args []string) []string {
 		case header && !strings.HasPrefix(a, "--"):
 			out[i] = redactHeaderArg(a)
 			continue
+		case script && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
+			out[i] = redactScript(a)
+			continue
 		}
 		if a == "--" || !strings.HasPrefix(a, "-") {
 			out[i] = redactArgValue(a)
+			valueIsScript = takesScript(a)
 			continue
 		}
 		name, value, hasValue := strings.Cut(a, "=")
@@ -724,6 +903,7 @@ func redactArgs(args []string) []string {
 			// A one-letter flag cannot be known to be secret; its value is
 			// still redacted when it looks like a token.
 			valueIsSecret = len(flag) > 1 && sensitiveName(flag)
+			valueIsScript = !valueIsSecret && takesScript(a)
 			out[i] = redactValue(a)
 		}
 	}
