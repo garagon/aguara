@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -98,7 +99,9 @@ func LoadFromDir(dir string) (rules []RawRule, skipped []SkippedFile, err error)
 		skipped = append(skipped, SkippedFile{Path: dir, Reason: reason + "; the rules directory was not loaded completely"})
 		return filepath.SkipAll
 	}
-	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	remaining := func() int { return maxRuleDirEntries - entries }
+	tooMany := func() error { return stop(fmt.Sprintf("more than %d files and directories", maxRuleDirEntries)) }
+	err = walkBounded(root, remaining, tooMany, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -167,6 +170,81 @@ func LoadFromDir(dir string) (rules []RawRule, skipped []SkippedFile, err error)
 		return nil
 	})
 	return rules, skipped, err
+}
+
+// walkBounded is filepath.Walk (lexical order, links not followed, the
+// same SkipDir and SkipAll handling) except that a directory's names are
+// read in batches: a directory that holds more entries than remaining()
+// allows is not listed in full or walked, and tooMany ends the walk. The
+// rules directory's entry limit therefore holds before a huge directory is
+// read into memory, and what is loaded does not depend on the order the
+// filesystem returns names in.
+func walkBounded(root string, remaining func() int, tooMany func() error, fn filepath.WalkFunc) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		err = fn(root, nil, err)
+	} else {
+		err = walkBoundedDir(root, info, remaining, tooMany, fn)
+	}
+	if err == filepath.SkipDir || err == filepath.SkipAll {
+		return nil
+	}
+	return err
+}
+
+func walkBoundedDir(path string, info os.FileInfo, remaining func() int, tooMany func() error, fn filepath.WalkFunc) error {
+	if !info.IsDir() {
+		return fn(path, info, nil)
+	}
+	names, over, err := readDirNamesBounded(path, remaining())
+	if err1 := fn(path, info, err); err != nil || err1 != nil {
+		return err1
+	}
+	if over {
+		return tooMany()
+	}
+	for _, name := range names {
+		child := filepath.Join(path, name)
+		childInfo, err := os.Lstat(child)
+		if err != nil {
+			if err := fn(child, childInfo, err); err != nil && err != filepath.SkipDir {
+				return err
+			}
+			continue
+		}
+		if err := walkBoundedDir(child, childInfo, remaining, tooMany, fn); err != nil {
+			if !childInfo.IsDir() || err != filepath.SkipDir {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// readDirNamesBounded lists dir in batches and sorts the names; over is
+// true, and no names are returned, once the directory holds more than
+// limit entries.
+func readDirNamesBounded(dir string, limit int) (names []string, over bool, err error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	for {
+		batch, err := f.Readdirnames(256)
+		names = append(names, batch...)
+		if len(names) > limit {
+			return nil, true, nil
+		}
+		if errors.Is(err, io.EOF) || (err == nil && len(batch) == 0) {
+			break
+		}
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	sort.Strings(names)
+	return names, false, nil
 }
 
 func notRegularRuleFile(path string, mode os.FileMode) SkippedFile {

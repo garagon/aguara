@@ -68,15 +68,37 @@ func TestLoadFromDirStopsAtFileAndEntryLimits(t *testing.T) {
 	requireSkipped(t, skipped, dir, "more than 3 rule files")
 
 	lowerLimit(t, &maxRuleFiles, 10000)
-	lowerLimit(t, &maxRuleDirEntries, 4) // the directory itself and 3 files
-	raws, skipped, err = LoadFromDir(dir)
+}
+
+// A directory with more entries than the walk has left is not listed in
+// full: the walk stops there, keeping what it loaded before it.
+func TestLoadFromDirStopsBeforeListingAHugeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 3 {
+		writeLimitRule(t, filepath.Join(dir, "a"), fmt.Sprintf("LIM_A%d", i))
+	}
+	for i := range 5 {
+		writeLimitRule(t, filepath.Join(dir, "b"), fmt.Sprintf("LIM_B%d", i))
+	}
+	// root, a and its 3 files take 5 entries; b's 5 files exceed the 4 left.
+	lowerLimit(t, &maxRuleDirEntries, 9)
+	raws, skipped, err := LoadFromDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(raws) != 3 {
-		t.Fatalf("loaded %d rules, want 3", len(raws))
+	if len(raws) != 3 || !strings.HasPrefix(raws[0].ID, "LIM_A") {
+		t.Fatalf("loaded %+v, want the 3 rules under a", raws)
 	}
-	requireSkipped(t, skipped, dir, "more than 4 files and directories")
+	requireSkipped(t, skipped, dir, "more than 9 files and directories")
+
+	names, over, err := readDirNamesBounded(filepath.Join(dir, "b"), 4)
+	if err != nil || !over || names != nil {
+		t.Fatalf("names=%v over=%v err=%v", names, over, err)
+	}
+	names, over, err = readDirNamesBounded(filepath.Join(dir, "b"), 5)
+	if err != nil || over || len(names) != 5 || names[0] != "LIM_B0.yaml" {
+		t.Fatalf("names=%v over=%v err=%v", names, over, err)
+	}
 }
 
 func TestLoadFromDirStopsAtTotalBytes(t *testing.T) {
