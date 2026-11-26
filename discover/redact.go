@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -623,11 +624,18 @@ func redactArgValue(a string) string {
 // never takes the next command as its value. Only the bytes of a word that
 // change are rewritten, in place, so quoting, operators and all other text
 // are kept as written. A command substitution, $(...) or `...`, stays
-// inside its word. An unterminated quote (or a trailing backslash or an
+// inside its word, and its body is redacted as a command line. An
+// unterminated quote (or a trailing backslash or an
 // unterminated substitution) masks everything from it to the end. The
 // rebuilt line is not read again: the words cover all of it, and only a
 // known token format that is still present is masked, as a last check.
 func redactCommand(cmd string) string {
+	return redactCommandAt(cmd, 0)
+}
+
+// redactCommandAt is redactCommand for a command line nested depth
+// command substitutions deep.
+func redactCommandAt(cmd string, depth int) string {
 	if red, ok := redactJSON(cmd); ok {
 		return red
 	}
@@ -654,7 +662,7 @@ func redactCommand(cmd string) string {
 		for hi < len(values) && !boundary[hi] {
 			hi++
 		}
-		copy(red[lo:hi], redactArgs(values[lo:hi]))
+		copy(red[lo:hi], redactArgsAt(values[lo:hi], depth))
 		lo = hi
 	}
 	var b strings.Builder
@@ -869,6 +877,10 @@ func rewriteWord(s string, w shellWord, red string) string {
 	for changed := true; changed; {
 		changed = false
 		for _, rg := range w.regions {
+			if rg.quote == '$' {
+				// Verbatim in the value: its bytes map one to one.
+				continue
+			}
 			inside := (rg.quote == '\'' || rg.quote == '"') && lo > rg.start && hi < rg.end
 			if inside || hi <= rg.start || lo >= rg.end {
 				continue
@@ -881,17 +893,31 @@ func rewriteWord(s string, w shellWord, red string) string {
 			}
 		}
 	}
+	// The value bytes of the widened span, and what replaces them.
+	vlo, vhi := p, len(v)-q
+	for vlo > 0 && w.raw[vlo-1] >= lo {
+		vlo--
+	}
+	for vhi < len(v) && w.raw[vhi] < hi {
+		vhi++
+	}
+	insert := red[vlo : len(red)-(len(v)-vhi)]
 	var ctx byte
-	escaped := false
+	escaped, subst := false, false
 	for _, rg := range w.regions {
 		switch {
 		case (rg.quote == '\'' || rg.quote == '"') && lo > rg.start && hi < rg.end:
 			ctx = rg.quote
 		case rg.quote == '\\' && rg.start >= lo && rg.end <= hi:
 			escaped = true
+		case rg.quote == '$' && lo < rg.end && hi > rg.start:
+			subst = true
 		}
 	}
-	insert := red[p : len(red)-q]
+	if subst {
+		// Redacted shell text in place of shell text inside a substitution.
+		return s[w.start:lo] + insert + s[hi:w.end]
+	}
 	var fits bool
 	switch ctx {
 	case '\'':
@@ -954,16 +980,75 @@ func takesScript(a string) bool {
 // redactScript redacts a command line given as one argument: a plain word
 // is redacted as an argument, anything with blanks, quotes, escapes,
 // substitutions or shell operators as a command.
-func redactScript(a string) string {
+func redactScript(a string, depth int) string {
 	if !strings.ContainsAny(a, shellSyntax) {
 		return redactArgValue(a)
 	}
-	return redactCommand(a)
+	return redactCommandAt(a, depth)
 }
 
 // shellSyntax are the characters that make a string more than one plain
 // word for a shell.
 const shellSyntax = " \t\n'\"\\`$" + shellOperatorChars
+
+// maxSubstitutionDepth bounds how deep command substitutions are read as
+// command lines; a deeper one is masked whole.
+const maxSubstitutionDepth = 4
+
+// hideSubstitutions replaces each command substitution in a, $(...) or
+// `...`, with a marker and returns a function that puts them back, each
+// with its body redacted as a command line, so the rules of a word apply
+// only to the text outside its substitutions. A marker the rules removed
+// takes its substitution with it. A substitution deeper than
+// maxSubstitutionDepth is masked whole. When one is not closed nothing is
+// hidden and the rules see the whole argument, so the text before it is
+// never judged alone (in a command line the shell reader has already
+// masked an unterminated substitution to the end).
+func hideSubstitutions(a string, depth int) (string, func(string) string) {
+	keep := func(s string) string { return s }
+	if !strings.ContainsAny(a, "$`") || strings.IndexByte(a, 0) >= 0 {
+		return a, keep
+	}
+	var b strings.Builder
+	var spans []string
+	for i := 0; i < len(a); {
+		c := a[i]
+		if c != '`' && (c != '$' || i+1 >= len(a) || a[i+1] != '(') {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		end := substitutionEnd(a, i)
+		if end < 0 {
+			return a, keep
+		}
+		red := redactedPlaceholder
+		if depth < maxSubstitutionDepth {
+			open := 2
+			if c == '`' {
+				open = 1
+			}
+			red = a[i:i+open] + redactCommandAt(a[i+open:end-1], depth+1) + a[end-1:end]
+		}
+		b.WriteString(substitutionMarker(len(spans)))
+		spans = append(spans, red)
+		i = end
+	}
+	if spans == nil {
+		return a, keep
+	}
+	return b.String(), func(s string) string {
+		for k, red := range spans {
+			s = strings.Replace(s, substitutionMarker(k), red, 1)
+		}
+		return s
+	}
+}
+
+// substitutionMarker stands for the k-th substitution of a word.
+func substitutionMarker(k int) string {
+	return "\x00" + strconv.Itoa(k) + "\x00"
+}
 
 // argNext is what an argument makes of the one after it.
 type argNext int
@@ -983,11 +1068,17 @@ const (
 // it (--token=x); a header given to --header or -H keeps only its name
 // unless its value is never a secret; a sensitive NAME=value or
 // $env:NAME = value keeps its name; the word after Bearer or Basic (or
-// Token after a word ending in ":") is a credential; the argument after
-// -c (and -lc, /c, /k, -Command) is a command line and is redacted as one.
-// Any other word is redacted as one value (redactArgValue). Commands,
-// package names and other arguments stay visible.
+// Token after a word ending in ":") is a credential. The argument after
+// -c (and -lc, /c, /k, -Command) is a command line and is redacted as one,
+// as is the body of a command substitution in any argument. Any other word is redacted as one value (redactArgValue).
+// Commands, package names and other arguments stay visible.
 func redactArgs(args []string) []string {
+	return redactArgsAt(args, 0)
+}
+
+// redactArgsAt is redactArgs for arguments nested depth command
+// substitutions deep.
+func redactArgsAt(args []string, depth int) []string {
 	if args == nil {
 		return nil
 	}
@@ -1004,7 +1095,7 @@ func redactArgs(args []string) []string {
 			out[i] = redactHeaderArg(a)
 			continue
 		case state == nextScript && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
-			out[i] = redactScript(a)
+			out[i] = redactScript(a, depth)
 			continue
 		case state == nextPSEquals && a == "=":
 			out[i], next = a, nextSecret
@@ -1013,40 +1104,44 @@ func redactArgs(args []string) []string {
 			out[i] = "=" + redactedPlaceholder
 			continue
 		}
-		if a == "--" || !strings.HasPrefix(a, "-") {
-			out[i], next = redactWord(a, i > 0 && strings.HasSuffix(args[i-1], ":"))
-			continue
-		}
-		name, value, hasValue := strings.Cut(a, "=")
-		if !flagToken.MatchString(name) {
-			// Text that starts with a dash but is not a flag, such as one
-			// argument holding several options: one value.
-			out[i] = redactValue(a)
-			continue
-		}
-		flag := strings.TrimLeft(name, "-")
-		switch {
-		case hasValue && headerFlags[name]:
-			out[i] = name + "=" + redactHeaderArg(value)
-		case hasValue && sensitiveName(flag):
-			out[i] = name + "=" + redactedPlaceholder
-		case hasValue:
-			out[i] = name + "=" + redactArgValue(value)
-		case headerFlags[a]:
-			out[i], next = a, nextHeader
-		default:
-			out[i] = redactValue(a)
-			switch {
-			case len(flag) > 1 && sensitiveName(flag):
-				// A one-letter flag cannot be known to be secret; its value
-				// is still redacted when it holds a secret.
-				next = nextSecret
-			case takesScript(a):
-				next = nextScript
-			}
-		}
+		lit, restore := hideSubstitutions(a, depth)
+		var red string
+		red, next = redactArg(lit, i > 0 && strings.HasSuffix(args[i-1], ":"), depth)
+		out[i] = restore(red)
 	}
 	return out
+}
+
+// redactArg redacts one argument that is not the value of the one before
+// it and says what it makes of the next one.
+func redactArg(a string, afterColon bool, depth int) (string, argNext) {
+	if a == "--" || !strings.HasPrefix(a, "-") {
+		return redactWord(a, afterColon)
+	}
+	name, value, hasValue := strings.Cut(a, "=")
+	if !flagToken.MatchString(name) {
+		// Text that starts with a dash but is not a flag, such as one
+		// argument holding several options: one value.
+		return redactValue(a), nextAny
+	}
+	flag := strings.TrimLeft(name, "-")
+	switch {
+	case hasValue && headerFlags[name]:
+		return name + "=" + redactHeaderArg(value), nextAny
+	case hasValue && sensitiveName(flag):
+		return name + "=" + redactedPlaceholder, nextAny
+	case hasValue:
+		return name + "=" + redactArgValue(value), nextAny
+	case headerFlags[a]:
+		return a, nextHeader
+	case len(flag) > 1 && sensitiveName(flag):
+		// A one-letter flag cannot be known to be secret; its value is
+		// still redacted when it holds a secret.
+		return redactValue(a), nextSecret
+	case takesScript(a):
+		return redactValue(a), nextScript
+	}
+	return redactValue(a), nextAny
 }
 
 // redactWord redacts an argument that is not a flag and says what it

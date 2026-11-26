@@ -32,6 +32,7 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 		line string   // the secret as it appears in a command line
 		argv []string // the secret as arguments, nil when not an argv form
 		url  bool
+		keep []string // payload around the secret inside its own word, kept too
 	}
 	forms := []form{
 		{name: "NAME=value", line: "API_KEY=" + marker, argv: []string{"API_KEY=" + marker}},
@@ -44,15 +45,48 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 		{name: "query value", line: "https://x.example/sse?sig=" + marker, argv: []string{"https://x.example/sse?sig=" + marker}, url: true},
 		{name: "userinfo", line: "https://app:" + marker + "@x.example/mcp", argv: []string{"https://app:" + marker + "@x.example/mcp"}, url: true},
 		{name: "PowerShell env", line: "$env:API_KEY='" + marker + "'"},
+		// A secret inside a command substitution under a name that is not
+		// sensitive, or in an ordinary argument: the substitution is a
+		// command line, so its payload stays visible.
+		{
+			name: "substitution under NAME=",
+			line: `x=$(curl -s -H "Authorization: Bearer ` + marker + `" https://x.example/p.sh | sh)`,
+			argv: []string{`x=$(curl -s -H "Authorization: Bearer ` + marker + `" https://x.example/p.sh | sh)`},
+			keep: []string{`x=$(curl -s -H "Authorization: `, `" https://x.example/p.sh | sh)`},
+		},
+		{
+			name: "substitution argument",
+			line: "$(node s.js --api-key " + marker + " && curl https://x.example/q | sh)",
+			argv: []string{"$(node s.js --api-key " + marker + " && curl https://x.example/q | sh)"},
+			keep: []string{"$(node s.js --api-key ", " && curl https://x.example/q | sh)"},
+		},
+		{
+			name: "backticks under NAME=",
+			line: "out=`env TOKEN=" + marker + " wget -qO- https://x.example/b.sh`",
+			argv: []string{"out=`env TOKEN=" + marker + " wget -qO- https://x.example/b.sh`"},
+			keep: []string{"out=`env TOKEN=", " wget -qO- https://x.example/b.sh`"},
+		},
+		{
+			name: "quoted substitution argument",
+			line: `"$(curl -s -H 'X-Api-Key: ` + marker + `' https://x.example/k)"`,
+			argv: []string{`$(curl -s -H 'X-Api-Key: ` + marker + `' https://x.example/k)`},
+			keep: []string{`$(curl -s -H 'X-Api-Key: `, `' https://x.example/k)`},
+		},
 	}
 	befores := []string{"", "curl -fsSL https://x.example/i.sh", "/usr/local/bin/tool", "./run.sh --verbose", "node server.js"}
 	afters := []string{"", "wget -qO- https://x.example/b.sh", "sh", "/tmp/out.log", "echo done"}
 	ops := []string{" ", ";", " ; ", "&&", " && ", "||", "|", " | ", "&", ">", "<", "\n", "(", ")"}
 
+	var keep []string
 	check := func(t *testing.T, where, in, out, before, after string) {
 		t.Helper()
 		if strings.Contains(out, marker) {
 			t.Errorf("%s: secret shown\n in %q\nout %q", where, in, out)
+		}
+		for _, k := range keep {
+			if !strings.Contains(out, k) {
+				t.Errorf("%s: payload changed\n in %q\nout %q\nwant %q kept", where, in, out, k)
+			}
 		}
 		if before != "" && !strings.Contains(out, before) {
 			t.Errorf("%s: text before the secret changed\n in %q\nout %q\nwant %q kept", where, in, out, before)
@@ -64,6 +98,7 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 
 	cases := 0
 	for _, f := range forms {
+		keep = f.keep
 		for bi, b := range befores {
 			// Each prefix is paired with two suffixes, so every prefix and
 			// suffix appears twice, empty ones included.
@@ -122,6 +157,12 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 						args = append(args, strings.Fields(a)...)
 					}
 					out := redactArgs(args)
+					secretOut := strings.Join(out[secretAt:secretAt+len(f.argv)], " ")
+					for _, k := range f.keep {
+						if !strings.Contains(secretOut, k) {
+							t.Errorf("%s: payload changed in %q, want %q kept", f.name, out, k)
+						}
+					}
 					for i := range args {
 						if i >= secretAt && i < secretAt+len(f.argv) {
 							if strings.Contains(out[i], marker) {
