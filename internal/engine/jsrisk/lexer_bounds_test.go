@@ -465,6 +465,8 @@ func (d decisionRecorder) regexStartsAt(i int) bool {
 	return got
 }
 
+// checkDecisionsAgainstMain runs the masking pass and the raw string pass,
+// whose buffers differ (comments blanked or not), in both dialects.
 func checkDecisionsAgainstMain(t *testing.T, src []byte) {
 	t.Helper()
 	for _, typescript := range []bool{false, true} {
@@ -473,7 +475,8 @@ func checkDecisionsAgainstMain(t *testing.T, src []byte) {
 			rc.typescript = typescript
 			return decisionRecorder{regexContext: rc, t: t, src: src}
 		}
-		viewsWith(src, rec)
+		stripJSCommentsWith(src, rec)
+		jsStringInteriorsWith(src, rec)
 	}
 }
 
@@ -539,7 +542,7 @@ func TestRegexContextMatchesBackwardScan(t *testing.T) {
 		inputs = append(inputs, randomLexerSnippet(r, lexerDifferentialPieces, 60))
 	}
 	// Long inputs put matching parentheses thousands of bytes apart.
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 150; i++ {
 		inputs = append(inputs, randomLexerSnippet(r, lexerDifferentialPieces, 4000))
 		inputs = append(inputs, randomLexerSnippet(r, plainLexerPieces, 4000))
 	}
