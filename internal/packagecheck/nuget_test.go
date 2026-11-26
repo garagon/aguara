@@ -130,13 +130,91 @@ func TestParseNuGet_CsprojExactRangeReadsTheVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseNuGet: %v", err)
 	}
-	want := map[string]string{"Exact.Pkg": "1.2.3", "Spaced.Pkg": "2.0.0", "Range.Pkg": "[1.0,2.0)", "Open.Pkg": "[1.0,]"}
+	// Ranges select whatever a feed offers at restore time: unpinned.
+	want := map[string]string{"Exact.Pkg": "1.2.3", "Spaced.Pkg": "2.0.0", "Range.Pkg": "unpinned [1.0,2.0)", "Open.Pkg": "unpinned [1.0,]"}
 	if len(refs) != len(want) {
 		t.Fatalf("refs = %+v, want %d", refs, len(want))
 	}
 	for _, r := range refs {
-		if want[r.Name] != r.Version {
-			t.Errorf("%s: version = %q, want %q", r.Name, r.Version, want[r.Name])
+		got := r.Version
+		if r.Unpinned {
+			got = "unpinned " + r.Constraint
+		}
+		if want[r.Name] != got {
+			t.Errorf("%s: version = %q, want %q", r.Name, got, want[r.Name])
+		}
+	}
+}
+
+// Central package management: versions come from VersionOverride or the
+// nearest Directory.Packages.props inside the checked root; floating,
+// range and missing versions are unpinned unless packages.lock.json
+// records the restore.
+func TestParseNuGet_CentralPackageManagement(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Directory.Packages.props"), `<Project>
+<PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally><SerilogVersion>3.1.1</SerilogVersion></PropertyGroup>
+<ItemGroup>
+<PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+<PackageVersion Include="Serilog" Version="$(SerilogVersion)" />
+<PackageVersion Include="Floating.Pkg" Version="2.*" />
+<PackageVersion Include="Overridden" Version="1.0.0" />
+<GlobalPackageReference Include="Analyzers.Pkg" Version="4.0.0" />
+</ItemGroup></Project>`)
+	proj := filepath.Join(root, "src", "App", "App.csproj")
+	writeFile(t, proj, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>
+<PackageReference Include="newtonsoft.json" />
+<PackageReference Include="Serilog" />
+<PackageReference Include="Floating.Pkg" />
+<PackageReference Include="Overridden" VersionOverride="1.5.0" />
+<PackageReference Include="Not.Central" />
+</ItemGroup></Project>`)
+	refs, err := ParseNuGet(Target{Ecosystem: intel.EcosystemNuGet, Path: proj, Source: "csproj", Root: root})
+	if err != nil {
+		t.Fatalf("ParseNuGet: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range refs {
+		v := r.Version
+		if r.Unpinned {
+			v = "unpinned " + r.Constraint
+		}
+		got[r.Name] = v
+	}
+	want := map[string]string{
+		"newtonsoft.json": "13.0.3", "Serilog": "3.1.1", "Floating.Pkg": "unpinned 2.*",
+		"Overridden": "1.5.0", "Not.Central": "unpinned ", "Analyzers.Pkg": "4.0.0",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("refs = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+
+	// A props file outside the checked root is not read.
+	refs, err = ParseNuGet(Target{Ecosystem: intel.EcosystemNuGet, Path: proj, Source: "csproj", Root: filepath.Join(root, "src")})
+	if err != nil {
+		t.Fatalf("ParseNuGet: %v", err)
+	}
+	for _, r := range refs {
+		if r.Name == "newtonsoft.json" && !r.Unpinned {
+			t.Errorf("version read from a props file outside the root: %+v", r)
+		}
+	}
+
+	// packages.lock.json beside the project records the restore, so the
+	// project file's open versions add nothing unpinned.
+	writeFile(t, filepath.Join(root, "src", "App", "packages.lock.json"), `{"version":1,"dependencies":{}}`)
+	refs, err = ParseNuGet(Target{Ecosystem: intel.EcosystemNuGet, Path: proj, Source: "csproj", Root: root})
+	if err != nil {
+		t.Fatalf("ParseNuGet: %v", err)
+	}
+	for _, r := range refs {
+		if r.Unpinned {
+			t.Errorf("unpinned ref beside packages.lock.json: %+v", r)
 		}
 	}
 }

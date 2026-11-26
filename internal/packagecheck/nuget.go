@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -103,8 +104,20 @@ type nugetLockDep struct {
 // `$(SerilogVersion)` looks up the SerilogVersion child of any
 // PropertyGroup. Unresolved properties skip the reference rather
 // than emit a literal `$(...)` the matcher would silently miss.
-// MSBuild built-ins (TargetFramework, Configuration) and external
+// MSBuild built-ins (TargetFramework, Configuration) and other
 // imports are out of scope.
+//
+// Central package management: a reference without a version takes it
+// from a `VersionOverride`, or else from the `PackageVersion` item of
+// the nearest Directory.Packages.props in the project's directory or a
+// parent directory inside the checked root, the file MSBuild imports.
+// That file's `GlobalPackageReference` items apply to the project too.
+//
+// A version that does not select one release (a floating version such as
+// "1.*", a range such as "[1.0,2.0)" or "(1.0,)", or no version found) is
+// returned as unpinned, so the audit asks for review as it does for an
+// unpinned Python requirement, unless a packages.lock.json beside the
+// project records what restore resolved.
 func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 	data, err := readNuGetManifest(target.Path)
 	if err != nil {
@@ -115,15 +128,33 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 		return nil, fmt.Errorf("parse %s: %w", target.Source, err)
 	}
 
-	props := map[string]string{}
-	for _, pg := range proj.PropertyGroups {
-		for _, p := range pg.Properties {
-			props[p.XMLName.Local] = strings.TrimSpace(p.Value)
-		}
+	props := msbuildProperties(proj.PropertyGroups)
+	central, err := centralPackageVersions(target)
+	if err != nil {
+		return nil, err
 	}
+	locked := manifestCandidate(filepath.Join(filepath.Dir(target.Path), "packages.lock.json"))
 
 	var refs []PackageRef
 	seen := map[string]bool{}
+	add := func(name, version string) {
+		ref := PackageRef{Ecosystem: intel.EcosystemNuGet, Name: name, Path: target.Path, Source: target.Source}
+		if nugetPinsOneVersion(version) {
+			ref.Version = nugetExactRange(version)
+		} else {
+			if locked {
+				// packages.lock.json records the version restore chose.
+				return
+			}
+			ref.Unpinned, ref.Constraint = true, version
+		}
+		key := strings.ToLower(name) + "@" + ref.Version + "@" + ref.Constraint
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		refs = append(refs, ref)
+	}
 	for _, ig := range proj.ItemGroups {
 		for _, pr := range ig.PackageRefs {
 			name := strings.TrimSpace(pr.Include)
@@ -133,34 +164,115 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 			if name == "" {
 				continue
 			}
-			version := strings.TrimSpace(pr.VersionAttr)
+			version := firstNonEmpty(pr.VersionOverrideAttr, pr.VersionOverrideChild, pr.VersionAttr, pr.VersionChild)
 			if version == "" {
-				version = strings.TrimSpace(pr.VersionChild)
-			}
-			if version == "" {
-				continue
-			}
-			if v, ok := resolveMSBuildProperty(version, props); ok {
+				version = central.versions[strings.ToLower(name)]
+			} else if v, ok := resolveMSBuildProperty(version, props); ok {
 				version = v
 			} else if msbuildIsPropertyPlaceholder(version) {
 				continue
 			}
-			version = nugetExactRange(version)
-			key := name + "@" + version
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			refs = append(refs, PackageRef{
-				Ecosystem: intel.EcosystemNuGet,
-				Name:      name,
-				Version:   version,
-				Path:      target.Path,
-				Source:    target.Source,
-			})
+			add(name, version)
 		}
 	}
+	for _, g := range central.global {
+		add(g.name, g.version)
+	}
 	return refs, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func msbuildProperties(groups []csPropertyGroup) map[string]string {
+	props := map[string]string{}
+	for _, pg := range groups {
+		for _, p := range pg.Properties {
+			props[p.XMLName.Local] = strings.TrimSpace(p.Value)
+		}
+	}
+	return props
+}
+
+// nugetPinsOneVersion reports a version that selects one release: a plain
+// version, which restore resolves to that release when it exists, or the
+// exact-match range "[1.2.3]". Floating versions and other ranges select
+// whatever a feed offers at restore time.
+func nugetPinsOneVersion(v string) bool {
+	if v == "" || strings.Contains(v, "*") {
+		return false
+	}
+	if strings.ContainsAny(v, "[(") || strings.HasSuffix(v, ")") || strings.HasSuffix(v, "]") {
+		return nugetExactRange(v) != v
+	}
+	return true
+}
+
+// centralVersions is what a Directory.Packages.props declares.
+type centralVersions struct {
+	versions map[string]string
+	global   []struct{ name, version string }
+}
+
+// centralPackageVersions reads the Directory.Packages.props that applies
+// to the project: the first found walking up from the project's directory,
+// staying inside the checked root. Its own <PropertyGroup> properties are
+// resolved; imports of other props files are not followed.
+func centralPackageVersions(target Target) (centralVersions, error) {
+	out := centralVersions{versions: map[string]string{}}
+	root := target.Root
+	if root == "" {
+		root = filepath.Dir(target.Path)
+	}
+	root = filepath.Clean(root)
+	for dir := filepath.Clean(filepath.Dir(target.Path)); ; {
+		path := filepath.Join(dir, "Directory.Packages.props")
+		if manifestCandidate(path) {
+			data, err := readNuGetManifest(path)
+			if err != nil {
+				return out, fmt.Errorf("open Directory.Packages.props: %w", err)
+			}
+			var p csProject
+			if err := xml.Unmarshal(data, &p); err != nil {
+				return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
+			}
+			props := msbuildProperties(p.PropertyGroups)
+			resolve := func(v string) string {
+				v = strings.TrimSpace(v)
+				if r, ok := resolveMSBuildProperty(v, props); ok {
+					return r
+				}
+				return ""
+			}
+			for _, ig := range p.ItemGroups {
+				for _, pv := range ig.PackageVersions {
+					if name := strings.TrimSpace(firstNonEmpty(pv.Include, pv.Update)); name != "" {
+						out.versions[strings.ToLower(name)] = resolve(firstNonEmpty(pv.VersionAttr, pv.VersionChild))
+					}
+				}
+				for _, g := range ig.GlobalRefs {
+					if name := strings.TrimSpace(g.Include); name != "" {
+						out.global = append(out.global, struct{ name, version string }{name, resolve(firstNonEmpty(g.VersionAttr, g.VersionChild))})
+					}
+				}
+			}
+			return out, nil
+		}
+		if dir == root {
+			return out, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || !withinDir(root, parent) {
+			return out, nil
+		}
+		dir = parent
+	}
 }
 
 type csProject struct {
@@ -179,14 +291,18 @@ type csProperty struct {
 }
 
 type csItemGroup struct {
-	PackageRefs []csPackageRef `xml:"PackageReference"`
+	PackageRefs     []csPackageRef `xml:"PackageReference"`
+	PackageVersions []csPackageRef `xml:"PackageVersion"`
+	GlobalRefs      []csPackageRef `xml:"GlobalPackageReference"`
 }
 
 type csPackageRef struct {
-	Include      string `xml:"Include,attr"`
-	Update       string `xml:"Update,attr"`
-	VersionAttr  string `xml:"Version,attr"`
-	VersionChild string `xml:"Version"`
+	Include              string `xml:"Include,attr"`
+	Update               string `xml:"Update,attr"`
+	VersionAttr          string `xml:"Version,attr"`
+	VersionChild         string `xml:"Version"`
+	VersionOverrideAttr  string `xml:"VersionOverride,attr"`
+	VersionOverrideChild string `xml:"VersionOverride"`
 }
 
 // nugetExactRange returns the version inside NuGet's exact-match range

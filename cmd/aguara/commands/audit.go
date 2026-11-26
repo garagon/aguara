@@ -11,6 +11,7 @@ import (
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/garagon/aguara/internal/rulemeta"
@@ -593,9 +594,21 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 			Severity: "warning",
 			Message:  counts,
 		})
+		hint := ""
+		pythonOnly := true
+		for _, e := range result.Check.Ecosystems {
+			if e.Unpinned > 0 && e.Ecosystem != intel.EcosystemPyPI {
+				pythonOnly = false
+			}
+		}
+		if pythonOnly {
+			hint = " (for example with pip-compile or uv pip compile)"
+		} else {
+			hint = " (or commit a lock file such as packages.lock.json)"
+		}
 		escalateForCoverage(t,
 			"Some dependency entries are not pinned to one version, so the audit cannot clear dependency installation.",
-			"Pin exact versions in "+files+" (for example with pip-compile or uv pip compile) and audit again, or review those dependencies before installing them.")
+			"Pin exact versions in "+files+hint+" and audit again, or review those dependencies before installing them.")
 	}
 
 	cov := result.Check.Coverage

@@ -241,23 +241,28 @@ func unresolvedIncludeFinding(u packagecheck.UnresolvedInclude) incident.Finding
 	}
 }
 
-// unpinnedNote is the one-line terminal notice for Python dependencies
-// without one exact version, or "" when every entry was pinned.
+// unpinnedNote is the one-line terminal notice for dependencies without
+// one exact version (Python requirements, NuGet floating or range
+// versions), or "" when every entry was pinned.
 func unpinnedNote(result *incident.CheckResult) string {
 	if result == nil {
 		return ""
 	}
 	n := 0
+	kind := "Python dependenc"
 	for _, e := range result.Ecosystems {
 		n += e.Unpinned
+		if e.Unpinned > 0 && e.Ecosystem != intel.EcosystemPyPI {
+			kind = "dependenc"
+		}
 	}
 	switch n {
 	case 0:
 		return ""
 	case 1:
-		return "1 Python dependency is not pinned to one version; only advisories covering every version were checked for it."
+		return "1 " + kind + "y is not pinned to one version; only advisories covering every version were checked for it."
 	default:
-		return fmt.Sprintf("%d Python dependencies are not pinned to one version; only advisories covering every version were checked for them.", n)
+		return fmt.Sprintf("%d %sies are not pinned to one version; only advisories covering every version were checked for them.", n, kind)
 	}
 }
 

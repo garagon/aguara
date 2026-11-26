@@ -118,6 +118,32 @@ func TestAuditRequirementsCoverageOfPythonManifests(t *testing.T) {
 	}
 }
 
+// NuGet central package management: versionless references read their
+// versions from Directory.Packages.props, and floating or range versions
+// review like unpinned Python requirements.
+func TestAuditNuGetCentralPackageManagement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	props := `<Project><ItemGroup><PackageVersion Include="8y234rtv8yvf" Version="1.0.0" /><PackageVersion Include="Clean.Pkg" Version="2.*" /></ItemGroup></Project>`
+	dir := projectWith(t, map[string]string{
+		"Directory.Packages.props": props,
+		"src/App/App.csproj":       `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="8y234rtv8yvf" /></ItemGroup></Project>`,
+	})
+	result := auditToFile(t, dir)
+	require.Equal(t, "stop", result.Triage.Decision, "a central version pinning a compromised release is a finding")
+	require.Equal(t, 1, result.Verdict.CheckCriticals)
+
+	dir = projectWith(t, map[string]string{
+		"Directory.Packages.props": props,
+		"src/App/App.csproj":       `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Clean.Pkg" /></ItemGroup></Project>`,
+	})
+	result = auditToFile(t, dir)
+	require.Equal(t, "review", result.Triage.Decision)
+	requireTriageReason(t, result.Triage, "unpinned_dependency_evidence")
+	require.Contains(t, result.Triage.RecommendedNextSteps[0], "packages.lock.json")
+	require.False(t, result.Plan.CanInstallDependencies)
+	require.Equal(t, "pass", result.Verdict.Status)
+}
+
 // A workspace without a lockfile is listed once, at its root, with the
 // number of manifests below it that a root lockfile would cover. A
 // separate project with its own lockfile below the root is covered by it.
