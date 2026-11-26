@@ -100,11 +100,12 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		return nil, fmt.Errorf("packagecheck: Runner.Matcher is required")
 	}
 	// Requirements files can include each other, so one file may be
-	// reached from several discovered targets. The cache parses each
-	// file once per run, and the seen set reports a PyPI entry (file,
-	// line, package) once even when several targets include it. Other
-	// ecosystems never share an entry between targets.
-	cache := newRequirementsCache()
+	// reached from several discovered targets, and one
+	// Directory.Packages.props applies to many .NET projects. The cache
+	// parses each such file once per run, and the seen set reports a PyPI
+	// entry (file, line, package) once even when several targets include
+	// it. Other ecosystems never share an entry between targets.
+	cache := newRunCache()
 	seen := map[hitKey]bool{}
 	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
@@ -289,11 +290,28 @@ type parsedTarget struct {
 	syntaxLines int
 }
 
+// runCache holds what one Runner.Run parses once and shares between
+// targets: requirements files, which include each other, and
+// Directory.Packages.props files, each of which applies to every .NET
+// project below it. Entries are keyed by resolved path.
+type runCache struct {
+	requirements *requirementsCache
+	nugetProps   map[string]nugetPropsEntry
+}
+
+func newRunCache() *runCache {
+	return &runCache{requirements: newRequirementsCache(), nugetProps: map[string]nugetPropsEntry{}}
+}
+
 // parseTargetDetail dispatches like parseTarget but keeps the
-// requirements-include bookkeeping and shares the per-run include cache.
-func parseTargetDetail(t Target, cache *requirementsCache) (parsedTarget, error) {
-	if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) {
-		return parseRequirementsTarget(t, cache)
+// requirements-include bookkeeping and shares the per-run caches.
+func parseTargetDetail(t Target, cache *runCache) (parsedTarget, error) {
+	switch {
+	case t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source):
+		return parseRequirementsTarget(t, cache.requirements)
+	case t.Ecosystem == intel.EcosystemNuGet && isNuGetProjectSource(t.Source):
+		refs, err := parseNuGetProjectFile(t, cache)
+		return parsedTarget{refs: refs}, err
 	}
 	refs, err := parseTarget(t)
 	return parsedTarget{refs: refs}, err

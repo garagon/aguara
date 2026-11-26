@@ -32,7 +32,7 @@ func ParseNuGet(target Target) ([]PackageRef, error) {
 	case "packages.lock.json":
 		return parseNuGetLockfile(target)
 	case "csproj", "fsproj", "vbproj":
-		return parseNuGetProjectFile(target)
+		return parseNuGetProjectFile(target, newRunCache())
 	default:
 		return nil, fmt.Errorf("packagecheck: ParseNuGet: unsupported source %q (want packages.lock.json, csproj, fsproj, or vbproj)", target.Source)
 	}
@@ -118,7 +118,7 @@ type nugetLockDep struct {
 // returned as unpinned, so the audit asks for review as it does for an
 // unpinned Python requirement, unless a packages.lock.json beside the
 // project records what restore resolved.
-func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
+func parseNuGetProjectFile(target Target, cache *runCache) ([]PackageRef, error) {
 	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", target.Source, err)
@@ -129,7 +129,7 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 	}
 
 	props := msbuildProperties(proj.PropertyGroups)
-	central, err := centralPackageVersions(target)
+	central, err := centralPackageVersions(target, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -220,12 +220,25 @@ type centralVersions struct {
 	global   []struct{ name, version string }
 }
 
+// maxNuGetPropsBytes bounds one Directory.Packages.props read, the
+// dependency-manifest limit rather than the lockfile one: the file holds
+// one short PackageVersion item per package (about 100 bytes), so 4 MiB
+// is tens of thousands of entries, far more than a real repository
+// declares. A larger file is an error, not a partial read.
+const maxNuGetPropsBytes = maxDependencyManifestBytes
+
+// nugetPropsEntry is one Directory.Packages.props parsed in a run.
+type nugetPropsEntry struct {
+	central centralVersions
+	err     error
+}
+
 // centralPackageVersions reads the Directory.Packages.props that applies
 // to the project: the first found walking up from the project's directory,
 // staying inside the checked root. Its own <PropertyGroup> properties are
-// resolved; imports of other props files are not followed.
-func centralPackageVersions(target Target) (centralVersions, error) {
-	out := centralVersions{versions: map[string]string{}}
+// resolved; imports of other props files are not followed. Each file is
+// parsed once per run (cache), however many projects it applies to.
+func centralPackageVersions(target Target, cache *runCache) (centralVersions, error) {
 	root := target.Root
 	if root == "" {
 		root = filepath.Dir(target.Path)
@@ -234,45 +247,70 @@ func centralPackageVersions(target Target) (centralVersions, error) {
 	for dir := filepath.Clean(filepath.Dir(target.Path)); ; {
 		path := filepath.Join(dir, "Directory.Packages.props")
 		if manifestCandidate(path) {
-			data, err := readNuGetManifest(path)
-			if err != nil {
-				return out, fmt.Errorf("open Directory.Packages.props: %w", err)
+			key := ResolvedPath(path)
+			e, ok := cache.nugetProps[key]
+			if !ok {
+				e.central, e.err = parseNuGetProps(path)
+				cache.nugetProps[key] = e
 			}
-			var p csProject
-			if err := xml.Unmarshal(data, &p); err != nil {
-				return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
-			}
-			props := msbuildProperties(p.PropertyGroups)
-			resolve := func(v string) string {
-				v = strings.TrimSpace(v)
-				if r, ok := resolveMSBuildProperty(v, props); ok {
-					return r
-				}
-				return ""
-			}
-			for _, ig := range p.ItemGroups {
-				for _, pv := range ig.PackageVersions {
-					if name := strings.TrimSpace(firstNonEmpty(pv.Include, pv.Update)); name != "" {
-						out.versions[strings.ToLower(name)] = resolve(firstNonEmpty(pv.VersionAttr, pv.VersionChild))
-					}
-				}
-				for _, g := range ig.GlobalRefs {
-					if name := strings.TrimSpace(g.Include); name != "" {
-						out.global = append(out.global, struct{ name, version string }{name, resolve(firstNonEmpty(g.VersionAttr, g.VersionChild))})
-					}
-				}
-			}
-			return out, nil
+			return e.central, e.err
 		}
 		if dir == root {
-			return out, nil
+			return centralVersions{}, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir || !withinDir(root, parent) {
-			return out, nil
+			return centralVersions{}, nil
 		}
 		dir = parent
 	}
+}
+
+func parseNuGetProps(path string) (centralVersions, error) {
+	out := centralVersions{versions: map[string]string{}}
+	f, err := openManifest(path, "Directory.Packages.props")
+	if err != nil {
+		return out, fmt.Errorf("open Directory.Packages.props: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	data, err := readBoundedManifestBytes(f, maxNuGetPropsBytes, "Directory.Packages.props")
+	if err != nil {
+		return out, fmt.Errorf("read Directory.Packages.props: %w", err)
+	}
+	var p csProject
+	if err := xml.Unmarshal(data, &p); err != nil {
+		return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
+	}
+	props := msbuildProperties(p.PropertyGroups)
+	resolve := func(v string) string {
+		v = strings.TrimSpace(v)
+		if r, ok := resolveMSBuildProperty(v, props); ok {
+			return r
+		}
+		return ""
+	}
+	for _, ig := range p.ItemGroups {
+		for _, pv := range ig.PackageVersions {
+			if name := strings.TrimSpace(firstNonEmpty(pv.Include, pv.Update)); name != "" {
+				out.versions[strings.ToLower(name)] = resolve(firstNonEmpty(pv.VersionAttr, pv.VersionChild))
+			}
+		}
+		for _, g := range ig.GlobalRefs {
+			if name := strings.TrimSpace(g.Include); name != "" {
+				out.global = append(out.global, struct{ name, version string }{name, resolve(firstNonEmpty(g.VersionAttr, g.VersionChild))})
+			}
+		}
+	}
+	return out, nil
+}
+
+// isNuGetProjectSource reports a .NET project file source.
+func isNuGetProjectSource(source string) bool {
+	switch source {
+	case "csproj", "fsproj", "vbproj":
+		return true
+	}
+	return false
 }
 
 type csProject struct {
