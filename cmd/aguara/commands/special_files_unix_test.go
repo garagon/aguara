@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -20,8 +21,20 @@ import (
 // command blocks on a special file.
 func runCLIWithin(t *testing.T, args ...string) error {
 	t.Helper()
+	// Set up on the test goroutine; only Execute runs in the goroutine, so
+	// a blocked command never touches t after the test has ended.
+	resetFlags()
+	rootCmd.SetOut(new(bytes.Buffer))
+	rootCmd.SetErr(new(bytes.Buffer))
+	rootCmd.SetArgs(append(args, "--no-update-check"))
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags()
+	})
 	done := make(chan error, 1)
-	go func() { done <- runCLI(t, args...) }()
+	go func() { done <- rootCmd.Execute() }()
 	select {
 	case err := <-done:
 		return err

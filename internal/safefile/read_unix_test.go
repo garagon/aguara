@@ -4,6 +4,7 @@ package safefile
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,16 +64,14 @@ func TestReadRegularRejectsSpecialFilesWithoutBlocking(t *testing.T) {
 	}
 }
 
-// A file replaced after the type check is caught on the opened descriptor:
-// the open does not block on the named pipe and the read is refused.
+// A file replaced by a named pipe after the type check is caught on the
+// opened descriptor: the open OpenRegular uses does not block on the pipe,
+// and the descriptor's mode is not regular. (The identity check is not
+// asserted: Linux can give the new pipe the freed inode number.)
 func TestOpenRegularRejectsReplacementAfterInspection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -81,7 +80,7 @@ func TestOpenRegularRejectsReplacementAfterInspection(t *testing.T) {
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	err = withDeadline(t, func() error {
+	err := withDeadline(t, func() error {
 		f, err := os.OpenFile(path, os.O_RDONLY|openNonBlock|openNoFollow, 0)
 		if err != nil {
 			return err
@@ -91,8 +90,8 @@ func TestOpenRegularRejectsReplacementAfterInspection(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if opened.Mode().IsRegular() || os.SameFile(info, opened) {
-			t.Fatalf("replacement not detected: %v", opened.Mode())
+		if opened.Mode().IsRegular() {
+			return fmt.Errorf("replacement not detected: %v", opened.Mode())
 		}
 		return nil
 	})
