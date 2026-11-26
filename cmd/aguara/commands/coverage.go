@@ -59,6 +59,10 @@ func checkCoverage(plan checkPlan, result *incident.CheckResult, run *packageche
 			unsupported = append(unsupported, u)
 		}
 	}
+	if run != nil {
+		// Requirements files whose syntax the parser does not read.
+		unsupported = append(unsupported, run.Unparsed...)
+	}
 	// Manifests that declare dependencies no lockfile covers: an install
 	// would resolve versions the check never saw.
 	locks := packagecheck.CoveringLockfiles(plan.packagecheckTargets, unsupported)

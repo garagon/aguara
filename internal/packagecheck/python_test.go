@@ -542,6 +542,72 @@ func TestPythonLockfileInputRejectsLinkedFiles(t *testing.T) {
 	}
 }
 
+// A file named like a requirements or constraints file whose lines are not
+// in the pip grammar the parser reads is not evaluated: the run lists it
+// instead of failing. Input the parser refuses because pip could still
+// read it and install something unseen stays an error.
+func TestRunnerListsRequirementsSyntaxItCannotRead(t *testing.T) {
+	m := intel.NewMatcher(intel.Snapshot{})
+	run := func(t *testing.T, files map[string]string, target string) (*RunResult, error) {
+		t.Helper()
+		dir := t.TempDir()
+		for name, content := range files {
+			writeFile(t, filepath.Join(dir, name), content)
+		}
+		return (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, target), Source: target, Root: dir}})
+	}
+	for name, tc := range map[string]struct {
+		files  map[string]string
+		target string
+		detail string
+	}{
+		// Line 1 reads as a requirement named "Constraints"; line 2 does not.
+		"documentation named constraints.txt": {map[string]string{"constraints.txt": "Constraints\n===========\n\n.. class:: CheckConstraint(*, check, name)\n"}, "constraints.txt", "line 2 is not"},
+		"unknown option":                      {map[string]string{"requirements.txt": "--frobnicate\nflask==3.0.0\n"}, "requirements.txt", "line 1 is not"},
+		"malformed specifier":                 {map[string]string{"requirements.txt": "flask==3.0.0\npkg==\n"}, "requirements.txt", "line 2 is not"},
+		"unterminated quote":                  {map[string]string{"requirements.txt": "-r 'base.txt\n"}, "requirements.txt", "line 1 is not"},
+		"malformed include":                   {map[string]string{"requirements.txt": "good==1.0\n-r bad.txt\n", "bad.txt": "pkg==\n"}, "requirements.txt", "bad.txt, which it includes, has a line (1)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := run(t, tc.files, tc.target)
+			require.NoError(t, err)
+			require.Empty(t, res.Ecosystems, "nothing in it was evaluated")
+			require.Len(t, res.Unparsed, 1)
+			require.Equal(t, ReasonFormatNotParsed, res.Unparsed[0].Reason)
+			require.Contains(t, res.Unparsed[0].Detail, tc.detail)
+		})
+	}
+
+	deep := map[string]string{}
+	for i := 0; i <= maxRequirementsIncludeDepth+2; i++ {
+		deep[fmt.Sprintf("r%d.txt", i)] = fmt.Sprintf("pkg%d==1.0\n-r r%d.txt\n", i, i+1)
+	}
+	deep["requirements.txt"] = "-r r0.txt\n"
+	for name, tc := range map[string]struct {
+		files  map[string]string
+		target string
+	}{
+		"declared encoding":   {map[string]string{"requirements.txt": "# -*- coding: latin-1 -*-\nflask==3.0.0\n"}, "requirements.txt"},
+		"not UTF-8":           {map[string]string{"requirements.txt": "flask==3.0.0\n\xff\xfe\n"}, "requirements.txt"},
+		"overlong line":       {map[string]string{"requirements.txt": strings.Repeat("a", maxRequirementsLineBytes+1) + "\n"}, "requirements.txt"},
+		"includes too deep":   {deep, "requirements.txt"},
+		"missing target file": {map[string]string{}, "requirements.txt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := run(t, tc.files, tc.target)
+			require.Error(t, err)
+		})
+	}
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "real.txt"), "flask==3.0.0\n")
+	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "requirements.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err := (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
+	require.Error(t, err, "a symlinked requirements file is unsafe input")
+}
+
 // A `===` pin is compared the way pip compares it, as a string against
 // the release's normalized version, while `==` keeps PEP 440 equality.
 func TestRequirementsArbitraryEqualityMatchesLikePip(t *testing.T) {

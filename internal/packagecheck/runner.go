@@ -1,6 +1,7 @@
 package packagecheck
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -40,6 +41,10 @@ type RunResult struct {
 	// files) for the manifest coverage rule: whether it records the
 	// versions a Python manifest beside it would install.
 	Requirements []RequirementsEvidence
+	// Unparsed lists requirements targets with a line outside the pip
+	// grammar the parser reads (RequirementsSyntaxError). Nothing in them
+	// was checked; they belong in coverage.unsupported_evidence.
+	Unparsed []UnsupportedEvidence
 }
 
 // RequirementsEvidence is what a read requirements file, with the files it
@@ -104,6 +109,23 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
 		parsed, err := parseTargetDetail(t, cache)
+		var syntax *RequirementsSyntaxError
+		if err != nil && t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && errors.As(err, &syntax) {
+			// Named like a requirements file but not in the pip grammar
+			// the parser reads: not evaluated, not a failed check.
+			kind := "requirements.txt"
+			if IsConstraintsFile(t.Path) {
+				kind = "constraints.txt"
+			}
+			detail := fmt.Sprintf("line %d is not a pip requirement or option Aguara reads", syntax.Line)
+			if ResolvedPath(syntax.Path) != ResolvedPath(t.Path) {
+				detail = fmt.Sprintf("%s, which it includes, has a line (%d) that is not a pip requirement or option Aguara reads", filepath.Base(syntax.Path), syntax.Line)
+			}
+			out.Unparsed = append(out.Unparsed, UnsupportedEvidence{
+				Path: t.Path, Kind: kind, Ecosystem: intel.EcosystemPyPI, Reason: ReasonFormatNotParsed, Detail: detail,
+			})
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("packagecheck: %s: %w", t.Path, err)
 		}

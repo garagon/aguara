@@ -98,6 +98,29 @@ func TestIncludedRequirementsFileIsNotUnsupported(t *testing.T) {
 	require.Contains(t, strings.Join(paths, "\n"), filepath.Join("requirements", "dev.txt"))
 }
 
+// A documentation file named constraints.txt is not pip syntax: check
+// names it as not evaluated and succeeds, and audit asks for review,
+// instead of the whole run failing.
+func TestNonPipFileUnderARequirementsNameIsNotEvaluated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := projectWith(t, map[string]string{
+		"docs/constraints.txt": "Constraints\n===========\n\n.. class:: CheckConstraint(*, check, name)\n",
+		"requirements.txt":     "flask==3.0.0\n",
+	})
+	check := checkToFile(t, dir)
+	require.Len(t, check.Coverage.UnsupportedEvidence, 1)
+	u := check.Coverage.UnsupportedEvidence[0]
+	require.Equal(t, filepath.Join(dir, "docs", "constraints.txt"), u.Path)
+	require.Equal(t, "constraints.txt", u.Kind)
+	require.Equal(t, "format_not_parsed", u.Reason)
+	require.Contains(t, u.Detail, "line 2")
+
+	result := auditToFile(t, dir)
+	require.Equal(t, "review", result.Triage.Decision)
+	requireTriageReason(t, result.Triage, "partial_dependency_coverage")
+	require.False(t, result.Plan.CanInstallDependencies)
+}
+
 // The same file, not included, is unsupported even beside a read
 // requirements.txt, so the partial-coverage rule applies.
 func TestUnincludedRequirementsDirFileIsPartialCoverage(t *testing.T) {

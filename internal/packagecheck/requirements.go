@@ -26,6 +26,31 @@ const (
 // UTF-8 file; pip accepts it.
 const utf8BOM = "\xef\xbb\xbf"
 
+// RequirementsSyntaxError is a line of a requirements file that the
+// parser's pip grammar does not accept: an unknown option, a malformed
+// requirement, specifier, version, extras or marker, an unterminated
+// quote, or an option without its value. Such a file is reported as not
+// evaluated (format_not_parsed) instead of failing the check: the grammar
+// is stricter than pip's, and a file under a requirements name is not
+// always a pip file. Everything else a reader refuses, such as an unsafe
+// or oversized file, a declared encoding other than UTF-8, content that
+// is not UTF-8, an overlong line, too many entries or includes nested
+// too deeply, remains an error, because pip could read such a file and
+// install a pin Aguara never saw.
+type RequirementsSyntaxError struct {
+	// Path is the file that holds the line, which can be a file
+	// reached through an include.
+	Path string
+	Line int
+	err  error
+}
+
+func (e *RequirementsSyntaxError) Error() string {
+	return fmt.Sprintf("line %d: %v", e.Line, e.err)
+}
+
+func (e *RequirementsSyntaxError) Unwrap() error { return e.err }
+
 // isRequirementsSource reports whether a file name is one discovery
 // treats as a pip requirements or constraints file.
 func isRequirementsSource(base string) bool {
@@ -366,7 +391,7 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 		}
 		items, err := parseRequirementsLine(text, line)
 		if err != nil {
-			return fmt.Errorf("line %d: %w", line, err)
+			return &RequirementsSyntaxError{Path: path, Line: line, err: err}
 		}
 		if len(out.items)+len(items) > maxPythonLockEntries {
 			return fmt.Errorf("more than %d entries", maxPythonLockEntries)
