@@ -29,6 +29,7 @@ func RuleMetadata() []rulemeta.Rule {
 			Severity: "CRITICAL",
 			Category: category,
 			Analyzer: rulemeta.AnalyzerAgentPolicy,
+			CWE:      []string{"CWE-494"},
 			Description: "A hook command in .claude/settings.json pipes a remote fetch into an " +
 				"interpreter (curl | sh) or runs it through command substitution (eval / sh -c " +
 				"\"$(curl ...)\"). Claude Code runs project hooks automatically after the one-time " +

@@ -49,6 +49,8 @@ func resetFlags() {
 	flagWriteBaseline = ""
 	flagProjectPolicy = "auto"
 	flagFailOnEmpty = false
+	flagFailOnSource = ""
+	flagSARIFCategory = ""
 	flagCheckPath = ""
 	flagCheckEcosystems = nil
 	flagCheckFailOn = ""
@@ -70,6 +72,7 @@ func resetFlags() {
 	flagAuditInsecure = false
 	flagAuditVerbose = false
 	flagAuditProjectPolicy = "auto"
+	flagAuditFailOnDecision = ""
 	flagCategory = ""
 	flagCleanDryRun = false
 	flagCleanPurgeCaches = false

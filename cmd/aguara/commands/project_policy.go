@@ -92,10 +92,11 @@ func applyCIProjectPolicy(cmd *cobra.Command, targetPath, ciVar string) error {
 			keys = slices.DeleteFunc(keys, func(k string) bool { return k == "ignore" })
 		}
 		if slices.Contains(keys, "fail_on") {
-			if _, err := scanner.ParseSeverity(cfg.FailOn); err != nil {
-				return fmt.Errorf("%s: invalid fail_on %q: %w", cfg.Source, cfg.FailOn, err)
+			if _, err := parseFailOn(cfg.FailOn); err != nil {
+				return fmt.Errorf("%s: invalid fail_on %q: choose %s", cfg.Source, cfg.FailOn, failOnChoices)
 			}
 			flagFailOn = cfg.FailOn
+			flagFailOnSource = cfg.Source + " fail_on"
 			appliedFailOn = cfg.FailOn
 			keys = slices.DeleteFunc(keys, func(k string) bool { return k == "fail_on" })
 		}

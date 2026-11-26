@@ -45,6 +45,7 @@ name: "Download-and-execute"
 description: "Detects patterns of downloading and piping to shell execution"
 severity: CRITICAL
 category: supply-chain
+cwe: [CWE-494]
 targets: []
 match_mode: any
 patterns:

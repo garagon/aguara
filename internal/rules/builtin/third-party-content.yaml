@@ -135,6 +135,7 @@ name: "Unescaped user input in HTML output"
 description: "Detects HTML string building with user-controlled variables without output encoding, enabling cross-site scripting"
 severity: HIGH
 category: third-party-content
+cwe: [CWE-79]
 targets: []
 match_mode: any
 remediation: "Use textContent instead of innerHTML, or sanitize with DOMPurify/html.escape() before inserting into the DOM."
@@ -166,6 +167,7 @@ name: "Unsafe deserialization from untrusted source"
 description: "Detects unsafe deserialization functions like pickle.loads, yaml.load, or unserialize with external data"
 severity: HIGH
 category: third-party-content
+cwe: [CWE-502]
 targets: []
 match_mode: any
 remediation: "Use safe alternatives: yaml.safe_load(), JSON.parse(), or json.loads(). Never deserialize untrusted data with pickle or Marshal."

@@ -20,10 +20,10 @@ func TestUnsupportedFormatIsRejected(t *testing.T) {
 		supported string
 	}{
 		{[]string{"scan", project, "--format", "xml"}, "terminal, json, sarif, markdown"},
-		{[]string{"audit", project, "--format", "sarif"}, "terminal, json"},
-		{[]string{"audit", project, "--format", "markdown"}, "terminal, json"},
-		{[]string{"check", project, "--format", "markdown"}, "terminal, json"},
-		{[]string{"check", project, "--format", "sarif"}, "terminal, json"},
+		{[]string{"audit", project, "--format", "xml"}, "terminal, json, sarif, markdown"},
+		{[]string{"audit", project, "--format", "html"}, "terminal, json, sarif, markdown"},
+		{[]string{"check", project, "--format", "xml"}, "terminal, json, sarif, markdown"},
+		{[]string{"check", project, "--format", "csv"}, "terminal, json, sarif, markdown"},
 		{[]string{"discover", "--format", "sarif"}, "terminal, json, markdown"},
 		{[]string{"list-rules", "--format", "sarif"}, "terminal, json"},
 		{[]string{"explain", "CRED_001", "--format", "md"}, "terminal, json"},
@@ -72,12 +72,12 @@ func TestScanRejectsUnsupportedConfigFormat(t *testing.T) {
 	requireUsageError(t, err, `unsupported .aguara.yml format "xml"`, "supported formats are terminal, json, sarif, markdown")
 }
 
-// audit only borrows the scan config's format key: a scan-only value
-// such as sarif is reported and the audit keeps its own --format.
+// audit only borrows the scan config's format key: a value audit cannot
+// render is reported and the audit keeps its own --format.
 func TestAuditIgnoresScanOnlyConfigFormat(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	project := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(project, ".aguara.yml"), []byte("format: sarif\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(project, ".aguara.yml"), []byte("format: xml\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(project, "notes.md"), []byte("# notes\n"), 0o600))
 	out := filepath.Join(t.TempDir(), "audit.txt")
 	require.NoError(t, runCLI(t, "audit", project, "--project-policy", "trust", "-o", out))

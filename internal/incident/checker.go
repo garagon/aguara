@@ -22,12 +22,36 @@ const (
 	SevInfo     = "INFO"
 )
 
+// Finding kinds: the class of a package check finding. SARIF output derives
+// one rule per kind (CHECK_<KIND>) from them.
+const (
+	// KindCompromisedPackage is a package version covered by a
+	// malicious-package advisory, in a lockfile, dependency file or
+	// installed tree.
+	KindCompromisedPackage = "compromised_package"
+	// KindCachedPackage is a compromised package in a package-manager cache.
+	KindCachedPackage = "cached_package"
+	// KindCachedArtifact is a cached file whose name matches a compromised
+	// release.
+	KindCachedArtifact = "cached_artifact"
+	// KindPthExecutable is a .pth file with executable content.
+	KindPthExecutable = "pth_executable"
+	// KindPthOversized is a .pth file larger than the inspection limit.
+	KindPthOversized = "pth_oversized"
+	// KindPersistenceArtifact is a known backdoor persistence file.
+	KindPersistenceArtifact = "persistence_artifact"
+	// KindUnresolvedInclude is a requirements include that was not read.
+	KindUnresolvedInclude = "unresolved_include"
+)
+
 // Finding represents a single issue found by the checker.
 type Finding struct {
 	Severity string `json:"severity"`
-	Title    string `json:"title"`
-	Detail   string `json:"detail"`
-	Path     string `json:"path,omitempty"`
+	// Kind is the finding class (KindCompromisedPackage, ...).
+	Kind   string `json:"kind,omitempty"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+	Path   string `json:"path,omitempty"`
 	// Line is the 1-based line in Path of the dependency entry that
 	// matched, for dependency files that have one (requirements files,
 	// TOML lockfiles). Omitted when the source has no meaningful line.
@@ -37,6 +61,13 @@ type Finding struct {
 	// the same IDs the title names. Omitted for findings that are not
 	// advisory matches.
 	AdvisoryIDs []string `json:"advisory_ids,omitempty"`
+	// Ecosystem, Package and Version identify the package of a package
+	// finding (OSV ecosystem name, package name as recorded, version as
+	// recorded; Version is empty for an unpinned requirement). Omitted
+	// for findings that are not about one package.
+	Ecosystem string `json:"ecosystem,omitempty"`
+	Package   string `json:"package,omitempty"`
+	Version   string `json:"version,omitempty"`
 }
 
 // Location renders Path, with ":line" appended when Line is known.
@@ -220,11 +251,15 @@ func Check(opts CheckOptions) (*CheckResult, error) {
 		hit := hits[0]
 		result.Findings = append(result.Findings, Finding{
 			Severity:    SevCritical,
+			Kind:        KindCompromisedPackage,
 			Title:       fmt.Sprintf("%s %s is a known compromised package (%s)", pkg.Name, pkg.Version, strings.Join(matchIDs(hits), ", ")),
 			Detail:      hit.Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Run 'aguara clean' to remove %s and associated malware", pkg.Name),
 			AdvisoryIDs: matchIDs(hits),
+			Ecosystem:   intel.EcosystemPyPI,
+			Package:     pkg.Name,
+			Version:     pkg.Version,
 		})
 		pypiFindings++
 	}
@@ -427,6 +462,7 @@ func checkPthFile(path string) []Finding {
 			// reporting the rest as clean.
 			return []Finding{{
 				Severity:    SevWarning,
+				Kind:        KindPthOversized,
 				Title:       fmt.Sprintf("%s is larger than the %d-byte inspection limit", filepath.Base(path), maxPthBytes),
 				Path:        path,
 				Remediation: "Inspect this file manually. Legitimate .pth files contain only a few directory paths.",
@@ -444,6 +480,7 @@ func checkPthFile(path string) []Finding {
 
 	return []Finding{{
 		Severity:    SevCritical,
+		Kind:        KindPthExecutable,
 		Title:       fmt.Sprintf("%s contains executable code", filepath.Base(path)),
 		Detail:      preview,
 		Path:        path,
@@ -472,6 +509,7 @@ func checkPersistence() []Finding {
 		if _, err := os.Stat(path); err == nil {
 			findings = append(findings, Finding{
 				Severity:    SevWarning,
+				Kind:        KindPersistenceArtifact,
 				Title:       fmt.Sprintf("Persistence artifact found: %s", a.desc),
 				Path:        path,
 				Remediation: "Run 'aguara clean' to quarantine this file",
@@ -592,10 +630,14 @@ func checkCaches(opts CheckOptions) []Finding {
 						seen[path] = true
 						findings = append(findings, Finding{
 							Severity:    SevCritical,
+							Kind:        KindCachedPackage,
 							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", pkg.Name, pkg.Version, hit.Record.ID),
 							Detail:      hit.Record.Summary,
 							Path:        path,
 							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+							Ecosystem:   intel.EcosystemPyPI,
+							Package:     pkg.Name,
+							Version:     pkg.Version,
 						})
 					}
 				}
@@ -648,9 +690,13 @@ func checkCaches(opts CheckOptions) []Finding {
 							seen[path] = true
 							findings = append(findings, Finding{
 								Severity:    SevWarning,
+								Kind:        KindCachedArtifact,
 								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
 								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+								Ecosystem:   intel.EcosystemPyPI,
+								Package:     entry.displayName,
+								Version:     v,
 							})
 							break
 						}

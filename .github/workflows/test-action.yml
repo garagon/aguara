@@ -60,6 +60,16 @@ jobs:
             exit 1
           fi
           jq '.runs[0].tool.driver.name' aguara-results.sarif
+          # A path below the repository root still yields repository-relative
+          # locations, and every rule carries a security-severity score.
+          if ! jq -e '[.runs[0].results[].locations[0].physicalLocation.artifactLocation.uri | startswith("internal/rules/builtin/")] | all' aguara-results.sarif >/dev/null; then
+            echo "::error::SARIF locations are not relative to the repository root"
+            exit 1
+          fi
+          if ! jq -e '[.runs[0].tool.driver.rules[].properties["security-severity"] | tonumber] | all(. >= 0 and . <= 10)' aguara-results.sarif >/dev/null; then
+            echo "::error::SARIF rules lack a security-severity score"
+            exit 1
+          fi
 
   test-action-json:
     runs-on: ubuntu-latest
@@ -109,9 +119,17 @@ jobs:
         with:
           path: ./.github/test-fixtures/clean/
           fail-on: critical
+          sarif-category: test-action-clean
           upload-sarif: 'false'
           # Build the binary from the same exact commit as action.yml.
           install-script-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify SARIF category and invocation
+        run: |
+          if ! jq -e '.runs[0].automationDetails.id == "test-action-clean/" and .runs[0].invocations[0].exitCode == 0' aguara-results.sarif >/dev/null; then
+            echo "::error::sarif-category or the invocation exit code is missing"
+            exit 1
+          fi
 
   test-action-untrusted-policy:
     runs-on: ubuntu-latest

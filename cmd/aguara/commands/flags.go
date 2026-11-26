@@ -95,6 +95,12 @@ func addOutputFlag(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Write the report to this file instead of stdout, in the selected --format and without color")
 }
 
+// addSARIFCategoryFlag registers --sarif-category for commands that render
+// SARIF. It has no effect on other formats.
+func addSARIFCategoryFlag(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&flagSARIFCategory, "sarif-category", "", "With --format sarif: the analysis category (runs[0].automationDetails.id), to keep several code scanning uploads for one commit apart")
+}
+
 // addSeverityFlag registers --severity, the minimum severity a content
 // scan reports.
 func addSeverityFlag(cmd *cobra.Command) {

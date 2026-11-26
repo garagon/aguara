@@ -40,6 +40,12 @@ type (
 	Verdict         = types.Verdict
 	ScanProfile     = types.ScanProfile
 	DeduplicateMode = types.DeduplicateMode
+	// MergedFinding is an entry of Finding.AlsoMatched: a finding that
+	// deduplication merged into the reported one on the same line.
+	MergedFinding = types.MergedFinding
+	// SuppressionSummary is ScanResult.Suppressed: what the scan matched
+	// but did not report on its own, by the step that removed it.
+	SuppressionSummary = types.SuppressionSummary
 )
 
 const (
@@ -133,6 +139,7 @@ type RuleDetail struct {
 	DecisionImpact string   `json:"decision_impact"`
 	Description    string   `json:"description"`
 	Remediation    string   `json:"remediation,omitempty"`
+	CWE            []string `json:"cwe,omitempty"`
 	Patterns       []string `json:"patterns"`
 	TruePositives  []string `json:"true_positives"`
 	FalsePositives []string `json:"false_positives"`
@@ -421,6 +428,7 @@ func ruleDetailFromMetadata(r rulemeta.Rule) *RuleDetail {
 		DecisionImpact: r.DecisionImpact,
 		Description:    r.Description,
 		Remediation:    r.Remediation,
+		CWE:            append([]string(nil), r.CWE...),
 		Patterns:       append([]string(nil), r.Patterns...),
 		TruePositives:  append([]string(nil), r.TruePositives...),
 		FalsePositives: append([]string(nil), r.FalsePositives...),

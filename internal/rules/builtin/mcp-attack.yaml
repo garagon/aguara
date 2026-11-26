@@ -228,6 +228,7 @@ name: "Prototype pollution vector"
 description: "Detects prototype pollution patterns via __proto__, constructor.prototype, or unguarded property traversal in tool code"
 severity: HIGH
 category: mcp-attack
+cwe: [CWE-1321]
 targets: []
 match_mode: any
 remediation: "Freeze prototypes with Object.freeze(Object.prototype). Filter __proto__ and constructor keys from untrusted input."

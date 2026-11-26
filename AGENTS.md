@@ -19,6 +19,9 @@ The installed binary's catalog is authoritative for that binary.
 | Combine content and dependency checks | `aguara audit .` |
 | Produce machine-readable audit results | `aguara audit . --format json` |
 | Gate a change in CI | `aguara audit . --ci` |
+| Gate on the audit decision | `aguara audit . --fail-on-decision review` |
+| Upload results to code scanning | `aguara audit . --format sarif -o aguara.sarif` |
+| Identify the binary and catalog | `aguara version --format json` |
 | Inspect the installed catalog | `aguara list-rules --format json` |
 | Understand a detection | `aguara explain SC-EX-007` |
 | Refresh signed advisory data | `aguara update` |
@@ -117,6 +120,34 @@ Use the actual types in [internal/types/types.go](internal/types/types.go),
 exported through public aliases, rather than copying a partial struct.
 
 - Severity is numeric in JSON: INFO=0, LOW=1, MEDIUM=2, HIGH=3, CRITICAL=4.
+  In this checkout findings also carry `severity_label` and scan results
+  `verdict_label`; the numbers stay. Package findings use CRITICAL, WARNING
+  and INFO; for `--fail-on` they count as critical, high and info.
+- CLI JSON from `scan`, `check` and `audit` starts with `schema_version`
+  (`1.x`: additive changes bump the minor, breaking ones the major), `tool`
+  and `catalog` (counts and a digest of the rule set). Ignore fields you do
+  not know. The schemas are in [schema/](schema/); `aguara version --format
+  json` prints the same identity.
+- `fingerprint` on a finding is the value baselines and SARIF
+  `partialFingerprints` use; it is absent when the matched text is
+  redacted. `baseline_state` (`new`, `baselined`, `non_baselineable`)
+  appears when a baseline is applied. GitHub code scanning does not track
+  alerts by this value; it uses the line hash its upload action computes.
+- `severity_label`, `fingerprint` and the rounding of `confidence` and
+  `score` are added when a `ScanResult` is marshalled. `Finding` and
+  `MergedFinding` keep Go's default JSON encoding, so a struct that embeds
+  `aguara.Finding` marshals its own fields too, and `json.Marshal` of a
+  `Finding` on its own has the v0.29.0 fields plus `also_matched` and
+  `baseline_state`. Library callers read the new fields through
+  `aguara.MergedFinding` and `aguara.SuppressionSummary`.
+- Full deduplication keeps one finding per file and line. The survivor
+  lists the rules it absorbed in `also_matched`, and `suppressed` counts
+  findings removed by dedup and filters. A short report is not proof that
+  nothing else matched.
+- Exit codes: 0 no gate tripped (findings may exist), 1 a gate tripped, 2
+  an error, misuse or incomplete scan. `--fail-on` takes critical, high,
+  medium, low or info on every command (`warning` is high). `audit
+  --fail-on-decision review|stop` gates on the triage decision.
 - `decision_impact` distinguishes `context` and `review`; it is not a downstream
   application's allow/block policy.
 - `verdict` (clean=0, flag=1, block=2) depends on the scan profile. A finding

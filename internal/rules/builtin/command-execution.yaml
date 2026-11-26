@@ -3,6 +3,7 @@ name: "Shell subprocess with shell=True"
 description: "Detects subprocess calls with shell=True which enables shell injection"
 severity: MEDIUM
 category: command-execution
+cwe: [CWE-78]
 targets: ["*.md", "*.txt", "*.py"]
 match_mode: any
 patterns:

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
+	"github.com/garagon/aguara/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -111,17 +111,24 @@ Supported values (case-insensitive):
 
 The known-bad list ships embedded with the binary; --fresh refreshes it
 from Aguara's signed advisory bundle (verified before use), which covers
-all supported ecosystems.`,
+all supported ecosystems.
+
+Package findings are CRITICAL, WARNING or INFO. --fail-on takes the same
+levels as scan, critical, high, medium, low or info: CRITICAL counts as
+critical, WARNING as high and INFO as info, so --fail-on high, medium or
+low trips on WARNING and CRITICAL findings. warning remains an alias of
+high. --ci is --fail-on critical.` + exitCodesHelp("1  A --fail-on threshold or --ci was reached."),
 	Args: cobra.MaximumNArgs(1),
 	RunE: runCheck,
 }
 
 func init() {
-	addFormatFlag(checkCmd, "terminal", "json")
+	addFormatFlag(checkCmd, "terminal", "json", "sarif", "markdown")
 	addOutputFlag(checkCmd)
+	addSARIFCategoryFlag(checkCmd)
 	checkCmd.Flags().StringVar(&flagCheckPath, "path", "", "Path to project root, node_modules, or Python site-packages (also accepted as a positional argument)")
 	checkCmd.Flags().StringSliceVar(&flagCheckEcosystems, "ecosystem", nil, "Package ecosystem (auto-detect by default; repeatable or comma-separated): python, npm, go, cargo, composer, ruby, maven, nuget")
-	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, warning, info")
+	checkCmd.Flags().StringVar(&flagCheckFailOn, "fail-on", "", "Exit with code 1 if findings reach this severity: critical, high, medium, low, info (warning = high; WARNING findings count as high)")
 	checkCmd.Flags().BoolVar(&flagCheckCI, "ci", false, "CI mode: equivalent to --fail-on critical --no-color")
 	checkCmd.Flags().BoolVar(&flagCheckFresh, "fresh", false, "Refresh threat intel from Aguara's signed advisory bundle before checking (network opt-in)")
 	checkCmd.Flags().BoolVar(&flagCheckAllowStale, "allow-stale", false, "If --fresh fails, fall back to previously verified local intel (errors if none is cached)")
@@ -160,17 +167,24 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 	applyIntelFreshness(&result.Intel, time.Now().UTC())
 
-	if flagFormat == "json" {
-		if err := writeCheckJSON(result); err != nil {
-			return err
-		}
-	} else {
-		if err := writeCheckTerminal(result, plan); err != nil {
-			return err
-		}
+	// The gate is decided before the report is written so SARIF can
+	// record the exit code; deciding it has no side effects.
+	gateErr := checkGate(result, flagCheckFailOn, ciFailOnSource(cmd.Flags().Changed("fail-on"), flagCheckCI))
+	var err2 error
+	switch flagFormat {
+	case "json":
+		err2 = writeCheckJSON(result)
+	case "sarif":
+		err2 = writeCheckSARIF(result, plan, gateErr)
+	case "markdown":
+		err2 = writeCheckMarkdown(result, plan)
+	default:
+		err2 = writeCheckTerminal(result, plan)
 	}
-
-	return checkIncidentFailOnThreshold(result, flagCheckFailOn)
+	if err2 != nil {
+		return err2
+	}
+	return gateErr
 }
 
 // resolveCheckPathArg picks the effective scan path from the positional
@@ -939,12 +953,16 @@ func runPackagecheckPlan(plan checkPlan, override *incident.IntelOverride) (*inc
 		title, remediation := ecosystemFindingText(ecoToken, hit)
 		result.Findings = append(result.Findings, incident.Finding{
 			Severity:    incident.SevCritical,
+			Kind:        incident.KindCompromisedPackage,
 			Title:       title,
 			Detail:      hit.Record.Summary,
 			Path:        hit.Ref.Path,
 			Line:        hit.Ref.Line,
 			Remediation: remediation,
 			AdvisoryIDs: hit.AdvisoryIDs,
+			Ecosystem:   hit.Ref.Ecosystem,
+			Package:     hit.Ref.Name,
+			Version:     hit.Ref.Version,
 		})
 	}
 	for _, u := range runRes.UnresolvedIncludes {
@@ -1043,12 +1061,78 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 	}
 }
 
+// writeCheckJSON writes the check report. It starts with schema_version,
+// tool and the built-in catalog identity (check runs no content rules, but
+// reports the catalog of the binary like scan and audit).
 func writeCheckJSON(result *incident.CheckResult) error {
 	return writeReport(func(w io.Writer) error {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return output.EncodeJSONReport(w, reportHeader(builtinCatalog()), result)
 	})
+}
+
+// writeCheckSARIF writes package findings as SARIF results located at the
+// dependency file (and line, where the file records one), relative to the
+// git work tree root when the checked path is inside one.
+func writeCheckSARIF(result *incident.CheckResult, plan checkPlan, runErr error) error {
+	output.ToolVersion = Version
+	base, inTree := sarifSourceRoot(plan.rootPath)
+	external, notes := packageSARIFResults(result.Findings, base)
+	opts := sarifOptions(scanReport{runErr: runErr, threshold: flagCheckFailOn, notes: notes})
+	opts.InWorkTree = inTree
+	opts.LocalRoots = localRoots(plan.rootPath)
+	opts.Properties = map[string]any{
+		"packages_read": result.PackagesRead,
+		"intel":         result.Intel,
+	}
+	if result.Coverage != nil {
+		opts.Properties["coverage"] = result.Coverage
+	}
+	return writeReport(func(w io.Writer) error {
+		return output.WriteSARIF(w, nil, external, opts)
+	})
+}
+
+// writeCheckMarkdown writes the check report for job summaries and PR
+// comments.
+func writeCheckMarkdown(result *incident.CheckResult, plan checkPlan) error {
+	return writeReport(func(w io.Writer) error {
+		renderCheckMarkdown(w, result, plan.rootPath)
+		return nil
+	})
+}
+
+func renderCheckMarkdown(w io.Writer, result *incident.CheckResult, root string) {
+	fmt.Fprintf(w, "## Aguara Package Check\n\n")
+	labels := map[types.Severity]string{types.SeverityCritical: "critical", types.SeverityHigh: "warning", types.SeverityInfo: "info"}
+	counts := packageSeverityCounts(result.Findings)
+	var badges []string
+	for _, sev := range []types.Severity{types.SeverityCritical, types.SeverityHigh, types.SeverityInfo} {
+		if n := counts[sev]; n > 0 {
+			badges = append(badges, fmt.Sprintf("%s **%d %s**", output.SeverityEmoji(sev), n, labels[sev]))
+		}
+	}
+	status := "**No known-compromised packages**"
+	if len(badges) > 0 {
+		status = strings.Join(badges, " &nbsp; ")
+	}
+	fmt.Fprintf(w, "> %s · `%s` · %d packages · %d dependency files\n\n",
+		status, output.EscapeMarkdown(result.Environment), result.PackagesRead, len(result.Ecosystems))
+	if line := packageCoverageLine(result.Coverage); line != "" {
+		fmt.Fprintf(w, "%s\n\n", output.EscapeMarkdown(line))
+	}
+	var notes []string
+	notes = append(notes, unsupportedEvidenceLines(result.Coverage, root)...)
+	if note := unpinnedNote(result); note != "" {
+		notes = append(notes, note)
+	}
+	for _, note := range notes {
+		fmt.Fprintf(w, "- %s\n", output.EscapeMarkdown(note))
+	}
+	if len(notes) > 0 {
+		fmt.Fprintln(w)
+	}
+	writePackageFindingsMarkdown(w, result.Findings, root)
+	fmt.Fprintf(w, "<sub>Generated by [Aguara](https://github.com/garagon/aguara) %s</sub>\n", output.EscapeMarkdown(Version))
 }
 
 // writeCheckTerminal renders the terminal report to stdout, or to the
@@ -1113,7 +1197,7 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 		label := output.TerminalText(string(f.Severity))
 		fmt.Fprintf(w, "  %s %s %s\n", st.SeverityIcon(label), st.SeverityLabel(fmt.Sprintf("%-8s", label)), output.TerminalText(f.Title))
 		if f.Path != "" {
-			fmt.Fprintf(w, "             %s\n", st.Dim("Path: "+output.TerminalText(f.Location())))
+			fmt.Fprintf(w, "             %s\n", st.Dim("Path: "+output.TerminalText(displayLocation(plan.rootPath, f))))
 		}
 		if f.Detail != "" {
 			fmt.Fprintf(w, "             %s\n", st.Dim(output.TerminalText(f.Detail)))
@@ -1313,40 +1397,16 @@ func localOrEmbeddedOverride(store *intel.Store) *incident.IntelOverride {
 	}
 }
 
-// checkSeverityRank orders Finding.Severity strings against the
-// --fail-on threshold. Unknown severities (defensive: future entries
-// the runtime predates) sort below INFO so they cannot trip the gate.
-var checkSeverityRank = map[string]int{
-	incident.SevInfo:     0,
-	incident.SevWarning:  1,
-	incident.SevCritical: 2,
-}
-
-// checkIncidentFailOnThreshold returns ErrThresholdExceeded when any
-// finding in result meets or exceeds the configured severity threshold.
-// An empty threshold disables the gate (return nil).
+// checkIncidentFailOnThreshold returns an error wrapping
+// ErrThresholdExceeded when any finding in result meets or exceeds the
+// configured severity threshold. An empty threshold disables the gate
+// (return nil).
 //
-// Kept separate from scan's checkFailOnThreshold because the check
-// pipeline uses string severities (CRITICAL/WARNING/INFO) rather than
-// scan's numeric Severity enum. Both gates fail with the same
-// sentinel so main.go's exit-code logic stays uniform.
+// The threshold uses the five-level vocabulary; package severities map
+// onto it with packageSeverity (WARNING is HIGH). Unknown severities
+// (defensive: future entries the runtime predates) never trip the gate.
+// Both gates fail with the same sentinel so main.go's exit-code logic
+// stays uniform.
 func checkIncidentFailOnThreshold(result *incident.CheckResult, threshold string) error {
-	if threshold == "" {
-		return nil
-	}
-	thrKey := strings.ToUpper(strings.TrimSpace(threshold))
-	thr, ok := checkSeverityRank[thrKey]
-	if !ok {
-		return fmt.Errorf("invalid --fail-on %q: choose critical, warning, or info", threshold)
-	}
-	for _, f := range result.Findings {
-		rank, ok := checkSeverityRank[strings.ToUpper(f.Severity)]
-		if !ok {
-			continue
-		}
-		if rank >= thr {
-			return ErrThresholdExceeded
-		}
-	}
-	return nil
+	return checkGate(result, threshold, "--fail-on")
 }

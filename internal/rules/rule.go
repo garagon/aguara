@@ -86,7 +86,11 @@ type RawRule struct {
 	Patterns        []RawPattern        `yaml:"patterns"`
 	ExcludePatterns []RawExcludePattern `yaml:"exclude_patterns"`
 	Remediation     string              `yaml:"remediation"`
-	Examples        RawExamples         `yaml:"examples"`
+	// CWE optionally lists the CWE weaknesses the rule detects, as
+	// "CWE-<number>" identifiers. Only unambiguous mappings belong here;
+	// SARIF output turns them into external/cwe tags and taxonomy links.
+	CWE      []string    `yaml:"cwe"`
+	Examples RawExamples `yaml:"examples"`
 	// Source is the file the rule was loaded from and Document the 1-based
 	// position of the rule's YAML document in that file. Both are set by
 	// the loaders, not read from YAML, and are used in configuration
@@ -130,5 +134,7 @@ type CompiledRule struct {
 	Patterns        []CompiledPattern
 	ExcludePatterns []CompiledExclude
 	Remediation     string
-	Examples        RawExamples
+	// CWE lists validated "CWE-<number>" identifiers (see RawRule.CWE).
+	CWE      []string
+	Examples RawExamples
 }

@@ -101,10 +101,15 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		hit := hits[0]
 		result.Findings = append(result.Findings, Finding{
 			Severity:    SevCritical,
+			Kind:        KindCompromisedPackage,
 			Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
 			Detail:      hit.Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
+			AdvisoryIDs: matchIDs(hits),
+			Ecosystem:   intel.EcosystemNPM,
+			Package:     pkg.Name,
+			Version:     pkg.Version,
 		})
 		npmFindings++
 	}

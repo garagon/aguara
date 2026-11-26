@@ -46,14 +46,17 @@ import (
 //     examples. Analyzer rules can include hand-curated fixtures
 //     here when useful, or leave them empty.
 type Rule struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Severity       string   `json:"severity"`
-	Category       string   `json:"category"`
-	Analyzer       string   `json:"analyzer,omitempty"`
-	DecisionImpact string   `json:"decision_impact"`
-	Description    string   `json:"description,omitempty"`
-	Remediation    string   `json:"remediation,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Severity       string `json:"severity"`
+	Category       string `json:"category"`
+	Analyzer       string `json:"analyzer,omitempty"`
+	DecisionImpact string `json:"decision_impact"`
+	Description    string `json:"description,omitempty"`
+	Remediation    string `json:"remediation,omitempty"`
+	// CWE lists "CWE-<number>" identifiers for rules with an unambiguous
+	// CWE mapping; most rules have none.
+	CWE            []string `json:"cwe,omitempty"`
 	Patterns       []string `json:"patterns,omitempty"`
 	TruePositives  []string `json:"true_positives,omitempty"`
 	FalsePositives []string `json:"false_positives,omitempty"`

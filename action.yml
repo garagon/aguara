@@ -16,13 +16,17 @@ inputs:
     required: false
     default: 'info'
   fail-on:
-    description: 'Exit code 1 if findings at or above this severity (critical, high, medium, low)'
+    description: 'Exit code 1 if findings at or above this severity: critical, high, medium, low, info (warning is an alias of high)'
     required: false
     default: ''
   format:
-    description: 'Output format: terminal, json, sarif, markdown'
+    description: 'Output format: terminal, json, sarif, markdown. SARIF locations are relative to the repository root, so a path below the root maps to repository files.'
     required: false
     default: 'sarif'
+  sarif-category:
+    description: 'SARIF analysis category (runs[0].automationDetails.id). Set a different value for each Aguara upload in the same workflow, for example one per package directory, so code scanning keeps their alerts apart. Leave empty to keep the existing analysis. Needs an Aguara version later than v0.29.0.'
+    required: false
+    default: ''
   output:
     description: 'Output file path'
     required: false
@@ -67,7 +71,7 @@ outputs:
     description: 'Number of findings detected'
     value: ${{ steps.scan.outputs.findings-count }}
   exit-code:
-    description: 'Exit code from aguara scan'
+    description: 'Exit code from aguara scan: 0 completed with no gate tripped, 1 the fail-on threshold was reached, 2 the scan failed or an input was invalid'
     value: ${{ steps.scan.outputs.exit-code }}
 
 runs:
@@ -138,6 +142,7 @@ runs:
         INPUT_RULES: ${{ inputs.rules }}
         INPUT_DISABLE_RULE: ${{ inputs.disable-rule }}
         INPUT_MAX_FILE_SIZE: ${{ inputs.max-file-size }}
+        INPUT_SARIF_CATEGORY: ${{ inputs.sarif-category }}
       run: |
         args=("scan" "$INPUT_PATH")
         args+=("--severity" "$INPUT_SEVERITY")
@@ -168,6 +173,10 @@ runs:
 
         if [ -n "$INPUT_MAX_FILE_SIZE" ]; then
           args+=("--max-file-size" "$INPUT_MAX_FILE_SIZE")
+        fi
+
+        if [ -n "$INPUT_SARIF_CATEGORY" ]; then
+          args+=("--sarif-category" "$INPUT_SARIF_CATEGORY")
         fi
 
         set +e

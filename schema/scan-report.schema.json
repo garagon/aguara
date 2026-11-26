@@ -1,0 +1,424 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/garagon/aguara/main/schema/scan-report.schema.json",
+  "title": "Aguara scan JSON report",
+  "description": "Output of `aguara scan --format json`, schema_version 1.x. The schema is open: consumers must ignore properties they do not know, because minor versions add properties. Severity is numeric (0 INFO, 1 LOW, 2 MEDIUM, 3 HIGH, 4 CRITICAL) with severity_label next to it.",
+  "allOf": [
+    {
+      "$ref": "#/definitions/reportHeader"
+    },
+    {
+      "$ref": "#/definitions/scanResult"
+    }
+  ],
+  "definitions": {
+    "reportHeader": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tool",
+        "catalog"
+      ],
+      "properties": {
+        "schema_version": {
+          "description": "Report contract version, major.minor. Additive changes bump the minor version; removals, renames and type changes bump the major version.",
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "tool": {
+          "$ref": "#/definitions/toolInfo"
+        },
+        "catalog": {
+          "$ref": "#/definitions/catalogInfo"
+        }
+      }
+    },
+    "toolInfo": {
+      "description": "The build that produced the report.",
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "aguara"
+          ]
+        },
+        "version": {
+          "description": "Release version such as v0.29.0, or dev for an unversioned build.",
+          "type": "string"
+        },
+        "commit": {
+          "description": "Source commit, when known.",
+          "type": "string"
+        }
+      }
+    },
+    "catalogInfo": {
+      "description": "The rule catalog the report used.",
+      "type": "object",
+      "required": [
+        "detections",
+        "pattern_rules",
+        "analyzer_rules",
+        "digest"
+      ],
+      "properties": {
+        "detections": {
+          "description": "Rules in the effective catalog: pattern plus analyzer rules, after disabled rules are removed.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pattern_rules": {
+          "description": "Compiled YAML pattern rules (rules_loaded).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "analyzer_rules": {
+          "description": "Analyzer-emitted rules.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "description": "SHA-256 of the canonical effective catalog; changes when any rule is added, removed, disabled, re-rated or edited.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "severity": {
+      "description": "0 INFO, 1 LOW, 2 MEDIUM, 3 HIGH, 4 CRITICAL.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4
+    },
+    "severityLabel": {
+      "type": "string",
+      "enum": [
+        "INFO",
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ]
+    },
+    "contextLine": {
+      "type": "object",
+      "required": [
+        "line",
+        "content",
+        "is_match"
+      ],
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "content": {
+          "description": "May be [REDACTED].",
+          "type": "string"
+        },
+        "is_match": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mergedFinding": {
+      "description": "A finding deduplication merged into the reported one on the same file and line. Never carries matched text.",
+      "type": "object",
+      "required": [
+        "rule_id",
+        "severity",
+        "severity_label",
+        "category"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/severity"
+        },
+        "severity_label": {
+          "$ref": "#/definitions/severityLabel"
+        },
+        "category": {
+          "type": "string"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "rule_name",
+        "severity",
+        "severity_label",
+        "category",
+        "file_path",
+        "line",
+        "matched_text",
+        "analyzer"
+      ],
+      "properties": {
+        "rule_id": {
+          "description": "Catalog rule ID; `aguara explain <rule_id>` documents it.",
+          "type": "string"
+        },
+        "rule_name": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/severity"
+        },
+        "severity_label": {
+          "$ref": "#/definitions/severityLabel"
+        },
+        "category": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Path relative to the scan target (the base name for a single-file scan).",
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "description": "1-based column, present only when the analyzer knows it.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "matched_text": {
+          "description": "May be [REDACTED]; not a stable identifier.",
+          "type": "string"
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/contextLine"
+          }
+        },
+        "score": {
+          "description": "0-100, rounded to 2 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "confidence": {
+          "description": "0-1, rounded to 4 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "decision_impact": {
+          "type": "string",
+          "enum": [
+            "context",
+            "review"
+          ]
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "analyzer": {
+          "type": "string"
+        },
+        "in_code_block": {
+          "type": "boolean"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "also_matched": {
+          "description": "Findings merged into this one by deduplication, by severity (highest first) then rule ID.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/mergedFinding"
+          }
+        },
+        "baseline_state": {
+          "description": "Present when a baseline was applied.",
+          "type": "string",
+          "enum": [
+            "new",
+            "baselined",
+            "non_baselineable"
+          ]
+        },
+        "fingerprint": {
+          "description": "The value baseline files and SARIF partialFingerprints (aguara/v1) use. Absent for findings whose matched text is redacted.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "baselineSummary": {
+      "type": "object",
+      "required": [
+        "applied",
+        "total",
+        "new",
+        "baselined",
+        "non_baselineable",
+        "gate_count"
+      ],
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "baselined": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "non_baselineable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gate_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scanCoverage": {
+      "type": "object",
+      "required": [
+        "files_scanned",
+        "scope"
+      ],
+      "properties": {
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scope": {
+          "description": "path, changed or auto; new scopes may be added.",
+          "type": "string"
+        }
+      }
+    },
+    "suppressionSummary": {
+      "description": "Findings matched but not reported on their own, by the step that removed them (each counted once), plus files excluded by ignore patterns.",
+      "type": "object",
+      "required": [
+        "deduplicated",
+        "below_min_severity",
+        "disabled_rules",
+        "tool_exemptions",
+        "inline_directives",
+        "excluded_files"
+      ],
+      "properties": {
+        "deduplicated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "below_min_severity": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disabled_rules": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_exemptions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inline_directives": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_files": {
+          "description": "Counts files, not findings.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scanResult": {
+      "type": "object",
+      "required": [
+        "findings",
+        "files_scanned",
+        "rules_loaded",
+        "verdict",
+        "verdict_label",
+        "risk_score",
+        "duration_ms"
+      ],
+      "properties": {
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/finding"
+          }
+        },
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rules_loaded": {
+          "description": "Compiled pattern rules, not the whole catalog.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "verdict": {
+          "description": "0 clean, 1 flag, 2 block.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "verdict_label": {
+          "type": "string",
+          "enum": [
+            "clean",
+            "flag",
+            "block"
+          ]
+        },
+        "risk_score": {
+          "description": "0-100, rounded to 2 decimal places.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "baseline": {
+          "$ref": "#/definitions/baselineSummary"
+        },
+        "coverage": {
+          "$ref": "#/definitions/scanCoverage"
+        },
+        "suppressed": {
+          "$ref": "#/definitions/suppressionSummary"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -193,3 +193,43 @@ func TestApplyPartitions(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyRecordsBaselineState(t *testing.T) {
+	known := finding("R1", "a.md", "old danger")
+	fresh := finding("R1", "a.md", "new danger")
+	sensitive := finding("CRED", "a.md", "secret")
+	sensitive.Sensitive = true
+
+	path := filepath.Join(t.TempDir(), "bl.json")
+	if _, _, err := Write(path, []types.Finding{known}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	set, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := []types.Finding{known, fresh, sensitive}
+	gate, _ := Apply(findings, set, path)
+
+	want := []string{StateBaselined, StateNew, StateNonBaselineable}
+	for i, f := range findings {
+		if f.BaselineState != want[i] {
+			t.Errorf("finding %d BaselineState = %q, want %q", i, f.BaselineState, want[i])
+		}
+	}
+	for _, g := range gate {
+		if g.BaselineState == StateBaselined || g.BaselineState == "" {
+			t.Errorf("gate finding %s has state %q", g.RuleID, g.BaselineState)
+		}
+	}
+}
+
+func TestComputeFingerprintMatchesFindingFingerprint(t *testing.T) {
+	f := types.Finding{RuleID: "PROMPT_INJECTION_001", Analyzer: "pattern", FilePath: "demo/SKILL.md", MatchedText: "Ignore all previous instructions"}
+	if got := string(ComputeFingerprint(f)); got != "0e50d62d07f615a5b70a595aa5df3d0f70da134565c97a8f3f4a3718630cf517" {
+		t.Fatalf("fingerprint changed: %s", got)
+	}
+	if string(ComputeFingerprint(f)) != types.FindingFingerprint(f) {
+		t.Fatal("baseline and JSON fingerprints diverge")
+	}
+}

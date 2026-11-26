@@ -54,6 +54,11 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		targets = append(targets, t)
 	}
 
+	cwes, err := normalizeCWEs(raw.CWE)
+	if err != nil {
+		return nil, fmt.Errorf("rule %s: %w", raw.ID, err)
+	}
+
 	compiled := &CompiledRule{
 		ID:             raw.ID,
 		Name:           raw.Name,
@@ -66,6 +71,7 @@ func Compile(raw RawRule) (*CompiledRule, error) {
 		WithinLines:    raw.WithinLines,
 		Sensitive:      raw.Sensitive,
 		Remediation:    raw.Remediation,
+		CWE:            cwes,
 		Examples:       raw.Examples,
 	}
 
@@ -197,4 +203,31 @@ func FilterByIDs(compiled []*CompiledRule, disabled map[string]bool) []*Compiled
 		}
 	}
 	return result
+}
+
+// cweIDPattern is the accepted spelling of a CWE identifier: "CWE-" and a
+// decimal number without leading zeros, for example CWE-798.
+var cweIDPattern = regexp.MustCompile(`^CWE-[1-9][0-9]*$`)
+
+// normalizeCWEs validates a rule's `cwe` list. Entries are upper-cased and
+// trimmed, must look like CWE-798, and may not repeat. An empty list is
+// valid: most rules have no unambiguous CWE mapping.
+func normalizeCWEs(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, entry := range raw {
+		id := strings.ToUpper(strings.TrimSpace(entry))
+		if !cweIDPattern.MatchString(id) {
+			return nil, fmt.Errorf("invalid cwe %q: use the form CWE-798", entry)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate cwe %q", entry)
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out, nil
 }
