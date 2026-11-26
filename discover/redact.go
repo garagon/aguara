@@ -63,9 +63,14 @@ func credentialSegment(seg string) bool {
 	return !readableSegment(seg)
 }
 
+// versionPart is a mixed letter-digit part that reads as a version or
+// product name, such as v2, x86, h264 or py311.
+var versionPart = regexp.MustCompile(`^[A-Za-z]{1,5}[0-9]{1,4}$`)
+
 // readableSegment reports whether seg is two or more parts separated by
 // "-", "_", "." or "~", each a word or a number of at most 12 characters,
-// or a short mixed part such as v2 or x86.
+// or a version-like part such as v2 or x86. Interleaved letter-digit
+// groups such as a1b2 are not readable.
 func readableSegment(seg string) bool {
 	parts := strings.FieldsFunc(seg, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == '~' })
 	if len(parts) < 2 {
@@ -74,7 +79,7 @@ func readableSegment(seg string) bool {
 	for _, p := range parts {
 		letters := strings.ContainsFunc(p, unicode.IsLetter)
 		digits := strings.ContainsFunc(p, unicode.IsDigit)
-		if len(p) > 12 || (letters && digits && len(p) > 4) || strings.ContainsAny(p, "=+") {
+		if len(p) > 12 || (letters && digits && !versionPart.MatchString(p)) || strings.ContainsAny(p, "=+") {
 			return false
 		}
 	}

@@ -114,6 +114,8 @@ func TestRedactURLPathSegments(t *testing.T) {
 		"https://example.com/files/aGVsbG8x/index.html",
 		"https://example.com/internationalization/settings",
 		"https://example.com/node_modules/package/dist/index.js",
+		"https://example.com/builds/release-notes-h264-x86-2024.txt",
+		"https://example.com/servers/mcp-server-v12-production-eu/sse",
 	} {
 		if got := redactURL(keep); got != keep {
 			t.Errorf("redactURL(%q) = %q, want it unchanged", keep, got)
@@ -125,6 +127,13 @@ func TestRedactURLPathSegments(t *testing.T) {
 		"https://example.com/w/123e4567-e89b-12d3-a456-426614174000/mcp":  "https://example.com/w/[REDACTED]/mcp",
 		"https://example.com/k/sk-ant-api03-abcdefghijklmnopqrstuv/mcp":   "https://example.com/k/[REDACTED]/mcp",
 		"https://example.com/hooks/a1b2c3d4e5f6g7h8i9j0k1l2.m3n4o5":       "https://example.com/hooks/[REDACTED]",
+		// Interleaved short letter-digit groups are not a slug, whatever
+		// the separator.
+		"https://example.com/k/a1b2-c3d4-e5f6-g7h8-i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/k/a1b2.c3d4.e5f6.g7h8.i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/k/a1b2_c3d4_e5f6_g7h8_i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/k/a1b2~c3d4~e5f6~g7h8~i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/k/1a2b-3c4d-5e6f-7g8h-9i0j/mcp": "https://example.com/k/[REDACTED]/mcp",
 	} {
 		if got := redactValue(in); got != want {
 			t.Errorf("redactValue(%q) = %q, want %q", in, got, want)
