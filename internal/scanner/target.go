@@ -151,6 +151,7 @@ type TargetDiscovery struct {
 	callerPatterns int    // IgnorePatterns[:callerPatterns] are the caller's
 	relPrefix      string // prepended to every relative path (a changed directory walked by ScanPaths)
 	linkRoot       string // the scan target links are resolved against; the walked root when empty
+	entries        int    // entries the walk saw below the root, read or not
 }
 
 // entryAction is what the walk does with one entry. Discover and
@@ -310,6 +311,9 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 
 	var targets []*Target
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if path != root {
+			td.entries++
+		}
 		relPath, _ := filepath.Rel(root, path)
 		if td.relPrefix != "" {
 			relPath = filepath.Join(td.relPrefix, relPath)

@@ -305,12 +305,17 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // A path that is a directory (git lists a changed submodule as its path)
 // is walked like a scanned directory, and its files, skipped entries and
 // failures are reported under that path. submodules names the paths that
-// are git submodules: a listed submodule whose directory is absent or
-// holds nothing, because it is not checked out, could not be scanned and
-// makes the scan incomplete, as does an empty listed directory. Any path
-// that cannot be inspected makes the scan incomplete too (an
-// *IncompleteError with the partial result), as in Scan.
-func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string, submodules map[string]bool) (*ScanResult, error) {
+// are git submodules. A listed submodule whose directory is absent or has
+// no entries at all is not checked out, so it could not be scanned and
+// makes the scan incomplete, as does an empty listed directory. One that
+// is checked out at a commit other than the recorded one (or whose
+// checked-out commit is unknown) is scanned as it is, and the scan is
+// incomplete because the recorded commit was not read. One checked out at
+// the recorded commit is just scanned, edits included, even when it holds
+// no scannable files. Any path that cannot be inspected makes the scan
+// incomplete too (an *IncompleteError with the partial result), as in
+// Scan.
+func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string, submodules map[string]Submodule) (*ScanResult, error) {
 	var targets []*Target
 	var skipped []types.SkippedFile
 	var failures []*scanFailure
@@ -326,7 +331,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 		info, err := os.Lstat(absPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				if submodules[relPath] {
+				if _, isSubmodule := submodules[relPath]; isSubmodule {
 					failures = append(failures, notCheckedOut(relPath))
 				}
 				continue
@@ -341,9 +346,12 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 				failures = append(failures, asScanFailure(err, "discover target", relPath))
 				continue
 			}
-			if len(found) == 0 && len(discovery.Skipped) == 0 && len(discovery.Failures) == 0 {
+			if discovery.entries == 0 {
 				failures = append(failures, notCheckedOut(relPath))
 				continue
+			}
+			if sm, isSubmodule := submodules[relPath]; isSubmodule && !sm.AtRecordedCommit() {
+				failures = append(failures, asScanFailure(IncompleteScanError("scan changed submodule", relPath, "", errNotAtRecordedCommit), "", ""))
 			}
 			for _, target := range found {
 				target.Path = filepath.Join(root, target.RelPath)
@@ -369,8 +377,13 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 }
 
 // errNotCheckedOut marks a changed submodule whose content is not in the
-// work tree.
-var errNotCheckedOut = errors.New("changed submodule; its content is not checked out and was not scanned")
+// work tree. errNotAtRecordedCommit marks one whose work tree holds
+// another commit than the one the index records: the work tree was
+// scanned, the recorded commit was not.
+var (
+	errNotCheckedOut       = errors.New("changed submodule; its content is not checked out and was not scanned")
+	errNotAtRecordedCommit = errors.New("changed submodule; the commit recorded for it is not checked out and was not scanned")
+)
 
 func notCheckedOut(relPath string) *scanFailure {
 	return asScanFailure(IncompleteScanError("scan changed submodule", relPath, "", errNotCheckedOut), "", "")

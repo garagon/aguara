@@ -464,7 +464,7 @@ const (
 	FailureReasonNotRegular = "not_regular" // the file changed into a non-regular file after discovery
 	FailureReasonIO         = "io"          // the file or directory could not be read
 	FailureReasonCanceled   = "canceled"    // the context was canceled or its deadline passed
-	FailureReasonNotScanned = "not_scanned" // a changed submodule whose content is not checked out
+	FailureReasonNotScanned = "not_scanned" // a changed submodule whose recorded commit is not checked out (or nothing is)
 	FailureReasonError      = "error"       // any other analyzer error
 )
 

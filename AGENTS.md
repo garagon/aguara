@@ -173,7 +173,10 @@ exported through public aliases, rather than copying a partial struct.
   link that is not `inside`. A link an ignore pattern matches is not listed,
   so with trusted project policy the target's own `.aguaraignore` can keep
   it out of triage. `scan --changed` scans a changed
-  submodule whole; one that is not checked out is a `not_scanned` failure.
+  submodule whole; one that is not checked out at the commit the index
+  records (nothing checked out, or another commit, whose files are still
+  scanned) is a `not_scanned` failure. One at its recorded commit is just
+  scanned, local edits included, even when it holds no scannable files.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a

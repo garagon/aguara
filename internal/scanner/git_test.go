@@ -167,3 +167,29 @@ func TestGitChangedFilesWithoutCommits(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"staged.md"}, files)
 }
+
+// GitSubmoduleHead reads a commit only for the top of a work tree: a
+// directory inside the superproject (a submodule that is not checked out,
+// with stray files) must not report the superproject's HEAD.
+func TestGitSubmoduleHeadOnlyForWorkTreeTop(t *testing.T) {
+	skipIfNoGit(t)
+	dir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.Output()
+		require.NoError(t, err, "git %v", args)
+		return string(out)
+	}
+	run("init", "-q")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "a.md"), []byte("a"), 0o600))
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+	head := run("rev-parse", "HEAD")
+	require.Equal(t, head[:len(head)-1], scanner.GitSubmoduleHead(dir))
+	require.Empty(t, scanner.GitSubmoduleHead(filepath.Join(dir, "sub")))
+	require.Empty(t, scanner.GitSubmoduleHead(t.TempDir()), "not a work tree")
+}

@@ -80,7 +80,7 @@ func failureReasonText(f types.ScanFailure) string {
 	case types.FailureReasonCanceled:
 		return "not evaluated: the scan was canceled"
 	case types.FailureReasonNotScanned:
-		return "changed submodule; its content is not checked out and was not scanned"
+		return "changed submodule; the commit recorded for it is not checked out, so that commit was not scanned (run `git submodule update --init` and scan again)"
 	default:
 		return "the analyzer failed"
 	}
