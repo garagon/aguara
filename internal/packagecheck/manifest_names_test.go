@@ -152,9 +152,18 @@ func TestUnknownDependencyNamesNeedTheNamedFile(t *testing.T) {
 		{"pip-tools input compiles to the same stem", map[string]string{
 			"requirements.in": "-r base.in\n", "base.in": "requests\n", "requirements.txt": "requests==2.31.0\n"},
 			true, ""},
-		{"pip-tools input beside another compiled name", map[string]string{
-			"requirements.in": "-r base.in\n", "base.in": "requests\n", "requirements-lock.txt": "requests==2.31.0\n"},
+		{"pip-tools input with an unread include beside another compiled name", map[string]string{
+			"requirements.in": "-r https://example.invalid/base.in\n", "requirements-lock.txt": "requests==2.31.0\n"},
 			false, "does not name requirements-lock.txt as their source"},
+		// -r includes of a requirements.in are followed for its names, and
+		// -c includes add none.
+		{"pip-tools input whose include is pinned elsewhere", map[string]string{
+			"requirements.in": "-r base.in\n-c constraints.txt\n", "base.in": "requests\n", "constraints.txt": "idna==3.7\n",
+			"requirements-lock.txt": "requests==2.31.0\n"},
+			true, ""},
+		{"pip-tools input whose include is not pinned", map[string]string{
+			"requirements.in": "-r base.in\n", "base.in": "requests\nflask\n", "requirements-lock.txt": "requests==2.31.0\n"},
+			false, "does not pin flask"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := manifestEntries(t, tc.files, nil)

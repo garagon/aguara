@@ -133,7 +133,7 @@ func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) 
 			}
 			return nil
 		}
-		if m, ok := readManifestAt(path, want, budget); ok {
+		if m, ok := readManifestAt(path, root, want, budget); ok {
 			out.Manifests = append(out.Manifests, m)
 			return nil
 		}

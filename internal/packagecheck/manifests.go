@@ -105,8 +105,9 @@ type manifestSpec struct {
 	match     func(base, dir string) bool
 	// read returns the manifest's info. ok is false when the file is not
 	// a manifest of this kind after all (a YAML file named
-	// environment.yml that is not a conda environment).
-	read func(path string) (info manifestInfo, ok bool, err error)
+	// environment.yml that is not a conda environment). root is the
+	// directory discovery walks; includes are read only inside it.
+	read func(path, root string) (info manifestInfo, ok bool, err error)
 	// marker reports a workspace marker that declares nothing itself
 	// (pnpm-workspace.yaml).
 	marker bool
@@ -131,8 +132,8 @@ func isRequirementsInName(base, dir string) bool {
 		(strings.Contains(base, "requirements") || filepath.Base(dir) == "requirements")
 }
 
-func readWith(parse func([]byte) (manifestInfo, error), label string) func(string) (manifestInfo, bool, error) {
-	return func(path string) (manifestInfo, bool, error) {
+func readWith(parse func([]byte) (manifestInfo, error), label string) func(string, string) (manifestInfo, bool, error) {
+	return func(path, _ string) (manifestInfo, bool, error) {
 		data, err := readDependencyManifest(path, label)
 		if err != nil {
 			return manifestInfo{}, true, err
@@ -161,13 +162,13 @@ var manifestSpecs = []manifestSpec{
 	{kind: "setup.py", ecosystem: intel.EcosystemPyPI, match: named("setup.py"), read: readWith(parseSetupPyManifest, "setup.py")},
 	{kind: "setup.cfg", ecosystem: intel.EcosystemPyPI, match: named("setup.cfg"), read: readWith(parseSetupCfgManifest, "setup.cfg")},
 	{kind: "Pipfile", ecosystem: intel.EcosystemPyPI, match: named("Pipfile"), read: readWith(parsePipfileManifest, "Pipfile")},
-	{kind: "requirements.in", ecosystem: intel.EcosystemPyPI, match: isRequirementsInName, read: func(path string) (manifestInfo, bool, error) {
-		info, err := parseRequirementsInManifest(path)
+	{kind: "requirements.in", ecosystem: intel.EcosystemPyPI, match: isRequirementsInName, read: func(path, root string) (manifestInfo, bool, error) {
+		info, err := parseRequirementsInManifest(path, root)
 		return info, true, err
 	}},
 	{kind: "Cargo.toml", ecosystem: intel.EcosystemCargo, match: named("Cargo.toml"), read: readWith(parseCargoManifest, "Cargo.toml")},
 	{kind: "Gemfile", ecosystem: intel.EcosystemRubyGems, match: named("Gemfile", "gems.rb"), read: readWith(parseGemfileManifest, "Gemfile")},
-	{kind: "environment.yml", ecosystem: ecosystemConda, match: named("environment.yml", "environment.yaml"), read: func(path string) (manifestInfo, bool, error) {
+	{kind: "environment.yml", ecosystem: ecosystemConda, match: named("environment.yml", "environment.yaml"), read: func(path, _ string) (manifestInfo, bool, error) {
 		data, err := readDependencyManifest(path, "environment.yml")
 		if err != nil {
 			// Unreadable YAML under a common name is not claimed to be
@@ -191,7 +192,7 @@ func wantsManifestEcosystem(want map[string]bool, eco string) bool {
 // readManifestAt identifies and reads the manifest at path, or returns
 // ok=false when the file is not a manifest. budget counts the reads so far
 // in this discovery.
-func readManifestAt(path string, want map[string]bool, budget *discoveryBudget) (Manifest, bool) {
+func readManifestAt(path, root string, want map[string]bool, budget *discoveryBudget) (Manifest, bool) {
 	base, dir := filepath.Base(path), filepath.Dir(path)
 	for _, spec := range manifestSpecs {
 		if !spec.match(base, dir) || !wantsManifestEcosystem(want, spec.ecosystem) {
@@ -211,7 +212,7 @@ func readManifestAt(path string, want map[string]bool, budget *discoveryBudget) 
 			m.Declares, m.Unreadable = true, true
 			return m, spec.ecosystem != ecosystemConda
 		}
-		info, ok, err := spec.read(path)
+		info, ok, err := spec.read(path, root)
 		if !ok {
 			return Manifest{}, false
 		}
@@ -227,7 +228,10 @@ func readManifestAt(path string, want map[string]bool, budget *discoveryBudget) 
 			m.DependencyFiles = append(m.DependencyFiles, filepath.Join(dir, filepath.FromSlash(f)))
 		}
 		for _, pin := range info.pins {
-			pin.Path, pin.Source = path, spec.kind
+			if pin.Path == "" {
+				// Pins read from an include keep their own file.
+				pin.Path, pin.Source = path, spec.kind
+			}
 			m.Pins = append(m.Pins, pin)
 		}
 		return m, true

@@ -959,37 +959,38 @@ func parseGemfileManifest(data []byte) (manifestInfo, error) {
 // --- pip-tools input: requirements.in ---------------------------------
 
 // parseRequirementsInManifest reads a pip-tools input file as pip
-// requirements. Includes are not followed: the compiled file is the
-// lockfile, and an input file on its own resolves what it names.
-func parseRequirementsInManifest(path string) (manifestInfo, error) {
+// requirements, with its -r and -c includes followed inside root as for a
+// requirements file. Its names are what it and its -r includes require;
+// -c constraints add none. An include that is not read (a URL, a path
+// outside root, a missing file), a local project or a skipped line leaves
+// the names unknown. Pins read from an include keep that file's path.
+func parseRequirementsInManifest(path, root string) (manifestInfo, error) {
 	var info manifestInfo
-	file, err := parseRequirementsFile(path)
+	if root == "" {
+		root = filepath.Dir(path)
+	}
+	parsed, err := parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: path, Source: filepath.Base(path), Root: root}, newRequirementsCache())
 	if err != nil {
 		return info, err
-	}
-	if file.syntax != nil {
-		// A skipped line may name a dependency.
-		info.unknown = true
 	}
 	// pip-compile writes the compiled file beside the input, under the
 	// same name with .txt for .in, pinning everything it resolved,
 	// includes and local projects too.
 	info.files = []string{strings.TrimSuffix(filepath.Base(path), ".in") + ".txt"}
-	for _, item := range file.items {
-		if item.include != "" || item.local {
-			// An include or a local project: what it pulls in is not
-			// named here.
-			info.unknown = true
+	info.unknown = parsed.local || parsed.syntax != nil || len(parsed.unresolved) > 0
+	for _, ref := range parsed.refs {
+		if ref.Group == constraintGroup {
 			continue
 		}
-		if item.ref == nil {
-			continue
-		}
-		if err := info.addDep(item.ref.Name, ""); err != nil {
+		if err := info.addDep(ref.Name, ""); err != nil {
 			return info, err
 		}
-		if item.ref.Version != "" && !item.ref.Unpinned {
-			info.addPin(*item.ref)
+		if ref.Version != "" && !ref.Unpinned {
+			if ref.Path == path {
+				// The manifest's own pins are labelled as manifest pins.
+				ref.Path, ref.Source = "", ""
+			}
+			info.addPin(ref)
 		}
 	}
 	return info, nil
