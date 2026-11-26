@@ -309,6 +309,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
+	printDiscoverWarnings(discovered)
 
 	// Collect unique config file paths
 	var paths []string

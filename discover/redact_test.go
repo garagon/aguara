@@ -119,8 +119,8 @@ func TestDiscoverRedactedJSONFields(t *testing.T) {
 	if s := byName["local"]; s.Transport != "" || s.URL != "" {
 		t.Errorf("stdio server must look as before: %+v", s)
 	}
-	if s := byName["odd"]; s.Command != "x" || s.URL != "" || s.Headers != nil {
-		t.Errorf("non-string remote fields are ignored: %+v", s)
+	if s := byName["odd"]; s.Command != "x" || s.URL != "" || s.Headers["n"] != "[REDACTED]" {
+		t.Errorf("a non-string URL is ignored and a numeric header is read as text and masked: %+v", s)
 	}
 }
 

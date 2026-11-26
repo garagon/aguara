@@ -45,6 +45,10 @@ type ClientResult struct {
 	Client  string      `json:"client"`
 	Path    string      `json:"path"`
 	Servers []MCPServer `json:"servers"`
+	// Warnings lists entries of the file that were not in the expected
+	// shape: a value of another type is read as text, an entry that is
+	// not an object is skipped. They never repeat the values.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Result holds the full discovery output.
@@ -91,7 +95,7 @@ func (r *Result) Redacted() *Result {
 			servers[j].URL = redactValue(s.URL)
 			servers[j].Headers = redactHeaders(s.Headers)
 		}
-		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
+		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers, Warnings: c.Warnings}
 	}
 	return out
 }
@@ -116,13 +120,17 @@ func (r *Result) AllServers() []struct {
 	return all
 }
 
-// Scan checks all known MCP client config paths and extracts server definitions.
+// Scan checks all known MCP client config paths and extracts server
+// definitions. Entries of an unexpected shape are read leniently and
+// reported in ClientResult.Warnings, and a file with warnings is listed
+// even when no server could be read, so scan --auto still scans it.
 func Scan() (*Result, error) {
 	result := &Result{}
 
 	for _, client := range KnownClients() {
 		for _, path := range client.Paths {
 			var servers []MCPServer
+			var warnings []string
 			var err error
 
 			switch {
@@ -136,21 +144,22 @@ func Scan() (*Result, error) {
 				}
 				continue
 			case client.ConfigKey == "opencode":
-				servers, err = parseOpenCodeConfig(path)
+				servers, warnings, err = parseOpenCodeConfigWarnings(path)
 			case client.ConfigKey == "claude-code":
-				servers, err = parseClaudeCodeConfig(path)
+				servers, warnings, err = parseClaudeCodeConfigWarnings(path)
 			default:
-				servers, err = parseConfigWithKey(path, client.ConfigKey)
+				servers, warnings, err = parseConfigWithKeyWarnings(path, client.ConfigKey)
 			}
 
 			if err != nil {
 				continue
 			}
-			if len(servers) > 0 {
+			if len(servers) > 0 || len(warnings) > 0 {
 				result.Clients = append(result.Clients, ClientResult{
-					Client:  client.Name,
-					Path:    path,
-					Servers: servers,
+					Client:   client.Name,
+					Path:     path,
+					Servers:  servers,
+					Warnings: warnings,
 				})
 			}
 		}
