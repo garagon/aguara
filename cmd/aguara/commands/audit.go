@@ -606,7 +606,7 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 		})
 		escalateForCoverage(&t,
 			"Some entries under the target were not evaluated, so the audit cannot clear it.",
-			"Review the entries listed under coverage.skipped before trusting the target: links that are dangling or resolve outside it, named pipes, sockets and devices.")
+			"Review the entries listed under coverage.skipped before trusting the target: links that are dangling, resolve outside it or reach content the scan skips, named pipes, sockets and devices.")
 	}
 	applyAuditCoverageTriage(&t, result)
 	return t

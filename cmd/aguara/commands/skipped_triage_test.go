@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,6 +80,7 @@ func TestAuditReviewsLinksToContentTheScanSkips(t *testing.T) {
 			require.True(t, auditCoverageIncomplete(r.Triage))
 			require.False(t, r.Plan.CanExecuteProjectCode)
 			require.Contains(t, hiddenSkippedNames(r.Coverage.Skipped), "SKILL.md (symbolic link to content the scan skips)")
+			require.Contains(t, strings.Join(r.Triage.RecommendedNextSteps, "\n"), "reach content the scan skips")
 		})
 	}
 }
