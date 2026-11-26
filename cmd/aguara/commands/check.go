@@ -1063,6 +1063,9 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 		if hit.Ref.Replacement != "" {
 			remediation += fmt.Sprintf(" go.mod replaces %s with %s, so builds use the replacement; check that the replacement does not ship the compromised code, and remove the requirement once nothing needs it.", name, hit.Ref.Replacement)
 		}
+		if hit.Ref.Excluded {
+			remediation += fmt.Sprintf(" go.mod also excludes %s %s, so the go command (1.16 and later) ignores this requirement and selects another version; remove the require line, and check which version of %s go.sum and the build use.", name, version, name)
+		}
 		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id), remediation
 	case ecoCargo:
 		return fmt.Sprintf("%s %s is a known compromised Rust crate (%s)", name, version, id),

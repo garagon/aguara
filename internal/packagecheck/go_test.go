@@ -265,6 +265,57 @@ func TestParseGoMod_RecordsReplacements(t *testing.T) {
 	}
 }
 
+// go.mod separates a directive from its arguments with any white space,
+// and a block's "(" may follow the verb directly. A version go.mod both
+// requires and excludes is still reported, marked as excluded.
+func TestParseGoMod_DirectiveSpellingAndExcludes(t *testing.T) {
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\n"+
+		"require\texample.com/tab v1.0.0\n"+
+		"require(\n\texample.com/paren v2.0.0\n)\n"+
+		"require example.com/excluded v1.1.0\n"+
+		"require example.com/kept v1.2.0\n"+
+		"exclude\texample.com/excluded v1.1.0\n"+
+		"exclude(\n\texample.com/kept v1.0.0 // a lower version only\n\t\"example.com/tab\" \"v1.0.0\"\n)\n")
+	for _, target := range []Target{
+		{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"},
+	} {
+		refs, err := ParseGo(target)
+		if err != nil {
+			t.Fatalf("ParseGo: %v", err)
+		}
+		got := map[string]bool{}
+		for _, r := range refs {
+			got[r.Name+" "+r.Version] = r.Excluded
+		}
+		want := map[string]bool{
+			"example.com/tab v1.0.0": true, "example.com/paren v2.0.0": false,
+			"example.com/excluded v1.1.0": true, "example.com/kept v1.2.0": false,
+		}
+		if len(got) != len(want) {
+			t.Fatalf("refs = %v, want %v", got, want)
+		}
+		for k, v := range want {
+			if ex, ok := got[k]; !ok || ex != v {
+				t.Errorf("%s: present %v excluded %v, want excluded %v", k, ok, ex, v)
+			}
+		}
+	}
+
+	// go.sum targets mark the versions the go.mod beside them excludes.
+	writeFile(t, filepath.Join(tmp, "go.sum"), "example.com/excluded v1.1.0 h1:AAAA=\nexample.com/excluded v1.1.0/go.mod h1:BBBB=\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(tmp, "go.sum"), Source: "go.sum"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	for _, r := range refs {
+		if r.Name == "example.com/excluded" && (!r.Excluded || r.GraphOnly) {
+			t.Errorf("go.sum excluded ref = %+v", r)
+		}
+	}
+}
+
 func TestParseGo_RejectsUnknownSource(t *testing.T) {
 	_, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: "/dev/null", Source: "Cargo.lock"})
 	if err == nil {

@@ -68,6 +68,10 @@ type PackageRef struct {
 	// replace directive substitutes for this module; empty when none.
 	// The ref is matched as written; the finding mentions the replacement.
 	Replacement string
+	// Excluded marks a Go version that the go.mod beside it also excludes:
+	// since Go 1.16 the go command ignores a requirement on an excluded
+	// version. The ref is still matched, and the finding says so.
+	Excluded bool
 }
 
 // Target is one discovery anchor under the scanned root. Discovery

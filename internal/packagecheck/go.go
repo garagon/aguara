@@ -100,15 +100,15 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 	}
 
 	required := make(map[key]bool)
-	var replaces []goReplace
+	var mod goModFile
 	modPath := filepath.Join(filepath.Dir(target.Path), "go.mod")
 	if manifestCandidate(modPath) {
-		mod, reps, err := readGoMod(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+		var err error
+		mod, err = readGoMod(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
 		if err != nil {
 			return nil, err
 		}
-		replaces = reps
-		for _, r := range mod {
+		for _, r := range mod.requires {
 			k := key{r.Name, r.Version}
 			required[k] = true
 			if _, ok := index[k]; !ok {
@@ -121,8 +121,25 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 		k := key{refs[i].Name, refs[i].Version}
 		refs[i].GraphOnly = refs[i].Source == "go.sum" && !hasZip[k] && !required[k]
 	}
-	applyGoReplaces(refs, replaces)
+	mod.apply(refs)
 	return refs, nil
+}
+
+// goModFile is what readGoMod keeps from a go.mod: the require lines, the
+// replace directives and the excluded (module, version) pairs.
+type goModFile struct {
+	requires []PackageRef
+	replaces []goReplace
+	excludes map[[2]string]bool
+}
+
+// apply records on refs what the go.mod's replace and exclude directives
+// say about them.
+func (m goModFile) apply(refs []PackageRef) {
+	applyGoReplaces(refs, m.replaces)
+	for i := range refs {
+		refs[i].Excluded = m.excludes[[2]string{refs[i].Name, refs[i].Version}]
+	}
 }
 
 // goReplace is one go.mod replace directive: `old [version] => new
@@ -155,26 +172,49 @@ func applyGoReplaces(refs []PackageRef, replaces []goReplace) {
 // recorded on the ref (Replacement) so the finding can say that the build
 // uses the replacement module or local directory instead.
 //
+// `exclude` directives do not change what is matched either: since Go
+// 1.16 the go command ignores a requirement on an excluded version, but
+// the require line still names a compromised release, so the ref is
+// matched and marked Excluded for the finding to say so.
+//
 // `module` and `go` directives are also skipped; they declare the
 // CURRENT module, not a dependency.
 func parseGoMod(target Target) ([]PackageRef, error) {
-	refs, replaces, err := readGoMod(target)
+	mod, err := readGoMod(target)
 	if err != nil {
 		return nil, err
 	}
-	applyGoReplaces(refs, replaces)
-	return refs, nil
+	mod.apply(mod.requires)
+	return mod.requires, nil
 }
 
-func readGoMod(target Target) ([]PackageRef, []goReplace, error) {
+func readGoMod(target Target) (goModFile, error) {
+	var mod goModFile
 	f, err := openManifest(target.Path, "go.mod")
 	if err != nil {
-		return nil, nil, fmt.Errorf("open go.mod: %w", err)
+		return mod, fmt.Errorf("open go.mod: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	var refs []PackageRef
-	var replaces []goReplace
+	mod.excludes = map[[2]string]bool{}
+	directive := func(verb, body string) {
+		switch verb {
+		case "require":
+			if ref, ok := parseRequireLine(body, target.Path); ok {
+				mod.requires = append(mod.requires, ref)
+			}
+		case "replace":
+			if r, ok := parseReplaceLine(body); ok && len(mod.replaces) < maxManifestEntries {
+				mod.replaces = append(mod.replaces, r)
+			}
+		case "exclude":
+			if fields := strings.Fields(body); len(fields) == 2 && len(mod.excludes) < maxManifestEntries {
+				mod.excludes[[2]string{unquoteGoModToken(fields[0]), unquoteGoModToken(fields[1])}] = true
+			}
+		}
+		// Everything else (module / go / retract / toolchain / use /
+		// godebug / tool / ignore) is skipped.
+	}
 	block := ""
 
 	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "go.mod"))
@@ -191,22 +231,17 @@ func readGoMod(target Target) ([]PackageRef, []goReplace, error) {
 		}
 
 		if block == "" {
-			verb, rest, _ := strings.Cut(line, " ")
-			rest = strings.TrimSpace(rest)
-			switch {
-			case (verb == "require" || verb == "replace") && strings.HasPrefix(rest, "("):
-				block = verb
-			case verb == "require":
-				if ref, ok := parseRequireLine(rest, target.Path); ok {
-					refs = append(refs, ref)
-				}
-			case verb == "replace":
-				if r, ok := parseReplaceLine(rest); ok && len(replaces) < maxManifestEntries {
-					replaces = append(replaces, r)
-				}
+			// The go.mod lexer ends a directive's verb at white space or
+			// at the "(" that opens a block ("require(").
+			verb, rest := line, ""
+			if i := strings.IndexAny(line, " \t("); i >= 0 {
+				verb, rest = line[:i], strings.TrimSpace(line[i:])
 			}
-			// Everything else (module / go / retract / exclude /
-			// toolchain / use / godebug) is skipped.
+			if rest == "(" {
+				block = verb
+				continue
+			}
+			directive(verb, rest)
 			continue
 		}
 
@@ -214,21 +249,12 @@ func readGoMod(target Target) ([]PackageRef, []goReplace, error) {
 			block = ""
 			continue
 		}
-		switch block {
-		case "require":
-			if ref, ok := parseRequireLine(line, target.Path); ok {
-				refs = append(refs, ref)
-			}
-		case "replace":
-			if r, ok := parseReplaceLine(line); ok && len(replaces) < maxManifestEntries {
-				replaces = append(replaces, r)
-			}
-		}
+		directive(block, line)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, nil, fmt.Errorf("read go.mod: %w", err)
+		return goModFile{}, fmt.Errorf("read go.mod: %w", err)
 	}
-	return refs, replaces, nil
+	return mod, nil
 }
 
 // parseReplaceLine reads `old [version] => new [version]`.

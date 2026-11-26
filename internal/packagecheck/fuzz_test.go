@@ -90,10 +90,41 @@ func FuzzParseBunLock(f *testing.F) {
 	)
 }
 
+// FuzzParseGo writes the input as both go.sum and the go.mod beside it,
+// so the go.sum reader and the go.mod reader it consults (require,
+// replace and exclude directives, blocks) run on the same bytes.
 func FuzzParseGo(f *testing.F) {
-	fuzzLockfile(f, intel.EcosystemGo, "go.sum", ParseGo,
+	for _, s := range []string{
 		"github.com/foo/bar v1.2.3 h1:abc=\ngithub.com/foo/bar v1.2.3/go.mod h1:def=\n",
-	)
+		"module m\n\nrequire\tgithub.com/foo/bar v1.2.3\nrequire(\n\tgithub.com/x/y v0.1.0 // indirect\n)\nexclude(\n\t\"github.com/foo/bar\" v1.2.3\n)\nreplace github.com/x/y => ../y\n",
+	} {
+		f.Add([]byte(s))
+	}
+	addTestdataSeeds(f, "go.sum")
+	addTestdataSeeds(f, "go.mod")
+	f.Fuzz(func(t *testing.T, data []byte) {
+		dir := t.TempDir()
+		if os.WriteFile(filepath.Join(dir, "go.sum"), data, 0o600) != nil || os.WriteFile(filepath.Join(dir, "go.mod"), data, 0o600) != nil {
+			t.Skip()
+		}
+		for _, source := range []string{"go.sum", "go.mod"} {
+			refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(dir, source), Source: source})
+			if err != nil {
+				if refs != nil {
+					t.Errorf("%s: refs returned alongside an error", source)
+				}
+				continue
+			}
+			for _, r := range refs {
+				if r.Name == "" || r.Version == "" {
+					t.Errorf("%s: PackageRef without a name or version: %+v", source, r)
+				}
+				if r.GraphOnly && r.Source != "go.sum" {
+					t.Errorf("%s: graph-only ref from %s", source, r.Source)
+				}
+			}
+		}
+	})
 }
 
 func FuzzParseCargo(f *testing.F) {
