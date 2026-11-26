@@ -64,6 +64,10 @@ type PackageRef struct {
 	// require. It is matched only against advisories that cover every
 	// version of the package.
 	GraphOnly bool
+	// Replacement is the module (and version) or local directory a go.mod
+	// replace directive substitutes for this module; empty when none.
+	// The ref is matched as written; the finding mentions the replacement.
+	Replacement string
 }
 
 // Target is one discovery anchor under the scanned root. Discovery

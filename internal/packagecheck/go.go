@@ -100,12 +100,14 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 	}
 
 	required := make(map[key]bool)
+	var replaces []goReplace
 	modPath := filepath.Join(filepath.Dir(target.Path), "go.mod")
 	if manifestCandidate(modPath) {
-		mod, err := parseGoMod(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+		mod, reps, err := readGoMod(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
 		if err != nil {
 			return nil, err
 		}
+		replaces = reps
 		for _, r := range mod {
 			k := key{r.Name, r.Version}
 			required[k] = true
@@ -119,33 +121,61 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 		k := key{refs[i].Name, refs[i].Version}
 		refs[i].GraphOnly = refs[i].Source == "go.sum" && !hasZip[k] && !required[k]
 	}
+	applyGoReplaces(refs, replaces)
 	return refs, nil
+}
+
+// goReplace is one go.mod replace directive: `old [version] => new
+// [version]`, where new is a module path or a local directory.
+type goReplace struct {
+	oldPath, oldVersion string
+	replacement         string
+}
+
+// applyGoReplaces records on each ref the replacement a go.mod replace
+// directive substitutes for it. The ref is still reported: the advisory
+// names the module and version the dependency graph asks for, and the
+// finding says the build uses the replacement instead.
+func applyGoReplaces(refs []PackageRef, replaces []goReplace) {
+	for i := range refs {
+		for _, r := range replaces {
+			if r.oldPath == refs[i].Name && (r.oldVersion == "" || r.oldVersion == refs[i].Version) {
+				refs[i].Replacement = r.replacement
+			}
+		}
+	}
 }
 
 // parseGoMod reads `require` declarations from a go.mod. Both the
 // single-line form and the block form are supported; the parser
 // strips inline `// ...` comments before splitting.
 //
-// `replace` directives are intentionally skipped in this first
-// cut: local replacements (`=> ../local`) do not have a Go-module
-// version the matcher could consume, and registry replacements
-// (`=> module v1.2.3`) require resolving the substitution chain
-// before the rest of the file's requires hash to the substituted
-// version. PR #2 covers the require-only surface; replace handling
-// lands in a follow-up alongside the gradle / Maven multi-source
-// parsers.
+// `replace` directives do not change what is matched: the require line
+// still names the module and version the graph asks for. They are
+// recorded on the ref (Replacement) so the finding can say that the build
+// uses the replacement module or local directory instead.
 //
 // `module` and `go` directives are also skipped; they declare the
 // CURRENT module, not a dependency.
 func parseGoMod(target Target) ([]PackageRef, error) {
+	refs, replaces, err := readGoMod(target)
+	if err != nil {
+		return nil, err
+	}
+	applyGoReplaces(refs, replaces)
+	return refs, nil
+}
+
+func readGoMod(target Target) ([]PackageRef, []goReplace, error) {
 	f, err := openManifest(target.Path, "go.mod")
 	if err != nil {
-		return nil, fmt.Errorf("open go.mod: %w", err)
+		return nil, nil, fmt.Errorf("open go.mod: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	var refs []PackageRef
-	inRequire := false
+	var replaces []goReplace
+	block := ""
 
 	scanner := bufio.NewScanner(boundedManifestReader(f, maxManifestBytes, "go.mod"))
 	for scanner.Scan() {
@@ -160,39 +190,66 @@ func parseGoMod(target Target) ([]PackageRef, error) {
 			continue
 		}
 
-		if !inRequire {
+		if block == "" {
+			verb, rest, _ := strings.Cut(line, " ")
+			rest = strings.TrimSpace(rest)
 			switch {
-			case line == "require (":
-				inRequire = true
-				continue
-			case strings.HasPrefix(line, "require ("):
-				// Defensive: a `require (` with trailing
-				// whitespace before the open paren.
-				inRequire = true
-				continue
-			case strings.HasPrefix(line, "require "):
-				if ref, ok := parseRequireLine(strings.TrimPrefix(line, "require "), target.Path); ok {
+			case (verb == "require" || verb == "replace") && strings.HasPrefix(rest, "("):
+				block = verb
+			case verb == "require":
+				if ref, ok := parseRequireLine(rest, target.Path); ok {
 					refs = append(refs, ref)
 				}
-				continue
+			case verb == "replace":
+				if r, ok := parseReplaceLine(rest); ok && len(replaces) < maxManifestEntries {
+					replaces = append(replaces, r)
+				}
 			}
-			// Skip everything else (module / go / replace / retract
-			// / exclude / toolchain / use / godebug).
+			// Everything else (module / go / retract / exclude /
+			// toolchain / use / godebug) is skipped.
 			continue
 		}
 
 		if line == ")" {
-			inRequire = false
+			block = ""
 			continue
 		}
-		if ref, ok := parseRequireLine(line, target.Path); ok {
-			refs = append(refs, ref)
+		switch block {
+		case "require":
+			if ref, ok := parseRequireLine(line, target.Path); ok {
+				refs = append(refs, ref)
+			}
+		case "replace":
+			if r, ok := parseReplaceLine(line); ok && len(replaces) < maxManifestEntries {
+				replaces = append(replaces, r)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read go.mod: %w", err)
+		return nil, nil, fmt.Errorf("read go.mod: %w", err)
 	}
-	return refs, nil
+	return refs, replaces, nil
+}
+
+// parseReplaceLine reads `old [version] => new [version]`.
+func parseReplaceLine(body string) (goReplace, bool) {
+	left, right, ok := strings.Cut(body, "=>")
+	if !ok {
+		return goReplace{}, false
+	}
+	lf, rf := strings.Fields(left), strings.Fields(right)
+	if len(lf) == 0 || len(lf) > 2 || len(rf) == 0 || len(rf) > 2 {
+		return goReplace{}, false
+	}
+	r := goReplace{oldPath: unquoteGoModToken(lf[0])}
+	if len(lf) == 2 {
+		r.oldVersion = unquoteGoModToken(lf[1])
+	}
+	r.replacement = unquoteGoModToken(rf[0])
+	if len(rf) == 2 {
+		r.replacement += " " + unquoteGoModToken(rf[1])
+	}
+	return r, true
 }
 
 // parseRequireLine extracts a (module, version) pair from a single

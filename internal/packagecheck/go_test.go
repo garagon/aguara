@@ -231,6 +231,40 @@ func TestRunner_GoSumGraphOnlyVersions(t *testing.T) {
 	}
 }
 
+// A replace directive does not hide the required module: it is still
+// matched, and the ref records what the build uses instead.
+func TestParseGoMod_RecordsReplacements(t *testing.T) {
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\nrequire (\n\texample.com/a v1.0.0\n\texample.com/b v2.0.0+incompatible\n\texample.com/c v1.1.0\n)\n\n"+
+		"replace example.com/a => ../local/a\n\nreplace (\n\texample.com/b v2.0.0+incompatible => example.com/fork/b v2.0.1+incompatible\n\texample.com/c v1.0.0 => example.com/c v1.0.1\n)\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	want := map[string]string{"example.com/a": "../local/a", "example.com/b": "example.com/fork/b v2.0.1+incompatible", "example.com/c": ""}
+	if len(refs) != 3 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	for _, r := range refs {
+		if r.Replacement != want[r.Name] {
+			t.Errorf("%s: replacement = %q, want %q", r.Name, r.Replacement, want[r.Name])
+		}
+	}
+
+	// go.sum targets pick the replacements up from the go.mod beside them.
+	writeFile(t, filepath.Join(tmp, "go.sum"), "example.com/b v2.0.0+incompatible h1:AAAA=\n")
+	refs, err = ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(tmp, "go.sum"), Source: "go.sum"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	for _, r := range refs {
+		if r.Replacement != want[r.Name] {
+			t.Errorf("go.sum %s: replacement = %q, want %q", r.Name, r.Replacement, want[r.Name])
+		}
+	}
+}
+
 func TestParseGo_RejectsUnknownSource(t *testing.T) {
 	_, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: "/dev/null", Source: "Cargo.lock"})
 	if err == nil {

@@ -1059,8 +1059,11 @@ func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remedia
 	case ecoPythonLock:
 		return pythonLockFindingText(hit)
 	case ecoGo:
-		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id),
-			fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
+		remediation := fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
+		if hit.Ref.Replacement != "" {
+			remediation += fmt.Sprintf(" go.mod replaces %s with %s, so builds use the replacement; check that the replacement does not ship the compromised code, and remove the requirement once nothing needs it.", name, hit.Ref.Replacement)
+		}
+		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id), remediation
 	case ecoCargo:
 		return fmt.Sprintf("%s %s is a known compromised Rust crate (%s)", name, version, id),
 			fmt.Sprintf("Run `cargo update -p %s` or pin a fixed version in Cargo.toml. Rotate secrets reachable from builds that used the compromised crate.", name)
