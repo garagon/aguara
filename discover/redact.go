@@ -31,8 +31,75 @@ var secretShapes = regexp.MustCompile(strings.Join([]string{
 	`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`,
 	`hooks\.slack\.com/services/[A-Za-z0-9/]+`,
 	`(?:discord|discordapp)\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+`,
+	`[0-9]{8,10}:[A-Za-z0-9_-]{30,}`, // bot token (id:secret), also inside a URL path
 	`-----BEGIN[ A-Z]*PRIVATE KEY(?: BLOCK)?-----`,
 }, "|"))
+
+var (
+	// uuidSegment is a UUID path segment. Hosted MCP endpoints use one as a
+	// per-user or per-workspace capability, so it is redacted.
+	uuidSegment = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	// tokenSegment is the shape of a path segment that can be a credential.
+	tokenSegment = regexp.MustCompile(`^[A-Za-z0-9_=+.~-]{20,}$`)
+)
+
+// credentialSegment reports whether a URL path segment looks like a
+// credential: a UUID, or 20 or more token characters with both a letter
+// and a digit that do not read as a slug or file name made of words and
+// numbers (release-notes-2024-final.md, my-server-v2-production).
+func credentialSegment(seg string) bool {
+	if uuidSegment.MatchString(seg) {
+		return true
+	}
+	if !tokenSegment.MatchString(seg) || !strings.ContainsAny(seg, "0123456789") || !strings.ContainsFunc(seg, unicode.IsLetter) {
+		return false
+	}
+	return !readableSegment(seg)
+}
+
+// readableSegment reports whether seg is two or more parts separated by
+// "-", "_", "." or "~", each a word or a number of at most 12 characters,
+// or a short mixed part such as v2 or x86.
+func readableSegment(seg string) bool {
+	parts := strings.FieldsFunc(seg, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == '~' })
+	if len(parts) < 2 {
+		return false
+	}
+	for _, p := range parts {
+		letters := strings.ContainsFunc(p, unicode.IsLetter)
+		digits := strings.ContainsFunc(p, unicode.IsDigit)
+		if len(p) > 12 || (letters && digits && len(p) > 4) || strings.ContainsAny(p, "=+") {
+			return false
+		}
+	}
+	return true
+}
+
+// redactPath replaces the path segments of a URL path that look like
+// credentials.
+func redactPath(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		if credentialSegment(s) {
+			segs[i] = redactedPlaceholder
+		}
+	}
+	return strings.Join(segs, "/")
+}
+
+// headerValueNeverSecret lists the headers whose values are shown; every
+// other header value is redacted, whatever the header's name.
+var headerValueNeverSecret = map[string]bool{
+	"accept": true, "content-type": true, "user-agent": true, "mcp-protocol-version": true,
+}
+
+// redactHeader returns a header value safe to show.
+func redactHeader(name, value string) string {
+	if headerValueNeverSecret[strings.ToLower(strings.TrimSpace(name))] {
+		return redactValue(value)
+	}
+	return redactedPlaceholder
+}
 
 var (
 	// authScheme matches the credential after an HTTP authorization scheme.
@@ -126,6 +193,11 @@ func redactURL(u string) string {
 func redactURLParts(u string) string {
 	base, fragment, hasFragment := strings.Cut(u, "#")
 	base, query, hasQuery := strings.Cut(base, "?")
+	if scheme, rest, ok := strings.Cut(base, "://"); ok {
+		if authority, path, hasPath := strings.Cut(rest, "/"); hasPath {
+			base = scheme + "://" + authority + "/" + redactPath(path)
+		}
+	}
 	if hasQuery {
 		base += "?" + redactParams(query)
 	}
@@ -229,27 +301,45 @@ func redactArgValue(a string) string {
 	return redactValue(a)
 }
 
+// headerFlags take an HTTP header as their value (mcp-remote, curl).
+var headerFlags = map[string]bool{"--header": true, "--headers": true, "-H": true, "-header": true}
+
+// redactHeaderArg redacts a "Name: value" header given to a header flag:
+// the value is masked unless the header is one whose value is never a
+// secret. Anything else is redacted like any argument.
+func redactHeaderArg(a string) string {
+	if m := headerArg.FindStringSubmatch(a); m != nil && !strings.HasPrefix(m[2], "//") {
+		return m[1] + ": " + redactHeader(m[1], m[2])
+	}
+	return redactArgValue(a)
+}
+
 // redactArgs redacts a server's command-line arguments. The value of a
 // flag whose name suggests a secret is replaced, whether it follows the
 // flag (--api-key x, also a value starting with a single dash) or is
-// joined to it (--token=x); a --flag=value whose value is a sensitive
-// header or NAME=value assignment (--header=Authorization: ..., --env=
-// API_KEY=...) and a separate NAME=value argument (-e DB_PASS=...) are
-// redacted too, as are secret-shaped values anywhere. Commands, package
-// names and other arguments stay visible.
+// joined to it (--token=x); a header given to --header or -H keeps only
+// its name unless its value is never a secret; a --flag=value whose value
+// is a sensitive NAME=value assignment (--env=API_KEY=...) and a separate
+// NAME=value argument (-e DB_PASS=...) are redacted too, as are
+// secret-shaped values anywhere. Commands, package names and other
+// arguments stay visible.
 func redactArgs(args []string) []string {
 	if args == nil {
 		return nil
 	}
 	out := make([]string, len(args))
-	valueIsSecret := false
+	valueIsSecret, valueIsHeader := false, false
 	for i, a := range args {
-		if valueIsSecret && !strings.HasPrefix(a, "--") {
+		secret, header := valueIsSecret, valueIsHeader
+		valueIsSecret, valueIsHeader = false, false
+		switch {
+		case secret && !strings.HasPrefix(a, "--"):
 			out[i] = redactedPlaceholder
-			valueIsSecret = false
+			continue
+		case header && !strings.HasPrefix(a, "--"):
+			out[i] = redactHeaderArg(a)
 			continue
 		}
-		valueIsSecret = false
 		if a == "--" || !strings.HasPrefix(a, "-") {
 			out[i] = redactArgValue(a)
 			continue
@@ -257,10 +347,15 @@ func redactArgs(args []string) []string {
 		name, value, hasValue := strings.Cut(a, "=")
 		flag := strings.TrimLeft(name, "-")
 		switch {
+		case hasValue && headerFlags[name]:
+			out[i] = name + "=" + redactHeaderArg(value)
 		case hasValue && sensitiveName(flag):
 			out[i] = name + "=" + redactedPlaceholder
 		case hasValue:
 			out[i] = name + "=" + redactArgValue(value)
+		case headerFlags[a]:
+			valueIsHeader = true
+			out[i] = a
 		default:
 			valueIsSecret = sensitiveName(flag)
 			out[i] = redactValue(a)
@@ -269,19 +364,16 @@ func redactArgs(args []string) []string {
 	return out
 }
 
-// redactHeaders masks every header whose name suggests a credential and
-// redacts secret-shaped parts of the others.
+// redactHeaders keeps every header name and masks every value, except the
+// values of headers that are never secrets (Accept, Content-Type,
+// User-Agent, MCP-Protocol-Version), which are redacted like any value.
 func redactHeaders(headers map[string]string) map[string]string {
 	if len(headers) == 0 {
 		return headers
 	}
 	out := make(map[string]string, len(headers))
 	for k, v := range headers {
-		if sensitiveName(k) {
-			out[k] = redactedPlaceholder
-		} else {
-			out[k] = redactValue(v)
-		}
+		out[k] = redactHeader(k, v)
 	}
 	return out
 }

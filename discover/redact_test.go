@@ -110,7 +110,7 @@ func TestDiscoverRedactedJSONFields(t *testing.T) {
 	if remote.Transport != "remote" || remote.Command != "" {
 		t.Errorf("remote server: %+v", remote)
 	}
-	if remote.Headers["Authorization"] != "[REDACTED]" || remote.Headers["X-Region"] != "eu" {
+	if remote.Headers["Authorization"] != "[REDACTED]" || remote.Headers["X-Region"] != "[REDACTED]" {
 		t.Errorf("headers = %v", remote.Headers)
 	}
 	if s := byName["http"]; s.Transport != "http" || s.URL != "https://api.example.com/mcp" {

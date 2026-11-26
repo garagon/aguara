@@ -40,6 +40,63 @@ var secretPositions = []struct {
 	{"header map credential", MCPServer{Transport: "http", URL: "https://mcp.example.com", Headers: map[string]string{"Authorization": "S24secret"}}, "S24secret"},
 	{"header map other value", MCPServer{Transport: "http", URL: "https://mcp.example.com", Headers: map[string]string{"X-Trace": "Bearer S25secret"}}, "S25secret"},
 	{"command url", MCPServer{Command: "https://mcp.example.com/run?token=S26secret"}, "S26secret"},
+	{"server url path credential", MCPServer{Transport: "http", URL: "https://host.example.com/api/mcp/s/S27abcDEF123ghiJKL456/mcp"}, "S27abcDEF123ghiJKL456"},
+	{"arg url path credential", MCPServer{Command: "npx", Args: []string{"mcp-remote", "https://host.example.com/api/mcp/s/S28abcDEF123ghiJKL456/mcp"}}, "S28abcDEF123ghiJKL456"},
+	{"bot token in url path", MCPServer{Command: "npx", Args: []string{"https://api.telegram.org/bot123456789:S29dqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage"}}, "S29dqTcvCH1vGWJxfSeofSAs0K5PALDsaw"},
+	{"header map unknown name", MCPServer{Transport: "http", URL: "https://mcp.example.com", Headers: map[string]string{"X-Access": "S30secret"}}, "S30secret"},
+	{"header map short name", MCPServer{Transport: "http", URL: "https://mcp.example.com", Headers: map[string]string{"X-Pw": "S31secret"}}, "S31secret"},
+	{"header argument unknown name", MCPServer{Command: "npx", Args: []string{"mcp-remote", "https://mcp.example.com/mcp", "--header", "X-Access: S32secret"}}, "S32secret"},
+	{"header argument joined unknown name", MCPServer{Command: "npx", Args: []string{"mcp-remote", "--header=X-Pw: S33secret"}}, "S33secret"},
+}
+
+// Path segments that look like credentials are redacted; ordinary path
+// segments stay readable. A UUID in a path is redacted too: hosted MCP
+// endpoints use it as a per-user capability.
+func TestRedactURLPathSegments(t *testing.T) {
+	for _, keep := range []string{
+		"https://mcp.example.com/v1/mcp",
+		"https://api.example.com/2024-06-01/servers/sse",
+		"https://cdn.example.com/docs/release-notes-2024-final.md",
+		"https://example.com/my-server-v2-production/sse",
+		"https://example.com/repos/garagon/aguara/contents/README.md",
+		"https://example.com/files/aGVsbG8x/index.html",
+		"https://example.com/internationalization/settings",
+		"https://example.com/node_modules/package/dist/index.js",
+	} {
+		if got := redactURL(keep); got != keep {
+			t.Errorf("redactURL(%q) = %q, want it unchanged", keep, got)
+		}
+	}
+	for in, want := range map[string]string{
+		"https://host.example.com/api/mcp/s/abcDEF123ghiJKL456mnoPQR/mcp": "https://host.example.com/api/mcp/s/[REDACTED]/mcp",
+		"https://example.com/t/dGhpc2lzYXNlY3JldDEyMw/sse":                "https://example.com/t/[REDACTED]/sse",
+		"https://example.com/w/123e4567-e89b-12d3-a456-426614174000/mcp":  "https://example.com/w/[REDACTED]/mcp",
+		"https://example.com/k/sk-ant-api03-abcdefghijklmnopqrstuv/mcp":   "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/hooks/a1b2c3d4e5f6g7h8i9j0k1l2.m3n4o5":       "https://example.com/hooks/[REDACTED]",
+	} {
+		if got := redactValue(in); got != want {
+			t.Errorf("redactValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := redactValue("https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage"); got != "https://api.telegram.org/bot[REDACTED]/sendMessage" {
+		t.Errorf("bot token in path = %q", got)
+	}
+}
+
+// Header values are masked unless the header's value is never a secret.
+func TestRedactHeadersAllowList(t *testing.T) {
+	got := redactHeaders(map[string]string{
+		"Accept": "application/json", "content-type": "application/json", "User-Agent": "agent/1.0",
+		"MCP-Protocol-Version": "2025-06-18", "X-Access": "secret", "X-Region": "eu", "Authorization": "Bearer x",
+	})
+	for name, want := range map[string]string{
+		"Accept": "application/json", "content-type": "application/json", "User-Agent": "agent/1.0",
+		"MCP-Protocol-Version": "2025-06-18", "X-Access": "[REDACTED]", "X-Region": "[REDACTED]", "Authorization": "[REDACTED]",
+	} {
+		if got[name] != want {
+			t.Errorf("header %s = %q, want %q", name, got[name], want)
+		}
+	}
 }
 
 func TestDiscoverSecretInEveryPositionIsRedacted(t *testing.T) {
