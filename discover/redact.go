@@ -622,8 +622,9 @@ func redactArgValue(a string) string {
 // operators is redacted as an argument list, so a flag before an operator
 // never takes the next command as its value. Only the bytes of a word that
 // change are rewritten, in place, so quoting, operators and all other text
-// are kept as written. An unterminated quote (or a trailing backslash)
-// masks everything from it to the end. The
+// are kept as written. A command substitution, $(...) or `...`, stays
+// inside its word. An unterminated quote (or a trailing backslash or an
+// unterminated substitution) masks everything from it to the end. The
 // rebuilt line is not read again: the words cover all of it, and only a
 // known token format that is still present is masked, as a last check.
 func redactCommand(cmd string) string {
@@ -683,11 +684,12 @@ const shellOperatorChars = ";&|<>()"
 // how a shell splits it.
 const unquotedSpecials = " \t\n'\"\\$`" + shellOperatorChars
 
-// quoteRegion is a quoted string or a backslash escape inside a word, as a
-// byte span of the command line that includes the quotes or the backslash.
+// quoteRegion is a quoted string, a backslash escape or a command
+// substitution inside a word, as a byte span of the command line that
+// includes the quotes, the backslash or the $( ) and backticks.
 type quoteRegion struct {
 	start, end int
-	quote      byte // '\'', '"' or '\\'
+	quote      byte // '\'', '"', '\\' or '$'
 }
 
 // shellWord is one word of a command line: its byte span in the original
@@ -703,10 +705,12 @@ type shellWord struct {
 }
 
 // shellWords splits s into words at unquoted blanks and shell operators,
-// honoring single quotes, double quotes and backslash escapes. When a
-// quote is not closed, or the text ends with a backslash outside quotes,
-// it also returns the open word: its start, the offset of that quote or
-// backslash as end, and its value up to there; otherwise open is nil.
+// honoring single quotes, double quotes, backslash escapes and command
+// substitutions, which are kept verbatim in their word. When a quote or a
+// substitution is not closed, or the text ends with a backslash outside
+// quotes, it also returns the open word: its start, the offset of that
+// quote, substitution or backslash as end, and its value up to there;
+// otherwise open is nil.
 func shellWords(s string) (words []shellWord, open *shellWord) {
 	var cur []byte
 	var raw []int
@@ -749,6 +753,19 @@ func shellWords(s string) (words []shellWord, open *shellWord) {
 			regions = append(regions, quoteRegion{start: i, end: i + 1 + n, quote: '\\'})
 			i += 1 + n
 			continue
+		case quote != '\'' && (c == '`' || c == '$' && i+1 < len(s) && s[i+1] == '('):
+			begin(i)
+			end := substitutionEnd(s, i)
+			if end < 0 {
+				if quote == 0 {
+					openAt, prefix = i, string(cur)
+				}
+				return words, &shellWord{start: start, end: openAt, value: prefix, afterOp: afterOp}
+			}
+			keep(i, end)
+			regions = append(regions, quoteRegion{start: i, end: end, quote: '$'})
+			i = end
+			continue
 		case quote != 0:
 			if c == quote {
 				regions = append(regions, quoteRegion{start: quoteStart, end: i + 1, quote: quote})
@@ -776,6 +793,53 @@ func shellWords(s string) (words []shellWord, open *shellWord) {
 	}
 	flush(len(s))
 	return words, nil
+}
+
+// substitutionEnd returns the offset just past the command substitution
+// that starts at s[i], "$(" or a backtick, or -1 when it is not closed.
+// Quotes, escapes and nested parentheses inside it are skipped.
+func substitutionEnd(s string, i int) int {
+	if s[i] == '`' {
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				j++
+			case '`':
+				return j + 1
+			}
+		}
+		return -1
+	}
+	depth := 0
+	for j := i + 1; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '\'':
+			k := strings.IndexByte(s[j+1:], '\'')
+			if k < 0 {
+				return -1
+			}
+			j += k + 1
+		case '"':
+			for j++; j < len(s) && s[j] != '"'; j++ {
+				if s[j] == '\\' {
+					j++
+				}
+			}
+			if j >= len(s) {
+				return -1
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return j + 1
+			}
+		}
+	}
+	return -1
 }
 
 // rewriteWord renders word w of s with its value replaced by red. Only the

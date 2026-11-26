@@ -20,9 +20,11 @@ import (
 //   - a whole argument that is a sensitive NAME=value, or the argument after
 //     a sensitive flag, is masked whole, because in an argument list the
 //     value is the entire argument;
+//   - a command substitution after a sensitive flag or in a sensitive
+//     NAME=value is the value;
 //   - the word after Bearer or Basic is the credential;
-//   - an unterminated quote or a trailing backslash masks everything from
-//     it to the end.
+//   - an unterminated quote or substitution, or a trailing backslash, masks
+//     everything from it to the end.
 func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 	const marker = "Mk7secretQz"
 	type form struct {
@@ -143,11 +145,13 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 // What the shell reads as one word with the secret is masked with it.
 func TestRedactionMasksTheWholeWord(t *testing.T) {
 	for in, want := range map[string]string{
-		"echo Authorization: Bearer abc123 && curl x": "echo Authorization: Bearer [REDACTED] && curl x",
-		`tool --api-key ab\;cd && echo done`:          "tool --api-key [REDACTED] && echo done",
-		"tool --api-key 'ab;cd' && echo done":         "tool --api-key '[REDACTED]' && echo done",
-		`env TOKEN=ab\ cd node x`:                     "env TOKEN=[REDACTED] node x",
-		"tool --token 'abc":                           "tool --token [REDACTED]",
+		"echo Authorization: Bearer abc123 && curl x":  "echo Authorization: Bearer [REDACTED] && curl x",
+		`tool --token "$(cat /run/k) more" --port 1`:   `tool --token "[REDACTED]" --port 1`,
+		`tool --api-key ab\;cd && echo done`:           "tool --api-key [REDACTED] && echo done",
+		"tool --api-key 'ab;cd' && echo done":          "tool --api-key '[REDACTED]' && echo done",
+		`env TOKEN=ab\ cd node x`:                      "env TOKEN=[REDACTED] node x",
+		"tool --token 'abc":                            "tool --token [REDACTED]",
+		"tool --token $(echo abc && echo more) --port": "tool --token [REDACTED] --port",
 	} {
 		if got := redactCommand(in); got != want {
 			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)

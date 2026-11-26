@@ -95,6 +95,24 @@ func TestPowerShellEnvAssignments(t *testing.T) {
 	}
 }
 
+// A command substitution is part of the word it is in: after a sensitive
+// flag or in a sensitive NAME=value the whole substitution is the value.
+func TestCommandSubstitutions(t *testing.T) {
+	for in, want := range map[string]string{
+		"tool --token $(echo subSecret01) --port 8080":         "tool --token [REDACTED] --port 8080",
+		"tool --token `echo subSecret02` --port 8080":          "tool --token [REDACTED] --port 8080",
+		`tool --token "$(cat /run/subSecret03)" --port 8080`:   `tool --token "[REDACTED]" --port 8080`,
+		"TOKEN=$(vault read -field=v secret/x) node server.js": "TOKEN=[REDACTED] node server.js",
+		"node server.js --name $(hostname) --port 8080":        "node server.js --name $(hostname) --port 8080",
+		"tool --token $(echo subSecret04":                      "tool --token [REDACTED]",
+		"sh -c 'tool --api-key $(cat k) && echo done'":         "sh -c 'tool --api-key [REDACTED] && echo done'",
+	} {
+		if got := redactCommand(in); got != want {
+			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+}
+
 // Plain-text mode never shows part of a secret: for a secret in any
 // redaction position, with operators, escapes, quotes and blanks inside
 // it and text around it, no 4-character piece of the secret is shown in
