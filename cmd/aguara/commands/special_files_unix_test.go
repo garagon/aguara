@@ -214,6 +214,48 @@ func TestDiscoverListsUnreadableClientConfigs(t *testing.T) {
 	}
 }
 
+// The package checks read manifests without a lockfile, requirements
+// includes, a go.mod beside a go.sum, a Directory.Packages.props above a
+// .NET project and conda environment files. A named pipe or a link to
+// /dev/zero in any of those places ends check and audit (audit used to
+// block on a named pipe there in its content scan); none of them is read.
+func TestCheckAndAuditDoNotBlockOnPackageInputs(t *testing.T) {
+	cases := map[string]struct {
+		files   map[string]string
+		special string
+	}{
+		"manifest":             {special: "package.json"},
+		"requirements include": {files: map[string]string{"requirements.txt": "requests==2.31.0\n-r inc.txt\n"}, special: "inc.txt"},
+		"go.mod beside go.sum": {files: map[string]string{"go.sum": "golang.org/x/text v0.3.7 h1:olpwvP2KacW1ZWvsR7uQhoyTYvKAupfQrRGBFM352Gk=\n"}, special: "go.mod"},
+		"Directory.Packages.props": {
+			files:   map[string]string{"src/app/app.csproj": `<Project><ItemGroup><PackageReference Include="Newtonsoft.Json" /></ItemGroup></Project>`},
+			special: "Directory.Packages.props",
+		},
+		"conda environment": {special: "environment.yml"},
+	}
+	for name, c := range cases {
+		for _, kind := range []string{"named pipe", "link to /dev/zero"} {
+			t.Run(name+"/"+kind, func(t *testing.T) {
+				files := map[string]string{"README.md": "# project\n"}
+				for k, v := range c.files {
+					files[k] = v
+				}
+				dir := projectWith(t, files)
+				path := filepath.Join(dir, c.special)
+				if kind == "named pipe" {
+					mkfifoOrSkip(t, path)
+				} else {
+					require.NoError(t, os.Symlink("/dev/zero", path))
+				}
+				for _, cmd := range []string{"check", "audit"} {
+					out := filepath.Join(t.TempDir(), cmd+".json")
+					_ = runCLIWithin(t, cmd, dir, "--format", "json", "-o", out)
+				}
+			})
+		}
+	}
+}
+
 func TestCheckSkipsSpecialInstalledManifests(t *testing.T) {
 	dir := t.TempDir()
 	mkfifoOrSkip(t, filepath.Join(dir, "node_modules", "pipe", "package.json"))
