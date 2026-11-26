@@ -123,11 +123,18 @@ func TestPlainTextNeverShowsPartOfASecret(t *testing.T) {
 	forEachSecretValue(func(v string, _ bool) {
 		cases++
 		note, _ := json.Marshal(map[string]string{"note": v})
+		quoted := "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 		outs := map[string]string{
-			"env value":    redactEnv(map[string]string{"SETUP": v})["SETUP"],
-			"header value": redactHeaders(map[string]string{"Accept": v})["Accept"],
-			"JSON string":  redactEnv(map[string]string{"CFG": string(note)})["CFG"],
-			"argument":     redactArgs([]string{v})[0],
+			"env value":           redactEnv(map[string]string{"SETUP": v})["SETUP"],
+			"header value":        redactHeaders(map[string]string{"Accept": v})["Accept"],
+			"JSON string":         redactEnv(map[string]string{"CFG": string(note)})["CFG"],
+			"argument":            redactArgs([]string{v})[0],
+			"cat here-string":     redactCommand("cat <<< " + quoted),
+			"grep here-string":    redactCommand("grep -c x <<< " + quoted),
+			"--command value":     redactArgs([]string{"tool", "--command", v})[2],
+			"--cmd value":         redactArgs([]string{"tool", "--cmd=" + v})[1],
+			"--run value":         redactArgs([]string{"tool", "--run", v})[2],
+			"--shell-command arg": redactArgs([]string{"tool", "--shell-command", v})[2],
 		}
 		for where, out := range outs {
 			if p := showsPiece(out, secretMarker); p != "" {
@@ -172,6 +179,12 @@ func forEachSecretValue(f func(v string, split bool)) {
 		{format: "curl x?token=%s"},
 		{format: "https://x.example/sse?sig=%s"},
 		{format: "https://app:%s@x.example/mcp", url: true},
+		// Credentials that start like an option or an "=" (base64url can
+		// start with "--").
+		{format: "Token --%s"},
+		{format: "token\t--%s"},
+		{format: "Basic ==%s"},
+		{format: "Bearer --Xa9_%s"},
 	}
 	inserts := []string{";", "&", "&&", "|", " ", "\t", "\n", `\ `, `\;`, `\`, `"`, "'", "`", "$", "(", ")", "<", ">", "#", "?", "=", ",", "%"}
 	urlSafe := map[string]bool{";": true, "&": true, "&&": true, "|": true, "$": true, "(": true, ")": true, "'": true, "=": true, ",": true, "%": true}

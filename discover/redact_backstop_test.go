@@ -53,6 +53,36 @@ func TestNonShellPairsInCommandLines(t *testing.T) {
 	}
 }
 
+// A word after an authorization scheme is a credential unless it is an
+// option (--hostname) or the "=" of a pair (TOKEN = x), in plain values and
+// in command lines alike; a credential that starts with "--" or "==" is
+// still one.
+func TestAuthSchemeCredentialsAndOptions(t *testing.T) {
+	for _, v := range []string{"Token --qzS3cretB1", "token\t--qzS3cretB1", "Basic ==qzS3cretB1", "Bearer --Xa9_qzS3cretB1"} {
+		if got := redactValue(v); got != redactedPlaceholder {
+			t.Errorf("redactValue(%q) = %q, want the whole value masked", v, got)
+		}
+		if got := redactCommand("curl -H Authorization: " + v + " https://x.example/a"); showsPiece(got, "qzS3cretB1") != "" {
+			t.Errorf("command with %q = %q", v, got)
+		}
+	}
+	for in, want := range map[string]string{
+		"gh auth token --hostname github.com":    "gh auth token --hostname github.com",
+		"tool Bearer --Xa9_qzS3cretB1 --verbose": "tool Bearer [REDACTED] --verbose",
+		"tool Token --qzS3cretB1 --verbose":      "tool Token [REDACTED] --verbose",
+		"tool TOKEN = qzS3cretB1 --verbose":      "tool TOKEN = [REDACTED] --verbose",
+	} {
+		var got string
+		fired := countBackstops(t, func() { got = redactCommand(in) })
+		if got != want || len(fired) != 0 {
+			t.Errorf("redactCommand(%q) = %q (backstop %d), want %q", in, got, len(fired), want)
+		}
+	}
+	if got := redactValue("gh auth token --hostname github.com"); got != "gh auth token --hostname github.com" {
+		t.Errorf("an option after token is not a credential: %q", got)
+	}
+}
+
 // A here-string is a command line only for a shell; for any other program
 // it is one plain value.
 func TestHereStringOnlyToAShell(t *testing.T) {

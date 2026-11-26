@@ -124,10 +124,14 @@ var (
 	// textUserinfo finds a user:password@ part after a scheme even when the
 	// password holds characters a URL cannot, such as a blank or a quote.
 	textUserinfo = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@]*:[^/@]*@`)
-	// textAuthScheme finds a credential after an authorization scheme or
-	// the word token (fish's set -x TOKEN value too); a --flag, "=" or ":"
-	// after it is not a credential (TOKEN = x is a pair, found as one).
-	textAuthScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic|token)\s+([^\s=:-]|-[^\s-])`)
+	// textAuthScheme finds the word after an authorization scheme or the
+	// word token (fish's set -x TOKEN value too); plainHit decides whether
+	// that word is a credential.
+	textAuthScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic|token)\s+(\S+)`)
+	// optionWord is a long option, such as the --hostname of gh auth token
+	// --hostname: not a credential after a scheme word. A credential that
+	// starts with "--" (base64url can) does not read as one.
+	optionWord = regexp.MustCompile(`^--[a-z][a-z0-9-]*(?:=|$)`)
 	// fishSet is fish's set [flags] NAME value.
 	fishSet = regexp.MustCompile(`(?:^|[\s;&|()])set\s+(?:-[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+(\S)`)
 	// wholeURL is a value that is one URL: a scheme and no blanks.
@@ -383,9 +387,13 @@ func plainHit(v string) bool {
 		return true
 	}
 	for _, m := range textAuthScheme.FindAllStringSubmatchIndex(v, -1) {
-		if !redactedAt(v[m[2]:]) {
-			return true
+		// TOKEN = x is a pair (found as one below), and an option is not a
+		// credential.
+		w := v[m[2]:m[3]]
+		if w == "=" || w == ":" || optionWord.MatchString(w) || redactedAt(strings.TrimLeft(v[m[2]:], "=:")) {
+			continue
 		}
+		return true
 	}
 	if strings.Contains(v, "://") && redactURL(v) != v {
 		return true
@@ -1220,11 +1228,12 @@ func substitutionMarker(k int) string {
 type argNext int
 
 const (
-	nextAny    argNext = iota
-	nextSecret         // the value of a sensitive flag, name or "Name:", or the credential after Bearer
-	nextHeader         // the value of --header or -H
-	nextScript         // a command line, after -c, /c, /k, -Command or --exec
-	nextEquals         // after a sensitive NAME or $env:NAME: "=" or "=value"
+	nextAny        argNext = iota
+	nextSecret             // the value of a sensitive flag, name or "Name:"
+	nextCredential         // the word after Bearer, Basic or Token: masked unless an option
+	nextHeader             // the value of --header or -H
+	nextScript             // a command line, after -c, /c, /k, -Command or --exec
+	nextEquals             // after a sensitive NAME or $env:NAME: "=" or "=value"
 )
 
 // redactArgs redacts a server's command-line arguments, which are words:
@@ -1270,15 +1279,21 @@ func redactArgsAt(args []string, depth int) ([]string, []bool) {
 		state := next
 		next = nextAny
 		switch {
-		case state == nextSecret && (a == "=" || isAuthScheme(a)):
-			// NAME = value, or Authorization: Bearer value: the value is
-			// the word after.
+		case (state == nextSecret || state == nextCredential) && a == "=":
+			// NAME = value: the value is the word after.
 			out[i], next = a, nextSecret
 			continue
-		case state == nextSecret && strings.HasPrefix(a, "="):
+		case (state == nextSecret || state == nextCredential) && isAuthScheme(a):
+			// Authorization: Bearer value: the credential is the word after.
+			out[i], next = a, nextCredential
+			continue
+		case (state == nextSecret || state == nextCredential) && strings.HasPrefix(a, "="):
 			out[i] = "=" + redactedPlaceholder
 			continue
-		case state == nextSecret && !strings.HasPrefix(a, "--"):
+		case state == nextSecret && !strings.HasPrefix(a, "--"),
+			state == nextCredential && !optionWord.MatchString(a):
+			// After a scheme word only an option (--hostname) is not the
+			// credential; a credential can start with "--".
 			out[i] = redactedPlaceholder
 			continue
 		case state == nextHeader && !strings.HasPrefix(a, "--"):
@@ -1369,7 +1384,7 @@ func redactWord(a string) (string, argNext) {
 	case takesScript(a):
 		return out, nextScript
 	case isAuthScheme(a):
-		return out, nextSecret
+		return out, nextCredential
 	case strings.HasSuffix(a, ":") && sensitiveName(nameBeforeColon(a)):
 		return out, nextSecret
 	case envName.MatchString(a) && sensitiveEnvName(a):
