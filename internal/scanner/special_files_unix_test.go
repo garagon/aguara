@@ -83,7 +83,7 @@ func TestScanSkipsSpecialFilesWithoutBlocking(t *testing.T) {
 	want := []types.SkippedFile{
 		{Path: "SKILL.md", Kind: types.SkippedNamedPipe},
 		{Path: filepath.Join("sub", "x"), Kind: types.SkippedNamedPipe},
-		{Path: "zero.md", Kind: types.SkippedSymlink},
+		{Path: "zero.md", Kind: types.SkippedSymlink, Resolves: types.LinkOutside},
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "s.md")); err == nil {
 		want = append(want[:1], append([]types.SkippedFile{{Path: "s.md", Kind: types.SkippedSocket}}, want[1:]...)...)
@@ -170,7 +170,7 @@ func TestScanPathsSkipsSpecialEntries(t *testing.T) {
 	require.Equal(t, []types.SkippedFile{
 		{Path: "SKILL.md", Kind: types.SkippedNamedPipe},
 		{Path: filepath.Join("module", "pipe.md"), Kind: types.SkippedNamedPipe},
-		{Path: "zero.md", Kind: types.SkippedSymlink},
+		{Path: "zero.md", Kind: types.SkippedSymlink, Resolves: types.LinkOutside},
 	}, r.Skipped)
 }
 

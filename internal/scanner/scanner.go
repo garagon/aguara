@@ -314,6 +314,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 	var targets []*Target
 	var skipped []types.SkippedFile
 	var failures []*scanFailure
+	linkRoot := resolvedRoot(root)
 	for _, relPath := range relPaths {
 		absPath := filepath.Join(root, relPath)
 		// Lstat so a symlink committed to the repository is not resolved:
@@ -331,7 +332,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 			continue
 		}
 		if info.IsDir() {
-			discovery := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true, relPrefix: relPath}
+			discovery := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true, relPrefix: relPath, linkRoot: linkRoot}
 			found, err := discovery.Discover(absPath)
 			if err != nil {
 				failures = append(failures, asScanFailure(err, "discover target", relPath))
@@ -352,7 +353,11 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 			continue
 		}
 		if kind := skipKind(info.Mode()); kind != "" {
-			skipped = append(skipped, types.SkippedFile{Path: relPath, Kind: kind})
+			entry := types.SkippedFile{Path: relPath, Kind: kind}
+			if kind == types.SkippedSymlink {
+				entry.Resolves = linkResolution(linkRoot, absPath)
+			}
+			skipped = append(skipped, entry)
 			continue
 		}
 		targets = append(targets, &Target{Path: absPath, RelPath: relPath, NoFollow: true})

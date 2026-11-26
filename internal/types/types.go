@@ -415,11 +415,32 @@ const (
 	SkippedIrregular = "irregular" // any other non-regular file type
 )
 
+// Where a skipped symbolic link resolves, found without reading the
+// target's content.
+const (
+	LinkInside   = "inside"   // to a file or directory inside the scan target, which the scan covers itself
+	LinkOutside  = "outside"  // to something outside the scan target, which the scan did not read
+	LinkDangling = "dangling" // to nothing (or the link cannot be resolved)
+)
+
 // SkippedFile is an entry a scan did not read because it is not a
-// regular file. Path is relative to the scan target.
+// regular file. Path is relative to the scan target. Resolves is set for
+// symbolic links (Kind SkippedSymlink) to one of the Link* values.
 type SkippedFile struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path     string `json:"path"`
+	Kind     string `json:"kind"`
+	Resolves string `json:"resolves,omitempty"`
+}
+
+// HidesContent reports whether the entry may stand for content no scan
+// read: a named pipe, socket, device or irregular file, or a symbolic
+// link that is dangling or resolves outside the scan target. A link that
+// resolves inside the target points at content the scan covers itself.
+func (s SkippedFile) HidesContent() bool {
+	if s.Kind == SkippedSymlink {
+		return s.Resolves != LinkInside
+	}
+	return true
 }
 
 // Stages of a scan at which an operation can fail.

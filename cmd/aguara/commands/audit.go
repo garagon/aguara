@@ -596,8 +596,50 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 			"The content scan is incomplete, so the audit cannot clear this target.",
 			"Fix the failures listed under scan.errors and run the audit again.")
 	}
+	if names := hiddenSkippedNames(result.Scan.Skipped); names != "" {
+		// An agent reading the target follows links and reads pipes; the
+		// scan did neither, so what they stand for was not evaluated.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "entries_not_evaluated",
+			Severity: "warning",
+			Message:  "These entries were not read and may stand for content an agent would load: " + names + ".",
+		})
+		escalateForCoverage(&t,
+			"Some entries under the target were not evaluated, so the audit cannot clear it.",
+			"Review the entries listed under coverage.skipped before trusting the target: links that are dangling or resolve outside it, named pipes, sockets and devices.")
+	}
 	applyAuditCoverageTriage(&t, result)
 	return t
+}
+
+// hiddenSkippedNames names up to five skipped entries that may stand for
+// content no scan read (see types.SkippedFile.HidesContent), or "" when
+// there are none. The full list is in coverage.skipped.
+func hiddenSkippedNames(skipped []types.SkippedFile) string {
+	const maxNamed = 5
+	var names []string
+	hidden := 0
+	for _, s := range skipped {
+		if !s.HidesContent() {
+			continue
+		}
+		hidden++
+		if len(names) == maxNamed {
+			continue
+		}
+		why := strings.ReplaceAll(s.Kind, "_", " ")
+		switch {
+		case s.Kind == types.SkippedSymlink && s.Resolves == types.LinkDangling:
+			why = "dangling symbolic link"
+		case s.Kind == types.SkippedSymlink:
+			why = "symbolic link resolving outside the target"
+		}
+		names = append(names, output.TerminalText(s.Path)+" ("+why+")")
+	}
+	if hidden > maxNamed {
+		names = append(names, fmt.Sprintf("and %d more listed in coverage.skipped", hidden-maxNamed))
+	}
+	return strings.Join(names, ", ")
 }
 
 // applyAuditCoverageTriage keeps an audit that evaluated nothing from
@@ -720,6 +762,7 @@ func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (messa
 // some entries are not pinned to one version.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "scan_incomplete") ||
+		hasTriageReason(t.Reasons, "entries_not_evaluated") ||
 		hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
 		hasTriageReason(t.Reasons, "partial_dependency_coverage") ||

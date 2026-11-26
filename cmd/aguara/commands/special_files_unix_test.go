@@ -90,6 +90,12 @@ func TestScanAndAuditReportSkippedSpecialFiles(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(data, &audit))
 	require.Equal(t, want, audit.Coverage.Skipped)
+	var triage struct {
+		Triage AuditTriage `json:"triage"`
+	}
+	require.NoError(t, json.Unmarshal(data, &triage))
+	require.Equal(t, "review", triage.Triage.Decision, "a named pipe skill file is content the audit did not read")
+	require.True(t, hasTriageReason(triage.Triage.Reasons, "entries_not_evaluated"))
 	require.Equal(t, want, audit.Scan.Coverage.Skipped)
 }
 

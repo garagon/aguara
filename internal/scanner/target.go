@@ -150,6 +150,31 @@ type TargetDiscovery struct {
 
 	callerPatterns int    // IgnorePatterns[:callerPatterns] are the caller's
 	relPrefix      string // prepended to every relative path (a changed directory walked by ScanPaths)
+	linkRoot       string // the scan target links are resolved against; the walked root when empty
+}
+
+// linkResolution says where the symbolic link at path resolves relative to
+// root (a resolved path): inside it, outside it, or nowhere. It only
+// resolves links; no file content is read.
+func linkResolution(root, path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return types.LinkDangling
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return types.LinkOutside
+	}
+	return types.LinkInside
+}
+
+// resolvedRoot returns path with symbolic links resolved, or path itself
+// when it cannot be resolved.
+func resolvedRoot(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 // maxIgnoreFileBytes bounds a target's .aguaraignore, like .aguara.yml.
@@ -193,6 +218,11 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		}
 	}
 
+	linkRoot := td.linkRoot
+	if linkRoot == "" {
+		linkRoot = resolvedRoot(root)
+	}
+
 	limit := td.MaxFileSize
 	if limit <= 0 {
 		limit = DefaultMaxFileSize
@@ -233,7 +263,11 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 		// pattern that matches one is not counted as an exclusion.
 		if kind := skipKind(info.Mode()); kind != "" {
 			if !isBinaryExt(path) && !td.matchesIgnore(relPath) {
-				td.Skipped = append(td.Skipped, types.SkippedFile{Path: relPath, Kind: kind})
+				entry := types.SkippedFile{Path: relPath, Kind: kind}
+				if kind == types.SkippedSymlink {
+					entry.Resolves = linkResolution(linkRoot, path)
+				}
+				td.Skipped = append(td.Skipped, entry)
 			}
 			return nil
 		}
