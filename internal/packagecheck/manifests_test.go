@@ -566,9 +566,9 @@ func TestRequirementsFileCoversPythonManifestOnlyWhenItPinsIt(t *testing.T) {
 		notPinne []string
 	}{
 		{"editable install of the project", map[string]string{"pyproject.toml": project, "requirements.txt": "-e .\n"},
-			false, "requirements.txt installs a local project (an editable or path entry), whose dependencies it does not pin", nil},
+			false, "requirements.txt installs it as a local project and does not pin flask-login, requests", nil},
 		{"bare dot", map[string]string{"pyproject.toml": project, "requirements.txt": ".\n"},
-			false, "requirements.txt installs a local project", nil},
+			false, "requirements.txt installs it as a local project", nil},
 		{"editable install beside full pins", map[string]string{"pyproject.toml": project, "requirements.txt": "-e .\nrequests==2.32.3\nflask-login==0.6.3\n"},
 			false, "installs a local project", nil},
 		{"file URL", map[string]string{"pyproject.toml": project, "requirements.txt": "app @ file:///src/app\nrequests==2.32.3\nflask-login==0.6.3\n"},

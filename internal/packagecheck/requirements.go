@@ -3,9 +3,11 @@ package packagecheck
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -170,6 +172,7 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 		files = append(files, key)
 	}
 	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files, local: w.local,
+		localProjects: w.localProjects, localOther: w.localOther,
 		syntax: w.syntax, syntaxLines: w.syntaxLines}, nil
 }
 
@@ -182,6 +185,11 @@ type requirementsWalk struct {
 	// local is set when the file or one it includes has an editable or
 	// local-path entry.
 	local bool
+	// localProjects are the project directories inside the root that
+	// those entries install; localOther counts the entries that install
+	// anything else (an archive, a VCS checkout, a path outside the root).
+	localProjects []string
+	localOther    int
 	// syntax is the first line skipped in the file or one it includes,
 	// in reading order; syntaxLines counts the skipped lines.
 	syntax      *RequirementsSyntaxError
@@ -221,6 +229,15 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 	for _, item := range file.items {
 		if item.local {
 			w.local = true
+			dirs := w.localProjectDirs(path, item.localPath)
+			if len(dirs) == 0 {
+				w.localOther++
+			}
+			for _, d := range dirs {
+				if !slices.Contains(w.localProjects, d) && len(w.localProjects) < maxRequirementsFiles {
+					w.localProjects = append(w.localProjects, d)
+				}
+			}
 			continue
 		}
 		if item.ref != nil {
@@ -291,6 +308,75 @@ func (w *requirementsWalk) resolveInclude(from, arg string) (string, string) {
 		return "", UnresolvedIncludeMissing
 	}
 	return p, ""
+}
+
+// localProjectDirs returns the Python project directories inside the
+// root that a local entry may install: its path taken relative to the
+// file, and relative to the root, since pip reads a local path relative to
+// the directory it runs in, which is usually the project root. A
+// directory counts when it holds pyproject.toml, setup.py or setup.cfg.
+// An archive, a VCS or remote URL, a home-relative path or one outside the
+// root yields nothing.
+func (w *requirementsWalk) localProjectDirs(from, arg string) []string {
+	target := strings.TrimSpace(arg)
+	if name, ref, ok := strings.Cut(target, "@"); ok && pep508Name.MatchString(strings.TrimSpace(strings.SplitN(name, "[", 2)[0])) {
+		target = strings.TrimSpace(ref)
+	}
+	if i := strings.IndexAny(target, " \t;#"); i >= 0 {
+		target = target[:i]
+	}
+	if rest, ok := cutPrefixFold(target, "file:"); ok {
+		switch {
+		case strings.HasPrefix(rest, "///"):
+			target = rest[2:]
+		case strings.HasPrefix(rest, "//localhost/"):
+			target = rest[len("//localhost"):]
+		case strings.HasPrefix(rest, "//"):
+			return nil
+		default:
+			target = rest
+		}
+		if unescaped, err := url.PathUnescape(target); err == nil {
+			target = unescaped
+		}
+	} else if strings.Contains(target, "://") || hasURLScheme(target) {
+		return nil
+	}
+	if i := strings.IndexByte(target, '['); i >= 0 && strings.HasSuffix(target, "]") {
+		target = target[:i]
+	}
+	if target == "" || strings.HasPrefix(target, "~") {
+		return nil
+	}
+	p := filepath.FromSlash(target)
+	candidates := []string{p}
+	if !filepath.IsAbs(p) {
+		candidates = []string{filepath.Join(filepath.Dir(from), p), filepath.Join(w.rootReal, p)}
+	}
+	var out []string
+	for _, c := range candidates {
+		real, err := realDir(c)
+		if err != nil || !withinDir(w.rootReal, real) || slices.Contains(out, real) {
+			continue
+		}
+		if info, err := os.Stat(real); err != nil || !info.IsDir() {
+			continue
+		}
+		for _, name := range []string{"pyproject.toml", "setup.py", "setup.cfg"} {
+			if manifestCandidate(filepath.Join(real, name)) {
+				out = append(out, real)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
 }
 
 func realDir(dir string) (string, error) {

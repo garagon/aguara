@@ -92,8 +92,8 @@ func TestAuditRequirementsCoverageOfPythonManifests(t *testing.T) {
 	for name, tc := range map[string]struct {
 		requirements, decision, message string
 	}{
-		"editable project":   {"-e .\n", "review", "requirements.txt installs a local project"},
-		"bare dot":           {".\n", "review", "requirements.txt installs a local project"},
+		"editable project":   {"-e .\n", "review", "requirements.txt installs it as a local project"},
+		"bare dot":           {".\n", "review", "requirements.txt installs it as a local project"},
 		"unrelated pin only": {"black==24.4.2\n", "review", "requirements.txt does not pin requests with == or ==="},
 		"compiled":           {"certifi==2024.2.2\nrequests==2.32.3\nurllib3==2.2.1\n", "proceed", ""},
 	} {
@@ -142,6 +142,39 @@ func TestAuditNuGetCentralPackageManagement(t *testing.T) {
 	require.Contains(t, result.Triage.RecommendedNextSteps[0], "packages.lock.json")
 	require.False(t, result.Plan.CanInstallDependencies)
 	require.Equal(t, "pass", result.Verdict.Status)
+}
+
+// Installing from a requirements file with a local entry resolves that
+// project's dependencies anew, so another file's pins do not clear it,
+// and a file that only constrains pins nothing it installs.
+func TestAuditLocalEntriesAndConstraintsDoNotCover(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const project = "[project]\nname = \"demo\"\nversion = \"1\"\ndependencies = [\"requests>=2\"]\n"
+	for name, tc := range map[string]struct {
+		files            map[string]string
+		decision, reason string
+	}{
+		"editable install beside a pinned file": {map[string]string{
+			"pyproject.toml": project, "requirements-dev.txt": "-e .\npytest==8.2.0\n", "requirements.txt": "requests==2.31.0\n"},
+			"review", "manifest_without_lockfile"},
+		"editable install that includes the pins": {map[string]string{
+			"pyproject.toml": project, "requirements-dev.txt": "-e .\n-r requirements.txt\npytest==8.2.0\n", "requirements.txt": "requests==2.31.0\n"},
+			"proceed", ""},
+		"local wheel beside a pinned file": {map[string]string{
+			"requirements-dev.txt": "./dist/demo-1.0-py3-none-any.whl\n", "requirements.txt": "requests==2.31.0\n"},
+			"review", "unpinned_dependency_evidence"},
+		"constraints-only file": {map[string]string{
+			"pyproject.toml": project, "requirements.txt": "-c constraints.txt\n", "constraints.txt": "requests==2.31.0\n"},
+			"review", "manifest_without_lockfile"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := auditToFile(t, projectWith(t, tc.files))
+			require.Equal(t, tc.decision, result.Triage.Decision, "%+v", result.Triage.Reasons)
+			if tc.reason != "" {
+				requireTriageReason(t, result.Triage, tc.reason)
+			}
+		})
+	}
 }
 
 // A pinned requirements file that pins nothing the manifest declares, or

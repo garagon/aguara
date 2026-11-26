@@ -2,6 +2,7 @@ package packagecheck
 
 import (
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -344,12 +345,40 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 		return nil, ""
 	}
 	reqsByDir := map[string][]RequirementsEvidence{}
+	// installers maps a project directory (resolved) to the requirements
+	// files whose local entries install it.
+	installers := map[string][]RequirementsEvidence{}
 	for _, r := range reqs {
 		dir := filepath.Clean(filepath.Dir(r.Path))
 		reqsByDir[dir] = append(reqsByDir[dir], r)
+		for _, p := range r.LocalProjects {
+			installers[p] = append(installers[p], r)
+		}
 	}
 	for _, list := range reqsByDir {
 		sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+	}
+	for _, list := range installers {
+		sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+	}
+	// installedUnpinned returns the first requirements file that installs
+	// the manifest's project as a local entry without pinning, itself or
+	// through its includes, what that install resolves. Another file's
+	// pins do not help: installing from this one does not read them.
+	installedUnpinned := func(m *Manifest, dir string) (requirementsGap, bool) {
+		real, err := realDir(dir)
+		if err != nil {
+			return requirementsGap{}, false
+		}
+		for _, r := range installers[real] {
+			pins := r
+			pins.Local = false
+			if gap := requirementsCover(pins, m); !gap.covered {
+				gap.installs = true
+				return gap, true
+			}
+		}
+		return requirementsGap{}, false
 	}
 	// requirementsNote returns whether a requirements file in the
 	// manifest's directory or a parent covers it, and otherwise what the
@@ -396,11 +425,13 @@ func ManifestsWithoutLockfile(root string, manifests []Manifest, locks LockfileD
 			continue
 		}
 		if m.Ecosystem == intel.EcosystemPyPI && m.Declares {
-			ok, gap := requirementsNote(m, dir)
-			if ok {
+			if gap, unpinned := installedUnpinned(m, dir); unpinned {
+				notes[m] = gap
+			} else if ok, gap := requirementsNote(m, dir); ok {
 				continue
+			} else {
+				notes[m] = gap
 			}
-			notes[m] = gap
 		}
 		if w, wdir := nearestRoot(m.Ecosystem, dir); w != nil {
 			w.declares = w.declares || m.Declares
@@ -445,6 +476,10 @@ type requirementsGap struct {
 	// notNamed: the manifest's dependency names are unknown and the
 	// manifest does not name the file as their source.
 	notNamed bool
+	// installs: the file installs the manifest's project as a local entry
+	// and does not pin what that install resolves (the other fields say
+	// what it lacks).
+	installs bool
 }
 
 // maxNotPinned bounds the names an entry lists.
@@ -498,19 +533,20 @@ func requirementsCover(r RequirementsEvidence, m *Manifest) requirementsGap {
 		gap.notPinned = gap.notPinned[:maxNotPinned]
 	}
 	if !m.DependencyNamesKnown {
-		gap.notNamed = !m.namesDependencyFile(r.Path)
+		gap.notNamed = !m.namesDependencyFile(r)
 		gap.unpinned, gap.noPins = r.Unpinned, r.ExactPins == 0
 		gap.covered = gap.covered && !gap.notNamed && r.Unpinned == 0 && r.ExactPins > 0
 	}
 	return gap
 }
 
-// namesDependencyFile reports whether the manifest names path as a source
-// of its dependencies; paths compare with symlinked directories resolved.
-func (m *Manifest) namesDependencyFile(path string) bool {
-	want := ResolvedPath(path)
+// namesDependencyFile reports whether the manifest names the requirements
+// file, or a file it includes, as a source of its dependencies; paths
+// compare with symlinked directories resolved.
+func (m *Manifest) namesDependencyFile(r RequirementsEvidence) bool {
+	files := append([]string{ResolvedPath(r.Path)}, r.Files...)
 	for _, f := range m.DependencyFiles {
-		if ResolvedPath(f) == want {
+		if slices.Contains(files, ResolvedPath(f)) {
 			return true
 		}
 	}
@@ -525,6 +561,15 @@ func (g requirementsGap) describe(root string) string {
 		name = filepath.ToSlash(rel)
 	}
 	switch {
+	case g.installs:
+		why := "does not pin what that install resolves"
+		switch {
+		case len(g.notPinned) > 0:
+			why = "does not pin " + strings.Join(g.notPinned, ", ") + " with == or ==="
+		case g.notNamed:
+			why = "the manifest's dependencies cannot all be read from it"
+		}
+		return name + " installs it as a local project and " + why
 	case g.local:
 		return name + " installs a local project (an editable or path entry), whose dependencies it does not pin"
 	case len(g.notPinned) > 0:

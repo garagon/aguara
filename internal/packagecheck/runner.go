@@ -58,8 +58,13 @@ type RequirementsEvidence struct {
 	ExactPins, Unpinned int
 	// Local reports an editable or local-path entry, such as -e . or a
 	// bare ".": pip installs that project from its own metadata, which
-	// the file does not record.
-	Local bool
+	// the file does not record. LocalProjects are the project directories
+	// inside the checked directory such entries install (resolved
+	// paths); an entry that installs anything else counts in Unpinned.
+	Local         bool
+	LocalProjects []string
+	// Files are the file and the files it includes, by resolved path.
+	Files []string
 }
 
 // ResolvedPath returns path with its directory's symlinks evaluated, the
@@ -189,6 +194,10 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			out.Hits = append(out.Hits, Hit{Ref: ref, Record: matches[0].Record, AdvisoryIDs: advisoryIDs(matches)})
 			findings++
 		}
+		// A local entry that is not a project directory inside the checked
+		// directory (an archive, a VCS checkout, a path outside it) installs
+		// something whose dependencies nothing here pins.
+		unpinned += parsed.localOther
 		out.Ecosystems = append(out.Ecosystems, EcosystemResult{
 			Ecosystem:          t.Ecosystem,
 			Path:               t.Path,
@@ -206,10 +215,20 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// for a manifest.
 			out.Unparsed = append(out.Unparsed, unparsedRequirements(t, parsed.syntax, parsed.syntaxLines))
 		} else if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
-			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local}
+			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local,
+				LocalProjects: parsed.localProjects, Files: append([]string{ResolvedPath(t.Path)}, parsed.files...)}
+			// A -c pin limits a name the file or its -r includes require;
+			// on its own it installs nothing, so it pins nothing here.
+			required := map[string]bool{}
 			for _, ref := range refs {
-				if !ref.Unpinned && ref.Version != "" {
-					ev.Pinned[intel.PEP503Normalize(ref.Name)] = true
+				if ref.Group != constraintGroup {
+					required[intel.PEP503Normalize(ref.Name)] = true
+				}
+			}
+			for _, ref := range refs {
+				name := intel.PEP503Normalize(ref.Name)
+				if !ref.Unpinned && ref.Version != "" && required[name] {
+					ev.Pinned[name] = true
 					ev.ExactPins++
 				}
 			}
@@ -282,8 +301,12 @@ type parsedTarget struct {
 	// including files reached only through an include.
 	files []string
 	// local reports an editable or local-path requirement in the file or
-	// one it includes.
-	local bool
+	// one it includes; localProjects are the project directories inside
+	// the root such entries install, and localOther counts the ones that
+	// install anything else.
+	local         bool
+	localProjects []string
+	localOther    int
 	// syntax is the first line of the file or its includes that was
 	// skipped as outside the pip grammar; syntaxLines counts them.
 	syntax      *RequirementsSyntaxError
