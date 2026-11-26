@@ -182,6 +182,7 @@ func FuzzParseRequirements(f *testing.F) {
 		"# c \\\nx>=1,<2\n-e .\ngit+https://x/y.git#egg=z\nname @ https://x/y.zip\n--index-url https://x\n",
 		"-r ../escape.txt\n-r ${HOME}/x\n-rfile:///etc/hosts\n",
 		"# coding: utf-7\nsix==1.16.0 # +AAo-x+AD0APQ-1\n",
+		"--constr other.txt\n--extra-index https://x\n--req a\n-- -r other.txt\nx==1 -r other.txt --g y\n-e ./x -r other.txt\n--pre=1\n",
 		utf8BOM + "# coding: utf-7\nx==1\r\n",
 	} {
 		f.Add([]byte(s))
@@ -207,6 +208,9 @@ func FuzzParseRequirements(f *testing.F) {
 			return
 		}
 		checkPythonRefs(t, "requirements.txt", parsed.refs)
+		if (parsed.syntax == nil) != (parsed.syntaxLines == 0) || (parsed.syntax != nil && parsed.syntax.Line < 1) {
+			t.Errorf("skipped lines %d recorded inconsistently (%v)", parsed.syntaxLines, parsed.syntax)
+		}
 		rootReal, err := realDir(root)
 		if err != nil {
 			t.Skip()

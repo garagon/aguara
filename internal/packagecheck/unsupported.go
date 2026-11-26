@@ -174,7 +174,9 @@ func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) 
 // include, and returns its exact pins. A range-only file is reported too:
 // read by name, the same content would make the audit review its
 // unpinned entries, so the file name must not decide the outcome. A .txt
-// that is prose fails to parse and is not reported.
+// with a line outside the pip grammar is reported only when it also pins
+// an exact version: prose under such a name is not reported, and the pins
+// of a pip file with one unreadable line are still matched.
 func namesRequirements(path string) ([]PackageRef, bool) {
 	file, err := parseRequirementsFile(path)
 	if err != nil {
@@ -195,6 +197,12 @@ func namesRequirements(path string) ([]PackageRef, bool) {
 			pin.Path, pin.Source = path, filepath.Base(path)
 			pins = append(pins, pin)
 		}
+	}
+	if file.syntax != nil {
+		// A line outside the pip grammar: a text file such as prose
+		// reads as words here and there, so the file counts as a pip
+		// file only when it also pins an exact version.
+		names = len(pins) > 0
 	}
 	return pins, names
 }

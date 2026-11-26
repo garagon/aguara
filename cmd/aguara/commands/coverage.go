@@ -148,7 +148,8 @@ func noExactVersions(c *packagecheck.Coverage) bool {
 
 // splitUnsupported separates files Aguara cannot parse from files of
 // ecosystems it has no package intelligence for and from manifests that
-// have no evaluated lockfile.
+// have no evaluated lockfile. Requirements files read except for some
+// lines count as files it cannot parse; partlyRead separates them.
 func splitUnsupported(evidence []packagecheck.UnsupportedEvidence) (unparsed, noIntel, manifests []packagecheck.UnsupportedEvidence) {
 	for _, u := range evidence {
 		switch {
@@ -161,6 +162,19 @@ func splitUnsupported(evidence []packagecheck.UnsupportedEvidence) (unparsed, no
 		}
 	}
 	return unparsed, noIntel, manifests
+}
+
+// partlyRead splits off the requirements files that were read except for
+// the lines they list.
+func partlyRead(evidence []packagecheck.UnsupportedEvidence) (partial, rest []packagecheck.UnsupportedEvidence) {
+	for _, u := range evidence {
+		if u.PartlyRead() {
+			partial = append(partial, u)
+		} else {
+			rest = append(rest, u)
+		}
+	}
+	return partial, rest
 }
 
 // pinsChecked sums the exact pins matched in evidence.
@@ -229,7 +243,17 @@ func unsupportedEvidenceLines(c *packagecheck.Coverage, root string) []string {
 		return nil
 	}
 	unparsed, noIntel, manifests := splitUnsupported(c.UnsupportedEvidence)
+	partial, unparsed := partlyRead(unparsed)
 	var lines []string
+	const maxPartial = 3
+	for i, u := range partial {
+		if i == maxPartial {
+			lines = append(lines, fmt.Sprintf("Partly evaluated: %d more requirements files with lines Aguara cannot read (see coverage.unsupported_evidence)", len(partial)-maxPartial))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("Partly evaluated: %s (%s)",
+			output.TerminalText(displayPath(root, u.Path)), output.TerminalText(u.Detail)))
+	}
 	if len(unparsed) > 0 {
 		lines = append(lines, fmt.Sprintf("Not evaluated: %s (dependency %s Aguara cannot parse; no packages in %s were checked%s)",
 			listedPaths(unparsed, root), plural(len(unparsed), "file", "files"), plural(len(unparsed), "it", "them"), pinsNote(unparsed)))
@@ -279,6 +303,8 @@ func unsupportedEvidenceNames(evidence []packagecheck.UnsupportedEvidence, root 
 			name += " (" + u.Ecosystem + detailSuffix(u) + ")"
 		case u.NoIntel():
 			name += " (Aguara has no package intelligence for " + u.Ecosystem + ")"
+		case u.PartlyRead():
+			name += " (" + u.Detail + ")"
 		}
 		names = append(names, name)
 	}

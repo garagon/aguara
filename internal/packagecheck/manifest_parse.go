@@ -910,6 +910,10 @@ func parseRequirementsInManifest(path string) (manifestInfo, error) {
 	if err != nil {
 		return info, err
 	}
+	if file.syntax != nil {
+		// A skipped line may name a dependency.
+		info.unknown = true
+	}
 	for _, item := range file.items {
 		if item.include != "" || item.local {
 			// An include or a local project: what it pulls in is not

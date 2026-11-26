@@ -642,14 +642,28 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 	files := unsupportedEvidenceNames(others, result.Target)
 	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
 	summary := "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
+	partial, _ := partlyRead(others)
 	if cov.Evaluated() {
 		// Some evidence was checked, but action_plan grants or withholds
 		// installation for the whole repository: an install would also
 		// pull the packages in these files, which nothing checked.
+		message := "These dependency files could not be evaluated and their packages were not checked: " + files + "."
+		if len(partial) > 0 {
+			// A requirements file read except for some lines: what pip
+			// does with those lines was not checked.
+			message = "These dependency files could not be evaluated in full, and what Aguara could not read in them was not checked: " + files + "."
+		}
+		if len(partial) == len(others) {
+			names := make([]string, 0, len(partial))
+			for _, u := range partial {
+				names = append(names, displayPath(result.Target, u.Path))
+			}
+			step = "Fix or review the lines listed in coverage.unsupported_evidence for " + strings.Join(names, ", ") + " before installing; this audit did not check what pip does with them."
+		}
 		t.Reasons = append(t.Reasons, AuditTriageReason{
 			Kind:     "partial_dependency_coverage",
 			Severity: "warning",
-			Message:  "These dependency files could not be evaluated and their packages were not checked: " + files + ".",
+			Message:  message,
 		})
 		summary = "Some dependency files could not be evaluated, so the audit cannot clear dependency installation."
 	} else {

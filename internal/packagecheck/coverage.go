@@ -70,10 +70,19 @@ type UnsupportedEvidence struct {
 	RequirementsFile string   `json:"requirements_file,omitempty"`
 	NotPinned        []string `json:"not_pinned,omitempty"`
 	Detail           string   `json:"detail,omitempty"`
+	// SkippedLines counts, for a requirements file that was read, the
+	// lines outside the pip grammar Aguara reads that were skipped (in the
+	// file or a file it includes); Detail names the first. Its other lines
+	// were checked like any read file's. Omitted when zero.
+	SkippedLines int `json:"skipped_lines,omitempty"`
 
 	// pins are the exact pins MatchPins checks.
 	pins []PackageRef
 }
+
+// PartlyRead reports a requirements file that was read except for the
+// lines counted in SkippedLines.
+func (u UnsupportedEvidence) PartlyRead() bool { return u.SkippedLines > 0 }
 
 // NoIntel reports whether Aguara has no malicious-package intelligence
 // for the file's ecosystem at all, so a parser would not help: the file

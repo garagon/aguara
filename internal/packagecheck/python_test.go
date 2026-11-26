@@ -252,12 +252,14 @@ func TestParseRequirementsIncludeBoundaries(t *testing.T) {
 	_, err = parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(root, "requirements-linked.txt"), Source: "requirements-linked.txt", Root: root}, newRequirementsCache())
 	require.Error(t, err)
 
-	// A malformed included file fails the whole target.
+	// A malformed line in an included file is skipped and reported; the
+	// rest of the target is still read.
 	writeFile(t, filepath.Join(root, "bad.txt"), "pkg==\n")
 	writeFile(t, filepath.Join(root, "requirements-bad.txt"), "good==1.0\n-r bad.txt\n")
 	refs, err := ParseRequirements(Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(root, "requirements-bad.txt"), Source: "requirements-bad.txt", Root: root})
-	require.Error(t, err)
-	require.Nil(t, refs)
+	var syntax *RequirementsSyntaxError
+	require.ErrorAs(t, err, &syntax)
+	require.Equal(t, []string{"good 1.0"}, refSummary(refs))
 }
 
 func TestParseRequirementsIncludeDepthLimit(t *testing.T) {
@@ -566,17 +568,35 @@ func TestRunnerListsRequirementsSyntaxItCannotRead(t *testing.T) {
 		"unknown option":                      {map[string]string{"requirements.txt": "--frobnicate\nflask==3.0.0\n"}, "requirements.txt", "line 1 is not"},
 		"malformed specifier":                 {map[string]string{"requirements.txt": "flask==3.0.0\npkg==\n"}, "requirements.txt", "line 2 is not"},
 		"unterminated quote":                  {map[string]string{"requirements.txt": "-r 'base.txt\n"}, "requirements.txt", "line 1 is not"},
-		"malformed include":                   {map[string]string{"requirements.txt": "good==1.0\n-r bad.txt\n", "bad.txt": "pkg==\n"}, "requirements.txt", "bad.txt, which it includes, has a line (1)"},
+		"malformed include":                   {map[string]string{"requirements.txt": "good==1.0\n-r bad.txt\n", "bad.txt": "pkg==\n"}, "requirements.txt", "line 1 of bad.txt, which it includes, is not"},
+		"several lines":                       {map[string]string{"requirements.txt": "--frobnicate\nflask==3.0.0\npkg==\n"}, "requirements.txt", "line 1 and 1 more line are not pip requirements or options Aguara reads"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			res, err := run(t, tc.files, tc.target)
 			require.NoError(t, err)
-			require.Empty(t, res.Ecosystems, "nothing in it was evaluated")
+			require.Len(t, res.Ecosystems, 1, "the lines that parsed were evaluated")
 			require.Len(t, res.Unparsed, 1)
 			require.Equal(t, ReasonFormatNotParsed, res.Unparsed[0].Reason)
 			require.Contains(t, res.Unparsed[0].Detail, tc.detail)
+			require.Contains(t, res.Unparsed[0].Detail, "the other lines were checked")
+			require.True(t, res.Unparsed[0].PartlyRead())
+			require.Empty(t, res.Requirements, "a file with a skipped line never stands for a manifest")
 		})
 	}
+
+	// The entries that parsed are matched as usual.
+	matcher := intel.NewMatcher(intel.Snapshot{Records: []intel.Record{
+		{ID: "MAL-TEST", Ecosystem: intel.EcosystemPyPI, Name: "evil-pkg", Kind: intel.KindMalicious, Versions: []string{"1.0"}},
+		{ID: "MAL-TEST-2", Ecosystem: intel.EcosystemPyPI, Name: "other-evil", Kind: intel.KindMalicious, Versions: []string{"2.0"}},
+	}})
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "requirements.txt"), "--frobnicate\nevil-pkg==1.0\n-r base.txt\n")
+	writeFile(t, filepath.Join(dir, "base.txt"), "pkg==\nother-evil==2.0 ; python_version >= '3'\n")
+	res, err := (&Runner{Matcher: matcher}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
+	require.NoError(t, err)
+	require.Len(t, res.Hits, 2, "the pin in the file and the one in its include")
+	require.Len(t, res.Unparsed, 1)
+	require.Equal(t, 2, res.Ecosystems[0].FindingsCount)
 
 	deep := map[string]string{}
 	for i := 0; i <= maxRequirementsIncludeDepth+2; i++ {
@@ -599,12 +619,12 @@ func TestRunnerListsRequirementsSyntaxItCannotRead(t *testing.T) {
 		})
 	}
 
-	dir := t.TempDir()
+	dir = t.TempDir()
 	writeFile(t, filepath.Join(dir, "real.txt"), "flask==3.0.0\n")
 	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "requirements.txt")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	_, err := (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
+	_, err = (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
 	require.Error(t, err, "a symlinked requirements file is unsafe input")
 }
 

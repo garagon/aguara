@@ -1,7 +1,6 @@
 package packagecheck
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -42,8 +41,9 @@ type RunResult struct {
 	// versions a Python manifest beside it would install.
 	Requirements []RequirementsEvidence
 	// Unparsed lists requirements targets with a line outside the pip
-	// grammar the parser reads (RequirementsSyntaxError). Nothing in them
-	// was checked; they belong in coverage.unsupported_evidence.
+	// grammar the parser reads (RequirementsSyntaxError). The line was
+	// skipped and the rest of the target checked; the entry belongs in
+	// coverage.unsupported_evidence.
 	Unparsed []UnsupportedEvidence
 }
 
@@ -109,23 +109,6 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
 		parsed, err := parseTargetDetail(t, cache)
-		var syntax *RequirementsSyntaxError
-		if err != nil && t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && errors.As(err, &syntax) {
-			// Named like a requirements file but not in the pip grammar
-			// the parser reads: not evaluated, not a failed check.
-			kind := "requirements.txt"
-			if IsConstraintsFile(t.Path) {
-				kind = "constraints.txt"
-			}
-			detail := fmt.Sprintf("line %d is not a pip requirement or option Aguara reads", syntax.Line)
-			if ResolvedPath(syntax.Path) != ResolvedPath(t.Path) {
-				detail = fmt.Sprintf("%s, which it includes, has a line (%d) that is not a pip requirement or option Aguara reads", filepath.Base(syntax.Path), syntax.Line)
-			}
-			out.Unparsed = append(out.Unparsed, UnsupportedEvidence{
-				Path: t.Path, Kind: kind, Ecosystem: intel.EcosystemPyPI, Reason: ReasonFormatNotParsed, Detail: detail,
-			})
-			continue
-		}
 		if err != nil {
 			return nil, fmt.Errorf("packagecheck: %s: %w", t.Path, err)
 		}
@@ -214,7 +197,14 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			Unpinned:           unpinned,
 			UnresolvedIncludes: len(parsed.unresolved),
 		})
-		if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
+		if parsed.syntax != nil {
+			// Lines outside the pip grammar the parser reads were
+			// skipped: everything else was matched above, but what pip
+			// would do with those lines was not checked, so the file is
+			// also listed as not evaluated in full, and it never stands
+			// for a manifest.
+			out.Unparsed = append(out.Unparsed, unparsedRequirements(t, parsed.syntax, parsed.syntaxLines))
+		} else if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
 			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local}
 			for _, ref := range refs {
 				if !ref.Unpinned && ref.Version != "" {
@@ -234,6 +224,31 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// unparsedRequirements is the coverage entry for a requirements target
+// with lines the parser skipped.
+func unparsedRequirements(t Target, first *RequirementsSyntaxError, lines int) UnsupportedEvidence {
+	kind := "requirements.txt"
+	if IsConstraintsFile(t.Path) {
+		kind = "constraints.txt"
+	}
+	where := fmt.Sprintf("line %d", first.Line)
+	if ResolvedPath(first.Path) != ResolvedPath(t.Path) {
+		where = fmt.Sprintf("line %d of %s, which it includes,", first.Line, filepath.Base(first.Path))
+	}
+	what := " is not a pip requirement or option Aguara reads"
+	switch {
+	case lines == 2:
+		what = " and 1 more line are not pip requirements or options Aguara reads"
+	case lines > 2:
+		what = fmt.Sprintf(" and %d more lines are not pip requirements or options Aguara reads", lines-1)
+	}
+	return UnsupportedEvidence{
+		Path: t.Path, Kind: kind, Ecosystem: intel.EcosystemPyPI, Reason: ReasonFormatNotParsed,
+		Detail:       where + what + "; the other lines were checked",
+		SkippedLines: lines,
+	}
 }
 
 // hitKey identifies one reported PyPI entry. Path and Line keep
@@ -268,6 +283,10 @@ type parsedTarget struct {
 	// local reports an editable or local-path requirement in the file or
 	// one it includes.
 	local bool
+	// syntax is the first line of the file or its includes that was
+	// skipped as outside the pip grammar; syntaxLines counts them.
+	syntax      *RequirementsSyntaxError
+	syntaxLines int
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the
