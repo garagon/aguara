@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -31,18 +32,23 @@ import (
 // analyzer is "pattern-decoder", and the line is where the encoded text
 // sits in the file.
 //
-// A blob is matched together with the text around it: up to
-// decodedContextBytes of its own line on each side, so a rule written for
-// the file's syntax (a JSON key, a YAML key) still sees the key in front of
-// an encoded value, and whole lines around it, so a context-scope exclude
-// sees the heading above it (rules.ExcludeContextLines lines above) and a
-// match_mode: all rule with within_lines can take one half from the file
-// and the other from the decoded text (up to maxDecodedContextLines lines on
-// each side, for those rules only). At most decodedContextLinesBytes of
-// whole lines are taken on each side. Only matches that touch the decoded
-// text are reported; the surrounding text was already matched as part of
-// the file. The decoded text is part of its line, so a `^` anchor matches at
-// its start only when the blob starts its line.
+// A blob is matched in place, together with up to decodedContextBytes of
+// its own line on each side, so a rule written for the file's syntax (a
+// JSON key, a YAML key) still sees the key in front of an encoded value.
+// Rules that read other lines also get whole lines around it: a rule with a
+// context-scope exclude the rules.ExcludeContextLines lines above, so the
+// exclude sees a heading there, and a match_mode: all rule with
+// within_lines up to maxDecodedContextLines lines on each side, so it can
+// take one half from the file and the other from the decoded text. At most
+// decodedContextLinesBytes of whole lines are taken on each side. A
+// match_mode: all rule without a window needs each pattern anywhere in the
+// file, and decoded text counts as part of it: the patterns the decoded
+// text and its line lack can hit anywhere in the file's own text. Only
+// matches that touch the decoded text are reported; the surrounding text
+// was already matched as part of the file. The decoded text is part of its
+// line: a `^` anchor matches at its start when the blob starts its line
+// (for the rules matched with lines above, only with `(?m)`), and not when
+// the blob sits in the middle of a line.
 //
 // Base64 wrapped over several lines of one width (MIME, PEM bodies,
 // indented YAML block scalars) is joined before decoding; unpadded base64
@@ -183,18 +189,35 @@ func (m *Matcher) newDecodeRun(ctx context.Context, target *scanner.Target, appl
 		run.blobsLeft[i] = decoderBlobBudget
 	}
 	// Rules with a within_lines window can combine a decoded hit with hits
-	// in the lines around the blob; they are matched against a wider
-	// splice, the other rules against the blob's line and the lines a
-	// context-scope exclude reads.
+	// in the lines around the blob, and a context-scope exclude reads the
+	// lines above a match; those rules are matched with those lines. The
+	// others are matched with the blob's line only, so the decoded text
+	// starts the matched text when the blob starts its line.
+	// A match_mode: all rule without a window can take its other patterns
+	// from anywhere in the file.
 	for _, rule := range applicable {
-		if rule.MatchMode == rules.MatchAll && rule.WithinLines > 0 {
+		switch {
+		case rule.MatchMode == rules.MatchAll && rule.WithinLines > 0:
 			run.windowRules = append(run.windowRules, rule)
 			run.windowLines = max(run.windowLines, min(rule.WithinLines, maxDecodedContextLines))
-		} else {
+		case hasContextExclude(rule):
+			run.contextRules = append(run.contextRules, rule)
+		case rule.MatchMode == rules.MatchAll:
+			run.fileRules = append(run.fileRules, rule)
+		default:
 			run.lineRules = append(run.lineRules, rule)
 		}
 	}
 	return run
+}
+
+func hasContextExclude(rule *rules.CompiledRule) bool {
+	for _, ex := range rule.ExcludePatterns {
+		if ex.Scope == rules.ExcludeScopeContext {
+			return true
+		}
+	}
+	return false
 }
 
 // run decodes the blobs of every encoding in the file's content.
@@ -222,12 +245,20 @@ type decodeRun struct {
 
 	blobsLeft [encodingCount]int
 	bytesLeft int
-	// lineRules are matched with the blob's line and the
-	// rules.ExcludeContextLines lines above it; windowRules (match_mode: all
-	// with within_lines) with up to windowLines lines on each side.
-	lineRules   []*rules.CompiledRule
-	windowRules []*rules.CompiledRule
-	windowLines int
+	// lineRules are matched with the blob's line, fileRules (match_mode: all
+	// without a window) with the blob's line and the file, contextRules
+	// (with a context-scope exclude) with the rules.ExcludeContextLines
+	// lines above it too, and windowRules (match_mode: all with
+	// within_lines) with up to windowLines lines on each side.
+	lineRules    []*rules.CompiledRule
+	fileRules    []*rules.CompiledRule
+	contextRules []*rules.CompiledRule
+	windowRules  []*rules.CompiledRule
+	windowLines  int
+	// fileHits caches filePatternHits; fileLower is the file's lowercase
+	// text, built when first needed.
+	fileHits  map[*rules.CompiledRule][]bool
+	fileLower *lowercaseContent
 	// decodeInput counts the encoded bytes handed to a decoder, the
 	// candidate-side work, and rescanned the decoded text matched; tests
 	// bound both.
@@ -615,28 +646,48 @@ func textLine(text string, c candidate, origin *blobOrigin, x int) int {
 
 // rescan matches the decoded text of the blob at c, with the text around it
 // in text (see surroundings), against the applicable rules and reports the
-// matches that touch the decoded text. Most rules see the blob's line and
-// the lines above it that a context-scope exclude reads; rules with a
-// within_lines window also see up to that many lines on each side, so a
-// match_mode: all rule can take one half from the file and the other from
-// the decoded text.
+// matches that touch the decoded text. Most rules see the blob's line;
+// rules with a context-scope exclude also see the lines above it that the
+// exclude reads, and rules with a within_lines window up to that many lines
+// on each side, so a match_mode: all rule can take one half from the file
+// and the other from the decoded text. A match_mode: all rule without a
+// window can take the patterns the decoded text lacks from anywhere in the
+// file, as it does for the file's own text.
 func (r *decodeRun) rescan(text string, c candidate, decoded string, origin *blobOrigin, label string) {
 	r.rescanned += len(decoded)
-	r.rescanWith(r.lineRules, text, c, decoded, origin, label, rules.ExcludeContextLines, 0)
-	if len(r.windowRules) > 0 && r.err == nil {
-		r.rescanWith(r.windowRules, text, c, decoded, origin, label, r.windowLines, r.windowLines)
-	}
+	r.rescanWith(r.lineRules, false, text, c, decoded, origin, label, 0, 0)
+	r.rescanWith(r.fileRules, true, text, c, decoded, origin, label, 0, 0)
+	r.rescanWith(r.contextRules, false, text, c, decoded, origin, label, rules.ExcludeContextLines, 0)
+	r.rescanWith(r.windowRules, false, text, c, decoded, origin, label, max(r.windowLines, rules.ExcludeContextLines), r.windowLines)
 }
 
-func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, text string, c candidate, decoded string, origin *blobOrigin, label string, above, below int) {
+func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, fileWide bool, text string, c candidate, decoded string, origin *blobOrigin, label string, above, below int) {
+	if len(applicable) == 0 || r.err != nil {
+		return
+	}
 	before, after := surroundings(text, c, above, below)
 	spliced := before + decoded + after
 	from, to := len(before), len(before)+len(decoded)
 	touchesDecoded := func(h matchHit) bool { return h.start < to && h.end > from }
 	lines := strings.Split(spliced, "\n")
-	matches, err := r.m.matchText(r.ctx, applicable, r.keys, spliced, newLowercaseContent(spliced), lines, r.target, touchesDecoded, r.prefilter)
-	if err != nil {
-		r.err = err
+	lower := newLowercaseContent(spliced)
+	var matches []ruleMatch
+	if fileWide {
+		for _, rule := range applicable {
+			if err := r.ctx.Err(); err != nil {
+				r.err = err
+				return
+			}
+			if rm, ok := r.matchFileWide(rule, spliced, lower, lines, touchesDecoded); ok {
+				matches = append(matches, rm)
+			}
+		}
+	} else {
+		var err error
+		matches, err = r.m.matchText(r.ctx, applicable, r.keys, spliced, lower, lines, r.target, touchesDecoded, r.prefilter)
+		if err != nil {
+			r.err = err
+		}
 	}
 	// sourceLineAt maps an offset of the spliced text to a source line: the
 	// surroundings to the lines of the text the blob was found in, the
@@ -697,6 +748,62 @@ func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, text string, c 
 		}
 		r.findings = append(r.findings, finding)
 	}
+}
+
+// matchFileWide matches a match_mode: all rule without a within_lines
+// window against decoded text as part of the file: every pattern needs a hit
+// that no exclude suppresses, in the spliced text or anywhere in the file,
+// and at least one hit in the spliced text must touch the decoded text. The
+// match reports the spliced hits.
+func (r *decodeRun) matchFileWide(rule *rules.CompiledRule, spliced string, lower *lowercaseContent, lines []string, touches func(matchHit) bool) (ruleMatch, bool) {
+	var chosen []matchHit
+	var missing []int
+	touched := false
+	for i, pat := range rule.Patterns {
+		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, spliced, lower, lines))
+		if len(hits) == 0 {
+			missing = append(missing, i)
+			continue
+		}
+		pick := hits[0]
+		if j := slices.IndexFunc(hits, touches); j >= 0 {
+			pick, touched = hits[j], true
+		}
+		chosen = append(chosen, pick)
+	}
+	if !touched {
+		return ruleMatch{}, false
+	}
+	if len(missing) > 0 {
+		inFile := r.filePatternHits(rule)
+		for _, i := range missing {
+			if !inFile[i] {
+				return ruleMatch{}, false
+			}
+		}
+	}
+	return ruleMatch{rule: rule, hits: chosen, conf: 0.95, all: true}, true
+}
+
+// filePatternHits reports for each pattern of rule whether it has a hit in
+// the file's own text that no exclude suppresses. It is computed once per
+// rule and file, the first time a decoded text needs it.
+func (r *decodeRun) filePatternHits(rule *rules.CompiledRule) []bool {
+	if got, ok := r.fileHits[rule]; ok {
+		return got
+	}
+	if r.fileLower == nil {
+		r.fileLower = newLowercaseContent(r.content)
+	}
+	got := make([]bool, len(rule.Patterns))
+	for i, pat := range rule.Patterns {
+		got[i] = len(excludeHits(rule.ExcludePatterns, r.lines, matchPattern(pat, r.content, r.fileLower, r.lines))) > 0
+	}
+	if r.fileHits == nil {
+		r.fileHits = make(map[*rules.CompiledRule][]bool)
+	}
+	r.fileHits[rule] = got
+	return got
 }
 
 // lineCursor returns the 1-based line of increasing offsets of text in
