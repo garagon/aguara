@@ -27,8 +27,14 @@ const (
 	// YAML document and the token count of an XML document.
 	maxStructuredNodes = 2_000_000
 	// maxContainerMembers bounds the members of one JSON object or
-	// array, or the entries of one YAML mapping or sequence: no lockfile
-	// within the entry limit needs more.
+	// array, or the entries of one YAML mapping or sequence. It equals
+	// maxLockfileEntries but counts something else: members are counted
+	// before decoding, entries are the (name, version) references left
+	// after deduplication. A package-lock.json "packages" object has one
+	// member per install path, and a package installed at several paths
+	// is one entry, so a lockfile with more than 100,000 install paths is
+	// rejected here even when it holds fewer unique packages. Real
+	// lockfiles hold a few thousand install paths.
 	maxContainerMembers = 100_000
 	// maxXMLDepth bounds XML element nesting. encoding/xml has no
 	// nesting limit of its own; real POMs and project files nest fewer

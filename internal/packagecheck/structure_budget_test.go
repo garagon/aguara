@@ -96,6 +96,29 @@ func TestJSONMemberLimit(t *testing.T) {
 	require.NoError(t, checkJSONNodeBudget([]byte(`["`+strings.Repeat(",", maxContainerMembers+1)+`"]`), "x"))
 }
 
+// The member limit counts install paths, not packages: one package
+// installed at more than 100,000 paths is a single entry, and the
+// lockfile is still rejected.
+func TestPackageLockMemberLimitCountsInstallPaths(t *testing.T) {
+	paths := func(n int) string {
+		var b strings.Builder
+		b.WriteString(`{"lockfileVersion":3,"packages":{`)
+		for i := range n {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `"node_modules/p%d/node_modules/shared":{"version":"1.0.0"}`, i)
+		}
+		b.WriteString("}}")
+		return b.String()
+	}
+	refs, err := parseFile(t, intel.EcosystemNPM, "package-lock.json", paths(maxContainerMembers))
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	_, err = parseFile(t, intel.EcosystemNPM, "package-lock.json", paths(maxContainerMembers+1))
+	require.ErrorContains(t, err, "more than 100000 members")
+}
+
 // A lockfileVersion 1 tree repeats packages at many paths, so its nested
 // entries are counted while it is decoded, up to four times the entry
 // limit, instead of after the whole tree is materialised.
