@@ -21,6 +21,11 @@ func TestInitRejectsLinkedOutputs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			if tc.name == "hook" {
+				// The hook is placed where git runs hooks, so the
+				// link must be inside a real repository.
+				dir = gitRepo(t)
+			}
 			outside := filepath.Join(t.TempDir(), "must-not-be-created")
 			path := filepath.Join(dir, filepath.FromSlash(tc.path))
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -53,6 +58,21 @@ func TestInitRejectsEscapingOutputParents(t *testing.T) {
 			require.Empty(t, entries)
 		})
 	}
+}
+
+// A repository whose hooks directory links outside the checkout must not
+// get a hook written through the link.
+func TestInitHookRejectsLinkedHooksDirectory(t *testing.T) {
+	dir, outside := gitRepo(t), t.TempDir()
+	hooks := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.RemoveAll(hooks))
+	if err := os.Symlink(outside, hooks); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	captureStdoutBytes(t, func() { require.Error(t, initHook(dir)) })
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestInitRootedCreatePreservesExistingFiles(t *testing.T) {

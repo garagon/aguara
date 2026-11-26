@@ -589,13 +589,15 @@ func checkCaches(opts CheckOptions) []Finding {
 					// OSV one when both are present.
 					if len(hits) > 0 && !seen[path] {
 						hit := hits[0]
+						ids := matchIDs(hits)
 						seen[path] = true
 						findings = append(findings, Finding{
 							Severity:    SevCritical,
-							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+							Title:       fmt.Sprintf("Cached compromised package: %s %s (%s)", pkg.Name, pkg.Version, strings.Join(ids, ", ")),
 							Detail:      hit.Record.Summary,
 							Path:        path,
 							Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+							AdvisoryIDs: ids,
 						})
 					}
 				}
@@ -651,6 +653,7 @@ func checkCaches(opts CheckOptions) []Finding {
 								Title:       fmt.Sprintf("Cached compromised artifact: %s %s (%s)", entry.displayName, v, entry.id),
 								Path:        path,
 								Remediation: "Run 'aguara clean --purge-caches' to remove cached packages",
+								AdvisoryIDs: []string{entry.id},
 							})
 							break
 						}

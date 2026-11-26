@@ -15,6 +15,8 @@ The installed binary's catalog is authoritative for that binary.
 | Task | Command |
 |---|---|
 | Inspect skills, code or agent configuration | `aguara scan ./skills/ --project-policy ignore` |
+| Scan several files and directories as one report | `aguara scan SKILL.md scripts/ --root .` |
+| Scan piped content (a tool description, a file about to be written) | `aguara scan - --stdin-filename SKILL.md` |
 | Check dependencies against malicious-package intelligence | `aguara check .` |
 | Combine content and dependency checks | `aguara audit .` |
 | Produce machine-readable audit results | `aguara audit . --format json` |
@@ -37,7 +39,11 @@ From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
 `.aguara.yml` when `--fail-on` is not passed (a threshold can only add a gate),
 and says so on stderr. It prints a stderr notice naming the files whenever
 applying the policy changed the result. A local `scan` can still trust
-it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+it. Use `--project-policy ignore` when inspecting unfamiliar content. Content piped to
+`scan -` never applies project policy, and `--project-policy trust` is rejected there.
+Commit hooks (`aguara init --hook`, `.pre-commit-hooks.yaml`) apply the committer's own
+policy; enforce in CI with `--project-policy ignore`.
+The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 
@@ -91,7 +97,10 @@ Important options:
   catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
-- `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
+- `WithIgnorePatterns([]string{...})`: caller-owned exclusions in the `.aguaraignore`
+  syntax (`dist/` excludes every `dist` directory, `/build` only the root one; a
+  pattern without a slash matches file names only; `!` negation is unsupported and
+  never matches). Repeated use accumulates; earlier versions kept only the last call.
 - `WithCustomRules(dirs...)`: additional YAML rules. Repeated use accumulates
   directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
@@ -138,10 +147,16 @@ exported through public aliases, rather than copying a partial struct.
 - Empty scan findings serialize as `[]`, not `null`.
 - CLI JSON from `scan`, `check` and `audit` carries a `coverage` block: files
   scanned, package evidence read (with `unpinned` counts),
-  `unsupported_evidence` (dependency files found but not evaluated) and
-  `unresolved_includes` (requirements includes not read). Zero files, zero
-  evaluated evidence, unsupported files or any unpinned requirement is not a
-  clean result. Library `ScanResult` values leave `coverage` unset.
+  `unsupported_evidence` (dependency files found but not evaluated, each with
+  a `reason`, including manifests such as `package.json` or `pyproject.toml`
+  that declare dependencies without a lockfile, `manifest_without_lockfile`)
+  and `unresolved_includes` (requirements includes not read). Zero files,
+  zero evaluated evidence, unsupported files, a manifest without a lockfile or
+  any unpinned requirement is not a clean result. Only the exact pins of
+  unsupported files are matched (`exact_pins_checked`), except a
+  `format_not_parsed` requirements file with `skipped_lines`: it was read
+  and matched in full except for those lines. Library `ScanResult` values
+  leave `coverage` unset.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a

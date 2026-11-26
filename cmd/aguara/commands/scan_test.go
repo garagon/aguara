@@ -49,6 +49,8 @@ func resetFlags() {
 	flagWriteBaseline = ""
 	flagProjectPolicy = "auto"
 	flagFailOnEmpty = false
+	flagStdinFilename = defaultStdinFilename
+	flagScanRoot = ""
 	flagCheckPath = ""
 	flagCheckEcosystems = nil
 	flagCheckFailOn = ""
@@ -79,11 +81,14 @@ func resetFlags() {
 	// whether .aguara.yml may supply a default, so an earlier test's
 	// --format does not hide a later test's config value.
 	for _, c := range rootCmd.Commands() {
-		for _, name := range []string{"severity", "format", "fail-on", "rules", "baseline"} {
+		for _, name := range []string{"severity", "format", "fail-on", "rules", "baseline", "stdin-filename", "root"} {
 			if f := c.Flags().Lookup(name); f != nil {
 				f.Changed = false
 			}
 		}
+		// pflag keeps the position of a "--" from the previous parse;
+		// Init resets it. 0 is pflag.ContinueOnError, which cobra uses.
+		c.Flags().Init(c.Name(), 0)
 	}
 }
 

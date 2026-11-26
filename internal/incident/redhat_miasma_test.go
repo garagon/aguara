@@ -32,6 +32,20 @@ func runMiasmaLockfile(t *testing.T, dir string) *packagecheck.RunResult {
 	return res
 }
 
+// requireMiasmaTitle checks that an installed-tree finding names the
+// manual Miasma advisory first and every matching advisory, the same IDs
+// its advisory_ids array lists.
+func requireMiasmaTitle(t *testing.T, f incident.Finding, name, version string) {
+	t.Helper()
+	if len(f.AdvisoryIDs) == 0 || f.AdvisoryIDs[0] != miasmaAdvisory {
+		t.Fatalf("advisory_ids = %v, want %s first", f.AdvisoryIDs, miasmaAdvisory)
+	}
+	want := name + " " + version + " is a known compromised npm package (" + strings.Join(f.AdvisoryIDs, ", ") + ")"
+	if f.Title != want {
+		t.Errorf("title = %q, want %q", f.Title, want)
+	}
+}
+
 func writeFixture(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -59,10 +73,7 @@ func TestMiasma_NodeModulesHit(t *testing.T) {
 	if f.Severity != incident.SevCritical {
 		t.Errorf("expected CRITICAL, got %q", f.Severity)
 	}
-	want := "@redhat-cloud-services/chrome 2.3.1 is a known compromised npm package (" + miasmaAdvisory + ")"
-	if f.Title != want {
-		t.Errorf("title = %q, want %q", f.Title, want)
-	}
+	requireMiasmaTitle(t, f, "@redhat-cloud-services/chrome", "2.3.1")
 }
 
 // TestMiasma_PackageLockHit covers the pre-install package-lock.json
@@ -178,10 +189,7 @@ func TestMiasma_NewVersionsFire(t *testing.T) {
 			if f.Severity != incident.SevCritical {
 				t.Errorf("expected CRITICAL, got %q", f.Severity)
 			}
-			want := tc.name + " " + tc.version + " is a known compromised npm package (" + miasmaAdvisory + ")"
-			if f.Title != want {
-				t.Errorf("title = %q, want %q", f.Title, want)
-			}
+			requireMiasmaTitle(t, f, tc.name, tc.version)
 		})
 	}
 }

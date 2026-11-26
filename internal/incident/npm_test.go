@@ -149,11 +149,13 @@ func TestCheckNPM_MiniShaiHulud_AntvWave(t *testing.T) {
 			t.Errorf("expected CRITICAL severity, got %q on %q", f.Severity, f.Title)
 		}
 	}
-	// Title should name the specific package+version+advisory so a
-	// dashboard reader can correlate without digging into Detail.
+	// Title should name the specific package+version+advisories so a
+	// dashboard reader can correlate without digging into Detail. The
+	// manual advisory comes first; the OSV record for the same tuple
+	// follows, as in advisory_ids.
 	wantTitles := []string{
-		"@antv/g2 5.6.8 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv)",
-		"echarts-for-react 3.2.7 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv)",
+		"@antv/g2 5.6.8 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv, MAL-2026-3973)",
+		"echarts-for-react 3.2.7 is a known compromised npm package (SOCKET-2026-05-19-mini-shai-hulud-antv, MAL-2026-4132)",
 	}
 	for _, want := range wantTitles {
 		var found bool
@@ -259,11 +261,11 @@ func TestCheckNPM_CollapsesManualAndOSVDuplicate(t *testing.T) {
 		t.Fatalf("expected exactly 1 finding (manual+OSV collapse to one exposure), got %d: %+v", got, result.Findings)
 	}
 	got := result.Findings[0]
-	if !strings.Contains(got.Title, "SOCKET-2026-05-19-mini-shai-hulud-antv") {
-		t.Errorf("manual advisory must win the title; got %q", got.Title)
+	if !strings.Contains(got.Title, "(SOCKET-2026-05-19-mini-shai-hulud-antv, MAL-2026-3973)") {
+		t.Errorf("title must name the manual advisory first and then the OSV one; got %q", got.Title)
 	}
-	if strings.Contains(got.Title, "MAL-2026-3973") {
-		t.Errorf("OSV advisory must not appear in title when manual is present; got %q", got.Title)
+	if len(got.AdvisoryIDs) != 2 || got.AdvisoryIDs[0] != "SOCKET-2026-05-19-mini-shai-hulud-antv" || got.AdvisoryIDs[1] != "MAL-2026-3973" {
+		t.Errorf("advisory_ids = %v, want the manual then the OSV advisory", got.AdvisoryIDs)
 	}
 	if got.Severity != incident.SevCritical {
 		t.Errorf("expected CRITICAL, got %q", got.Severity)

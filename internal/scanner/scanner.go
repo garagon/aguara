@@ -63,6 +63,7 @@ type Scanner struct {
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
 	projectPolicyEnabled bool
+	outputFiles          []string
 	redact               bool
 }
 
@@ -95,9 +96,10 @@ func (s *Scanner) SetRedaction(enabled bool) {
 	s.redact = enabled
 }
 
-// SetIgnorePatterns sets additional file ignore patterns from config.
+// SetIgnorePatterns sets additional file ignore patterns from config. The
+// slice is copied, so later changes by the caller have no effect.
 func (s *Scanner) SetIgnorePatterns(patterns []string) {
-	s.ignorePatterns = patterns
+	s.ignorePatterns = append([]string(nil), patterns...)
 }
 
 // SetProjectPolicyEnabled controls whether files being scanned may suppress
@@ -106,6 +108,14 @@ func (s *Scanner) SetIgnorePatterns(patterns []string) {
 // inspect untrusted repositories or content should disable it.
 func (s *Scanner) SetProjectPolicyEnabled(enabled bool) {
 	s.projectPolicyEnabled = enabled
+}
+
+// SetOutputFiles names files this scan writes, such as its report or
+// baseline. A directory walk or path list never scans them, so a report an
+// earlier run of the same command left in the target cannot change the
+// result. Files named directly to Scan are scanned as before.
+func (s *Scanner) SetOutputFiles(paths []string) {
+	s.outputFiles = append([]string(nil), paths...)
 }
 
 // SetMaxFileSize sets the maximum file size for scanning.
@@ -260,6 +270,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		IgnorePatterns:    s.ignorePatterns,
 		MaxFileSize:       s.maxFileSize,
 		IgnoreProjectFile: !s.projectPolicyEnabled,
+		OutputFiles:       s.outputFiles,
 	}
 	targets, err := discovery.Discover(resolvedRoot)
 	if err != nil {
@@ -279,7 +290,44 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 	}
 	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+	result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
 	return result, nil
+}
+
+// ScanPaths scans several files and directories as one scan rooted at
+// root, a directory that contains all of them. Paths are relative to the
+// working directory, as typed; findings report paths relative to root.
+// Ignore patterns, including root's .aguaraignore when project policy is
+// enabled, apply to every path, files named directly included. Cross-file
+// correlation sees only the files of this scan, grouped by their directory
+// relative to root. It also returns the paths it was given and did not
+// scan (symbolic links, paths inside .git, node_modules or .aguara).
+func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*ScanResult, []SkippedPath, error) {
+	discovery := &TargetDiscovery{
+		IgnorePatterns:    s.ignorePatterns,
+		MaxFileSize:       s.maxFileSize,
+		IgnoreProjectFile: !s.projectPolicyEnabled,
+		OutputFiles:       s.outputFiles,
+	}
+	targets, err := discovery.DiscoverPaths(root, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, target := range targets {
+		target.Path = filepath.Join(root, target.RelPath)
+	}
+	result, err := s.ScanTargets(ctx, targets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if discovery.ExcludedByIgnoreFile > 0 {
+		result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
+	}
+	result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
+	result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+	result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
+	return result, discovery.Skipped, nil
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.

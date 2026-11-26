@@ -90,10 +90,41 @@ func FuzzParseBunLock(f *testing.F) {
 	)
 }
 
+// FuzzParseGo writes the input as both go.sum and the go.mod beside it,
+// so the go.sum reader and the go.mod reader it consults (require,
+// replace and exclude directives, blocks) run on the same bytes.
 func FuzzParseGo(f *testing.F) {
-	fuzzLockfile(f, intel.EcosystemGo, "go.sum", ParseGo,
+	for _, s := range []string{
 		"github.com/foo/bar v1.2.3 h1:abc=\ngithub.com/foo/bar v1.2.3/go.mod h1:def=\n",
-	)
+		"module m\n\nrequire\tgithub.com/foo/bar v1.2.3\nrequire(\n\tgithub.com/x/y v0.1.0 // indirect\n)\nexclude(\n\t\"github.com/foo/bar\" v1.2.3\n)\nreplace github.com/x/y => ../y\n",
+	} {
+		f.Add([]byte(s))
+	}
+	addTestdataSeeds(f, "go.sum")
+	addTestdataSeeds(f, "go.mod")
+	f.Fuzz(func(t *testing.T, data []byte) {
+		dir := t.TempDir()
+		if os.WriteFile(filepath.Join(dir, "go.sum"), data, 0o600) != nil || os.WriteFile(filepath.Join(dir, "go.mod"), data, 0o600) != nil {
+			t.Skip()
+		}
+		for _, source := range []string{"go.sum", "go.mod"} {
+			refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(dir, source), Source: source})
+			if err != nil {
+				if refs != nil {
+					t.Errorf("%s: refs returned alongside an error", source)
+				}
+				continue
+			}
+			for _, r := range refs {
+				if r.Name == "" || r.Version == "" {
+					t.Errorf("%s: PackageRef without a name or version: %+v", source, r)
+				}
+				if r.GraphOnly && r.Source != "go.sum" {
+					t.Errorf("%s: graph-only ref from %s", source, r.Source)
+				}
+			}
+		}
+	})
 }
 
 func FuzzParseCargo(f *testing.F) {
@@ -182,6 +213,7 @@ func FuzzParseRequirements(f *testing.F) {
 		"# c \\\nx>=1,<2\n-e .\ngit+https://x/y.git#egg=z\nname @ https://x/y.zip\n--index-url https://x\n",
 		"-r ../escape.txt\n-r ${HOME}/x\n-rfile:///etc/hosts\n",
 		"# coding: utf-7\nsix==1.16.0 # +AAo-x+AD0APQ-1\n",
+		"--constr other.txt\n--extra-index https://x\n--req a\n-- -r other.txt\nx==1 -r other.txt --g y\n-e ./x -r other.txt\n--pre=1\n",
 		utf8BOM + "# coding: utf-7\nx==1\r\n",
 	} {
 		f.Add([]byte(s))
@@ -207,6 +239,9 @@ func FuzzParseRequirements(f *testing.F) {
 			return
 		}
 		checkPythonRefs(t, "requirements.txt", parsed.refs)
+		if (parsed.syntax == nil) != (parsed.syntaxLines == 0) || (parsed.syntax != nil && parsed.syntax.Line < 1) {
+			t.Errorf("skipped lines %d recorded inconsistently (%v)", parsed.syntaxLines, parsed.syntax)
+		}
 		rootReal, err := realDir(root)
 		if err != nil {
 			t.Skip()
@@ -233,6 +268,66 @@ func checkPythonRefs(t *testing.T, source string, refs []PackageRef) {
 			t.Errorf("%s: %q must be either pinned with a version or unpinned without one", source, r.Name)
 		}
 	}
+}
+
+// FuzzParseDependencyManifests runs every dependency-manifest reader on
+// the same input: they only decide whether a manifest declares
+// dependencies and which exact pins it has, so one target covers them
+// all within the nightly budget. Each must not panic, and every pin must
+// carry an ecosystem, a name and a version.
+func FuzzParseDependencyManifests(f *testing.F) {
+	for _, s := range []string{
+		`{"dependencies":{"left-pad":"1.3.0","a":"npm:b@2.0.0"},"workspaces":["p/*"]}`,
+		`{"require":{"php":">=8","vendor/pkg":"v1.2.3"},"require-dev":{"x/y":"1.0.0@beta"}}`,
+		"[project]\ndependencies = [\"flask==3.0.0\"]\n[tool.poetry.dependencies]\na = \"1.0\"\n[tool.uv.workspace]\nmembers = [\"x\"]\n",
+		"[packages]\nflask = \"==3.0.0\"\nb = { version = \"===1.0\" }\n",
+		"[workspace]\n[dependencies]\nserde = \"=1.0.0\"\n[dependencies.x]\nversion = \"=2.0.0\"\n",
+		"setup(install_requires=['a'])\n",
+		"R = ['a==1', \"b\" 'c']\nif x == R:\n    R += [f'{y}']\nsetup(install_requires=R, extras_require={'d': ('e',)}, **k)\nopen(os.path.join(h, 'r', 'q.txt'))\n'''x\\\n'''\n",
+		"[project]\ndynamic = [\"dependencies\"]\n[tool.setuptools.dynamic]\ndependencies = {file = [\"requirements.txt\"]}\n",
+		"[options]\ninstall_requires =\n    flask==3.0.0\n",
+		"gem \"rails\", \"7.1.3\"\ngemspec\n",
+		"dependencies:\n  - numpy\n  - pip:\n    - flask==3.0.0\n",
+		"a: &a [*a]\n",
+	} {
+		f.Add([]byte(s))
+	}
+	readers := []struct {
+		name  string
+		parse func([]byte) (manifestInfo, error)
+	}{
+		{"package.json", parsePackageJSONManifest},
+		{"composer.json", parseComposerManifest},
+		{"pyproject.toml", parsePyprojectManifest},
+		{"Pipfile", parsePipfileManifest},
+		{"Cargo.toml", parseCargoManifest},
+		{"setup.py", parseSetupPyManifest},
+		{"setup.cfg", parseSetupCfgManifest},
+		{"Gemfile", parseGemfileManifest},
+		{"environment.yml", func(data []byte) (manifestInfo, error) {
+			info, _, err := parseCondaEnvironment(data)
+			return info, err
+		}},
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, r := range readers {
+			info, err := r.parse(data)
+			if err != nil {
+				continue
+			}
+			if len(info.pins) > info.deps {
+				t.Errorf("%s: %d pins for %d dependencies", r.name, len(info.pins), info.deps)
+			}
+			for _, p := range info.pins {
+				if p.Ecosystem == "" || p.Name == "" || p.Version == "" {
+					t.Errorf("%s: incomplete pin %+v", r.name, p)
+				}
+			}
+			if len(info.files) > 100 {
+				t.Errorf("%s: %d dependency files named", r.name, len(info.files))
+			}
+		}
+	})
 }
 
 func FuzzParseNuGet(f *testing.F) {
