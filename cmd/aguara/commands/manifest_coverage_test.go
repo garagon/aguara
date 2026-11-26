@@ -144,6 +144,39 @@ func TestAuditNuGetCentralPackageManagement(t *testing.T) {
 	require.Equal(t, "pass", result.Verdict.Status)
 }
 
+// The gaps that let NuGet references pass unchecked: a compromised
+// version in a conditional PackageVersion that a later one shadows, a
+// version from a property the project does not define, and central
+// versions applied although the project turns central management off.
+func TestAuditNuGetCentralVersionGaps(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := projectWith(t, map[string]string{
+		"Directory.Packages.props": `<Project><ItemGroup>
+<PackageVersion Include="8y234rtv8yvf" Version="1.0.0" Condition="'$(TargetFramework)' == 'net48'" />
+<PackageVersion Include="8y234rtv8yvf" Version="2.0.0" />
+</ItemGroup></Project>`,
+		"src/App/App.csproj": `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="8y234rtv8yvf" /></ItemGroup></Project>`,
+	})
+	result := auditToFile(t, dir)
+	require.Equal(t, "stop", result.Triage.Decision, "every central version declared for the package is checked")
+
+	for name, project := range map[string]string{
+		"undefined property": `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Clean.Pkg" Version="$(CleanPkgVersion)" /></ItemGroup></Project>`,
+		"central management off": `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup>
+<ItemGroup><PackageReference Include="Clean.Pkg" /></ItemGroup></Project>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{
+				"Directory.Packages.props": `<Project><ItemGroup><PackageVersion Include="Clean.Pkg" Version="2.0.0" /></ItemGroup></Project>`,
+				"src/App/App.csproj":       project,
+			})
+			result := auditToFile(t, dir)
+			require.Equal(t, "review", result.Triage.Decision)
+			requireTriageReason(t, result.Triage, "unpinned_dependency_evidence")
+		})
+	}
+}
+
 // A workspace without a lockfile is listed once, at its root, with the
 // number of manifests below it that a root lockfile would cover. A
 // separate project with its own lockfile below the root is covered by it.
