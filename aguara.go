@@ -113,6 +113,13 @@ const (
 	SkippedIrregular = types.SkippedIrregular
 )
 
+// Where a skipped symbolic link resolves (SkippedFile.Resolves).
+const (
+	LinkInside   = types.LinkInside
+	LinkOutside  = types.LinkOutside
+	LinkDangling = types.LinkDangling
+)
+
 // Configuration problems. NewScanner, the package-level scan functions and
 // ListRulesE return a *ConfigError for invalid rule configuration; each
 // ConfigProblem names the kind, rule ID, source and a message.
