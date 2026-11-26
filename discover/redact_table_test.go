@@ -177,7 +177,7 @@ func TestDiscoverSecretInEveryPositionIsRedacted(t *testing.T) {
 			t.Errorf("visible text %q missing", want)
 		}
 	}
-	if got := redactEnv(map[string]string{"CONFIG": `{"region": "eu", "apiKey": "x"}`})["CONFIG"]; got != `{"region": "eu", "apiKey": "[REDACTED]"}` {
+	if got := redactEnv(map[string]string{"CONFIG": `{"region": "eu", "apiKey": "x"}`})["CONFIG"]; got != `{"apiKey":"[REDACTED]","region":"eu"}` {
 		t.Errorf("embedded JSON = %q", got)
 	}
 }

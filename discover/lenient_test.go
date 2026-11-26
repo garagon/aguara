@@ -17,7 +17,7 @@ const oddValuesConfig = `{"mcpServers": {
             "env": {"PORT": 8080, "DEBUG": true, "EMPTY": null, "NESTED": {"a": 1}, "NAME": "x"}},
   "scalar-args": {"command": "tool", "args": "--single"},
   "not-an-object": "just a string",
-  "object-command": {"command": {"path": "/usr/bin/tool", "args": ["a"]}}
+  "object-command": {"command": {"bin": "/usr/bin/tool", "args": ["a"]}}
 }}`
 
 func writeConfig(t *testing.T, content string) string {
@@ -57,7 +57,7 @@ func TestParseServersLeniently(t *testing.T) {
 	if got := byName["scalar-args"].Args; len(got) != 1 || got[0] != "--single" {
 		t.Errorf("a string args value is read as one argument, got %v", got)
 	}
-	if byName["object-command"].Command != `{"path":"/usr/bin/tool","args":["a"]}` {
+	if byName["object-command"].Command != `{"bin":"/usr/bin/tool","args":["a"]}` {
 		t.Errorf("object command = %q", byName["object-command"].Command)
 	}
 	joined := strings.Join(warnings, "\n")

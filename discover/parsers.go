@@ -127,10 +127,12 @@ func decodeServer(name string, raw json.RawMessage, warn warnFunc) (MCPServer, b
 	}
 	s := MCPServer{
 		Name:    name,
-		Command: lenientString(fields["command"], "command", serverWarn),
 		Args:    lenientStrings(fields["args"], "args", serverWarn),
 		Env:     lenientStringMap(fields["env"], "env", serverWarn),
 		Headers: lenientStringMap(fields["headers"], "headers", serverWarn),
+	}
+	if !decodeCommandObject(fields["command"], &s, serverWarn) {
+		s.Command = lenientString(fields["command"], "command", serverWarn)
 	}
 	s.Transport = firstString(fields["type"], fields["transport"])
 	s.URL = firstString(fields["url"], fields["serverUrl"], fields["httpUrl"])
@@ -144,6 +146,36 @@ func decodeServer(name string, raw json.RawMessage, warn warnFunc) (MCPServer, b
 		}
 	}
 	return s, true
+}
+
+// decodeCommandObject reads a command given as an object with a "path",
+// the form an editor documents ({"path", "args", "env"}), into s: the path
+// becomes the command, its args come before any top-level args, and its
+// env is merged with the top-level env (top-level entries win). It
+// reports false when raw is not such an object.
+func decodeCommandObject(raw json.RawMessage, s *MCPServer, warn warnFunc) bool {
+	if jsonType(raw) != "an object" {
+		return false
+	}
+	var c map[string]json.RawMessage
+	if json.Unmarshal(raw, &c) != nil {
+		return false
+	}
+	path, ok := c["path"]
+	if !ok {
+		return false
+	}
+	s.Command = lenientString(path, "command.path", warn)
+	if args := lenientStrings(c["args"], "command.args", warn); len(args) > 0 {
+		s.Args = append(args, s.Args...)
+	}
+	if env := lenientStringMap(c["env"], "command.env", warn); len(env) > 0 {
+		for k, v := range s.Env {
+			env[k] = v
+		}
+		s.Env = env
+	}
+	return true
 }
 
 // decodeServerMap reads a map of server names to entries. A value that is

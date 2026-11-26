@@ -1,7 +1,10 @@
 package discover
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -311,7 +314,7 @@ func redactValue(v string) string {
 	if v == "" || v == redactedPlaceholder {
 		return v
 	}
-	if red, ok := redactJSONArray(v); ok {
+	if red, ok := redactJSON(v); ok {
 		return red
 	}
 	v = redactURL(v)
@@ -364,33 +367,132 @@ func redactValue(v string) string {
 	return secretShapes.ReplaceAllString(v, redactedPlaceholder)
 }
 
-// redactJSONArray redacts a value that is a JSON array of strings, such as
-// extra arguments kept in an environment variable, as a list of arguments.
-// It reports false for anything else, which redactValue then handles.
-func redactJSONArray(v string) (string, bool) {
+// maxJSONDepth bounds the nesting redactJSON walks; a deeper value is
+// masked whole.
+const maxJSONDepth = 32
+
+// redactJSON redacts a value that parses as one JSON object or array, such
+// as arguments or settings kept in an environment variable, or an entry
+// read as JSON text. Every list of strings is redacted as arguments, every
+// value under a key with an environment-style sensitive name is masked all
+// the way down, and other strings are redacted as values. A value nested
+// deeper than maxJSONDepth is masked whole. Unchanged JSON keeps its
+// original text; changed JSON is re-encoded without HTML escaping. It
+// reports false for anything that is not a JSON object or array.
+func redactJSON(v string) (string, bool) {
 	trimmed := strings.TrimSpace(v)
-	if !strings.HasPrefix(trimmed, "[") {
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
 		return "", false
 	}
-	var items []json.RawMessage
-	if json.Unmarshal([]byte(trimmed), &items) != nil || len(items) == 0 {
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	var doc any
+	if dec.Decode(&doc) != nil {
 		return "", false
 	}
-	strs := make([]string, len(items))
-	for i, it := range items {
-		if json.Unmarshal(it, &strs[i]) != nil {
-			return "", false
-		}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", false
 	}
-	red := redactArgs(strs)
-	if slices.Equal(red, strs) {
-		return v, true
-	}
-	out, err := json.Marshal(red)
-	if err != nil {
+	red, ok := redactJSONNode(doc, 0)
+	if !ok {
 		return redactedPlaceholder, true
 	}
-	return string(out), true
+	if reflect.DeepEqual(red, doc) {
+		return v, true
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(red) != nil {
+		return redactedPlaceholder, true
+	}
+	return strings.TrimSuffix(b.String(), "\n"), true
+}
+
+func redactJSONNode(n any, depth int) (any, bool) {
+	if depth > maxJSONDepth {
+		return nil, false
+	}
+	switch t := n.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, v := range t {
+			var r any
+			ok := true
+			if sensitiveEnvName(k) {
+				r, ok = maskJSONNode(v, depth+1)
+			} else {
+				r, ok = redactJSONNode(v, depth+1)
+			}
+			if !ok {
+				return nil, false
+			}
+			out[k] = r
+		}
+		return out, true
+	case []any:
+		strs := make([]string, len(t))
+		allStrings := true
+		for i, v := range t {
+			s, isString := v.(string)
+			if !isString {
+				allStrings = false
+				break
+			}
+			strs[i] = s
+		}
+		out := make([]any, len(t))
+		if allStrings {
+			for i, s := range redactArgs(strs) {
+				out[i] = s
+			}
+			return out, true
+		}
+		for i, v := range t {
+			r, ok := redactJSONNode(v, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out[i] = r
+		}
+		return out, true
+	case string:
+		return redactValue(t), true
+	}
+	return n, true // numbers, booleans, null
+}
+
+// maskJSONNode masks every string and number under a sensitive key,
+// keeping the shape of objects and arrays.
+func maskJSONNode(n any, depth int) (any, bool) {
+	if depth > maxJSONDepth {
+		return nil, false
+	}
+	switch t := n.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, v := range t {
+			r, ok := maskJSONNode(v, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out[k] = r
+		}
+		return out, true
+	case []any:
+		out := make([]any, len(t))
+		for i, v := range t {
+			r, ok := maskJSONNode(v, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out[i] = r
+		}
+		return out, true
+	case string, json.Number:
+		return redactedPlaceholder, true
+	}
+	return n, true // booleans and null carry no secret
 }
 
 // redactArgValue redacts one argument, or the value of a --flag=value
@@ -421,6 +523,9 @@ func redactArgValue(a string) string {
 // a shell would, for redaction only, and its words are redacted as
 // arguments; the original text is kept when nothing in it is secret.
 func redactCommand(cmd string) string {
+	if red, ok := redactJSON(cmd); ok {
+		return red
+	}
 	if !strings.ContainsAny(cmd, " \t") {
 		return redactValue(cmd)
 	}
