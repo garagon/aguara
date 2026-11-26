@@ -180,6 +180,32 @@ func TestDecoderWorkIsBounded(t *testing.T) {
 	require.LessOrEqual(t, run.decodeInput, 2*int(encodingCount)*len(content)+int(encodingCount)*decodedBytesFactor*len(content))
 }
 
+// NFKC can make decoded text up to 11 times longer (U+FDFA becomes 33
+// bytes). The budget is charged with the normalized text that is matched,
+// so the decoded text rescanned for a file stays within twice its size.
+func TestDecoderBudgetCountsNormalizedText(t *testing.T) {
+	rule, err := rules.Compile(rules.RawRule{
+		ID: "TEST_BOUND", Name: "Bound", Severity: "LOW", Category: "test",
+		Patterns: []rules.RawPattern{{Type: rules.PatternRegex, Value: `(?i)ignore\s+previous`}},
+	})
+	require.NoError(t, err)
+	m := NewMatcher([]*rules.CompiledRule{rule})
+	ligatures := strings.Repeat("ﷺ", 30)
+	var b strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&b, "x%d: %s\n", i, base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s %d", ligatures, i))))
+	}
+	content := b.String()
+	target := &scanner.Target{RelPath: "SKILL.md", Content: []byte(content)}
+	keys := lookupKeys(target.RelPath)
+	run := m.newDecodeRun(context.Background(), target, m.rulesForFile(target.RelPath, keys), keys, nil, true)
+	run.run()
+	require.NoError(t, run.err)
+	require.Positive(t, run.rescanned)
+	require.LessOrEqual(t, run.rescanned, decodedBytesFactor*len(content))
+	require.Equal(t, decodedBytesFactor*len(content)-run.bytesLeft, run.rescanned, "the budget is charged with what is rescanned")
+}
+
 // A cancelled context stops the decoder and is reported.
 func TestDecoderStopsOnCancel(t *testing.T) {
 	m := NewMatcher(compiledBuiltins(t))

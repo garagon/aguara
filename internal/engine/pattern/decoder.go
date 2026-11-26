@@ -31,25 +31,38 @@ import (
 // analyzer is "pattern-decoder", and the line is where the encoded text
 // sits in the file.
 //
-// A blob is matched together with up to decodedContextBytes of its own line
-// on each side, so a rule written for the file's syntax (a JSON key, a YAML
-// key) still sees the key in front of an encoded value. Only matches that
-// touch the decoded text are reported; the surrounding text was already
-// matched as part of the file.
+// A blob is matched together with the text around it: up to
+// decodedContextBytes of its own line on each side, so a rule written for
+// the file's syntax (a JSON key, a YAML key) still sees the key in front of
+// an encoded value, and whole lines around it, so a context-scope exclude
+// sees the heading above it (rules.ExcludeContextLines lines above) and a
+// match_mode: all rule with within_lines can take one half from the file
+// and the other from the decoded text (up to maxDecodedContextLines lines on
+// each side, for those rules only). At most decodedContextLinesBytes of
+// whole lines are taken on each side. Only matches that touch the decoded
+// text are reported; the surrounding text was already matched as part of
+// the file. The decoded text is part of its line, so a `^` anchor matches at
+// its start only when the blob starts its line.
 //
 // Base64 wrapped over several lines of one width (MIME, PEM bodies,
-// indented YAML block scalars) is joined before decoding. Decoded text is
-// searched once more for blobs (base64 of base64, URL-encoded or hex
-// base64), up to maxDecodeDepth levels in all.
+// indented YAML block scalars) is joined before decoding; unpadded base64
+// and base64 or hex one character too long decode their longest whole
+// prefix. Decoded text is searched once more for blobs (base64 of base64,
+// URL-encoded or hex base64), up to maxDecodeDepth levels in all. Inline
+// source maps are not decoded: they hold the file's own sources. Escape runs
+// that decode to no letter or digit (a sanitizer's list of zero-width,
+// bidirectional or separator characters) are not matched either.
 //
 // Work is bounded per file. Each encoding rescans at most decoderBlobBudget
 // blobs, nested ones included, and the decoded text rescanned for the
-// whole file is at most decodedBytesFactor times the file size, plus at most
-// 2*decodedContextBytes of line context per blob. Only blobs that decode to
-// text count: hashes, integrity values and other binary encodings are
-// decoded, fail the text test and cost nothing from either budget, so a
-// lockfile full of them cannot exhaust it. Finding candidates and decoding
-// them is linear in the file size for each encoding.
+// whole file, measured after NFKC normalization, is at most
+// decodedBytesFactor times the file size. Each rescan adds at most
+// 2*decodedContextBytes of line context and twice 2*decodedContextLinesBytes
+// of surrounding lines. Only blobs that decode to text count: hashes,
+// integrity values and other binary encodings are decoded, fail the text
+// test and cost nothing from either budget, so a lockfile full of them
+// cannot exhaust it. Finding candidates and decoding them is linear in the
+// file size for each encoding.
 
 const (
 	// maxEncodedBlobSize is the maximum size of an encoded blob to attempt decoding.
@@ -73,6 +86,10 @@ const (
 	// decodedContextBytes is how much of the blob's own line is matched
 	// with the decoded text on each side.
 	decodedContextBytes = 256
+	// maxDecodedContextLines and decodedContextLinesBytes bound the whole
+	// lines above and below a blob that are matched with its decoded text.
+	maxDecodedContextLines   = 25
+	decodedContextLinesBytes = 2048
 	// minWrapWidth is the narrowest line a wrapped base64 block may use.
 	minWrapWidth = 16
 	// minBase64Length is the shortest base64 blob the decoder considers,
@@ -159,6 +176,18 @@ func (m *Matcher) newDecodeRun(ctx context.Context, target *scanner.Target, appl
 	for i := range run.blobsLeft {
 		run.blobsLeft[i] = decoderBlobBudget
 	}
+	// Rules with a within_lines window can combine a decoded hit with hits
+	// in the lines around the blob; they are matched against a wider
+	// splice, the other rules against the blob's line and the lines a
+	// context-scope exclude reads.
+	for _, rule := range applicable {
+		if rule.MatchMode == rules.MatchAll && rule.WithinLines > 0 {
+			run.windowRules = append(run.windowRules, rule)
+			run.windowLines = max(run.windowLines, min(rule.WithinLines, maxDecodedContextLines))
+		} else {
+			run.lineRules = append(run.lineRules, rule)
+		}
+	}
 	return run
 }
 
@@ -187,9 +216,17 @@ type decodeRun struct {
 
 	blobsLeft [encodingCount]int
 	bytesLeft int
+	// lineRules are matched with the blob's line and the
+	// rules.ExcludeContextLines lines above it; windowRules (match_mode: all
+	// with within_lines) with up to windowLines lines on each side.
+	lineRules   []*rules.CompiledRule
+	windowRules []*rules.CompiledRule
+	windowLines int
 	// decodeInput counts the encoded bytes handed to a decoder, the
-	// candidate-side work, which tests bound.
+	// candidate-side work, and rescanned the decoded text matched; tests
+	// bound both.
 	decodeInput int
+	rescanned   int
 
 	findings []scanner.Finding
 	reported map[decodedFindingKey]bool
@@ -262,19 +299,26 @@ func (r *decodeRun) scanText(text string, enc encoding, parent *blobOrigin, dept
 		if r.stopped() || r.blobsLeft[enc] == 0 {
 			return false
 		}
+		if inlineSourceMap(text, c.start) {
+			// The file's own sources, which are matched as the file.
+			return true
+		}
 		r.decodeInput += len(c.encoded)
 		decoded, ok := decodeBlob(enc, c.encoded)
 		if !ok || len(decoded) < minDecodedSize || !isLikelyText(decoded) {
 			return true
 		}
-		if len(decoded) > maxDecodedSize {
-			decoded = decoded[:maxDecodedSize]
+		if isEscapeEncoding(enc) && !hasLetterOrDigit(decoded) {
+			// An escaped list of invisible or separator characters, such as
+			// a sanitizer's set: the escapes are its readable form and there
+			// is no hidden text to match.
+			return true
 		}
-		if len(decoded) > r.bytesLeft {
-			decoded = decoded[:r.bytesLeft]
-		}
+		// The budget is charged with the normalized text that is matched:
+		// NFKC can make text up to 11 times longer (U+FDFA).
+		decodedText := normalizeLimited(decoded, min(maxDecodedSize, r.bytesLeft))
 		r.blobsLeft[enc]--
-		r.bytesLeft -= len(decoded)
+		r.bytesLeft -= len(decodedText)
 
 		origin := &blobOrigin{parent: parent, start: c.start, enc: enc, width: c.width, nlines: c.nlines}
 		if enc == encHex && strings.HasPrefix(c.encoded, "0x") {
@@ -287,12 +331,7 @@ func (r *decodeRun) scanText(text string, enc encoding, parent *blobOrigin, dept
 		if label != "" {
 			blobLabel = label + "+" + blobLabel
 		}
-		decodedText := norm.NFKC.String(string(decoded))
-		var prefix, suffix string
-		if c.width == 0 {
-			prefix, suffix = lineContext(text, c.start, c.end)
-		}
-		r.rescan(prefix, decodedText, suffix, origin, blobLabel)
+		r.rescan(text, c, decodedText, origin, blobLabel)
 		if depth < maxDecodeDepth {
 			for inner := range encodingCount {
 				if r.stopped() {
@@ -500,38 +539,107 @@ func isBase64Char(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/'
 }
 
-// lineContext returns up to decodedContextBytes of text before start and
-// after end on the same line.
-func lineContext(text string, start, end int) (prefix, suffix string) {
-	lineStart := strings.LastIndexByte(text[:start], '\n') + 1
-	lineStart = max(lineStart, start-decodedContextBytes)
-	lineEnd := len(text)
-	if nl := strings.IndexByte(text[end:], '\n'); nl >= 0 {
-		lineEnd = end + nl
+// surroundings returns the text of the parent around a blob that is matched
+// with its decoded text. On the blob's own lines that is at most
+// decodedContextBytes on each side. When the blob's line is complete on a
+// side, whole lines follow on that side: up to above lines before it and
+// below lines after it, at most decodedContextLinesBytes on each side.
+// before ends at c.start and after starts at c.end, so both are contiguous
+// with the blob in text.
+func surroundings(text string, c candidate, above, below int) (before, after string) {
+	lineStart := strings.LastIndexByte(text[:c.start], '\n') + 1
+	bs := max(lineStart, c.start-decodedContextBytes)
+	if bs == lineStart {
+		for n := 0; n < above && bs > 0; n++ {
+			prev := strings.LastIndexByte(text[:bs-1], '\n') + 1
+			if lineStart-prev > decodedContextLinesBytes {
+				break
+			}
+			bs = prev
+		}
 	}
-	lineEnd = min(lineEnd, end+decodedContextBytes)
-	return text[lineStart:start], text[end:lineEnd]
+	lineEnd := len(text)
+	if nl := strings.IndexByte(text[c.end:], '\n'); nl >= 0 {
+		lineEnd = c.end + nl
+	}
+	ae := min(lineEnd, c.end+decodedContextBytes)
+	if ae == lineEnd {
+		for n := 0; n < below && ae < len(text); n++ {
+			next := len(text)
+			if nl := strings.IndexByte(text[ae+1:], '\n'); nl >= 0 {
+				next = ae + 1 + nl
+			}
+			if next-lineEnd > decodedContextLinesBytes {
+				break
+			}
+			ae = next
+		}
+	}
+	return text[bs:c.start], text[c.end:ae]
 }
 
-// rescan matches prefix+decoded+suffix against the applicable rules and
-// reports the matches that touch the decoded text.
-func (r *decodeRun) rescan(prefix, decoded, suffix string, origin *blobOrigin, label string) {
-	text := prefix + decoded + suffix
-	from, to := len(prefix), len(prefix)+len(decoded)
+// textLine returns the source line of offset x of text, the text the blob
+// at c was found in.
+func textLine(text string, c candidate, origin *blobOrigin, x int) int {
+	if origin.parent != nil {
+		return origin.parent.sourceLine(x)
+	}
+	if x < c.start {
+		return origin.line - strings.Count(text[x:c.start], "\n")
+	}
+	return origin.line + strings.Count(text[c.start:x], "\n")
+}
+
+// rescan matches the decoded text of the blob at c, with the text around it
+// in text (see surroundings), against the applicable rules and reports the
+// matches that touch the decoded text. Most rules see the blob's line and
+// the lines above it that a context-scope exclude reads; rules with a
+// within_lines window also see up to that many lines on each side, so a
+// match_mode: all rule can take one half from the file and the other from
+// the decoded text.
+func (r *decodeRun) rescan(text string, c candidate, decoded string, origin *blobOrigin, label string) {
+	r.rescanned += len(decoded)
+	r.rescanWith(r.lineRules, text, c, decoded, origin, label, rules.ExcludeContextLines, 0)
+	if len(r.windowRules) > 0 && r.err == nil {
+		r.rescanWith(r.windowRules, text, c, decoded, origin, label, r.windowLines, r.windowLines)
+	}
+}
+
+func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, text string, c candidate, decoded string, origin *blobOrigin, label string, above, below int) {
+	before, after := surroundings(text, c, above, below)
+	spliced := before + decoded + after
+	from, to := len(before), len(before)+len(decoded)
 	touchesDecoded := func(h matchHit) bool { return h.start < to && h.end > from }
-	lines := strings.Split(text, "\n")
-	matches, err := r.m.matchText(r.ctx, r.applicable, r.keys, text, newLowercaseContent(text), lines, r.target, touchesDecoded, r.prefilter)
+	lines := strings.Split(spliced, "\n")
+	matches, err := r.m.matchText(r.ctx, applicable, r.keys, spliced, newLowercaseContent(spliced), lines, r.target, touchesDecoded, r.prefilter)
 	if err != nil {
 		r.err = err
 	}
-	// sourceLineAt maps an offset of text to a source line: offsets in the
-	// surrounding line context fall on the blob's first or last line.
+	// sourceLineAt maps an offset of the spliced text to a source line: the
+	// surroundings to the lines of the text the blob was found in, the
+	// decoded text through the blob's origin.
 	sourceLineAt := func(off int) int {
-		return origin.sourceLine(min(max(off-from, 0), max(to-from-1, 0)))
+		switch {
+		case off < from:
+			return textLine(text, c, origin, c.start-from+off)
+		case off >= to:
+			return textLine(text, c, origin, c.end+off-to)
+		}
+		return origin.sourceLine(off - from)
 	}
 	for _, rm := range matches {
 		rule := rm.rule
-		line := sourceLineAt(rm.hits[0].start)
+		// The finding sits on the decoded evidence: the first hit that
+		// touches the decoded text (a match_mode: all rule can take its
+		// other hits from the lines around the blob).
+		at := rm.hits[0]
+		for _, h := range rm.hits {
+			if touchesDecoded(h) {
+				at = h
+				break
+			}
+		}
+		line := sourceLineAt(min(max(at.start, from), max(to-1, from)))
 		key := decodedFindingKey{rule.ID, line}
 		if r.reported[key] {
 			continue
@@ -596,15 +704,22 @@ func decodeBlob(enc encoding, s string) ([]byte, bool) {
 		if err != nil {
 			decoded, err = base64.URLEncoding.DecodeString(s)
 		}
+		if err != nil {
+			// Unpadded, or one character too many: decode the longest
+			// prefix that holds whole bytes.
+			raw := strings.TrimRight(s, "=")
+			if len(raw)%4 == 1 {
+				raw = raw[:len(raw)-1]
+			}
+			decoded, err = base64.RawStdEncoding.DecodeString(raw)
+		}
 	case encHex:
 		if isCryptoAddress(s) {
 			return nil, false
 		}
 		s = strings.TrimPrefix(s, "0x")
-		if len(s)%2 != 0 {
-			return nil, false
-		}
-		decoded, err = hex.DecodeString(s)
+		// An odd length decodes its even prefix.
+		decoded, err = hex.DecodeString(s[:len(s)-len(s)%2])
 	case encURL:
 		decoded, err = decodeURLEncoded(s)
 	case encUnicodeEscape:
@@ -776,6 +891,50 @@ const (
 	minTextRatioNum = 4
 	minTextRatioDen = 5
 )
+
+// normalizeLimited returns the NFKC form of data cut at a character boundary
+// to at most limit bytes. It stops normalizing at the limit, so the work is
+// bounded by the limit whatever the expansion.
+func normalizeLimited(data []byte, limit int) string {
+	var it norm.Iter
+	it.Init(norm.NFKC, data)
+	out := make([]byte, 0, min(len(data), limit))
+	for !it.Done() {
+		seg := it.Next()
+		if len(out)+len(seg) > limit {
+			break
+		}
+		out = append(out, seg...)
+	}
+	return string(out)
+}
+
+// isEscapeEncoding reports whether enc writes each character as an escape.
+func isEscapeEncoding(enc encoding) bool {
+	switch enc {
+	case encUnicodeEscape, encHexEscape, encHTMLEntity, encOctalEscape:
+		return true
+	}
+	return false
+}
+
+// hasLetterOrDigit reports whether data holds a letter or a digit.
+func hasLetterOrDigit(data []byte) bool {
+	for _, r := range string(data) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// inlineSourceMap reports whether the blob at start is the data of an
+// inline source map (`//# sourceMappingURL=data:...;base64,`), which holds
+// the file's own sources.
+func inlineSourceMap(text string, start int) bool {
+	lineStart := strings.LastIndexByte(text[:start], '\n') + 1
+	return strings.Contains(text[max(lineStart, start-decodedContextBytes):start], "sourceMappingURL=data:")
+}
 
 // isDigestLength reports whether n is the size in bytes of a common digest:
 // MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512.
