@@ -1250,8 +1250,8 @@ const (
 // body of a command substitution in any argument. Any other word is
 // redacted as one value (redactArgValue). Commands, package names and
 // other arguments stay visible. When the redacted arguments still have a
-// plain-mode hit (the backstop of redactCommand), the shortest trailing
-// run of arguments whose removal leaves no hit is masked, so the leading
+// plain-mode hit (the backstop of redactCommand), the arguments from the
+// first one the hit needs to the end are masked, so the leading
 // arguments, such as a package name, stay visible.
 func redactArgs(args []string) []string {
 	out, script := redactArgsAt(args, 0)
@@ -1259,16 +1259,47 @@ func redactArgs(args []string) []string {
 		if onBackstop != nil {
 			onBackstop(text)
 		}
-		// A hit in the first k arguments stays a hit with more of them, so
-		// the longest prefix without one is found by bisection.
-		keep := sort.Search(len(out), func(k int) bool {
-			return plainHit(backstopText(out[:k+1], script[:k+1]))
-		})
-		for i := keep; i < len(out); i++ {
+		start := backstopStart(out, script)
+		for i := start; i < len(out); i++ {
 			out[i] = redactedPlaceholder
 		}
 	}
 	return out
+}
+
+// maxBackstopWork bounds, in bytes of text read, how much work
+// backstopStart does before it gives up and masks the whole list.
+const maxBackstopWork = 1 << 20
+
+// backstopStart returns the first argument to mask in an argument list
+// with a backstop hit. It finds the shortest prefix that hits (by
+// bisection: a guess, since a hit is not strictly monotone in the
+// prefix), then walks back to the first argument that hit needs, as when
+// a URL password is split across two arguments. It returns 0, masking the
+// whole list, unless the arguments it keeps have no hit of their own, and
+// when the walk would read more than maxBackstopWork bytes.
+func backstopStart(out []string, script []bool) int {
+	keep := sort.Search(len(out), func(k int) bool {
+		return plainHit(backstopText(out[:k+1], script[:k+1]))
+	})
+	if keep >= len(out) {
+		return 0
+	}
+	start, work := keep, 0
+	for start > 0 {
+		text := backstopText(out[start:keep+1], script[start:keep+1])
+		if work += len(text); work > maxBackstopWork {
+			return 0
+		}
+		if plainHit(text) {
+			break
+		}
+		start--
+	}
+	if start > 0 && plainHit(backstopText(out[:start], script[:start])) {
+		return 0
+	}
+	return start
 }
 
 // redactArgsAt is redactArgs, without the backstop, for arguments nested
@@ -1286,11 +1317,15 @@ func redactArgsAt(args []string, depth int) ([]string, []bool) {
 		state := next
 		next = nextAny
 		switch {
-		case (state == nextSecret || state == nextCredential) && a == "=":
+		case state != nextAny && state != nextScript && strings.TrimSpace(a) == "":
+			// A blank argument is not the value; the next one is.
+			out[i], next = a, state
+			continue
+		case (state == nextSecret || state == nextCredential) && strings.TrimSpace(a) == "=":
 			// NAME = value: the value is the word after.
 			out[i], next = a, nextSecret
 			continue
-		case (state == nextSecret || state == nextCredential) && isAuthScheme(a):
+		case (state == nextSecret || state == nextCredential) && isAuthScheme(strings.TrimSpace(a)):
 			// Authorization: Bearer value: the credential is the word after.
 			out[i], next = a, nextCredential
 			continue

@@ -134,12 +134,13 @@ func TestBackstopMasksTheSimpleCommand(t *testing.T) {
 			t.Errorf("backstop fired %d times for %q", len(fired), in)
 		}
 	}
-	// In an argument list the shortest trailing run that holds the hit is
-	// masked, so the leading arguments stay visible.
-	if got := redactArgs([]string{"set", "-x", "GITHUB_TOKEN", "qzS3cretA5"}); strings.Join(got, " ") != "set -x GITHUB_TOKEN [REDACTED]" {
+	// In an argument list the arguments from the first one the hit needs
+	// (here set) to the end are masked, so the leading arguments stay
+	// visible.
+	if got := redactArgs([]string{"set", "-x", "GITHUB_TOKEN", "qzS3cretA5"}); strings.Join(got, " ") != "[REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
 		t.Errorf("argument list = %q", got)
 	}
-	if got := redactArgs([]string{"-y", "@scope/pkg", "set", "-gx", "GITHUB_TOKEN", "qzS3cretA5", "--verbose"}); strings.Join(got, " ") != "-y @scope/pkg set -gx GITHUB_TOKEN [REDACTED] [REDACTED]" {
+	if got := redactArgs([]string{"-y", "@scope/pkg", "set", "-gx", "GITHUB_TOKEN", "qzS3cretA5", "--verbose"}); strings.Join(got, " ") != "-y @scope/pkg [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
 		t.Errorf("argument list = %q", got)
 	}
 	if got := redactArgs([]string{"-y", "@scope/pkg", `{"token": "qzS3cretA5"`}); strings.Join(got, " ") != "-y @scope/pkg [REDACTED]" {
@@ -242,5 +243,82 @@ func TestBackstopQuietOnOrdinaryCommands(t *testing.T) {
 		if len(fired) != 0 {
 			t.Errorf("backstop fired on the argument list of %q: %q", s, fired)
 		}
+	}
+}
+
+// A secret split across arguments, whose hit exists only once they are
+// joined, is masked from the first argument the hit needs; the arguments
+// before it stay visible.
+func TestArgumentListSplitSecrets(t *testing.T) {
+	ph := redactedPlaceholder
+	for _, tc := range []struct{ in, want []string }{
+		{[]string{"-y", "@acme/pkg", "https://user:Sk9a", "ZZq@h.example/x"}, []string{"-y", "@acme/pkg", ph, ph}},
+		{[]string{"--url", "postgres://user:Sk10", "pass@db.example/app"}, []string{"--url", ph, ph}},
+		{[]string{"-y", "@acme/pkg", "https://user:Sk", "9aZZ", "q@h.example/x"}, []string{"-y", "@acme/pkg", ph, ph, ph}},
+	} {
+		if got := redactArgs(tc.in); strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+			t.Errorf("redactArgs(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// Generated: secret-bearing values split at every position into two
+	// and three arguments, after ordinary arguments.
+	const marker = "Qx7mZp4Wr9Kv"
+	values := []string{
+		"https://user:" + marker + "@h.example/x",
+		"postgres://app:" + marker + "@db.example/app",
+		`{"token": "` + marker + `"}`,
+		"Authorization: Bearer " + marker,
+		"--api-key " + marker,
+		"API_KEY=" + marker,
+		"X-Api-Key: " + marker,
+		"https://x.example/sse?sig=" + marker,
+		"set -gx GITHUB_TOKEN " + marker,
+		"Token --" + marker,
+	}
+	lead := []string{"-y", "@acme/pkg", "--port", "8080"}
+	check := func(pieces []string) bool {
+		// Only splits whose hit exists once the pieces are joined and that
+		// no word rule handles: a piece with a hit of its own is masked by
+		// the word rules, and when a word rule takes a piece as a whole
+		// value (--api-key, then " Q"), the pieces after it are separate
+		// arguments, as words after a separator are in a command line.
+		if !plainHit(strings.Join(pieces, " ")) {
+			return false
+		}
+		for _, p := range pieces {
+			if plainHit(p) {
+				return false
+			}
+		}
+		args := append(append([]string{}, lead...), pieces...)
+		words, _ := redactArgsAt(args, 0)
+		if strings.Join(words, "\x00") != strings.Join(args, "\x00") {
+			return false
+		}
+		out := redactArgs(args)
+		if p := showsPiece(strings.Join(out, " "), marker); p != "" {
+			t.Errorf("%q shown in %q for %q", p, out, args)
+		}
+		if strings.Join(out[:len(lead)], " ") != strings.Join(lead, " ") {
+			t.Errorf("leading arguments changed: %q for %q", out, args)
+		}
+		return true
+	}
+	cases := 0
+	for _, v := range values {
+		for i := 1; i < len(v); i++ {
+			if check([]string{v[:i], v[i:]}) {
+				cases++
+			}
+			for j := i + 1; j < len(v); j++ {
+				if check([]string{v[:i], v[i:j], v[j:]}) {
+					cases++
+				}
+			}
+		}
+	}
+	if cases < 500 {
+		t.Fatalf("only %d split lists checked", cases)
 	}
 }
