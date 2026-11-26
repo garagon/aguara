@@ -476,6 +476,9 @@ jobs:
           upload-sarif: ${{ vars.AGUARA_UPLOAD_SARIF != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
       - name: Audit dependencies and content
+        # Also after the step above fails: its scan exits 2 when it is
+        # incomplete, and this report says what was not evaluated.
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set +e
