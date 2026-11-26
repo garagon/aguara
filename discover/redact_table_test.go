@@ -116,6 +116,8 @@ func TestRedactURLPathSegments(t *testing.T) {
 		"https://example.com/node_modules/package/dist/index.js",
 		"https://example.com/builds/release-notes-h264-x86-2024.txt",
 		"https://example.com/servers/mcp-server-v12-production-eu/sse",
+		"https://example.com/pkgs/python3-pip-latest-build/info",
+		"https://example.com/presets/babel-preset-es2015-webpack5/index.js",
 	} {
 		if got := redactURL(keep); got != keep {
 			t.Errorf("redactURL(%q) = %q, want it unchanged", keep, got)
@@ -134,6 +136,10 @@ func TestRedactURLPathSegments(t *testing.T) {
 		"https://example.com/k/a1b2_c3d4_e5f6_g7h8_i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
 		"https://example.com/k/a1b2~c3d4~e5f6~g7h8~i9j0/mcp": "https://example.com/k/[REDACTED]/mcp",
 		"https://example.com/k/1a2b-3c4d-5e6f-7g8h-9i0j/mcp": "https://example.com/k/[REDACTED]/mcp",
+		// Repeated letters-then-digits groups are not a slug either: a slug
+		// has a word of three or more letters.
+		"https://example.com/k/ab12_cd34_ef56_gh78_ij90/mcp": "https://example.com/k/[REDACTED]/mcp",
+		"https://example.com/k/abc12-def34-ghi56-jkl78/mcp":  "https://example.com/k/[REDACTED]/mcp",
 	} {
 		if got := redactValue(in); got != want {
 			t.Errorf("redactValue(%q) = %q, want %q", in, got, want)
