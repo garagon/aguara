@@ -79,6 +79,8 @@ func failureReasonText(f types.ScanFailure) string {
 		return "could not be read"
 	case types.FailureReasonCanceled:
 		return "not evaluated: the scan was canceled"
+	case types.FailureReasonNotScanned:
+		return "changed submodule; its content is not checked out and was not scanned"
 	default:
 		return "the analyzer failed"
 	}

@@ -41,6 +41,9 @@ func IncompleteScanError(stage, path, analyzer string, cause error) error {
 		// display. Arbitrary parser or filesystem causes remain hidden.
 		message += fmt.Sprintf(" (file exceeds %d-byte limit)", sizeErr.limit)
 	}
+	if errors.Is(cause, errNotCheckedOut) {
+		message += " (not checked out)"
+	}
 	var notRegular *safefile.NotRegularError
 	if errors.As(cause, &notRegular) {
 		// The file type comes from a fixed list of descriptions.
@@ -83,6 +86,8 @@ func failureReason(cause error, analyzer string) string {
 	switch {
 	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
 		return types.FailureReasonCanceled
+	case errors.Is(cause, errNotCheckedOut):
+		return types.FailureReasonNotScanned
 	case errors.Is(cause, types.ErrAnalysisBudget):
 		return types.FailureReasonBudget
 	case errors.As(cause, &sizeErr), errors.Is(cause, safefile.ErrTooLarge):

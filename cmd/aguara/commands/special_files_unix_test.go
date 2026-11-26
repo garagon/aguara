@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -112,32 +111,6 @@ func TestScanChangedSkipsReplacedFileAndSubmodule(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &r))
 	require.Zero(t, r.FilesScanned)
 	require.Equal(t, []types.SkippedFile{{Path: "SKILL.md", Kind: types.SkippedNamedPipe}}, r.Skipped)
-
-	// A changed submodule is listed by git as a path that is a directory.
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	sub := commitRepo(t, map[string]string{"s.md": "# s\n"})
-	super := commitRepo(t, map[string]string{"a.md": "# a\n"})
-	git := func(dir string, args ...string) {
-		t.Helper()
-		c := exec.Command("git", append([]string{"-c", "protocol.file.allow=always"}, args...)...)
-		c.Dir = dir
-		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t")
-		b, err := c.CombinedOutput()
-		require.NoError(t, err, "git %v: %s", args, b)
-	}
-	git(super, "submodule", "add", "-q", sub, "mod")
-	git(super, "commit", "-q", "-m", "submodule")
-	require.NoError(t, os.WriteFile(filepath.Join(super, "mod", "t.md"), []byte("# t\n"), 0o600))
-	git(filepath.Join(super, "mod"), "add", "t.md")
-	git(filepath.Join(super, "mod"), "commit", "-q", "-m", "t")
-	out = filepath.Join(t.TempDir(), "submodule.json")
-	require.NoError(t, runCLIWithin(t, "scan", super, "--changed", "--format", "json", "-o", out))
-	data, err = os.ReadFile(out)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &r))
-	require.Equal(t, []types.SkippedFile{{Path: "mod", Kind: types.SkippedDirectory}}, r.Skipped)
 }
 
 func TestScanStateBaselineAndConfigSpecialFiles(t *testing.T) {

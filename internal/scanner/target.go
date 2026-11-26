@@ -148,7 +148,8 @@ type TargetDiscovery struct {
 	// returned as Discover's error.
 	Failures []error
 
-	callerPatterns int // IgnorePatterns[:callerPatterns] are the caller's
+	callerPatterns int    // IgnorePatterns[:callerPatterns] are the caller's
+	relPrefix      string // prepended to every relative path (a changed directory walked by ScanPaths)
 }
 
 // maxIgnoreFileBytes bounds a target's .aguaraignore, like .aguara.yml.
@@ -168,8 +169,6 @@ func skipKind(mode os.FileMode) string {
 		return types.SkippedSocket
 	case mode&os.ModeDevice != 0:
 		return types.SkippedDevice
-	case mode.IsDir():
-		return types.SkippedDirectory
 	default:
 		return types.SkippedIrregular
 	}
@@ -208,6 +207,9 @@ func (td *TargetDiscovery) Discover(root string) ([]*Target, error) {
 			}
 		}
 		relPath, _ := filepath.Rel(root, path)
+		if td.relPrefix != "" {
+			relPath = filepath.Join(td.relPrefix, relPath)
+		}
 		if err != nil {
 			if td.isIgnoredSubtree(relPath) || (info != nil && !info.IsDir() && (td.isIgnored(relPath) || isBinaryExt(path))) {
 				return nil

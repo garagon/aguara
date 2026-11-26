@@ -412,7 +412,6 @@ const (
 	SkippedNamedPipe = "named_pipe" // FIFO: reading one blocks or returns a writer's stream
 	SkippedSocket    = "socket"
 	SkippedDevice    = "device"    // character or block device
-	SkippedDirectory = "directory" // a listed path that is a directory, such as a changed submodule
 	SkippedIrregular = "irregular" // any other non-regular file type
 )
 
@@ -437,6 +436,7 @@ const (
 	FailureReasonNotRegular = "not_regular" // the file changed into a non-regular file after discovery
 	FailureReasonIO         = "io"          // the file or directory could not be read
 	FailureReasonCanceled   = "canceled"    // the context was canceled or its deadline passed
+	FailureReasonNotScanned = "not_scanned" // a changed submodule whose content is not checked out
 	FailureReasonError      = "error"       // any other analyzer error
 )
 

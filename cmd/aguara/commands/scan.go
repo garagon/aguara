@@ -614,11 +614,16 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 		}
 		return nil, fmt.Errorf("--changed: cannot list changed files: %w", err)
 	}
+	submodules, err := scanner.GitSubmodulePaths(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("--changed: %w", err)
+	}
 	// ScanPaths skips symlinks exactly as the directory walk does, so a
 	// malicious symlink committed to the repository cannot make aguara read
-	// files outside the tree; named pipes, devices and changed submodules
-	// are skipped and listed as well.
-	result, err := s.ScanPaths(ctx, targetPath, changedFiles)
+	// files outside the tree; named pipes and devices are skipped and
+	// listed as well. A changed submodule is scanned whole, and one that is
+	// not checked out makes the scan incomplete.
+	result, err := s.ScanPaths(ctx, targetPath, changedFiles, submodules)
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}

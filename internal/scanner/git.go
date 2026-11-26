@@ -93,6 +93,26 @@ func GitChangedFiles(root string) ([]string, error) {
 	return result, nil
 }
 
+// GitSubmodulePaths returns the git submodules (gitlink entries of the
+// index) under root, relative to root like GitChangedFiles. A changed
+// submodule is listed by GitChangedFiles as its path; this set tells a
+// submodule that is not checked out apart from a deleted file.
+func GitSubmodulePaths(root string) (map[string]bool, error) {
+	out, err := runGit(root, "ls-files", "--stage", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("listing submodules: %w", err)
+	}
+	submodules := map[string]bool{}
+	for _, entry := range splitNUL(out) {
+		// "<mode> <object> <stage>\t<path>"; gitlinks have mode 160000.
+		meta, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") {
+			submodules[path] = true
+		}
+	}
+	return submodules, nil
+}
+
 // runGit runs git in dir and returns stdout. A failure carries git's
 // stderr so the caller can show why (for example a repository git
 // refuses to use because of its ownership).

@@ -383,8 +383,6 @@ func skippedKindLabel(kind string) string {
 		return "socket"
 	case types.SkippedDevice:
 		return "device"
-	case types.SkippedDirectory:
-		return "directory"
 	default:
 		return "irregular file"
 	}

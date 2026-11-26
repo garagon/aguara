@@ -57,6 +57,7 @@ const (
 	FailureReasonNotRegular = types.FailureReasonNotRegular
 	FailureReasonIO         = types.FailureReasonIO
 	FailureReasonCanceled   = types.FailureReasonCanceled
+	FailureReasonNotScanned = types.FailureReasonNotScanned
 	FailureReasonError      = types.FailureReasonError
 
 	// MaxReportedFailures bounds ScanResult.Errors; ScanResult.FailedOperations
@@ -109,7 +110,6 @@ const (
 	SkippedNamedPipe = types.SkippedNamedPipe
 	SkippedSocket    = types.SkippedSocket
 	SkippedDevice    = types.SkippedDevice
-	SkippedDirectory = types.SkippedDirectory
 	SkippedIrregular = types.SkippedIrregular
 )
 

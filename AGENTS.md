@@ -164,7 +164,8 @@ exported through public aliases, rather than copying a partial struct.
   and a `scan_incomplete` triage reason, so triage is never `proceed`.
 - `skipped` (top level, and in the CLI's `coverage`) lists entries a scan did
   not read because they are not regular files: symbolic links, named pipes,
-  sockets, devices, and changed submodules under `--changed`. Always an array.
+  sockets and devices. Always an array. `scan --changed` scans a changed
+  submodule whole; one that is not checked out is a `not_scanned` failure.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a

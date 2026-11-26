@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -298,11 +299,18 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // ScanPaths scans the files at relPaths under root, such as the changed
 // files of a git work tree. Each path is inspected without following a
 // symbolic link: a path that no longer exists is left out (a deletion has
-// no content), and a symbolic link, named pipe, socket, device or directory
-// (for example a changed submodule) is listed in ScanResult.Skipped instead
-// of being read. A path that cannot be inspected makes the scan incomplete
-// (an *IncompleteError with the partial result), as in Scan.
-func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string) (*ScanResult, error) {
+// no content), and a symbolic link, named pipe, socket or device is listed
+// in ScanResult.Skipped instead of being read.
+//
+// A path that is a directory (git lists a changed submodule as its path)
+// is walked like a scanned directory, and its files, skipped entries and
+// failures are reported under that path. submodules names the paths that
+// are git submodules: a listed submodule whose directory is absent or
+// holds nothing, because it is not checked out, could not be scanned and
+// makes the scan incomplete, as does an empty listed directory. Any path
+// that cannot be inspected makes the scan incomplete too (an
+// *IncompleteError with the partial result), as in Scan.
+func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string, submodules map[string]bool) (*ScanResult, error) {
 	var targets []*Target
 	var skipped []types.SkippedFile
 	var failures []*scanFailure
@@ -314,9 +322,33 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string)
 		info, err := os.Lstat(absPath)
 		if err != nil {
 			if os.IsNotExist(err) {
+				if submodules[relPath] {
+					failures = append(failures, notCheckedOut(relPath))
+				}
 				continue
 			}
 			failures = append(failures, asScanFailure(IncompleteScanError("inspect changed target", relPath, "", err), "", ""))
+			continue
+		}
+		if info.IsDir() {
+			discovery := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true, relPrefix: relPath}
+			found, err := discovery.Discover(absPath)
+			if err != nil {
+				failures = append(failures, asScanFailure(err, "discover target", relPath))
+				continue
+			}
+			if len(found) == 0 && len(discovery.Skipped) == 0 && len(discovery.Failures) == 0 {
+				failures = append(failures, notCheckedOut(relPath))
+				continue
+			}
+			for _, target := range found {
+				target.Path = filepath.Join(root, target.RelPath)
+			}
+			targets = append(targets, found...)
+			skipped = append(skipped, discovery.Skipped...)
+			for _, f := range discovery.Failures {
+				failures = append(failures, asScanFailure(f, "discover target", relPath))
+			}
 			continue
 		}
 		if kind := skipKind(info.Mode()); kind != "" {
@@ -326,6 +358,14 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string)
 		targets = append(targets, &Target{Path: absPath, RelPath: relPath, NoFollow: true})
 	}
 	return s.scanTargets(ctx, targets, failures, skipped, nil)
+}
+
+// errNotCheckedOut marks a changed submodule whose content is not in the
+// work tree.
+var errNotCheckedOut = errors.New("changed submodule; its content is not checked out and was not scanned")
+
+func notCheckedOut(relPath string) *scanFailure {
+	return asScanFailure(IncompleteScanError("scan changed submodule", relPath, "", errNotCheckedOut), "", "")
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
