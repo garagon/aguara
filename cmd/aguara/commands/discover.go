@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/garagon/aguara/discover"
+	"github.com/garagon/aguara/internal/output"
 )
 
 var discoverCmd = &cobra.Command{
@@ -25,11 +27,22 @@ func init() {
 	rootCmd.AddCommand(discoverCmd)
 }
 
+// printDiscoverWarnings reports configuration entries discovery read
+// leniently or skipped, on stderr, for discover and scan --auto.
+func printDiscoverWarnings(result *discover.Result) {
+	for _, c := range result.Clients {
+		for _, w := range c.Warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", output.TerminalText(w))
+		}
+	}
+}
+
 func runDiscover(cmd *cobra.Command, args []string) error {
 	result, err := discover.Scan()
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
+	printDiscoverWarnings(result)
 
 	return writeReport(func(w io.Writer) error {
 		switch flagFormat {

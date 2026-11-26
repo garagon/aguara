@@ -154,13 +154,20 @@ func TestProjectPolicyNoticeSkipsPolicyThatChangedNothing(t *testing.T) {
 	})
 	require.NotContains(t, string(stderr), "notice:")
 
-	// The scaffolded files are named once their "*.log" patterns exclude
-	// something: both the .aguaraignore and the config's ignore list.
+	// The scaffolded .aguaraignore is named once one of its patterns
+	// excludes something. The scaffolded config only shows ignore
+	// patterns as a comment, so it is still not named.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "debug.log"), []byte(injectionPayload), 0o600))
 	stderr = captureStderrBytes(t, func() { _, _ = runScanJSONWithError(t, dir) })
-	require.Contains(t, string(stderr), filepath.Join(dir, ".aguara.yml")+" (ignore)")
-	require.NotContains(t, string(stderr), filepath.Join(dir, ".aguaraignore"),
-		"the config's identical pattern matched first, so the .aguaraignore changed nothing")
+	require.Contains(t, string(stderr), filepath.Join(dir, ".aguaraignore"))
+	require.NotContains(t, string(stderr), filepath.Join(dir, ".aguara.yml"))
+
+	// Its directory patterns take effect too.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "dist", "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dist", "assets", "notes.md"), []byte(injectionPayload), 0o600))
+	data, err := runScanJSONWithError(t, dir)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "dist/assets/notes.md")
 }
 
 // Rule entries in .aguara.yml that fail validation are warned about and

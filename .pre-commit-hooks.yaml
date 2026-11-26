@@ -1,0 +1,32 @@
+# Hooks for the pre-commit framework (https://pre-commit.com).
+#
+# aguara builds the scanner from this repository at the rev you pin
+# (language: golang, Go 1.26 or later). aguara-system runs the aguara
+# already on PATH, for example a verified release binary.
+#
+# Both pass the staged files to one `aguara scan` rooted at the
+# repository root (--root .): paths are reported from the root, and a
+# local run applies the project's .aguara.yml and .aguaraignore to every
+# file, as `aguara scan .` would. In a detected CI environment that policy
+# is not applied. The default arguments fail the hook on HIGH or CRITICAL
+# findings; set args in your .pre-commit-config.yaml to change them, and
+# keep "--" as the last entry, so file names that start with a dash are
+# never read as flags.
+- id: aguara
+  name: aguara scan
+  description: Scan files for prompt injection, credential leaks, risky agent and MCP configuration, CI workflow trust issues and supply-chain behavior.
+  entry: aguara scan --root .
+  args: [--fail-on, high, --]
+  language: golang
+  types: [file]
+  require_serial: true
+  minimum_pre_commit_version: "3.0.0"
+- id: aguara-system
+  name: aguara scan (installed binary)
+  description: Like the aguara hook, with the aguara binary already installed on PATH.
+  entry: aguara scan --root .
+  args: [--fail-on, high, --]
+  language: system
+  types: [file]
+  require_serial: true
+  minimum_pre_commit_version: "3.0.0"

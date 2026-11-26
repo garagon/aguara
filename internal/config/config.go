@@ -44,6 +44,9 @@ type RuleOverride struct {
 
 // Config represents the .aguara.yml configuration file.
 type Config struct {
+	// Paths is accepted for compatibility with files that uncommented the
+	// "paths" example earlier `aguara init` versions scaffolded. Nothing
+	// reads it; Load adds a notice when it is set.
 	Paths         []string                `yaml:"paths,omitempty"`
 	Ignore        []string                `yaml:"ignore,omitempty"`
 	Severity      string                  `yaml:"severity,omitempty"`
@@ -62,6 +65,9 @@ type Config struct {
 	// example a misspelled "disabled_rules"). They are ignored, so callers
 	// that apply the file should show these warnings to the user.
 	Warnings []string `yaml:"-"`
+	// Notices lists keys that are accepted but have no effect, such as
+	// "paths".
+	Notices []string `yaml:"-"`
 }
 
 // Load reads the .aguara.yml or .aguara.yaml config file from the given path.
@@ -102,7 +108,7 @@ func Load(dir string) (Config, error) {
 			}
 		}
 		cfg.Source = path
-		cfg.Warnings = unknownKeys(path, data)
+		cfg.Warnings, cfg.Notices = unknownKeys(path, data)
 		return cfg, nil
 	}
 	return Config{}, nil
@@ -110,23 +116,28 @@ func Load(dir string) (Config, error) {
 
 // unknownKeys reports top-level keys and rule_overrides entry keys that do
 // not map to a Config or RuleOverride field. yaml.Unmarshal ignores them, so
-// a misspelled key silently loses the setting.
-func unknownKeys(path string, data []byte) []string {
+// a misspelled key silently loses the setting. The second result notes
+// known keys that have no effect.
+func unknownKeys(path string, data []byte) ([]string, []string) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
-		return nil
+		return nil, nil
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return nil
+		return nil, nil
 	}
 	topKeys := yamlFieldNames(reflect.TypeFor[Config]())
 	overrideKeys := yamlFieldNames(reflect.TypeFor[RuleOverride]())
-	var warnings []string
+	var warnings, notices []string
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
 		if key.Value == "<<" {
 			continue // merge key; its contents are checked by the decoder
+		}
+		if key.Value == "paths" {
+			notices = append(notices, fmt.Sprintf("%s:%d: %q has no effect; name the paths to scan on the command line", path, key.Line, key.Value))
+			continue
 		}
 		if !topKeys[key.Value] {
 			warnings = append(warnings, fmt.Sprintf("%s:%d: unknown key %q (ignored)", path, key.Line, key.Value))
@@ -148,7 +159,7 @@ func unknownKeys(path string, data []byte) []string {
 			}
 		}
 	}
-	return warnings
+	return warnings, notices
 }
 
 // yamlFieldNames returns the YAML key of every field of struct type t.
