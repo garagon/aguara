@@ -117,7 +117,7 @@ func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) 
 	for _, eco := range ecosystems {
 		want[eco] = true
 	}
-	parsed := 0
+	budget := &discoveryBudget{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Same policy as Discover: an unreadable nested directory
@@ -133,7 +133,7 @@ func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) 
 			}
 			return nil
 		}
-		if m, ok := readManifestAt(path, want, &parsed); ok {
+		if m, ok := readManifestAt(path, want, budget); ok {
 			out.Manifests = append(out.Manifests, m)
 			return nil
 		}
@@ -148,6 +148,11 @@ func DiscoverUnevaluated(root string, ecosystems []string) (Unevaluated, error) 
 			if f.Ecosystem == intel.EcosystemPyPI {
 				if isRequirementsSource(d.Name()) {
 					// Discovery reads it by name.
+					break
+				}
+				if !budget.take(path, maxManifestBytes) {
+					// Past the discovery read budget: listed unread.
+					out.Unsupported = append(out.Unsupported, entry)
 					break
 				}
 				pins, ok := namesRequirements(path)

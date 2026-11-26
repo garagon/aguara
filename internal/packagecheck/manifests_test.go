@@ -679,6 +679,32 @@ func TestManifestReadsAreBounded(t *testing.T) {
 	require.True(t, found.Manifests[0].Unreadable, "a symlinked manifest is not followed")
 }
 
+// One discovery reads at most maxDiscoveryReadBytes from manifests and
+// pip-name files together; past it a manifest is reported unread, with
+// its dependencies unknown.
+func TestDiscoveryReadBudget(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "package.json")
+	writeFile(t, path, pkgWithDeps)
+
+	budget := &discoveryBudget{bytes: maxDiscoveryReadBytes - int64(len(pkgWithDeps)) + 1}
+	m, ok := readManifestAt(path, nil, budget)
+	require.True(t, ok)
+	require.True(t, m.Unreadable, "the read would pass the budget")
+	require.True(t, m.Declares)
+
+	budget = &discoveryBudget{bytes: maxDiscoveryReadBytes - int64(len(pkgWithDeps))}
+	m, ok = readManifestAt(path, nil, budget)
+	require.True(t, ok)
+	require.False(t, m.Unreadable, "the read fits the budget")
+	require.Equal(t, maxDiscoveryReadBytes, budget.bytes)
+	require.Equal(t, 1, budget.files)
+
+	budget = &discoveryBudget{files: maxManifestsParsed}
+	m, _ = readManifestAt(path, nil, budget)
+	require.True(t, m.Unreadable, "past the file count")
+}
+
 // The exact pins of a listed manifest are matched against intelligence;
 // everything else in the file stays unevaluated.
 func TestMatchPinsReportsCompromisedManifestPins(t *testing.T) {

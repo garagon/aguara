@@ -1,6 +1,7 @@
 package packagecheck
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -29,10 +30,39 @@ const (
 // intelligence for conda channels; the file's pip list is PyPI.
 const ecosystemConda = "conda"
 
-// maxManifestsParsed bounds how many manifests one discovery reads. Any
-// further manifest is still reported, as one whose dependencies are
-// unknown, without being read.
-const maxManifestsParsed = 10_000
+// maxManifestsParsed bounds how many manifests one discovery reads, and
+// maxDiscoveryReadBytes the bytes it reads from manifests and from pip
+// files under names it does not read as targets. Real manifests are a few
+// kilobytes, so the byte budget is far above what a repository's
+// manifests add up to. Past either bound a manifest is still reported, as
+// one whose dependencies are unknown, without being read, and a pip-name
+// file is listed without its pins.
+const (
+	maxManifestsParsed          = 10_000
+	maxDiscoveryReadBytes int64 = 256 << 20
+)
+
+// discoveryBudget counts what one discovery walk has read.
+type discoveryBudget struct {
+	files int
+	bytes int64
+}
+
+// take charges the read of path, up to limit bytes, to the budget, or
+// reports false when the budget is spent. A file that cannot be stat'ed
+// is charged nothing; its read fails on its own.
+func (b *discoveryBudget) take(path string, limit int64) bool {
+	size := int64(0)
+	if info, err := os.Lstat(path); err == nil {
+		size = min(info.Size(), limit)
+	}
+	if b.files >= maxManifestsParsed || b.bytes+size > maxDiscoveryReadBytes {
+		return false
+	}
+	b.files++
+	b.bytes += size
+	return true
+}
 
 // Manifest is a dependency manifest found under the checked root: a file
 // that declares what to install but does not record the versions an
@@ -159,9 +189,9 @@ func wantsManifestEcosystem(want map[string]bool, eco string) bool {
 }
 
 // readManifestAt identifies and reads the manifest at path, or returns
-// ok=false when the file is not a manifest. parsed counts the reads so far
+// ok=false when the file is not a manifest. budget counts the reads so far
 // in this discovery.
-func readManifestAt(path string, want map[string]bool, parsed *int) (Manifest, bool) {
+func readManifestAt(path string, want map[string]bool, budget *discoveryBudget) (Manifest, bool) {
 	base, dir := filepath.Base(path), filepath.Dir(path)
 	for _, spec := range manifestSpecs {
 		if !spec.match(base, dir) || !wantsManifestEcosystem(want, spec.ecosystem) {
@@ -172,11 +202,15 @@ func readManifestAt(path string, want map[string]bool, parsed *int) (Manifest, b
 			m.Workspace = true
 			return m, true
 		}
-		if *parsed >= maxManifestsParsed {
+		limit := maxDependencyManifestBytes
+		if spec.kind == "requirements.in" {
+			// Read with the requirements-file reader and its limit.
+			limit = maxManifestBytes
+		}
+		if !budget.take(path, limit) {
 			m.Declares, m.Unreadable = true, true
 			return m, spec.ecosystem != ecosystemConda
 		}
-		*parsed++
 		info, ok, err := spec.read(path)
 		if !ok {
 			return Manifest{}, false
