@@ -96,9 +96,10 @@ type AuditResult struct {
 	// Coverage states what the audit evaluated: files scanned, package
 	// evidence read, and dependency files found but not evaluated.
 	Coverage AuditCoverage `json:"coverage"`
-	// Complete is false when the content scan is incomplete: scan.errors
-	// lists what failed, the findings are partial, the verdict status is
-	// "incomplete" (unless the gate failed) and the command exits 2.
+	// Complete is false when the content scan or the package check is
+	// incomplete: scan.errors or check.errors lists what failed, the
+	// findings are partial, the verdict status is "incomplete" (unless the
+	// gate failed) and the command exits 2.
 	Complete bool `json:"complete"`
 
 	scanGate    []types.Finding
@@ -230,7 +231,7 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		Scan:     scanResult,
 		Intel:    checkResult.Intel,
 		Coverage: auditCoverage(checkResult, scanResult),
-		Complete: !scanResult.Incomplete,
+		Complete: !scanResult.Incomplete && !checkResult.Incomplete,
 	}
 
 	// Baseline applies to the SCAN side only; package (check) findings
@@ -297,9 +298,13 @@ func runAudit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// An incomplete scan is an error (exit 2) whatever the threshold.
+	// An incomplete scan or check is an error (exit 2) whatever the
+	// threshold.
 	if scanErr != nil {
 		return scanErr
+	}
+	if err := checkIncompleteError(checkResult); err != nil {
+		return fmt.Errorf("audit: check phase: %w", err)
 	}
 	if result.Verdict.ThresholdExceeded {
 		return ErrThresholdExceeded
@@ -449,10 +454,10 @@ func computeAuditVerdict(result *AuditResult, threshold string) (AuditVerdict, e
 	if totalFindings > 0 {
 		v.Status = "findings"
 	}
-	// An incomplete content scan is never a pass: "incomplete" replaces
-	// pass and findings (the counts still say what was found), and only a
-	// crossed gate ("fail") outranks it.
-	if result.Scan.Incomplete {
+	// An incomplete content scan or package check is never a pass:
+	// "incomplete" replaces pass and findings (the counts still say what
+	// was found), and only a crossed gate ("fail") outranks it.
+	if result.Scan.Incomplete || (result.Check != nil && result.Check.Incomplete) {
 		v.Status = "incomplete"
 	}
 
@@ -596,6 +601,19 @@ func computeAuditTriage(result *AuditResult) AuditTriage {
 		escalateForCoverage(&t,
 			"The content scan is incomplete, so the audit cannot clear this target.",
 			"Fix the failures listed under scan.errors and run the audit again.")
+	}
+	if result.Check != nil && result.Check.Incomplete {
+		// A dependency file over a parsing budget was not evaluated: what
+		// it installs is unknown.
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "check_incomplete",
+			Severity: "warning",
+			Message: fmt.Sprintf("The package check could not evaluate %d dependency file(s) that exceed a parsing budget, listed under check.errors; its results are partial.",
+				result.Check.FailedOperations),
+		})
+		escalateForCoverage(&t,
+			"The package check is incomplete, so the audit cannot clear this target.",
+			"Review the dependency files listed under check.errors (an oversized or generated file), and run the audit again.")
 	}
 	if names := hiddenSkippedNames(result.Scan.Skipped); names != "" {
 		// An agent reading the target follows links and reads pipes; the
@@ -815,6 +833,7 @@ func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (messa
 // lockfile.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "scan_incomplete") ||
+		hasTriageReason(t.Reasons, "check_incomplete") ||
 		hasTriageReason(t.Reasons, "entries_not_evaluated") ||
 		hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
@@ -979,7 +998,15 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 			fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow(line))
 		}
 	}
+	if summary, details := checkIncompleteLines(result.Check, result.Target); summary != "" {
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+		for _, line := range details {
+			fmt.Fprintf(w, "    %s\n", st.Dim(line))
+		}
+	}
 	switch {
+	case len(result.Check.Findings) == 0 && result.Check.Incomplete:
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow("No known-compromised packages in what was evaluated; the check is incomplete."))
 	case len(result.Check.Findings) > 0:
 		for _, f := range result.Check.Findings {
 			label := output.TerminalText(string(f.Severity))
@@ -1061,8 +1088,10 @@ func renderAuditTerminal(w io.Writer, result *AuditResult) error {
 	switch {
 	case result.Verdict.ThresholdExceeded:
 		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts
-	case result.Verdict.Status == "incomplete":
+	case result.Verdict.Status == "incomplete" && result.Scan.Incomplete:
 		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts + " " + st.Yellow("(content scan incomplete, see scan.errors)")
+	case result.Verdict.Status == "incomplete":
+		line = st.SeverityIcon("CRITICAL") + " " + st.RedBold(verdict) + " " + counts + " " + st.Yellow("(package check incomplete, see check.errors)")
 	case result.Verdict.Status == "findings":
 		line = st.SeverityIcon("MEDIUM") + " " + st.Yellow(st.Bold(verdict)) + " " + counts
 	case result.Triage.Decision != "" && result.Triage.Decision != "proceed":

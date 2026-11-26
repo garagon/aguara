@@ -168,6 +168,12 @@ exported through public aliases, rather than copying a partial struct.
   CLI writes the report of an incomplete scan, then exits 2; `audit` sets
   top-level `complete`, `verdict.status` `incomplete` unless the gate failed,
   and a `scan_incomplete` triage reason, so triage is never `proceed`.
+- Check JSON (and `audit`'s `check`) carries `complete`, `errors` and
+  `failed_operations` too: a dependency manifest over a parsing budget is an
+  `errors` entry (stage `read`, reason `budget`) and makes the check
+  incomplete (exit 2, report written, other results kept); `audit` adds the
+  `check_incomplete` triage reason. The manifest is still listed under
+  `coverage.unsupported_evidence`.
 - `skipped` (top level, and in the CLI's `coverage`) lists entries a scan did
   not read because they are not regular files: symbolic links, named pipes,
   sockets and devices. Always an array. A link carries `resolves`

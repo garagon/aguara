@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
+	"github.com/garagon/aguara/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -170,6 +172,10 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// An incomplete check is an error (exit 2) whatever the threshold.
+	if err := checkIncompleteError(result); err != nil {
+		return err
+	}
 	return checkIncidentFailOnThreshold(result, flagCheckFailOn)
 }
 
@@ -909,7 +915,62 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 			result.Findings = append(result.Findings, pinFinding(hit))
 		}
 	}
+	recordCheckFailures(result, plan.manifests)
 	return result, nil
+}
+
+// errCheckIncomplete is the error of a check that could not evaluate a
+// dependency file it found; the CLI writes the report first, then exits 2.
+var errCheckIncomplete = errors.New("check incomplete")
+
+// recordCheckFailures marks the result incomplete for each dependency
+// manifest that exceeds a parsing budget: its dependencies are unknown,
+// and unlike a file the check cannot read (listed under
+// coverage.unsupported_evidence), it is a file the check refused to
+// evaluate. Every other result stays in the report.
+func recordCheckFailures(result *incident.CheckResult, manifests []packagecheck.Manifest) {
+	result.Errors = []types.ScanFailure{}
+	for _, m := range manifests {
+		if errors.Is(m.Failure, packagecheck.ErrBudget) {
+			result.Errors = append(result.Errors, types.ScanFailure{Path: m.Path, Stage: types.FailureStageRead, Reason: types.FailureReasonBudget})
+		}
+	}
+	sort.Slice(result.Errors, func(i, j int) bool { return result.Errors[i].Path < result.Errors[j].Path })
+	result.FailedOperations = len(result.Errors)
+	if len(result.Errors) > types.MaxReportedFailures {
+		result.Errors = result.Errors[:types.MaxReportedFailures]
+	}
+	result.Incomplete = result.FailedOperations > 0
+}
+
+// checkIncompleteLines is the terminal notice of an incomplete check: a
+// summary and one line per listed file, paths relative to root when they
+// are inside it. Both are empty for a complete check.
+func checkIncompleteLines(result *incident.CheckResult, root string) (string, []string) {
+	if result == nil || !result.Incomplete {
+		return "", nil
+	}
+	summary := fmt.Sprintf("CHECK INCOMPLETE: %d dependency file(s) exceed a parsing budget and were not evaluated; the results are partial.", result.FailedOperations)
+	details := make([]string, 0, len(result.Errors)+1)
+	for _, f := range result.Errors {
+		path := f.Path
+		if rel, err := filepath.Rel(root, path); root != "" && err == nil && !strings.HasPrefix(rel, "..") {
+			path = rel
+		}
+		details = append(details, output.TerminalText(path)+": exceeds a parsing budget; its dependencies were not evaluated")
+	}
+	if result.FailedOperations > len(result.Errors) {
+		details = append(details, fmt.Sprintf("and %d more", result.FailedOperations-len(result.Errors)))
+	}
+	return summary, details
+}
+
+// checkIncompleteError is the command error of an incomplete check.
+func checkIncompleteError(result *incident.CheckResult) error {
+	if result == nil || !result.Incomplete {
+		return nil
+	}
+	return fmt.Errorf("%w: %d dependency file(s) exceed a parsing budget and were not evaluated, listed under errors", errCheckIncomplete, result.FailedOperations)
 }
 
 // pinFinding reports an exact pin in a file that was not otherwise
@@ -1156,6 +1217,13 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 		}
 		fmt.Fprintln(w)
 	}
+	if summary, details := checkIncompleteLines(result, plan.rootPath); summary != "" {
+		fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+		for _, line := range details {
+			fmt.Fprintf(w, "    %s\n", st.Dim(line))
+		}
+		fmt.Fprintln(w)
+	}
 
 	// Provenance line: which intel answered this scan, and how old it is.
 	// Suppressed under --ci to keep stdout to findings (a stale local
@@ -1165,6 +1233,10 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 		fmt.Fprintf(w, "  %s\n\n", st.Yellow(note))
 	}
 
+	if len(result.Findings) == 0 && result.Incomplete {
+		fmt.Fprintf(w, "  %s %s\n\n", st.SeverityIcon("MEDIUM"), st.Yellow("No known-compromised packages in what was evaluated; the check is incomplete."))
+		return nil
+	}
 	if len(result.Findings) == 0 {
 		fmt.Fprintf(w, "  %s\n\n", noPackageFindingsLine(st, result.Coverage))
 		return nil

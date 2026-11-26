@@ -3,6 +3,7 @@ package incident
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/packagecheck"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // Severity levels for check findings.
@@ -79,6 +81,44 @@ type CheckResult struct {
 	// dependency files were found but not evaluated. Set by the CLI
 	// after discovery; omitted when a caller does not compute it.
 	Coverage *packagecheck.Coverage `json:"coverage,omitempty"`
+	// Incomplete is set when the check could not evaluate a dependency
+	// file it found because the file exceeds a parsing budget; Errors
+	// lists those files (at most types.MaxReportedFailures, sorted by
+	// path) and FailedOperations counts them all. JSON carries it as
+	// "complete" (see MarshalJSON). The CLI sets the three fields, writes
+	// the report of an incomplete check with every other result in it,
+	// then exits 2.
+	Incomplete       bool                `json:"-"`
+	Errors           []types.ScanFailure `json:"errors"`
+	FailedOperations int                 `json:"failed_operations"`
+}
+
+// MarshalJSON writes "complete" (false for an incomplete check) and keeps
+// errors an array.
+func (r CheckResult) MarshalJSON() ([]byte, error) {
+	if r.Errors == nil {
+		r.Errors = []types.ScanFailure{}
+	}
+	type Alias CheckResult
+	return json.Marshal(struct {
+		Alias
+		Complete bool `json:"complete"`
+	}{Alias: Alias(r), Complete: !r.Incomplete})
+}
+
+// UnmarshalJSON reads what MarshalJSON writes: "complete": false sets
+// Incomplete, and a report without "complete" decodes as complete.
+func (r *CheckResult) UnmarshalJSON(data []byte) error {
+	type Alias CheckResult
+	aux := struct {
+		*Alias
+		Complete *bool `json:"complete"`
+	}{Alias: (*Alias)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	r.Incomplete = aux.Complete != nil && !*aux.Complete
+	return nil
 }
 
 // IntelSummary tells the consumer (terminal output, JSON
