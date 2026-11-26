@@ -283,6 +283,66 @@ func TestWriteCheckTerminal(t *testing.T) {
 	resetFlags()
 }
 
+// The compromise response (remove the package, rotate every credential,
+// audit CI) is printed only when a critical finding says a compromised
+// package was found. Warnings alone, such as a requirements include that
+// was not read, get a short instruction to review the listed files.
+func TestWriteCheckTerminalActionBlockFollowsSeverity(t *testing.T) {
+	critical := incident.Finding{
+		Severity:    incident.SevCritical,
+		Title:       "evil-pkg 1.0.0 is a known compromised npm package (MAL-2026-0001)",
+		Path:        "/tmp/x/package-lock.json",
+		Remediation: "Remove evil-pkg@1.0.0 from the lockfile.",
+	}
+	warning := incident.Finding{
+		Severity:    incident.SevWarning,
+		Title:       "requirements.txt includes https://example.com/x.txt, which was not checked: it is a URL, which Aguara does not fetch",
+		Path:        "/tmp/x/requirements.txt",
+		Line:        2,
+		Remediation: "Save the included requirements inside the project and check them, or review what that URL serves before installing.",
+	}
+	for _, tc := range []struct {
+		name         string
+		findings     []incident.Finding
+		wantAction   bool
+		wantReview   bool
+		wantSummary  string
+		forbidReview bool
+	}{
+		{name: "critical only", findings: []incident.Finding{critical}, wantAction: true, wantSummary: "1 critical", forbidReview: true},
+		{name: "warnings only", findings: []incident.Finding{warning, warning}, wantReview: true, wantSummary: "2 warning"},
+		{name: "critical and warning", findings: []incident.Finding{critical, warning}, wantAction: true, wantSummary: "1 critical · 1 warning", forbidReview: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetFlags()
+			flagNoColor = true
+			defer resetFlags()
+			res := &incident.CheckResult{Environment: "test-env", PackagesRead: 2, Findings: tc.findings}
+			fetch, restore := captureStdout(t)
+			require.NoError(t, writeCheckTerminal(res, checkPlan{}))
+			restore()
+			out := fetch()
+			require.Contains(t, out, tc.wantSummary)
+			if tc.wantAction {
+				require.Contains(t, out, "ACTION REQUIRED")
+				require.Contains(t, out, "Rotate ALL credentials")
+			} else {
+				require.NotContains(t, out, "ACTION REQUIRED")
+				require.NotContains(t, out, "Rotate ALL credentials")
+			}
+			if tc.wantReview {
+				require.Contains(t, out, "REVIEW")
+				require.Contains(t, out, "Review the files listed above")
+				// The remediation is listed once even for two warnings.
+				require.Equal(t, 1, strings.Count(out, warning.Remediation))
+			}
+			if tc.forbidReview {
+				require.NotContains(t, out, "Review the files listed above")
+			}
+		})
+	}
+}
+
 func TestWriteCleanJSONToFile(t *testing.T) {
 	resetFlags()
 	out := filepath.Join(t.TempDir(), "clean.json")

@@ -54,6 +54,24 @@ type PackageRef struct {
 	// version of the package; it never guesses a version.
 	Unpinned   bool
 	Constraint string
+	// ArbitraryEquality marks a version pinned with `===` in a pip
+	// requirement, which pip compares as a string, not as a PEP 440
+	// version (see intel.MatchInput.ArbitraryEquality).
+	ArbitraryEquality bool
+	// GraphOnly marks a version a lockfile records only as part of
+	// dependency resolution, not as installed or built: a go.sum entry
+	// with a `/go.mod` hash and no zip hash, that go.mod does not
+	// require. It is matched only against advisories that cover every
+	// version of the package.
+	GraphOnly bool
+	// Replacement is the module (and version) or local directory a go.mod
+	// replace directive substitutes for this module; empty when none.
+	// The ref is matched as written; the finding mentions the replacement.
+	Replacement string
+	// Excluded marks a Go version that the go.mod beside it also excludes:
+	// since Go 1.16 the go command ignores a requirement on an excluded
+	// version. The ref is still matched, and the finding says so.
+	Excluded bool
 }
 
 // Target is one discovery anchor under the scanned root. Discovery

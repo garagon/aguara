@@ -192,7 +192,10 @@ func TestParseRequirementsMalformedIsAnError(t *testing.T) {
 		"pkg==1.0abc!",
 		"pkg>>1.0",
 		"pkg[unterminated==1.0",
-		"pkg==1.0;",
+		"pkg==1.0;;",
+		"pkg==1.0; python_version >= '3' and",
+		"pkg[a,]==1.0",
+		"pkg==1.0,,",
 		"-pkg",
 		"--unknown-option value",
 		"pkg==1.0 --unknown-per-req",
@@ -252,12 +255,14 @@ func TestParseRequirementsIncludeBoundaries(t *testing.T) {
 	_, err = parseRequirementsTarget(Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(root, "requirements-linked.txt"), Source: "requirements-linked.txt", Root: root}, newRequirementsCache())
 	require.Error(t, err)
 
-	// A malformed included file fails the whole target.
+	// A malformed line in an included file is skipped and reported; the
+	// rest of the target is still read.
 	writeFile(t, filepath.Join(root, "bad.txt"), "pkg==\n")
 	writeFile(t, filepath.Join(root, "requirements-bad.txt"), "good==1.0\n-r bad.txt\n")
 	refs, err := ParseRequirements(Target{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(root, "requirements-bad.txt"), Source: "requirements-bad.txt", Root: root})
-	require.Error(t, err)
-	require.Nil(t, refs)
+	var syntax *RequirementsSyntaxError
+	require.ErrorAs(t, err, &syntax)
+	require.Equal(t, []string{"good 1.0"}, refSummary(refs))
 }
 
 func TestParseRequirementsIncludeDepthLimit(t *testing.T) {
@@ -539,6 +544,119 @@ func TestPythonLockfileInputRejectsLinkedFiles(t *testing.T) {
 			require.Error(t, err)
 			require.Nil(t, result)
 		})
+	}
+}
+
+// A file named like a requirements or constraints file whose lines are not
+// in the pip grammar the parser reads is not evaluated: the run lists it
+// instead of failing. Input the parser refuses because pip could still
+// read it and install something unseen stays an error.
+func TestRunnerListsRequirementsSyntaxItCannotRead(t *testing.T) {
+	m := intel.NewMatcher(intel.Snapshot{})
+	run := func(t *testing.T, files map[string]string, target string) (*RunResult, error) {
+		t.Helper()
+		dir := t.TempDir()
+		for name, content := range files {
+			writeFile(t, filepath.Join(dir, name), content)
+		}
+		return (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, target), Source: target, Root: dir}})
+	}
+	for name, tc := range map[string]struct {
+		files  map[string]string
+		target string
+		detail string
+	}{
+		// Line 1 reads as a requirement named "Constraints"; line 2 does not.
+		"documentation named constraints.txt": {map[string]string{"constraints.txt": "Constraints\n===========\n\n.. class:: CheckConstraint(*, check, name)\n"}, "constraints.txt", "line 2 is not"},
+		"unknown option":                      {map[string]string{"requirements.txt": "--frobnicate\nflask==3.0.0\n"}, "requirements.txt", "line 1 is not"},
+		"malformed specifier":                 {map[string]string{"requirements.txt": "flask==3.0.0\npkg==\n"}, "requirements.txt", "line 2 is not"},
+		"unterminated quote":                  {map[string]string{"requirements.txt": "-r 'base.txt\n"}, "requirements.txt", "line 1 is not"},
+		"malformed include":                   {map[string]string{"requirements.txt": "good==1.0\n-r bad.txt\n", "bad.txt": "pkg==\n"}, "requirements.txt", "line 1 of bad.txt, which it includes, is not"},
+		"several lines":                       {map[string]string{"requirements.txt": "--frobnicate\nflask==3.0.0\npkg==\n"}, "requirements.txt", "line 1 and 1 more line are not pip requirements or options Aguara reads"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := run(t, tc.files, tc.target)
+			require.NoError(t, err)
+			require.Len(t, res.Ecosystems, 1, "the lines that parsed were evaluated")
+			require.Len(t, res.Unparsed, 1)
+			require.Equal(t, ReasonFormatNotParsed, res.Unparsed[0].Reason)
+			require.Contains(t, res.Unparsed[0].Detail, tc.detail)
+			require.Contains(t, res.Unparsed[0].Detail, "the other lines were checked")
+			require.True(t, res.Unparsed[0].PartlyRead())
+			for _, ev := range res.Requirements {
+				require.NotEmpty(t, ev.Skipped, "a file with a skipped line never stands for a manifest")
+				require.Empty(t, ev.Pinned)
+			}
+		})
+	}
+
+	// The entries that parsed are matched as usual.
+	matcher := intel.NewMatcher(intel.Snapshot{Records: []intel.Record{
+		{ID: "MAL-TEST", Ecosystem: intel.EcosystemPyPI, Name: "evil-pkg", Kind: intel.KindMalicious, Versions: []string{"1.0"}},
+		{ID: "MAL-TEST-2", Ecosystem: intel.EcosystemPyPI, Name: "other-evil", Kind: intel.KindMalicious, Versions: []string{"2.0"}},
+	}})
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "requirements.txt"), "--frobnicate\nevil-pkg==1.0\n-r base.txt\n")
+	writeFile(t, filepath.Join(dir, "base.txt"), "pkg==\nother-evil==2.0 ; python_version >= '3'\n")
+	res, err := (&Runner{Matcher: matcher}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
+	require.NoError(t, err)
+	require.Len(t, res.Hits, 2, "the pin in the file and the one in its include")
+	require.Len(t, res.Unparsed, 1)
+	require.Equal(t, 2, res.Ecosystems[0].FindingsCount)
+
+	deep := map[string]string{}
+	for i := 0; i <= maxRequirementsIncludeDepth+2; i++ {
+		deep[fmt.Sprintf("r%d.txt", i)] = fmt.Sprintf("pkg%d==1.0\n-r r%d.txt\n", i, i+1)
+	}
+	deep["requirements.txt"] = "-r r0.txt\n"
+	for name, tc := range map[string]struct {
+		files  map[string]string
+		target string
+	}{
+		"declared encoding":   {map[string]string{"requirements.txt": "# -*- coding: latin-1 -*-\nflask==3.0.0\n"}, "requirements.txt"},
+		"not UTF-8":           {map[string]string{"requirements.txt": "flask==3.0.0\n\xff\xfe\n"}, "requirements.txt"},
+		"overlong line":       {map[string]string{"requirements.txt": strings.Repeat("a", maxRequirementsLineBytes+1) + "\n"}, "requirements.txt"},
+		"includes too deep":   {deep, "requirements.txt"},
+		"missing target file": {map[string]string{}, "requirements.txt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := run(t, tc.files, tc.target)
+			require.Error(t, err)
+		})
+	}
+
+	dir = t.TempDir()
+	writeFile(t, filepath.Join(dir, "real.txt"), "flask==3.0.0\n")
+	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "requirements.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err = (&Runner{Matcher: m}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: filepath.Join(dir, "requirements.txt"), Source: "requirements.txt", Root: dir}})
+	require.Error(t, err, "a symlinked requirements file is unsafe input")
+}
+
+// A `===` pin is compared the way pip compares it, as a string against
+// the release's normalized version, while `==` keeps PEP 440 equality.
+func TestRequirementsArbitraryEqualityMatchesLikePip(t *testing.T) {
+	matcher := intel.NewMatcher(intel.Snapshot{Records: []intel.Record{{
+		ID: "MAL-ARB", Ecosystem: intel.EcosystemPyPI, Name: "evil-pkg", Kind: intel.KindMalicious, Versions: []string{"0.0.1"},
+	}}})
+	for _, tc := range []struct {
+		line string
+		hit  bool
+	}{
+		{"evil-pkg===0.0.1\n", true},
+		{"Evil_Pkg===0.0.1\n", true},
+		{"evil-pkg===0.0.1.0\n", false}, // pip would not select 0.0.1
+		{"evil-pkg===v0.0.1\n", false},
+		{"evil-pkg==0.0.1.0\n", true}, // PEP 440 equality pads zeros
+		{"evil-pkg==v0.0.1\n", true},
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "requirements.txt")
+		writeFile(t, path, tc.line)
+		res, err := (&Runner{Matcher: matcher}).Run([]Target{{Ecosystem: intel.EcosystemPyPI, Path: path, Source: "requirements.txt", Root: dir}})
+		require.NoError(t, err)
+		require.Equal(t, tc.hit, len(res.Hits) == 1, "line %q", tc.line)
 	}
 }
 
