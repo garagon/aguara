@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -1249,15 +1250,21 @@ const (
 // body of a command substitution in any argument. Any other word is
 // redacted as one value (redactArgValue). Commands, package names and
 // other arguments stay visible. When the redacted arguments still have a
-// plain-mode hit, every argument is masked (the backstop of
-// redactCommand).
+// plain-mode hit (the backstop of redactCommand), the shortest trailing
+// run of arguments whose removal leaves no hit is masked, so the leading
+// arguments, such as a package name, stay visible.
 func redactArgs(args []string) []string {
 	out, script := redactArgsAt(args, 0)
 	if text := backstopText(out, script); len(out) > 0 && plainHit(text) {
 		if onBackstop != nil {
 			onBackstop(text)
 		}
-		for i := range out {
+		// A hit in the first k arguments stays a hit with more of them, so
+		// the longest prefix without one is found by bisection.
+		keep := sort.Search(len(out), func(k int) bool {
+			return plainHit(backstopText(out[:k+1], script[:k+1]))
+		})
+		for i := keep; i < len(out); i++ {
 			out[i] = redactedPlaceholder
 		}
 	}

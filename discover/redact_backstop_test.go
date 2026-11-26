@@ -134,8 +134,16 @@ func TestBackstopMasksTheSimpleCommand(t *testing.T) {
 			t.Errorf("backstop fired %d times for %q", len(fired), in)
 		}
 	}
-	if got := redactArgs([]string{"set", "-x", "GITHUB_TOKEN", "qzS3cretA5"}); strings.Join(got, " ") != "[REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
-		t.Errorf("argument list = %q, want every argument masked", got)
+	// In an argument list the shortest trailing run that holds the hit is
+	// masked, so the leading arguments stay visible.
+	if got := redactArgs([]string{"set", "-x", "GITHUB_TOKEN", "qzS3cretA5"}); strings.Join(got, " ") != "set -x GITHUB_TOKEN [REDACTED]" {
+		t.Errorf("argument list = %q", got)
+	}
+	if got := redactArgs([]string{"-y", "@scope/pkg", "set", "-gx", "GITHUB_TOKEN", "qzS3cretA5", "--verbose"}); strings.Join(got, " ") != "-y @scope/pkg set -gx GITHUB_TOKEN [REDACTED] [REDACTED]" {
+		t.Errorf("argument list = %q", got)
+	}
+	if got := redactArgs([]string{"-y", "@scope/pkg", `{"token": "qzS3cretA5"`}); strings.Join(got, " ") != "-y @scope/pkg [REDACTED]" {
+		t.Errorf("argument list = %q", got)
 	}
 	if got := redactCommand(`fish -c "set -x TOKEN qzS3cretA5; node s.js"`); got != `fish -c "set -x TOKEN [REDACTED]; node s.js"` {
 		t.Errorf("set -x TOKEN = %q", got)
