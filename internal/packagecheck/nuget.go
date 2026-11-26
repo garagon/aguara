@@ -330,6 +330,9 @@ func parseNuGetProps(path string) (centralVersions, error) {
 	if err != nil {
 		return out, fmt.Errorf("read Directory.Packages.props: %w", err)
 	}
+	if err := checkXMLBudget(data, "Directory.Packages.props"); err != nil {
+		return out, err
+	}
 	var p csProject
 	if err := xml.Unmarshal(data, &p); err != nil {
 		return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
@@ -356,7 +359,7 @@ func parseNuGetProps(path string) (centralVersions, error) {
 				continue
 			}
 			if len(seen) >= maxLockfileEntries {
-				return out, fmt.Errorf("parse Directory.Packages.props: more than %d package versions", maxLockfileEntries)
+				return out, errBudget("parse Directory.Packages.props: more than %d package versions", maxLockfileEntries)
 			}
 			seen[name+"\x00"+v] = true
 			out.versions[name] = append(out.versions[name], v)

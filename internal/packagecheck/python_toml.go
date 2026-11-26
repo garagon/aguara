@@ -60,7 +60,7 @@ func walkTOML(data []byte, label string, visit func(tomlExpr) error) error {
 				offset = int(node.Raw.Offset)
 			}
 			if len(keys) == maxTOMLKeyParts {
-				return fmt.Errorf("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
+				return errBudget("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
 			}
 			keys = append(keys, string(node.Data))
 		}
@@ -145,7 +145,7 @@ func checkTOMLNodeBudget(data []byte, label string) error {
 			i++
 		}
 		if count > maxTOMLExpressionNodes {
-			return fmt.Errorf("parse %s: a TOML expression exceeds the %d-node limit", label, maxTOMLExpressionNodes)
+			return errBudget("parse %s: a TOML expression exceeds the %d-node limit", label, maxTOMLExpressionNodes)
 		}
 	}
 	return nil
@@ -280,7 +280,7 @@ func (c *pythonRefCollector) add(ref PackageRef) error {
 		return nil
 	}
 	if len(c.refs) >= maxLockfileEntries {
-		return fmt.Errorf("parse %s: more than %d package entries", c.label, maxLockfileEntries)
+		return errBudget("parse %s: more than %d package entries", c.label, maxLockfileEntries)
 	}
 	c.seen[key] = true
 	c.refs = append(c.refs, ref)

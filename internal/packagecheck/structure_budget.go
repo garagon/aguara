@@ -3,6 +3,7 @@ package packagecheck
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 )
 
@@ -49,9 +50,29 @@ const (
 // variable so tests can lower it.
 var maxLockfileEntries = 100_000
 
+// ErrBudget is matched by errors.Is when a dependency file was not
+// evaluated because it exceeds a parsing budget: too many values,
+// collection members, XML tokens or nesting levels, TOML expression nodes
+// or key parts, package entries, or requirements includes. Such a file is
+// not malformed; its dependencies are unknown.
+var ErrBudget = errors.New("dependency file exceeds a parsing budget")
+
+// budgetError is a parsing budget failure; its message names the limit.
+type budgetError struct{ msg string }
+
+func (e *budgetError) Error() string { return e.msg }
+
+// Is reports ErrBudget.
+func (e *budgetError) Is(target error) bool { return target == ErrBudget }
+
+// errBudget formats a budget failure.
+func errBudget(format string, args ...any) error {
+	return &budgetError{msg: fmt.Sprintf(format, args...)}
+}
+
 // errEntryLimit reports a dependency file with too many package entries.
 func errEntryLimit(label string) error {
-	return fmt.Errorf("parse %s: more than %d package entries", label, maxLockfileEntries)
+	return errBudget("parse %s: more than %d package entries", label, maxLockfileEntries)
 }
 
 // checkEntryLimit fails once refs would exceed maxLockfileEntries. Line
@@ -69,12 +90,12 @@ func CheckJSONNodeBudget(data []byte, label string) error {
 	return checkJSONNodeBudget(data, label)
 }
 
-func errNodeLimit(label string) error {
-	return fmt.Errorf("parse %s: document exceeds the %d-node limit", label, maxStructuredNodes)
+func errNodeLimit(label string, limit int) error {
+	return errBudget("parse %s: document exceeds the %d-node limit", label, limit)
 }
 
 func errContainerLimit(label string) error {
-	return fmt.Errorf("parse %s: a collection has more than %d members", label, maxContainerMembers)
+	return errBudget("parse %s: a collection has more than %d members", label, maxContainerMembers)
 }
 
 // checkJSONNodeBudget counts the bytes that can start a JSON value outside
@@ -110,7 +131,7 @@ func checkJSONNodeBudget(data []byte, label string) error {
 			continue
 		}
 		if count++; count > maxStructuredNodes {
-			return errNodeLimit(label)
+			return errNodeLimit(label, maxStructuredNodes)
 		}
 	}
 	return nil
@@ -128,6 +149,12 @@ func checkJSONNodeBudget(data []byte, label string) error {
 // scalar count as entries of a deeper collection, which only
 // over-approximates.
 func checkYAMLNodeBudget(data []byte, label string) error {
+	return checkYAMLNodeBudgetLimit(data, label, maxStructuredNodes)
+}
+
+// checkYAMLNodeBudgetLimit is checkYAMLNodeBudget with a smaller node
+// limit, for small documents whose decoded node tree is all that is kept.
+func checkYAMLNodeBudgetLimit(data []byte, label string, limit int) error {
 	type flowOpen struct {
 		kind   byte
 		commas int
@@ -202,8 +229,8 @@ func checkYAMLNodeBudget(data []byte, label string) error {
 			add = 1
 		}
 		count += add
-		if count > maxStructuredNodes {
-			return errNodeLimit(label)
+		if count > limit {
+			return errNodeLimit(label, limit)
 		}
 	}
 	return nil
@@ -223,13 +250,13 @@ func checkXMLBudget(data []byte, label string) error {
 		}
 		tokens++
 		if tokens > maxStructuredNodes {
-			return fmt.Errorf("parse %s: document exceeds the %d-token limit", label, maxStructuredNodes)
+			return errBudget("parse %s: document exceeds the %d-token limit", label, maxStructuredNodes)
 		}
 		switch tok.(type) {
 		case xml.StartElement:
 			depth++
 			if depth > maxXMLDepth {
-				return fmt.Errorf("parse %s: elements nest more than %d levels deep", label, maxXMLDepth)
+				return errBudget("parse %s: elements nest more than %d levels deep", label, maxXMLDepth)
 			}
 		case xml.EndElement:
 			if depth > 0 {

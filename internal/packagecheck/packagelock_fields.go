@@ -2,7 +2,6 @@ package packagecheck
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
 
 	"github.com/garagon/aguara/internal/jsonfields"
@@ -45,7 +44,7 @@ func (p *plPackagesEntry) UnmarshalJSON(data []byte) error {
 // the count stops the decoding instead of the refs check afterwards.
 func decodeLockDependencies(data []byte, depth int, budget *int64, entries *int) (map[string]plDepEntry, error) {
 	if depth >= 128 || int64(len(data)) > *budget {
-		return nil, fmt.Errorf("package-lock dependency tree exceeds decoding budget")
+		return nil, errBudget("package-lock dependency tree exceeds decoding budget")
 	}
 	*budget -= int64(len(data))
 	var raw map[string]json.RawMessage
@@ -61,7 +60,7 @@ func decodeLockDependencies(data []byte, depth int, budget *int64, entries *int)
 	}
 	sort.Strings(keys)
 	if *entries += len(raw); *entries > 4*maxLockfileEntries {
-		return nil, fmt.Errorf("package-lock dependency tree exceeds decoding budget: more than %d nested entries", 4*maxLockfileEntries)
+		return nil, errBudget("package-lock dependency tree exceeds decoding budget: more than %d nested entries", 4*maxLockfileEntries)
 	}
 	decoded := make(map[string]plDepEntry, len(raw))
 	for _, key := range keys {
