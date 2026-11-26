@@ -633,8 +633,9 @@ func redactArgValue(a string) string {
 // change are rewritten, in place, so quoting, operators and all other text
 // are kept as written. A command substitution, $(...) or `...`, stays
 // inside its word, and its body is redacted as a command line. The word
-// after <<<, and the arguments of echo or printf piped into a shell, are
-// command lines too. An unterminated quote (or a trailing backslash or an
+// after <<< to a shell, and the arguments of echo or printf piped into a
+// shell, are command lines too; a here-string to another program is one
+// plain value. An unterminated quote (or a trailing backslash or an
 // unterminated substitution) masks everything from it to the end. The
 // rebuilt line is not read again: the words cover all of it, and only a
 // known token format that is still present is masked, as a last check.
@@ -666,6 +667,7 @@ func redactCommandAt(cmd string, depth int) string {
 		boundary = append(boundary, open.afterOp)
 	}
 	red := make([]string, len(values))
+	prev := -1
 	for lo := 0; lo < len(values); {
 		hi := lo + 1
 		for hi < len(values) && !boundary[hi] {
@@ -673,8 +675,12 @@ func redactCommandAt(cmd string, depth int) string {
 		}
 		copy(red[lo:hi], redactArgsAt(values[lo:hi], depth))
 		if lo < len(words) && strings.HasSuffix(words[lo].op, "<<<") {
-			// A here-string is read by the command before it, a shell.
-			red[lo] = redactScript(values[lo], depth)
+			if prev >= 0 && isShell(values[prev]) {
+				red[lo] = redactScript(values[lo], depth)
+			} else {
+				// Input of a program that is not a shell: one plain value.
+				red[lo] = redactValue(values[lo])
+			}
 		}
 		if hi < len(words) && pipedIntoShell(values[lo], words[hi]) {
 			for k := lo + 1; k < hi; k++ {
@@ -683,7 +689,7 @@ func redactCommandAt(cmd string, depth int) string {
 				}
 			}
 		}
-		lo = hi
+		prev, lo = lo, hi
 	}
 	var b strings.Builder
 	last := 0
@@ -707,13 +713,15 @@ func redactCommandAt(cmd string, depth int) string {
 // shells are the programs that run a command line given on their input.
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "pwsh": true}
 
+// isShell reports whether program is a shell, by its base name.
+func isShell(program string) bool {
+	return shells[program[strings.LastIndexByte(program, '/')+1:]]
+}
+
 // pipedIntoShell reports whether a command starting with program is echo
 // or printf and its output goes through a pipe into a shell, the word next.
 func pipedIntoShell(program string, next shellWord) bool {
-	if program != "echo" && program != "printf" || next.op != "|" {
-		return false
-	}
-	return shells[next.value[strings.LastIndexByte(next.value, '/')+1:]]
+	return (program == "echo" || program == "printf") && next.op == "|" && isShell(next.value)
 }
 
 // shellOperatorChars end a word outside quotes, like a blank: the shell
@@ -1028,8 +1036,10 @@ func redactScript(a string, depth int) string {
 // word for a shell.
 const shellSyntax = " \t\n'\"\\`$" + shellOperatorChars
 
-// scriptOptions are long options whose value is a command line.
-var scriptOptions = map[string]bool{"--exec": true, "--command": true, "--cmd": true, "--run": true, "--shell-command": true}
+// scriptOptions are long options known to take a shell command line.
+// Others named like one (--command, --run) are not known to be shell lines
+// and their value is one value.
+var scriptOptions = map[string]bool{"--exec": true}
 
 // maxSubstitutionDepth bounds how deep command substitutions are read as
 // command lines; a deeper one is masked whole.
@@ -1094,11 +1104,11 @@ func substitutionMarker(k int) string {
 type argNext int
 
 const (
-	nextAny      argNext = iota
-	nextSecret           // the value of a sensitive flag, or the credential after Bearer
-	nextHeader           // the value of --header or -H
-	nextScript           // a command line, after -c, /c, /k, -Command or --exec
-	nextPSEquals         // after $env:NAME with a sensitive NAME: "=" or "=value"
+	nextAny    argNext = iota
+	nextSecret         // the value of a sensitive flag, name or "Name:", or the credential after Bearer
+	nextHeader         // the value of --header or -H
+	nextScript         // a command line, after -c, /c, /k, -Command or --exec
+	nextEquals         // after a sensitive NAME or $env:NAME: "=" or "=value"
 )
 
 // redactArgs redacts a server's command-line arguments, which are words:
@@ -1106,13 +1116,12 @@ const (
 // name suggests a secret is replaced, whether it follows the flag
 // (--api-key x, also a value starting with a single dash) or is joined to
 // it (--token=x); a header given to --header or -H keeps only its name
-// unless its value is never a secret; a sensitive NAME=value or
-// $env:NAME = value keeps its name; the word after Bearer or Basic (or
-// Token after a word ending in ":") is a credential. The argument after
-// -c (and -lc, /c, /k, -Command), the value of --exec, --command, --cmd,
-// --run and --shell-command, and the arguments of eval are command lines
-// and are redacted as one, as is the body of a command substitution in
-// any argument. Any other word is redacted as one value (redactArgValue).
+// unless its value is never a secret; a sensitive NAME=value, NAME = value
+// or $env:NAME = value keeps its name; the word after a sensitive "Name:"
+// and the word after Bearer, Basic or Token is a credential. The argument
+// after -c (and -lc, /c, /k, -Command), the value of --exec and the
+// arguments of eval are command lines and are redacted as one, as is the
+// body of a command substitution in any argument. Any other word is redacted as one value (redactArgValue).
 // Commands, package names and other arguments stay visible.
 func redactArgs(args []string) []string {
 	return redactArgsAt(args, 0)
@@ -1131,6 +1140,14 @@ func redactArgsAt(args []string, depth int) []string {
 		state := next
 		next = nextAny
 		switch {
+		case state == nextSecret && (a == "=" || isAuthScheme(a)):
+			// NAME = value, or Authorization: Bearer value: the value is
+			// the word after.
+			out[i], next = a, nextSecret
+			continue
+		case state == nextSecret && strings.HasPrefix(a, "="):
+			out[i] = "=" + redactedPlaceholder
+			continue
 		case state == nextSecret && !strings.HasPrefix(a, "--"):
 			out[i] = redactedPlaceholder
 			continue
@@ -1140,16 +1157,16 @@ func redactArgsAt(args []string, depth int) []string {
 		case (state == nextScript || evalArgs) && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
 			out[i] = redactScript(a, depth)
 			continue
-		case state == nextPSEquals && a == "=":
+		case state == nextEquals && a == "=":
 			out[i], next = a, nextSecret
 			continue
-		case state == nextPSEquals && strings.HasPrefix(a, "="):
+		case state == nextEquals && strings.HasPrefix(a, "="):
 			out[i] = "=" + redactedPlaceholder
 			continue
 		}
 		lit, restore := hideSubstitutions(a, depth)
 		var red string
-		red, next = redactArg(lit, i > 0 && strings.HasSuffix(args[i-1], ":"), depth)
+		red, next = redactArg(lit, depth)
 		out[i] = restore(red)
 		evalArgs = evalArgs || a == "eval"
 	}
@@ -1158,9 +1175,9 @@ func redactArgsAt(args []string, depth int) []string {
 
 // redactArg redacts one argument that is not the value of the one before
 // it and says what it makes of the next one.
-func redactArg(a string, afterColon bool, depth int) (string, argNext) {
+func redactArg(a string, depth int) (string, argNext) {
 	if a == "--" || !strings.HasPrefix(a, "-") {
-		return redactWord(a, afterColon)
+		return redactWord(a)
 	}
 	name, value, hasValue := strings.Cut(a, "=")
 	if !flagToken.MatchString(name) {
@@ -1190,9 +1207,20 @@ func redactArg(a string, afterColon bool, depth int) (string, argNext) {
 	return redactValue(a), nextAny
 }
 
+// envName is a name that can stand before "=" in a NAME = value pair.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// isAuthScheme reports whether a is Bearer, Basic or Token, in any case.
+func isAuthScheme(a string) bool {
+	return strings.EqualFold(a, "bearer") || strings.EqualFold(a, "basic") || strings.EqualFold(a, "token")
+}
+
 // redactWord redacts an argument that is not a flag and says what it
-// makes of the next one.
-func redactWord(a string, afterColon bool) (string, argNext) {
+// makes of the next one: $env:NAME, NAME= and a sensitive "Name:" leave
+// their value to the next word, a sensitive NAME alone may be followed by
+// "=" and its value, and the word after Bearer, Basic or Token is the
+// credential.
+func redactWord(a string) (string, argNext) {
 	if m := psEnv.FindStringSubmatch(a); m != nil && sensitiveEnvName(m[2]) {
 		switch {
 		case m[3] != "" && m[4] != "":
@@ -1200,17 +1228,35 @@ func redactWord(a string, afterColon bool) (string, argNext) {
 		case m[3] != "":
 			return a, nextSecret
 		case m[4] == "":
-			return a, nextPSEquals
+			return a, nextEquals
 		}
+	}
+	if m := assignment.FindStringSubmatch(a); m != nil && m[2] == "" && sensitiveEnvName(m[1]) {
+		return a, nextSecret
 	}
 	out := redactArgValue(a)
 	switch {
 	case takesScript(a):
 		return out, nextScript
-	case strings.EqualFold(a, "bearer") || strings.EqualFold(a, "basic") || afterColon && strings.EqualFold(a, "token"):
+	case isAuthScheme(a):
 		return out, nextSecret
+	case strings.HasSuffix(a, ":") && sensitiveName(nameBeforeColon(a)):
+		return out, nextSecret
+	case envName.MatchString(a) && sensitiveEnvName(a):
+		return out, nextEquals
 	}
 	return out, nextAny
+}
+
+// nameBeforeColon is the name that ends at the final ":" of a, such as
+// X-Api-Key in X-Api-Key: or token in {token:.
+func nameBeforeColon(a string) string {
+	a = strings.TrimSuffix(a, ":")
+	i := len(a)
+	for i > 0 && isNameByte(a[i-1]) {
+		i--
+	}
+	return a[i:]
 }
 
 // redactHeaders keeps every header name and masks every value, except the

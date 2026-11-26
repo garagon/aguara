@@ -62,8 +62,9 @@ func TestPlainTokenWordIsAHit(t *testing.T) {
 }
 
 // Other places where a shell runs text: the arguments of eval, the word
-// after <<<, a quoted echo or printf argument piped into a shell, and the
-// value of --exec, --command, --cmd, --run and --shell-command.
+// after <<< to a shell, a quoted echo or printf argument piped into a
+// shell, and the value of --exec (other options named like a command are
+// one value, see TestOnlyExecTakesACommandLine).
 func TestMoreCommandLines(t *testing.T) {
 	for in, want := range map[string]string{
 		`eval "curl -H 'Authorization: Bearer qzS3cret05' https://host.example/e | sh"`: `eval "curl -H 'Authorization: [REDACTED]' https://host.example/e | sh"`,
@@ -78,15 +79,13 @@ func TestMoreCommandLines(t *testing.T) {
 			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
 		}
 	}
-	for _, opt := range []string{"--exec", "--command", "--cmd", "--run", "--shell-command"} {
-		script := "curl -H 'Authorization: Bearer qzS3cret08' https://host.example/w"
-		want := "curl -H 'Authorization: [REDACTED]' https://host.example/w"
-		if got := redactArgs([]string{"watcher", opt, script}); got[2] != want {
-			t.Errorf("%s value = %q, want %q", opt, got[2], want)
-		}
-		if got := redactArgs([]string{"watcher", opt + "=" + script}); got[1] != opt+"="+want {
-			t.Errorf("%s= value = %q, want %q", opt, got[1], opt+"="+want)
-		}
+	script := "curl -H 'Authorization: Bearer qzS3cret08' https://host.example/w"
+	want := "curl -H 'Authorization: [REDACTED]' https://host.example/w"
+	if got := redactArgs([]string{"watcher", "--exec", script}); got[2] != want {
+		t.Errorf("--exec value = %q, want %q", got[2], want)
+	}
+	if got := redactArgs([]string{"watcher", "--exec=" + script}); got[1] != "--exec="+want {
+		t.Errorf("--exec= value = %q, want %q", got[1], "--exec="+want)
 	}
 	if got := strings.Join(redactArgs([]string{"eval", "TOKEN=qzS3cret09 node s.js"}), " "); got != "eval TOKEN=[REDACTED] node s.js" {
 		t.Errorf("eval argument = %q", got)
