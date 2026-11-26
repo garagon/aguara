@@ -330,7 +330,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		fmt.Fprintln(os.Stderr, "No MCP configurations found; nothing to scan.")
 	} else {
 		fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
-			len(paths), discovered.TotalClients())
+			len(paths), len(discovered.Clients))
 	}
 
 	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)

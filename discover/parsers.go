@@ -3,6 +3,7 @@ package discover
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -235,6 +236,34 @@ func (c *collector) warn(format string, args ...any) {
 	c.warnings = append(c.warnings, c.path+": "+fmt.Sprintf(format, args...))
 }
 
+// parseError reports a client file that was read but that the JSON
+// reader rejects: a syntax error (including JSONC comments and trailing
+// commas, which some clients accept), nesting too deep, or a top level
+// that is not an object. Its message keeps the form "parsing <path>: ...".
+type parseError struct {
+	path string
+	data []byte
+	err  error
+}
+
+func (e *parseError) Error() string { return fmt.Sprintf("parsing %s: %v", e.path, e.err) }
+func (e *parseError) Unwrap() error { return e.err }
+
+// warning describes the failure after the path, like the other warnings,
+// without quoting the file, which can hold secrets.
+func (e *parseError) warning() string {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(e.err, &typeErr) {
+		return fmt.Sprintf("%s: the file is %s, not a JSON object; no servers read", e.path, jsonType(bytes.TrimSpace(e.data)))
+	}
+	where := ""
+	var syntaxErr *json.SyntaxError
+	if errors.As(e.err, &syntaxErr) && syntaxErr.Offset > 0 && syntaxErr.Offset <= int64(len(e.data)) {
+		where = fmt.Sprintf(" (near line %d)", bytes.Count(e.data[:syntaxErr.Offset], []byte("\n"))+1)
+	}
+	return e.path + ": the file could not be parsed as JSON" + where + "; no servers read. Some clients accept JSONC (comments, trailing commas), which discovery does not read"
+}
+
 // parseConfigWithKey parses a config file using the specified JSON key for the server map.
 // If key is empty, defaults to "mcpServers".
 // For VS Code ("servers" key), also tries "mcpServers" as fallback.
@@ -257,7 +286,7 @@ func parseConfigWithKeyWarnings(path, key string) ([]MCPServer, []string, error)
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, nil, &parseError{path: path, data: data, err: err}
 	}
 
 	c := &collector{path: path}
@@ -303,7 +332,7 @@ func parseOpenCodeConfigWarnings(path string) ([]MCPServer, []string, error) {
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, nil, &parseError{path: path, data: data, err: err}
 	}
 
 	mcpRaw, ok := raw["mcp"]
@@ -367,7 +396,7 @@ func parseClaudeCodeConfigWarnings(path string) ([]MCPServer, []string, error) {
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, nil, &parseError{path: path, data: data, err: err}
 	}
 
 	c := &collector{path: path}
@@ -445,7 +474,7 @@ func scanOpenClawConfig(path string) (*ClientResult, error) {
 
 	var cfg openClawConfig
 	if err := json.Unmarshal(clean, &cfg); err != nil {
-		return nil, err
+		return nil, &parseError{path: path, data: clean, err: err}
 	}
 
 	var servers []MCPServer

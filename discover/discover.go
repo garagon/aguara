@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -123,7 +124,10 @@ func (r *Result) AllServers() []struct {
 // Scan checks all known MCP client config paths and extracts server
 // definitions. Entries of an unexpected shape are read leniently and
 // reported in ClientResult.Warnings, and a file with warnings is listed
-// even when no server could be read, so scan --auto still scans it.
+// even when no server could be read, so scan --auto still scans it. A file
+// the JSON reader rejects (JSONC comments, trailing commas, extreme
+// nesting, a top level that is not an object) is listed the same way, with
+// one warning.
 func Scan() (*Result, error) {
 	result := &Result{}
 
@@ -136,6 +140,10 @@ func Scan() (*Result, error) {
 			switch {
 			case client.Name == "openclaw":
 				cr, oerr := scanOpenClawConfig(path)
+				var perr *parseError
+				if errors.As(oerr, &perr) {
+					result.Clients = append(result.Clients, ClientResult{Client: client.Name, Path: path, Warnings: []string{perr.warning()}})
+				}
 				if oerr != nil {
 					continue
 				}
@@ -151,6 +159,13 @@ func Scan() (*Result, error) {
 				servers, warnings, err = parseConfigWithKeyWarnings(path, client.ConfigKey)
 			}
 
+			// A file that exists but is not JSON the reader accepts is
+			// listed with a warning, so it stays visible and scan --auto
+			// still scans it; a missing or unreadable file is skipped.
+			var perr *parseError
+			if errors.As(err, &perr) {
+				servers, warnings, err = nil, []string{perr.warning()}, nil
+			}
 			if err != nil {
 				continue
 			}
@@ -180,7 +195,7 @@ func FormatTree(result *Result) string {
 	var b strings.Builder
 	result = result.Redacted()
 
-	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", result.TotalClients())
+	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", len(result.Clients))
 
 	for _, cr := range result.Clients {
 		fmt.Fprintf(&b, "  %s  %s\n", output.TerminalText(clientDisplayName(cr.Client)), output.TerminalText(cr.Path))

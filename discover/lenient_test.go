@@ -82,6 +82,69 @@ func TestParseServersLeniently(t *testing.T) {
 	}
 }
 
+// A file the JSON reader rejects (a comment, a trailing comma, extreme
+// nesting) is listed with a warning instead of being dropped, so it is
+// visible and scan --auto still scans it as a file.
+func TestScanListsUnparsableFiles(t *testing.T) {
+	for name, tc := range map[string]struct{ content, warning string }{
+		"comment":        {"{\n  // local servers\n  \"mcpServers\": {\"x\": {\"command\": \"npx\"}}\n}", "could not be parsed as JSON (near line 2); no servers read. Some clients accept JSONC"},
+		"trailing comma": {`{"mcpServers": {"x": {"command": "npx"},}}`, "could not be parsed as JSON (near line 1)"},
+		"deep nesting":   {strings.Repeat("[", 20000) + strings.Repeat("]", 20000), "could not be parsed as JSON"},
+		"not an object":  {`["mcpServers"]`, "the file is an array, not a JSON object"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".cursor", "mcp.json"), []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := Scan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cursor *ClientResult
+			for i := range result.Clients {
+				if result.Clients[i].Client == "cursor" {
+					cursor = &result.Clients[i]
+				}
+			}
+			if cursor == nil || len(cursor.Servers) != 0 || len(cursor.Warnings) != 1 || !strings.Contains(cursor.Warnings[0], tc.warning) {
+				t.Fatalf("cursor client = %+v", cursor)
+			}
+			if tree := FormatTree(result); !strings.Contains(tree, "mcp.json") || !strings.Contains(tree, "Found 1 MCP configuration") {
+				t.Errorf("tree:\n%s", tree)
+			}
+		})
+	}
+}
+
+// OpenClaw reads JSON5 comments itself; a file still invalid after that is
+// listed with a warning too.
+func TestScanListsUnparsableOpenClawFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := os.MkdirAll(filepath.Join(home, ".openclaw"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".openclaw", "openclaw.json"), []byte(`{"gateway": {"port": 1,}} }`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Clients) != 1 || result.Clients[0].Client != "openclaw" || len(result.Clients[0].Servers) != 0 || len(result.Clients[0].Warnings) != 1 {
+		t.Fatalf("clients = %+v", result.Clients)
+	}
+}
+
 func TestScanKeepsClientsWithOddValues(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
