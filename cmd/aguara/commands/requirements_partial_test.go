@@ -122,6 +122,24 @@ func TestRequirementsLinePipRejectsWithoutAMatchIsReview(t *testing.T) {
 	require.False(t, audit.Plan.CanInstallDependencies)
 }
 
+// A requirements file with a skipped line never stands for a manifest,
+// neither as a requirements file nor as an unread lockfile would.
+func TestPartlyReadRequirementsDoNotCoverAManifest(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
+	dir := projectWith(t, map[string]string{
+		"pyproject.toml":   "[project]\nname = \"demo\"\nversion = \"1\"\ndependencies = [\"requests>=2\"]\n",
+		"requirements.txt": "requests==2.31.0\n--frobnicate\n",
+	})
+	check, err := gateCheck(t, dir)
+	require.NoError(t, err)
+	reasons := map[string]string{}
+	for _, u := range check.Coverage.UnsupportedEvidence {
+		reasons[filepath.Base(u.Path)] = u.Reason
+	}
+	require.Equal(t, map[string]string{"pyproject.toml": "manifest_without_lockfile", "requirements.txt": "format_not_parsed"}, reasons)
+}
+
 // A pip file under a name discovery does not read keeps its exact pins
 // matched when one of its lines is outside the grammar; a text file under
 // such a name that pins nothing is not a pip file.

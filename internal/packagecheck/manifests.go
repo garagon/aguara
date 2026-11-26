@@ -272,7 +272,9 @@ func lockfileSource(t Target) bool {
 // CoveringLockfiles collects the lockfile directories from the targets a
 // check reads and from the unsupported lockfiles it found (npm-shrinkwrap,
 // deno.lock, gems.locked): those are already listed as not evaluated, so
-// their manifests are not listed a second time.
+// their manifests are not listed a second time. A requirements or
+// constraints file listed as not parsed is not a lockfile and covers
+// nothing.
 func CoveringLockfiles(targets []Target, unsupported []UnsupportedEvidence) LockfileDirs {
 	locks := LockfileDirs{}
 	for _, t := range targets {
@@ -281,7 +283,8 @@ func CoveringLockfiles(targets []Target, unsupported []UnsupportedEvidence) Lock
 		}
 	}
 	for _, u := range unsupported {
-		if u.Reason == ReasonFormatNotParsed {
+		requirements := u.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(u.Kind)
+		if u.Reason == ReasonFormatNotParsed && !requirements {
 			locks.add(u.Ecosystem, u.Path)
 		}
 	}
