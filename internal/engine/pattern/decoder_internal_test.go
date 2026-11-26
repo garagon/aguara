@@ -252,4 +252,12 @@ func TestDecoderStopsOnCancel(t *testing.T) {
 	findings, err := m.decodeAndRescan(ctx, target, m.rulesForFile(target.RelPath, keys), keys, nil, true)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, findings)
+
+	// The passes over the whole file for a match_mode: all rule stop too,
+	// and a partial answer is not kept.
+	run := m.newDecodeRun(ctx, target, m.rulesForFile(target.RelPath, keys), keys, nil, true)
+	require.NotEmpty(t, run.fileRules)
+	run.filePatternHits(run.fileRules[0])
+	require.ErrorIs(t, run.err, context.Canceled)
+	require.Empty(t, run.fileHits)
 }

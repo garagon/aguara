@@ -797,6 +797,12 @@ func (r *decodeRun) filePatternHits(rule *rules.CompiledRule) []bool {
 	}
 	got := make([]bool, len(rule.Patterns))
 	for i, pat := range rule.Patterns {
+		// Each pattern is a pass over the whole file: a canceled scan stops
+		// before the next one.
+		if err := r.ctx.Err(); err != nil {
+			r.err = err
+			return got
+		}
 		got[i] = len(excludeHits(rule.ExcludePatterns, r.lines, matchPattern(pat, r.content, r.fileLower, r.lines))) > 0
 	}
 	if r.fileHits == nil {
