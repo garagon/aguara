@@ -190,6 +190,30 @@ func TestScanAutoReportsUnreadableClientConfigs(t *testing.T) {
 	require.Contains(t, string(data), `"reason": "io"`)
 }
 
+// aguara discover said "No MCP configurations found" for a client
+// configuration it could not read; every format now lists it.
+func TestDiscoverListsUnreadableClientConfigs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	pipe := filepath.Join(home, ".cursor", "mcp.json")
+	mkfifoOrSkip(t, pipe)
+	for format, want := range map[string]string{
+		"json":     `"reason": "is a named pipe, not a regular file"`,
+		"terminal": "Could not read 1 MCP configuration(s)",
+		"markdown": "### Unreadable Configurations",
+	} {
+		out := filepath.Join(t.TempDir(), "discover."+format)
+		require.NoError(t, runCLIWithin(t, "discover", "--format", format, "-o", out))
+		data, err := os.ReadFile(out)
+		require.NoError(t, err)
+		require.Contains(t, string(data), want, format)
+		require.Contains(t, string(data), pipe, format)
+		require.NotContains(t, string(data), "No MCP configurations found", format)
+	}
+}
+
 func TestCheckSkipsSpecialInstalledManifests(t *testing.T) {
 	dir := t.TempDir()
 	mkfifoOrSkip(t, filepath.Join(dir, "node_modules", "pipe", "package.json"))

@@ -104,6 +104,7 @@ func (r *Result) Redacted() *Result {
 		}
 		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
 	}
+	out.Unreadable = append([]UnreadableConfig(nil), r.Unreadable...)
 	return out
 }
 
@@ -176,14 +177,20 @@ func Scan() (*Result, error) {
 	return result, nil
 }
 
-// FormatTree returns a human-readable tree of discovered MCP servers.
+// FormatTree returns a human-readable tree of discovered MCP servers,
+// followed by the configurations that could not be read.
 func FormatTree(result *Result) string {
-	if len(result.Clients) == 0 {
+	if len(result.Clients) == 0 && len(result.Unreadable) == 0 {
 		return "No MCP configurations found.\n\nChecked paths for: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, " +
 			"OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, JetBrains"
 	}
 
 	var b strings.Builder
+	if len(result.Clients) == 0 {
+		b.WriteString("No readable MCP configuration lists a server.\n")
+		writeUnreadableTree(&b, result.Unreadable)
+		return b.String()
+	}
 
 	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", result.TotalClients())
 
@@ -204,16 +211,35 @@ func FormatTree(result *Result) string {
 	}
 
 	fmt.Fprintf(&b, "Total: %d MCP servers across %d clients\n", result.TotalServers(), result.TotalClients())
+	writeUnreadableTree(&b, result.Unreadable)
 	return b.String()
 }
 
-// FormatMarkdown returns a Markdown-formatted table of discovered MCP servers.
+// writeUnreadableTree lists the configurations that exist but could not
+// be read; their servers are unknown.
+func writeUnreadableTree(b *strings.Builder, unreadable []UnreadableConfig) {
+	if len(unreadable) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nCould not read %d MCP configuration(s); their servers are unknown:\n", len(unreadable))
+	for _, u := range unreadable {
+		fmt.Fprintf(b, "  %s  %s  %s\n", output.TerminalText(clientDisplayName(u.Client)), output.TerminalText(u.Path), output.TerminalText(u.Reason))
+	}
+}
+
+// FormatMarkdown returns a Markdown-formatted table of discovered MCP
+// servers, followed by the configurations that could not be read.
 func FormatMarkdown(result *Result) string {
-	if len(result.Clients) == 0 {
+	if len(result.Clients) == 0 && len(result.Unreadable) == 0 {
 		return "No MCP configurations found.\n"
 	}
 
 	var b strings.Builder
+	if len(result.Clients) == 0 {
+		b.WriteString("No readable MCP configuration lists a server.\n")
+		writeUnreadableMarkdown(&b, result.Unreadable)
+		return b.String()
+	}
 
 	fmt.Fprintf(&b, "## MCP Clients Discovered\n\n")
 	b.WriteString("| Client | Config Path | Servers |\n")
@@ -234,7 +260,23 @@ func FormatMarkdown(result *Result) string {
 		clientWord = "client"
 	}
 	fmt.Fprintf(&b, "**Total:** %d MCP %s across %d %s\n", result.TotalServers(), serverWord, result.TotalClients(), clientWord)
+	writeUnreadableMarkdown(&b, result.Unreadable)
 	return b.String()
+}
+
+// writeUnreadableMarkdown is writeUnreadableTree as a Markdown table.
+func writeUnreadableMarkdown(b *strings.Builder, unreadable []UnreadableConfig) {
+	if len(unreadable) == 0 {
+		return
+	}
+	b.WriteString("\n### Unreadable Configurations\n\n")
+	b.WriteString("Their servers are unknown.\n\n")
+	b.WriteString("| Client | Config Path | Reason |\n")
+	b.WriteString("|--------|------------|--------|\n")
+	for _, u := range unreadable {
+		escapedPath := strings.ReplaceAll(output.TerminalText(u.Path), "|", "\\|")
+		fmt.Fprintf(b, "| %s | `%s` | %s |\n", clientDisplayName(u.Client), escapedPath, u.Reason)
+	}
 }
 
 func clientDisplayName(name string) string {

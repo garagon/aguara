@@ -79,7 +79,7 @@ Review known-malicious package matches first, then the content findings and thei
 | Package-manager policy | Explicit npm and pnpm settings that relax install-time protections | `aguara scan .` |
 | Project code and CI | Suspicious install hooks, credential access, execution chains, and GitHub Actions trust risks | `aguara scan .` |
 
-`scan --auto` discovers supported MCP client configurations on the machine. Use `aguara discover` to inspect that inventory. Configuration coverage is specific to supported file formats; it does not imply support for every agent host.
+`scan --auto` discovers supported MCP client configurations on the machine. Use `aguara discover` to inspect that inventory; in the development version it also lists, in every format (`unreadable` in JSON), configurations that exist but could not be read, such as a named pipe at a configuration path, whose servers are unknown. Configuration coverage is specific to supported file formats; it does not imply support for every agent host.
 
 ### Packages and lockfiles
 
