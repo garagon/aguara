@@ -271,7 +271,10 @@ func (m *manifestInfo) addPEP508(s string, line int, group string) error {
 	ref, err := parseNamedRequirement(strings.TrimSpace(s))
 	if err != nil {
 		m.unknown = true
-		return nil
+		// Keep an exact pin the string still starts with for matching.
+		if ref = salvageExactPin(s); ref == nil {
+			return nil
+		}
 	}
 	if ref == nil {
 		return nil

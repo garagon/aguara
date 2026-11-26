@@ -506,6 +506,15 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 				out.syntax = &RequirementsSyntaxError{Path: path, Line: line, err: err}
 			}
 			out.syntaxLines++
+			if len(items) == 0 && !strings.HasPrefix(text, "-") {
+				// An exact pin the line still starts with is kept for
+				// matching: matching more than pip would install is
+				// harmless, missing a pin it installs is not.
+				if ref := salvageExactPin(text); ref != nil {
+					ref.Line = line
+					items = []requirementsItem{{ref: ref, line: line}}
+				}
+			}
 		}
 		if len(out.items)+len(items) > maxPythonLockEntries {
 			return fmt.Errorf("more than %d entries", maxPythonLockEntries)
@@ -832,9 +841,13 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		}
 		return pythonHostedRef("", first), nil
 	}
-	spec, marker, hasMarker := strings.Cut(s, ";")
-	if hasMarker && strings.TrimSpace(marker) == "" {
-		return nil, fmt.Errorf("empty environment marker")
+	// pip splits the marker off at the first ";" and reads an empty one
+	// as no marker ("name==1.0;"); a marker that is there must parse.
+	spec, marker, _ := strings.Cut(s, ";")
+	if marker = strings.TrimSpace(marker); marker != "" {
+		if err := checkPEP508Marker(marker); err != nil {
+			return nil, err
+		}
 	}
 	spec = strings.TrimSpace(spec)
 	end := 0
@@ -851,9 +864,13 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		if closeIdx < 0 {
 			return nil, fmt.Errorf("unterminated extras for %s", name)
 		}
-		for _, extra := range strings.Split(rest[1:closeIdx], ",") {
-			if extra = strings.TrimSpace(extra); extra != "" && !pep508Name.MatchString(extra) {
-				return nil, fmt.Errorf("invalid extra for %s", name)
+		// An empty list is allowed; otherwise every comma separates two
+		// names ("[a,]" and "[,a]" are rejected, as pip rejects them).
+		if inner := strings.TrimSpace(rest[1:closeIdx]); inner != "" {
+			for _, extra := range strings.Split(inner, ",") {
+				if !pep508Name.MatchString(strings.TrimSpace(extra)) {
+					return nil, fmt.Errorf("invalid extra for %s", name)
+				}
 			}
 		}
 		rest = strings.TrimSpace(rest[closeIdx+1:])
@@ -887,6 +904,42 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		ref.Unpinned, ref.Constraint = true, rest
 	}
 	return ref, nil
+}
+
+// salvagedPin is how a requirement starts when it pins one release: a
+// PEP 508 name, optional extras, an optional "(" and an == or === pin.
+var (
+	salvagedPin       = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)[ \t]*(?:\[[^\]]*\][ \t]*)?\(?[ \t]*(===|==)[ \t]*([^\s,;()]+)`)
+	salvagedDirectRef = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)[ \t]*(?:\[[^\]]*\][ \t]*)?@[ \t]*(\S+)`)
+)
+
+// salvageExactPin reads the exact pin at the start of a requirement line
+// that does not parse as a whole (a malformed marker, extras or trailing
+// clause): `name==1.0`, `name[x] (===1.0`, or a direct reference to a
+// files.pythonhosted.org artifact, bare or after `name @`. It returns nil
+// when the start pins nothing.
+func salvageExactPin(text string) *PackageRef {
+	text = strings.TrimSpace(text)
+	if first, _, _ := strings.Cut(text, " "); looksLikeRequirementPath(first) {
+		return pythonHostedRef("", strings.TrimRight(first, ";"))
+	}
+	if m := salvagedDirectRef.FindStringSubmatch(text); m != nil {
+		return pythonHostedRef(m[1], strings.TrimRight(m[2], ";"))
+	}
+	m := salvagedPin.FindStringSubmatch(text)
+	if m == nil {
+		return nil
+	}
+	version := m[3]
+	if m[2] == "==" {
+		if strings.HasSuffix(version, ".*") {
+			return nil
+		}
+		if _, ok := intel.PEP440Canonical(version); !ok {
+			return nil
+		}
+	}
+	return &PackageRef{Ecosystem: intel.EcosystemPyPI, Name: m[1], Version: version, ArbitraryEquality: m[2] == "==="}
 }
 
 var specifierOperators = []string{"===", "==", "!=", "~=", "<=", ">=", "<", ">"}
@@ -936,7 +989,13 @@ func parsePinnedSpecifier(spec string) (string, bool, error) {
 			agree = false
 		}
 	}
-	for _, clause := range strings.Split(spec, ",") {
+	clauses := strings.Split(spec, ",")
+	if n := len(clauses); n > 1 && strings.TrimSpace(clauses[n-1]) == "" {
+		// One trailing comma is allowed ("==1.0,"), as pip allows it;
+		// ",," and a leading comma stay errors.
+		clauses = clauses[:n-1]
+	}
+	for _, clause := range clauses {
 		clause = strings.TrimSpace(clause)
 		op := ""
 		for _, candidate := range specifierOperators {

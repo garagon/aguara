@@ -81,6 +81,72 @@ func TestAbbreviatedPipOptionsDoNotHideAPin(t *testing.T) {
 	}
 }
 
+// Requirement spellings pip 25.2 and 26.0 install from: an empty marker
+// after ";" and one trailing comma in the specifier. A compromised pin
+// written so fails both gates.
+func TestPipRequirementSpellingsDoNotHideAPin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
+	const whl = "https://files.pythonhosted.org/packages/aa/bb/num2words-0.5.15-py3-none-any.whl"
+	for _, line := range []string{
+		"num2words==0.5.15;",
+		"num2words == 0.5.15 ;\t",
+		"num2words===0.5.15 ;",
+		"num2words[extra]==0.5.15;",
+		"num2words (==0.5.15);",
+		"num2words==0.5.15 \\\n;",
+		"num2words==0.5.15; --hash=sha256:00",
+		whl + ";",
+		"num2words @ " + whl + " ;",
+		"num2words==0.5.15,",
+		"num2words===0.5.15,",
+		"num2words (==0.5.15,)",
+		"num2words==0.5.15, ;python_version>'3'",
+	} {
+		t.Run(line, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{"requirements.txt": line + "\n"})
+			check, err := gateCheck(t, dir)
+			require.ErrorIs(t, err, ErrThresholdExceeded, "check --ci exits 1")
+			requireCriticalFor(t, check.Findings, "num2words")
+			require.Empty(t, check.Coverage.UnsupportedEvidence, "pip reads the line, so the file is read in full")
+
+			audit, err := gateAudit(t, dir)
+			require.ErrorIs(t, err, ErrThresholdExceeded, "audit --ci exits 1")
+			require.Equal(t, "stop", audit.Triage.Decision)
+		})
+	}
+}
+
+// A line Aguara reads although pip rejects it still leaves the file partly
+// read: its pin is matched, and the file never stands for a manifest.
+func TestLinesPipRejectsDoNotCoverAManifest(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
+	for _, line := range []string{
+		"requests[security,]==2.31.0",
+		"requests==2.31.0; python_version >= '3' and",
+		"requests==2.31.0,,",
+	} {
+		t.Run(line, func(t *testing.T) {
+			dir := projectWith(t, map[string]string{
+				"pyproject.toml":   "[project]\nname = \"demo\"\nversion = \"1\"\ndependencies = [\"requests>=2\"]\n",
+				"requirements.txt": line + "\n",
+			})
+			check, err := gateCheck(t, dir)
+			require.NoError(t, err)
+			reasons := map[string]string{}
+			for _, u := range check.Coverage.UnsupportedEvidence {
+				reasons[filepath.Base(u.Path)] = u.Reason
+			}
+			require.Equal(t, map[string]string{"pyproject.toml": "manifest_without_lockfile", "requirements.txt": "format_not_parsed"}, reasons)
+			require.Equal(t, 1, check.Coverage.PackageEvidence[0].PackagesRead, "the pin is still read")
+		})
+	}
+	dir := projectWith(t, map[string]string{"requirements.txt": "num2words[x,]==0.5.15\n"})
+	_, err := gateCheck(t, dir)
+	require.ErrorIs(t, err, ErrThresholdExceeded, "and still matched")
+}
+
 // A line pip also rejects is skipped and reported, and the pins on the
 // other lines are still matched.
 func TestRequirementsLinePipRejectsDoesNotHideThePins(t *testing.T) {
