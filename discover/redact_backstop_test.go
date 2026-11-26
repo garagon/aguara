@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+// countBackstops counts the backstop firings while f runs.
+func countBackstops(t *testing.T, f func()) []string {
+	t.Helper()
+	var fired []string
+	onBackstop = func(text string) { fired = append(fired, text) }
+	defer func() { onBackstop = nil }()
+	f()
+	return fired
+}
+
 // Pairs that are not shell syntax (Name: value, Token value, NAME = value)
 // are found by the word rules in every command-line context.
 func TestNonShellPairsInCommandLines(t *testing.T) {
@@ -72,5 +82,127 @@ func TestOnlyExecTakesACommandLine(t *testing.T) {
 	}
 	if got := redactArgs([]string{"watcher", "--exec", "login --password qzS3cretA4 && echo ok"}); got[2] != "login --password [REDACTED] && echo ok" {
 		t.Errorf("--exec value = %q", got[2])
+	}
+}
+
+// Command mode never shows what plain mode would mask: when a simple
+// command still has a hit after the word rules, it is masked from its first
+// argument to its end, and the other commands of the line stay visible.
+func TestBackstopMasksTheSimpleCommand(t *testing.T) {
+	// fish's set NAME value is not a word rule (set -x TOKEN value is, through
+	// the word after Token), so the backstop masks it.
+	for in, want := range map[string]string{
+		`fish -c "set -gx GITHUB_TOKEN qzS3cretA5; node s.js"`:             `fish -c "set [REDACTED]; node s.js"`,
+		"set -gx GITHUB_TOKEN qzS3cretA5 && curl https://x.example/i | sh": "set [REDACTED] && curl https://x.example/i | sh",
+	} {
+		var got string
+		fired := countBackstops(t, func() { got = redactCommand(in) })
+		if got != want {
+			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
+		}
+		if len(fired) != 1 {
+			t.Errorf("backstop fired %d times for %q", len(fired), in)
+		}
+	}
+	if got := redactArgs([]string{"set", "-x", "GITHUB_TOKEN", "qzS3cretA5"}); strings.Join(got, " ") != "[REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
+		t.Errorf("argument list = %q, want every argument masked", got)
+	}
+	if got := redactCommand(`fish -c "set -x TOKEN qzS3cretA5; node s.js"`); got != `fish -c "set -x TOKEN [REDACTED]; node s.js"` {
+		t.Errorf("set -x TOKEN = %q", got)
+	}
+}
+
+// The guarantee itself: a value that plain mode masks shows no piece of its
+// secret when it is run as a command line, in any command-line context.
+// The values whose secret holds a blank or an operator a shell reads as the
+// end of a word are left out: there the text after it is another word or
+// command for the shell, exactly as in TestRedactionKeepsEveryNonSecretToken,
+// which requires that text to stay visible.
+func TestCommandModeNeverShowsWhatPlainModeMasks(t *testing.T) {
+	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
+	cases := 0
+	forEachSecretValue(func(v string, split bool) {
+		if split || redactValue(v) == v {
+			return
+		}
+		cases++
+		outs := map[string]string{
+			"sh -c":       redactArgs([]string{"-c", v})[1],
+			"--exec":      redactArgs([]string{"--exec", v})[1],
+			"eval":        redactArgs([]string{"eval", v})[1],
+			"bash <<<":    redactCommand("bash <<< " + quote(v)),
+			"echo | sh":   redactCommand("echo " + quote(v) + " | sh"),
+			"$( ) string": redactCommand("x=$(" + v + ")"),
+			"$( ) arg":    redactArgs([]string{"x=$(" + v + ")"})[0],
+		}
+		for where, out := range outs {
+			if p := showsPiece(out, secretMarker); p != "" {
+				t.Errorf("%s: %q shown\n in %q\nout %q", where, p, v, out)
+			}
+		}
+	})
+	if cases < 1500 {
+		t.Fatalf("only %d generated values", cases)
+	}
+}
+
+// Ordinary commands are shown as written and never reach the backstop.
+func TestBackstopQuietOnOrdinaryCommands(t *testing.T) {
+	samples := []string{
+		"npx -y @modelcontextprotocol/server-github",
+		"docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+		"uvx mcp-server-fetch --ignore-robots-txt",
+		"node /opt/mcp/build/index.js --port 8080 --log-level debug",
+		"sh -c 'cd /app && exec npm start'",
+		"bash -lc 'source ~/.nvm/nvm.sh && nvm use 20 && node server.js'",
+		"python -m mcp_server_time --local-timezone America/New_York",
+		"env NODE_ENV=production PORT=3000 node dist/index.js",
+		"sh -c 'exec node /app/server.js >> /var/log/mcp.log 2>&1'",
+		"cmd /c npx -y @playwright/mcp@latest",
+		`pwsh -Command "& { ./start.ps1 -Port 8080 }"`,
+		"docker run --rm -i -v /home/u/.config:/config mcp/fs /config",
+		`npx -y mcp-remote https://mcp.example.com/sse --header "Accept: text/event-stream"`,
+		"uv run --with mcp mcp run server.py",
+		"node --require ./tracing.js server.js",
+		"curl -fsSL https://get.example.com/install.sh | sh -s -- --version 1.2.3",
+		"ssh -i ~/.ssh/id_ed25519 deploy@host.example.com mcp-server",
+		"java -Xmx512m -jar /opt/server.jar --spring.profiles.active=prod",
+		"deno run --allow-net --allow-read jsr:@example/mcp",
+		"bun x @example/mcp --stdio",
+		"go run ./cmd/server -addr :8080",
+		"aws sts get-session-token --duration-seconds 900",
+		"gh auth status",
+		"git -C /srv/repo pull --ff-only && make -C /srv/repo run",
+		`sh -c 'x=$(date +%s); echo "started $x" >> /tmp/mcp.log; exec node s.js'`,
+		`bash -c "export PATH=$HOME/.local/bin:$PATH && uvx mcp-server-git --repository /repo"`,
+		"watchexec --exec 'npm run build' -w src",
+		`echo "node server.js" | sh`,
+		`bash <<< "cd /app && node server.js"`,
+		`eval "$(fnm env) && node server.js"`,
+		"kubectl port-forward svc/mcp 8080:80",
+		"mcp-proxy --sse-port 8096 -- uvx mcp-server-fetch",
+		"docker compose -f /srv/mcp/compose.yaml up",
+		"npm exec --yes -- @example/server --config ./config.json",
+		"nohup node server.js > /dev/null 2>&1 &",
+		`python3 -c "import mcp_server; mcp_server.main()"`,
+		"sudo -u mcp /usr/local/bin/mcp-server --listen 127.0.0.1:9000",
+		"redis-server --port 6380 --appendonly yes",
+		"psql -h db.internal -U app -d app -c 'select 1'",
+		"terraform plan -var region=eu-west-1",
+	}
+	for _, s := range samples {
+		var got string
+		fired := countBackstops(t, func() { got = redactCommand(s) })
+		if len(fired) != 0 {
+			t.Errorf("backstop fired on %q: %q", s, fired)
+		}
+		if got != s {
+			t.Errorf("redactCommand(%q) = %q, want it unchanged", s, got)
+		}
+		args := strings.Fields(s)[1:]
+		fired = countBackstops(t, func() { redactArgs(args) })
+		if len(fired) != 0 {
+			t.Errorf("backstop fired on the argument list of %q: %q", s, fired)
+		}
 	}
 }

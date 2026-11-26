@@ -119,25 +119,55 @@ func TestCommandSubstitutions(t *testing.T) {
 // an environment value, a shown header value, a string inside JSON or a
 // single argument.
 func TestPlainTextNeverShowsPartOfASecret(t *testing.T) {
-	const marker = "Qx7mZp4Wr9Kv"
+	cases := 0
+	forEachSecretValue(func(v string, _ bool) {
+		cases++
+		note, _ := json.Marshal(map[string]string{"note": v})
+		outs := map[string]string{
+			"env value":    redactEnv(map[string]string{"SETUP": v})["SETUP"],
+			"header value": redactHeaders(map[string]string{"Accept": v})["Accept"],
+			"JSON string":  redactEnv(map[string]string{"CFG": string(note)})["CFG"],
+			"argument":     redactArgs([]string{v})[0],
+		}
+		for where, out := range outs {
+			if p := showsPiece(out, secretMarker); p != "" {
+				t.Errorf("%s: %q shown\n in %q\nout %q", where, p, v, out)
+			}
+		}
+	})
+	if cases < 3000 {
+		t.Fatalf("only %d generated values", cases)
+	}
+}
+
+// secretMarker is the secret of forEachSecretValue.
+const secretMarker = "Qx7mZp4Wr9Kv"
+
+// forEachSecretValue calls f with every generated value: the marker, with
+// an operator, escape, quote, blank or other character inserted at one of
+// three offsets, in each redaction position, with text around it. split
+// is true when a shell reads the inserted character as the end of a word
+// at that position (an unquoted blank or operator).
+func forEachSecretValue(f func(v string, split bool)) {
 	positions := []struct {
 		format string
 		url    bool // a URL: only characters a URL can hold go inside
+		quoted bool // the secret is inside shell quotes
 	}{
 		{format: "API_KEY=%s"},
 		{format: "export TOKEN=%s"},
 		{format: "TOKEN = %s"},
 		{format: "--api-key %s"},
 		{format: "--token=%s"},
-		{format: "--password '%s'"},
-		{format: `--password "%s"`},
+		{format: "--password '%s'", quoted: true},
+		{format: `--password "%s"`, quoted: true},
 		{format: "Authorization: Bearer %s"},
 		{format: "Authorization: Token %s"},
 		{format: "X-Api-Key: %s"},
-		{format: "$env:TOKEN = '%s'"},
+		{format: "$env:TOKEN = '%s'", quoted: true},
 		{format: "$env:API_KEY=%s"},
 		{format: "/token:%s"},
-		{format: `{"token": "%s"}`},
+		{format: `{"token": "%s"}`, quoted: true},
 		{format: "Server=db;Password=%s;Encrypt=true"},
 		{format: "curl x?token=%s"},
 		{format: "https://x.example/sse?sig=%s"},
@@ -145,40 +175,24 @@ func TestPlainTextNeverShowsPartOfASecret(t *testing.T) {
 	}
 	inserts := []string{";", "&", "&&", "|", " ", "\t", "\n", `\ `, `\;`, `\`, `"`, "'", "`", "$", "(", ")", "<", ">", "#", "?", "=", ",", "%"}
 	urlSafe := map[string]bool{";": true, "&": true, "&&": true, "|": true, "$": true, "(": true, ")": true, "'": true, "=": true, ",": true, "%": true}
+	separators := map[string]bool{";": true, "&": true, "&&": true, "|": true, " ": true, "\t": true, "\n": true, "(": true, ")": true, "<": true, ">": true}
 	arounds := []struct{ before, after string }{
 		{"", ""},
 		{"curl -fsSL https://x.example/i.sh ", " wget -qO- https://x.example/b.sh"},
 		{"node server.js;", ";echo done"},
 		{"./run.sh --verbose && ", " | sh"},
 	}
-	cases := 0
 	for _, pos := range positions {
 		for _, ins := range inserts {
 			if pos.url && !urlSafe[ins] {
 				continue
 			}
 			for _, at := range []int{3, 6, 9} {
-				secret := marker[:at] + ins + marker[at:]
+				secret := secretMarker[:at] + ins + secretMarker[at:]
 				for _, ar := range arounds {
-					v := ar.before + fmt.Sprintf(pos.format, secret) + ar.after
-					cases++
-					note, _ := json.Marshal(map[string]string{"note": v})
-					outs := map[string]string{
-						"env value":    redactEnv(map[string]string{"SETUP": v})["SETUP"],
-						"header value": redactHeaders(map[string]string{"Accept": v})["Accept"],
-						"JSON string":  redactEnv(map[string]string{"CFG": string(note)})["CFG"],
-						"argument":     redactArgs([]string{v})[0],
-					}
-					for where, out := range outs {
-						if p := showsPiece(out, marker); p != "" {
-							t.Errorf("%s: %q shown\n in %q\nout %q", where, p, v, out)
-						}
-					}
+					f(ar.before+fmt.Sprintf(pos.format, secret)+ar.after, separators[ins] && !pos.quoted)
 				}
 			}
 		}
-	}
-	if cases < 3000 {
-		t.Fatalf("only %d generated values", cases)
 	}
 }

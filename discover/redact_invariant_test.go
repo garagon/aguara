@@ -27,6 +27,11 @@ import (
 //     everything from it to the end.
 func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 	const marker = "Mk7secretQz"
+	// The word rules handle every generated position, so the backstop of
+	// redactCommand never fires here; if it does, a word rule is missing.
+	var fired []string
+	onBackstop = func(text string) { fired = append(fired, text) }
+	defer func() { onBackstop = nil }()
 	type form struct {
 		name string
 		line string   // the secret as it appears in a command line
@@ -177,6 +182,9 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 				}
 			}
 		}
+	}
+	if len(fired) != 0 {
+		t.Errorf("the backstop fired %d times, first on %q", len(fired), fired[0])
 	}
 	if cases < 4000 {
 		t.Fatalf("only %d generated lines", cases)

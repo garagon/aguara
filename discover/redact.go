@@ -125,10 +125,11 @@ var (
 	// password holds characters a URL cannot, such as a blank or a quote.
 	textUserinfo = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s@]*:[^/@]*@`)
 	// textAuthScheme finds a credential after an authorization scheme or
-	// the word token (fish's set -x TOKEN value too).
-	textAuthScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic|token)\s+\S`)
+	// the word token (fish's set -x TOKEN value too); a --flag, "=" or ":"
+	// after it is not a credential (TOKEN = x is a pair, found as one).
+	textAuthScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic|token)\s+([^\s=:-]|-[^\s-])`)
 	// fishSet is fish's set [flags] NAME value.
-	fishSet = regexp.MustCompile(`(?:^|[\s;&|()])set\s+(?:-[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+\S`)
+	fishSet = regexp.MustCompile(`(?:^|[\s;&|()])set\s+(?:-[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+(\S)`)
 	// wholeURL is a value that is one URL: a scheme and no blanks.
 	wholeURL = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 	// headerArg matches a "Name: value" header such as the --header value
@@ -374,10 +375,17 @@ func redactConnectionString(v string) string {
 // known token format, a credential after an authorization scheme, a URL
 // with userinfo, a query, a fragment or a credential-like path segment, a
 // sensitive name with a value (sensitivePairIn), fish's set NAME value
-// with a sensitive name, or a sensitive member of JSON text.
+// with a sensitive name, or a sensitive member of JSON text. A match whose
+// value is already the placeholder is not a hit. It is the one source of
+// hits for plain mode and for the backstop of command mode.
 func plainHit(v string) bool {
-	if secretShapes.MatchString(v) || textAuthScheme.MatchString(v) || textUserinfo.MatchString(v) {
+	if secretShapes.MatchString(v) || textUserinfo.MatchString(v) {
 		return true
+	}
+	for _, m := range textAuthScheme.FindAllStringSubmatchIndex(v, -1) {
+		if !redactedAt(v[m[2]:]) {
+			return true
+		}
 	}
 	if strings.Contains(v, "://") && redactURL(v) != v {
 		return true
@@ -385,19 +393,30 @@ func plainHit(v string) bool {
 	if sensitivePairIn(v) {
 		return true
 	}
-	for _, m := range fishSet.FindAllStringSubmatch(v, -1) {
-		if sensitiveEnvName(m[1]) {
+	for _, m := range fishSet.FindAllStringSubmatchIndex(v, -1) {
+		if sensitiveEnvName(v[m[2]:m[3]]) && !redactedAt(v[m[4]:]) {
 			return true
 		}
 	}
 	if strings.Contains(v, `"`) {
 		for _, p := range jsonPair.FindAllStringSubmatch(v, -1) {
-			if p[3] != "" && sensitiveEnvName(p[1]) {
+			if p[3] != "" && p[3] != redactedPlaceholder && sensitiveEnvName(p[1]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// redactedAt reports whether s starts with the placeholder, also after an
+// opening quote or an authorization scheme (Bearer [REDACTED]): a value
+// that was redacted already.
+func redactedAt(s string) bool {
+	s = strings.TrimLeft(s, `"'`)
+	if i := strings.IndexAny(s, " \t"); i > 0 && isAuthScheme(s[:i]) {
+		s = strings.TrimLeft(s[i:], " \t")
+	}
+	return strings.HasPrefix(s, redactedPlaceholder)
 }
 
 // isNameByte reports whether c can be part of a name in text.
@@ -431,7 +450,7 @@ func sensitivePairIn(v string) bool {
 		switch {
 		case strings.HasPrefix(after, "=") || strings.HasPrefix(after, ":"):
 			value := strings.TrimLeft(after[1:], " \t")
-			if value == "" || strings.HasPrefix(value, "//") || after[0] == '=' && value[0] == '=' {
+			if value == "" || strings.HasPrefix(value, "//") || after[0] == '=' && value[0] == '=' || redactedAt(value) {
 				continue
 			}
 			if flag || after[0] == ':' {
@@ -441,7 +460,7 @@ func sensitivePairIn(v string) bool {
 			} else if sensitiveEnvName(bare) {
 				return true
 			}
-		case flag && len(after) < len(rest) && after != "" && !strings.HasPrefix(after, "--") && len(bare) > 1 && sensitiveName(bare):
+		case flag && len(after) < len(rest) && after != "" && !strings.HasPrefix(after, "--") && !redactedAt(after) && len(bare) > 1 && sensitiveName(bare):
 			return true
 		}
 	}
@@ -627,18 +646,23 @@ func redactArgValue(a string) string {
 // redactCommand redacts a server command. A command given as one string
 // with arguments (env VAR=value program, docker run -e ..., a -c script)
 // is split like a shell would, for redaction only. Unquoted blanks and the
-// shell operators ; & | < > ( ) end a word, and each command between
-// operators is redacted as an argument list, so a flag before an operator
-// never takes the next command as its value. Only the bytes of a word that
-// change are rewritten, in place, so quoting, operators and all other text
-// are kept as written. A command substitution, $(...) or `...`, stays
-// inside its word, and its body is redacted as a command line. The word
-// after <<< to a shell, and the arguments of echo or printf piped into a
-// shell, are command lines too; a here-string to another program is one
-// plain value. An unterminated quote (or a trailing backslash or an
-// unterminated substitution) masks everything from it to the end. The
-// rebuilt line is not read again: the words cover all of it, and only a
-// known token format that is still present is masked, as a last check.
+// shell operators ; & | < > ( ) end a word, and each simple command (the
+// words between operators) is redacted as an argument list, so a flag
+// before an operator never takes the next command as its value. Only the
+// bytes of a word that change are rewritten, in place, so quoting,
+// operators and all other text are kept as written. A command
+// substitution, $(...) or `...`, stays inside its word, and its body is
+// redacted as a command line. The word after <<< to a shell, and the
+// arguments of echo or printf piped into a shell, are command lines too;
+// a here-string to another program is one plain value. An unterminated
+// quote (or a trailing backslash or an unterminated substitution) masks
+// everything from it to the end.
+//
+// Command mode never shows what plain mode would mask: when a simple
+// command still has a plain-mode hit (plainHit) after the word rules, it
+// is masked from its first argument to its end, and the other simple
+// commands of the line stay as they are. The rebuilt line is not read
+// again; only a known token format still present in it is masked.
 func redactCommand(cmd string) string {
 	return redactCommandAt(cmd, 0)
 }
@@ -667,40 +691,65 @@ func redactCommandAt(cmd string, depth int) string {
 		boundary = append(boundary, open.afterOp)
 	}
 	red := make([]string, len(values))
+	script := make([]bool, len(values))
+	masked := map[int]int{} // first masked word of a simple command -> its end
 	prev := -1
 	for lo := 0; lo < len(values); {
 		hi := lo + 1
 		for hi < len(values) && !boundary[hi] {
 			hi++
 		}
-		copy(red[lo:hi], redactArgsAt(values[lo:hi], depth))
+		segRed, segScript := redactArgsAt(values[lo:hi], depth)
+		copy(red[lo:hi], segRed)
+		copy(script[lo:hi], segScript)
 		if lo < len(words) && strings.HasSuffix(words[lo].op, "<<<") {
 			if prev >= 0 && isShell(values[prev]) {
-				red[lo] = redactScript(values[lo], depth)
+				red[lo], script[lo] = redactScript(values[lo], depth), true
 			} else {
 				// Input of a program that is not a shell: one plain value.
-				red[lo] = redactValue(values[lo])
+				red[lo], script[lo] = redactValue(values[lo]), false
 			}
 		}
 		if hi < len(words) && pipedIntoShell(values[lo], words[hi]) {
 			for k := lo + 1; k < hi; k++ {
 				if !strings.HasPrefix(values[k], "-") {
-					red[k] = redactScript(values[k], depth)
+					red[k], script[k] = redactScript(values[k], depth), true
 				}
 			}
+		}
+		if text := backstopText(red[lo:hi], script[lo:hi]); plainHit(text) {
+			if onBackstop != nil {
+				onBackstop(text)
+			}
+			from := lo + 1
+			if from == hi || plainHit(backstopText(red[lo:lo+1], script[lo:lo+1])) {
+				from = lo
+			}
+			masked[from] = hi
 		}
 		prev, lo = lo, hi
 	}
 	var b strings.Builder
 	last := 0
-	for i, w := range words {
+	for i := 0; i < len(words); i++ {
+		w := words[i]
 		b.WriteString(cmd[last:w.start])
+		if end, ok := masked[i]; ok {
+			b.WriteString(redactedPlaceholder)
+			if end > len(words) {
+				// The open word is in the masked command: all the rest.
+				return secretShapes.ReplaceAllString(b.String(), redactedPlaceholder)
+			}
+			last, i = words[end-1].end, end-1
+			continue
+		}
 		b.WriteString(rewriteWord(cmd, w, red[i]))
 		last = w.end
 	}
 	if open != nil {
 		b.WriteString(cmd[last:open.start])
-		if i := len(words); red[i] == values[i] {
+		i := len(words)
+		if _, cut := masked[i]; !cut && red[i] == values[i] && openPrefix.MatchString(open.value) {
 			b.WriteString(cmd[open.start:open.end])
 		}
 		b.WriteString(redactedPlaceholder)
@@ -709,6 +758,53 @@ func redactCommandAt(cmd string, depth int) string {
 	b.WriteString(cmd[last:])
 	return secretShapes.ReplaceAllString(b.String(), redactedPlaceholder)
 }
+
+// openPrefix is the part of a word before an unterminated quote that is
+// shown: nothing, or a NAME=, $env:NAME= or --flag= whose value starts at
+// the quote. Any other text before the quote may be part of the secret it
+// opens (a URL password with a quote in it) and is masked with it.
+var openPrefix = regexp.MustCompile(`^(?:(?:\$(?i:env):)?[A-Za-z_][A-Za-z0-9_.-]*=|--?[A-Za-z][A-Za-z0-9_.-]*=)?$`)
+
+// backstopText is the text of a redacted simple command or argument list
+// that the backstop reads: the words joined by blanks, without the command
+// lines in it (scripts and substitution bodies), which were checked as
+// command lines of their own.
+func backstopText(words []string, script []bool) string {
+	parts := make([]string, 0, len(words))
+	for k, w := range words {
+		if !script[k] {
+			parts = append(parts, stripSubstitutions(w))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// stripSubstitutions removes the closed command substitutions from s; from
+// the first one that is not closed, the rest of s is kept as it is.
+func stripSubstitutions(s string) string {
+	if !strings.ContainsAny(s, "$`") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '`' || s[i] == '$' && i+1 < len(s) && s[i+1] == '(' {
+			end := substitutionEnd(s, i)
+			if end < 0 {
+				b.WriteString(s[i:])
+				break
+			}
+			i = end
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// onBackstop, when set (by tests), is called with the text of each simple
+// command or argument list the backstop masks.
+var onBackstop func(text string)
 
 // shells are the programs that run a command line given on their input.
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "pwsh": true}
@@ -1088,10 +1184,30 @@ func hideSubstitutions(a string, depth int) (string, func(string) string) {
 		return a, keep
 	}
 	return b.String(), func(s string) string {
-		for k, red := range spans {
-			s = strings.Replace(s, substitutionMarker(k), red, 1)
+		// One pass: each marker the rules kept is put back once.
+		var out strings.Builder
+		used := make([]bool, len(spans))
+		for {
+			i := strings.IndexByte(s, 0)
+			if i < 0 {
+				break
+			}
+			j := strings.IndexByte(s[i+1:], 0)
+			if j < 0 {
+				break
+			}
+			k, err := strconv.Atoi(s[i+1 : i+1+j])
+			out.WriteString(s[:i])
+			if err == nil && k >= 0 && k < len(spans) && !used[k] {
+				out.WriteString(spans[k])
+				used[k] = true
+			} else {
+				out.WriteString(s[i : i+2+j])
+			}
+			s = s[i+2+j:]
 		}
-		return s
+		out.WriteString(s)
+		return out.String()
 	}
 }
 
@@ -1121,19 +1237,33 @@ const (
 // and the word after Bearer, Basic or Token is a credential. The argument
 // after -c (and -lc, /c, /k, -Command), the value of --exec and the
 // arguments of eval are command lines and are redacted as one, as is the
-// body of a command substitution in any argument. Any other word is redacted as one value (redactArgValue).
-// Commands, package names and other arguments stay visible.
+// body of a command substitution in any argument. Any other word is
+// redacted as one value (redactArgValue). Commands, package names and
+// other arguments stay visible. When the redacted arguments still have a
+// plain-mode hit, every argument is masked (the backstop of
+// redactCommand).
 func redactArgs(args []string) []string {
-	return redactArgsAt(args, 0)
+	out, script := redactArgsAt(args, 0)
+	if text := backstopText(out, script); len(out) > 0 && plainHit(text) {
+		if onBackstop != nil {
+			onBackstop(text)
+		}
+		for i := range out {
+			out[i] = redactedPlaceholder
+		}
+	}
+	return out
 }
 
-// redactArgsAt is redactArgs for arguments nested depth command
-// substitutions deep.
-func redactArgsAt(args []string, depth int) []string {
+// redactArgsAt is redactArgs, without the backstop, for arguments nested
+// depth command substitutions deep. It also reports which arguments were
+// redacted as command lines.
+func redactArgsAt(args []string, depth int) ([]string, []bool) {
 	if args == nil {
-		return nil
+		return nil, nil
 	}
 	out := make([]string, len(args))
+	script := make([]bool, len(args))
 	next := nextAny
 	evalArgs := false
 	for i, a := range args {
@@ -1155,7 +1285,7 @@ func redactArgsAt(args []string, depth int) []string {
 			out[i] = redactHeaderArg(a)
 			continue
 		case (state == nextScript || evalArgs) && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
-			out[i] = redactScript(a, depth)
+			out[i], script[i] = redactScript(a, depth), true
 			continue
 		case state == nextEquals && a == "=":
 			out[i], next = a, nextSecret
@@ -1170,7 +1300,7 @@ func redactArgsAt(args []string, depth int) []string {
 		out[i] = restore(red)
 		evalArgs = evalArgs || a == "eval"
 	}
-	return out
+	return out, script
 }
 
 // redactArg redacts one argument that is not the value of the one before
