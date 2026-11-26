@@ -421,7 +421,7 @@ func redactJSONNode(n any, depth int) (any, bool) {
 		out := make(map[string]any, len(t))
 		for k, v := range t {
 			var r any
-			ok := true
+			var ok bool
 			if sensitiveEnvName(k) {
 				r, ok = maskJSONNode(v, depth+1)
 			} else {
