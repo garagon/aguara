@@ -12,8 +12,8 @@ import (
 )
 
 // gateRun runs `aguara <cmd> <dir> --ci` with JSON output and returns the
-// command's error (ErrThresholdExceeded is exit 1) and the report.
-func gateRun(t *testing.T, cmd, dir string) (error, []byte) {
+// report and the command's error (ErrThresholdExceeded is exit 1).
+func gateRun(t *testing.T, cmd, dir string) ([]byte, error) {
 	t.Helper()
 	resetFlags()
 	out := filepath.Join(t.TempDir(), cmd+".json")
@@ -29,23 +29,23 @@ func gateRun(t *testing.T, cmd, dir string) (error, []byte) {
 	err := rootCmd.Execute()
 	data, readErr := os.ReadFile(out)
 	require.NoError(t, readErr)
-	return err, data
+	return data, err
 }
 
-func gateCheck(t *testing.T, dir string) (error, *incident.CheckResult) {
+func gateCheck(t *testing.T, dir string) (*incident.CheckResult, error) {
 	t.Helper()
-	err, data := gateRun(t, "check", dir)
+	data, err := gateRun(t, "check", dir)
 	var res incident.CheckResult
 	require.NoError(t, json.Unmarshal(data, &res))
-	return err, &res
+	return &res, err
 }
 
-func gateAudit(t *testing.T, dir string) (error, *AuditResult) {
+func gateAudit(t *testing.T, dir string) (*AuditResult, error) {
 	t.Helper()
-	err, data := gateRun(t, "audit", dir)
+	data, err := gateRun(t, "audit", dir)
 	var res AuditResult
 	require.NoError(t, json.Unmarshal(data, &res))
-	return err, &res
+	return &res, err
 }
 
 // pip accepts an unambiguous prefix of a long option. A compromised pin
@@ -67,14 +67,14 @@ func TestAbbreviatedPipOptionsDoNotHideAPin(t *testing.T) {
 				"requirements.txt": line + "\nnum2words==0.5.15\n",
 				"other.txt":        "six==1.16.0\n",
 			})
-			err, check := gateCheck(t, dir)
+			check, err := gateCheck(t, dir)
 			require.ErrorIs(t, err, ErrThresholdExceeded, "check --ci exits 1")
 			requireCriticalFor(t, check.Findings, "num2words")
 			for _, u := range check.Coverage.UnsupportedEvidence {
 				require.NotEqual(t, "format_not_parsed", u.Reason, "pip reads the option, so the file is read in full")
 			}
 
-			err, audit := gateAudit(t, dir)
+			audit, err := gateAudit(t, dir)
 			require.ErrorIs(t, err, ErrThresholdExceeded, "audit --ci exits 1")
 			require.Equal(t, "stop", audit.Triage.Decision)
 		})
@@ -88,7 +88,7 @@ func TestRequirementsLinePipRejectsDoesNotHideThePins(t *testing.T) {
 	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
 	dir := projectWith(t, map[string]string{"requirements.txt": "num2words==0.5.15\n--frobnicate\n"})
 
-	err, check := gateCheck(t, dir)
+	check, err := gateCheck(t, dir)
 	require.ErrorIs(t, err, ErrThresholdExceeded)
 	requireCriticalFor(t, check.Findings, "num2words")
 	require.Len(t, check.Coverage.UnsupportedEvidence, 1)
@@ -98,7 +98,7 @@ func TestRequirementsLinePipRejectsDoesNotHideThePins(t *testing.T) {
 	require.Contains(t, u.Detail, "line 2")
 	require.Len(t, check.Coverage.PackageEvidence, 1, "the file was read")
 
-	err, audit := gateAudit(t, dir)
+	audit, err := gateAudit(t, dir)
 	require.ErrorIs(t, err, ErrThresholdExceeded)
 	require.Equal(t, "stop", audit.Triage.Decision)
 }
@@ -109,13 +109,13 @@ func TestRequirementsLinePipRejectsWithoutAMatchIsReview(t *testing.T) {
 	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
 	dir := projectWith(t, map[string]string{"requirements.txt": "six==1.16.0\n--frobnicate\n"})
 
-	err, check := gateCheck(t, dir)
+	check, err := gateCheck(t, dir)
 	require.NoError(t, err)
 	require.Empty(t, check.Findings)
 	require.Len(t, check.Coverage.UnsupportedEvidence, 1)
 	require.Equal(t, "format_not_parsed", check.Coverage.UnsupportedEvidence[0].Reason)
 
-	err, audit := gateAudit(t, dir)
+	audit, err := gateAudit(t, dir)
 	require.NotErrorIs(t, err, ErrThresholdExceeded)
 	require.Equal(t, "review", audit.Triage.Decision)
 	requireTriageReason(t, audit.Triage, "partial_dependency_coverage")
@@ -132,7 +132,7 @@ func TestUnreadRequirementsNameWithALineOutsideTheGrammar(t *testing.T) {
 		"requirements/dev.txt":   "num2words==0.5.15\n--frobnicate\n",
 		"requirements/notes.txt": "Install\n=======\n",
 	})
-	err, check := gateCheck(t, dir)
+	check, err := gateCheck(t, dir)
 	require.ErrorIs(t, err, ErrThresholdExceeded)
 	requireCriticalFor(t, check.Findings, "num2words")
 	require.Len(t, check.Coverage.UnsupportedEvidence, 1)

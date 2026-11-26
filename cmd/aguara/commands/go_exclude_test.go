@@ -24,7 +24,7 @@ func TestGoFindingNamesTheExclusion(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := projectWith(t, files)
-			err, check := gateCheck(t, dir)
+			check, err := gateCheck(t, dir)
 			require.ErrorIs(t, err, ErrThresholdExceeded)
 			var found *incident.Finding
 			for i, f := range check.Findings {

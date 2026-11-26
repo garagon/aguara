@@ -44,6 +44,19 @@ type pyTok struct {
 	line  int
 }
 
+// isOp reports an operator token spelled as one of ops.
+func (t pyTok) isOp(ops ...string) bool {
+	if t.kind != pyOp {
+		return false
+	}
+	for _, op := range ops {
+		if t.text == op {
+			return true
+		}
+	}
+	return false
+}
+
 type pyLexer struct {
 	src   string
 	pos   int
@@ -270,11 +283,11 @@ func scanSetupPy(src string) *setupPyScan {
 			return s
 		}
 		s.trackPath(prev, t)
-		attribute := prev.kind == pyOp && prev.text == "."
+		attribute := prev.isOp(".")
 		switch {
 		case t.kind == pyName && t.text == "setup" && s.lex.peek(0).text == "(":
 			s.calls = true
-		case t.kind == pyOp && t.text == "**" && prev.kind == pyOp && (prev.text == "(" || prev.text == ","):
+		case t.isOp("**") && prev.isOp("(", ","):
 			s.unpacks = true
 		case t.kind == pyName && !attribute && s.lex.peek(0).kind == pyOp && s.lex.peek(0).text == "=":
 			s.lex.next() // "="
@@ -390,7 +403,8 @@ func (s *setupPyScan) skipValue(depth int, displays []bool) []pyStringItem {
 		s.trackPath(prev, t)
 		switch {
 		case t.kind == pyOp && (t.text == "[" || t.text == "(" || t.text == "{"):
-			display := t.text == "[" && !(prev.kind == pyName || prev.kind == pyString || prev.kind == pyOp && (prev.text == ")" || prev.text == "]"))
+			// "[" after an operand is a subscript, not a list display.
+			display := t.text == "[" && prev.kind != pyName && prev.kind != pyString && !prev.isOp(")", "]")
 			displays = append(displays, display)
 		case t.kind == pyOp && (t.text == "]" || t.text == ")" || t.text == "}"):
 			if len(displays) > 0 {
@@ -400,7 +414,7 @@ func (s *setupPyScan) skipValue(depth int, displays []bool) []pyStringItem {
 			if n := s.lex.peek(0); n.kind == pyOp && (n.text == "," || n.text == "]") {
 				listed = append(listed, pyStringItem{t.text, t.line})
 			}
-		case t.kind == pyName && !(prev.kind == pyOp && prev.text == "."):
+		case t.kind == pyName && !prev.isOp("."):
 			s.use(t.text)
 		}
 		prev = t
@@ -487,14 +501,14 @@ func (s *setupPyScan) parseDict() pyListValue {
 func (s *setupPyScan) trackPath(prev, t pyTok) {
 	switch {
 	case t.kind == pyString:
-		if len(s.pathParts) == 0 || !(prev.kind == pyOp && (prev.text == "," || prev.text == "/")) {
+		if len(s.pathParts) == 0 || !prev.isOp(",", "/") {
 			s.flushPath()
 		}
 		if len(s.pathParts) < 16 {
 			s.pathParts = append(s.pathParts, t.text)
 		}
 	case t.kind == pyOp && (t.text == "," || t.text == "/"):
-	case t.kind == pyName && prev.kind == pyOp && prev.text == ",":
+	case t.kind == pyName && prev.isOp(","):
 		// A name argument between literals (os.path.join(here, "a")) does
 		// not end the sequence.
 	default:
