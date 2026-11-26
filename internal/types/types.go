@@ -138,36 +138,65 @@ type MergedFinding struct {
 	Category string   `json:"category"`
 }
 
-// MarshalJSON adds severity_label next to the numeric severity.
-func (m MergedFinding) MarshalJSON() ([]byte, error) {
-	type alias MergedFinding
-	return json.Marshal(struct {
-		alias
-		SeverityLabel string `json:"severity_label"`
-	}{alias(m), m.Severity.String()})
+// Finding and MergedFinding keep Go's default JSON encoding, so a caller
+// struct that embeds them marshals its own fields too. The report-only
+// fields (severity_label, fingerprint, rounding) are added by
+// ScanResult.MarshalJSON through findingReport, the single place that
+// defines the serialized shape of a finding in a report.
+
+// MergedFindingReport is the serialized form of a MergedFinding in reports:
+// the merged finding plus the name of its numeric severity.
+type MergedFindingReport struct {
+	RuleID        string   `json:"rule_id"`
+	Severity      Severity `json:"severity"`
+	SeverityLabel string   `json:"severity_label"`
+	Category      string   `json:"category"`
 }
 
-// MarshalJSON adds the output-only fields of the finding contract:
-// severity_label (the name of the numeric severity, which stays a number)
-// and fingerprint (the value baselines and SARIF partialFingerprints use,
-// omitted for findings that have none because their matched text is
-// redacted). Confidence and score are rounded here, at the output boundary,
-// so float noise from repeated multiplication (0.9900000000000001) does not
-// reach reports; the in-memory values are unchanged.
-func (f Finding) MarshalJSON() ([]byte, error) {
-	type alias Finding
-	a := alias(f)
-	a.Confidence = RoundConfidence(a.Confidence)
-	a.Score = RoundScore(a.Score)
-	fp := ""
-	if Fingerprintable(f) {
-		fp = FindingFingerprint(f)
+// MergedFindingReports returns the report form of merged findings, nil for
+// none. JSON and SARIF reports both use it.
+func MergedFindingReports(merged []MergedFinding) []MergedFindingReport {
+	if len(merged) == 0 {
+		return nil
 	}
-	return json.Marshal(struct {
-		alias
-		SeverityLabel string `json:"severity_label"`
-		Fingerprint   string `json:"fingerprint,omitempty"`
-	}{a, f.Severity.String(), fp})
+	out := make([]MergedFindingReport, len(merged))
+	for i, m := range merged {
+		out[i] = MergedFindingReport{RuleID: m.RuleID, Severity: m.Severity, SeverityLabel: m.Severity.String(), Category: m.Category}
+	}
+	return out
+}
+
+// findingReport is the serialized form of a Finding in a report: every
+// Finding field, with confidence and score rounded, plus severity_label
+// (the name of the numeric severity, which stays a number), fingerprint
+// (the value baselines and SARIF partialFingerprints use, omitted for
+// findings whose matched text is redacted) and merged findings with their
+// labels. The outer AlsoMatched field shadows the embedded one.
+type findingReport struct {
+	findingFields
+	AlsoMatched   []MergedFindingReport `json:"also_matched,omitempty"`
+	SeverityLabel string                `json:"severity_label"`
+	Fingerprint   string                `json:"fingerprint,omitempty"`
+}
+
+// findingFields has Finding's fields and none of its methods.
+type findingFields Finding
+
+func newFindingReport(f Finding) findingReport {
+	fields := findingFields(f)
+	// Rounding happens on this copy only: stored values, and anything
+	// computed from them such as ordering and verdicts, are unchanged.
+	fields.Confidence = RoundConfidence(fields.Confidence)
+	fields.Score = RoundScore(fields.Score)
+	r := findingReport{
+		findingFields: fields,
+		AlsoMatched:   MergedFindingReports(f.AlsoMatched),
+		SeverityLabel: f.Severity.String(),
+	}
+	if Fingerprintable(f) {
+		r.Fingerprint = FindingFingerprint(f)
+	}
+	return r
 }
 
 // RoundConfidence rounds a 0-1 confidence to 4 decimal places for output.
@@ -497,20 +526,26 @@ type ScanCoverage struct {
 // scans. The normalization covers every ScanResult producer (the
 // Scanner, the CLI's aggregate runAutoScan, library callers that
 // construct results directly) without each one needing to remember
-// the contract. It also adds verdict_label next to the numeric verdict
-// and rounds risk_score to 2 decimal places.
+// the contract. It also adds verdict_label next to the numeric verdict,
+// rounds risk_score to 2 decimal places, and writes each finding in its
+// report form (see findingReport). ScanResult already had a custom
+// marshaller before these fields, so structs that embed it behave as
+// before.
 func (r ScanResult) MarshalJSON() ([]byte, error) {
-	if r.Findings == nil {
-		r.Findings = []Finding{}
+	findings := make([]findingReport, len(r.Findings))
+	for i, f := range r.Findings {
+		findings[i] = newFindingReport(f)
 	}
 	r.RiskScore = RoundScore(r.RiskScore)
 	type Alias ScanResult
 	return json.Marshal(struct {
 		Alias
-		VerdictLabel string `json:"verdict_label"`
-		DurationMS   int64  `json:"duration_ms"`
+		Findings     []findingReport `json:"findings"`
+		VerdictLabel string          `json:"verdict_label"`
+		DurationMS   int64           `json:"duration_ms"`
 	}{
 		Alias:        Alias(r),
+		Findings:     findings,
 		VerdictLabel: r.Verdict.String(),
 		DurationMS:   r.Duration.Milliseconds(),
 	})

@@ -131,7 +131,15 @@ exported through public aliases, rather than copying a partial struct.
 - `fingerprint` on a finding is the value baselines and SARIF
   `partialFingerprints` use; it is absent when the matched text is
   redacted. `baseline_state` (`new`, `baselined`, `non_baselineable`)
-  appears when a baseline is applied.
+  appears when a baseline is applied. GitHub code scanning does not track
+  alerts by this value; it uses the line hash its upload action computes.
+- `severity_label`, `fingerprint` and the rounding of `confidence` and
+  `score` are added when a `ScanResult` is marshalled. `Finding` and
+  `MergedFinding` keep Go's default JSON encoding, so a struct that embeds
+  `aguara.Finding` marshals its own fields too, and `json.Marshal` of a
+  `Finding` on its own has the v0.29.0 fields plus `also_matched` and
+  `baseline_state`. Library callers read the new fields through
+  `aguara.MergedFinding` and `aguara.SuppressionSummary`.
 - Full deduplication keeps one finding per file and line. The survivor
   lists the rules it absorbed in `also_matched`, and `suppressed` counts
   findings removed by dedup and filters. A short report is not proof that

@@ -43,7 +43,22 @@ func TestFingerprintableMirrorsRedaction(t *testing.T) {
 	require.False(t, types.Fingerprintable(types.Finding{Category: "exfiltration", Sensitive: true}))
 }
 
-func TestFindingMarshalJSONAddsLabelFingerprintAndRounds(t *testing.T) {
+// reportFinding marshals a result holding f and returns its finding.
+func reportFinding(t *testing.T, f types.Finding) (map[string]any, string) {
+	t.Helper()
+	out, err := json.Marshal(types.ScanResult{Findings: []types.Finding{f}})
+	require.NoError(t, err)
+	var got struct {
+		Findings []json.RawMessage `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(out, &got))
+	require.Len(t, got.Findings, 1)
+	var finding map[string]any
+	require.NoError(t, json.Unmarshal(got.Findings[0], &finding))
+	return finding, string(got.Findings[0])
+}
+
+func TestReportFindingAddsLabelFingerprintAndRounds(t *testing.T) {
 	f := types.Finding{
 		RuleID:      "PROMPT_INJECTION_001",
 		Severity:    types.SeverityHigh,
@@ -55,17 +70,14 @@ func TestFindingMarshalJSONAddsLabelFingerprintAndRounds(t *testing.T) {
 		Score:       16.500000000000004,
 		AlsoMatched: []types.MergedFinding{{RuleID: "EXTDL_013", Severity: types.SeverityMedium, Category: "external-download"}},
 	}
-	out, err := json.Marshal(f)
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, json.Unmarshal(out, &got))
+	got, raw := reportFinding(t, f)
 
 	require.Equal(t, float64(3), got["severity"], "severity stays numeric")
 	require.Equal(t, "HIGH", got["severity_label"])
 	require.Equal(t, types.FindingFingerprint(f), got["fingerprint"])
 	require.Equal(t, 0.99, got["confidence"])
 	require.Equal(t, 16.5, got["score"])
-	require.NotContains(t, string(out), "0000000")
+	require.NotContains(t, raw, "0000000")
 
 	also := got["also_matched"].([]any)
 	require.Len(t, also, 1)
@@ -80,16 +92,38 @@ func TestFindingMarshalJSONAddsLabelFingerprintAndRounds(t *testing.T) {
 	require.Equal(t, 0.9900000000000001, f.Confidence)
 }
 
-func TestFindingMarshalJSONOmitsFingerprintForRedactedFindings(t *testing.T) {
+func TestReportFindingOmitsFingerprintForRedactedFindings(t *testing.T) {
 	for _, f := range []types.Finding{
 		{RuleID: "CRED_002", Category: "credential-leak", MatchedText: types.RedactedPlaceholder},
 		{RuleID: "MCP_007", Category: "mcp-attack", Sensitive: true, MatchedText: types.RedactedPlaceholder},
 	} {
-		out, err := json.Marshal(f)
-		require.NoError(t, err)
-		require.NotContains(t, string(out), `"fingerprint"`)
-		require.Contains(t, string(out), `"severity_label":"INFO"`)
+		_, raw := reportFinding(t, f)
+		require.NotContains(t, raw, `"fingerprint"`)
+		require.Contains(t, raw, `"severity_label":"INFO"`)
 	}
+}
+
+// Finding keeps Go's default encoding, so a caller type that embeds it
+// still marshals its own fields. Only reports (ScanResult) add the labels.
+func TestFindingKeepsDefaultJSONEncoding(t *testing.T) {
+	type annotated struct {
+		types.Finding
+		Ticket string `json:"ticket"`
+	}
+	f := types.Finding{RuleID: "R1", Severity: types.SeverityHigh, Confidence: 0.5, AlsoMatched: []types.MergedFinding{{RuleID: "R2"}}}
+	out, err := json.Marshal(annotated{Finding: f, Ticket: "SEC-1"})
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"ticket":"SEC-1"`)
+	require.Contains(t, string(out), `"rule_id":"R1"`)
+	require.NotContains(t, string(out), "severity_label")
+	require.NotContains(t, string(out), "fingerprint")
+	require.Contains(t, string(out), `"also_matched":[{"rule_id":"R2","severity":0,"category":""}]`)
+
+	var _ json.Marshaler = types.ScanResult{}
+	_, isMarshaler := any(f).(json.Marshaler)
+	require.False(t, isMarshaler)
+	_, isMarshaler = any(types.MergedFinding{}).(json.Marshaler)
+	require.False(t, isMarshaler)
 }
 
 func TestScanResultMarshalJSONAddsVerdictLabelAndRoundsRisk(t *testing.T) {

@@ -40,6 +40,12 @@ type (
 	Verdict         = types.Verdict
 	ScanProfile     = types.ScanProfile
 	DeduplicateMode = types.DeduplicateMode
+	// MergedFinding is an entry of Finding.AlsoMatched: a finding that
+	// deduplication merged into the reported one on the same line.
+	MergedFinding = types.MergedFinding
+	// SuppressionSummary is ScanResult.Suppressed: what the scan matched
+	// but did not report on its own, by the step that removed it.
+	SuppressionSummary = types.SuppressionSummary
 )
 
 const (
