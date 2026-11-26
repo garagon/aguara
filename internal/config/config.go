@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,12 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
+
+// maxConfigBytes bounds .aguara.yml.
+const maxConfigBytes = 1 << 20
 
 const (
 	// DefaultMaxFileSize is the default maximum file size (50 MB).
@@ -90,11 +96,18 @@ func Load(dir string) (Config, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return Config{}, fmt.Errorf("%s is a symbolic link (rejected for security)", path)
 		}
-		if info.Size() > 1<<20 {
+		if !info.Mode().IsRegular() {
+			// A named pipe or device would block the read or never end.
+			return Config{}, fmt.Errorf("%s is not a regular file (rejected)", path)
+		}
+		if info.Size() > maxConfigBytes {
 			return Config{}, fmt.Errorf("config file too large: %s (%d bytes, max 1 MB)", path, info.Size())
 		}
-		data, err := os.ReadFile(path)
+		data, err := safefile.ReadRegular(path, false, maxConfigBytes)
 		if err != nil {
+			if errors.Is(err, safefile.ErrTooLarge) {
+				return Config{}, fmt.Errorf("config file too large: %s (max 1 MB)", path)
+			}
 			return Config{}, fmt.Errorf("reading %s: %w", path, err)
 		}
 		var cfg Config

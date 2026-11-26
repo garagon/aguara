@@ -150,6 +150,9 @@ func TestInitWorkflowStructure(t *testing.T) {
 			}
 		case strings.Contains(step.Run, "aguara audit"):
 			run = step.Run
+			// The action step fails when its scan is incomplete (exit
+			// 2); the audit must still run so the job summary shows why.
+			require.Equal(t, "${{ !cancelled() }}", step.If)
 		case strings.Contains(step.Run, "GITHUB_STEP_SUMMARY"):
 			summary = step.Run
 			require.Equal(t, "always()", step.If)

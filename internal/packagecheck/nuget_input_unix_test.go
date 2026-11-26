@@ -3,11 +3,13 @@
 package packagecheck
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/garagon/aguara/internal/intel"
+	"github.com/garagon/aguara/internal/safefile"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,16 +24,11 @@ func TestNuGetRejectsFIFO(t *testing.T) {
 			if err == nil || len(refs) != 0 {
 				t.Fatalf("FIFO accepted: refs=%v err=%v", refs, err)
 			}
-			// Exercise the actual open flags separately: a FIFO swapped in
-			// after Lstat must open without waiting, then fail the type check.
-			f, err := os.OpenFile(path, os.O_RDONLY|manifestOpenFlags, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			info, statErr := f.Stat()
-			closeErr := f.Close()
-			if statErr != nil || closeErr != nil || info.Mode().IsRegular() {
-				t.Fatalf("FIFO open: info=%v stat=%v close=%v", info, statErr, closeErr)
+			// A FIFO swapped in after the type check opens without
+			// waiting and fails the check on the opened file; the shared
+			// reader's own tests cover that (internal/safefile).
+			if !errors.Is(err, safefile.ErrNotRegular) {
+				t.Fatalf("FIFO error does not match safefile.ErrNotRegular: %v", err)
 			}
 		})
 	}
@@ -45,12 +42,12 @@ func TestNuGetUnixOpenRejectsLeafSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(link, os.O_RDONLY|manifestOpenFlags, 0)
+	f, err := openManifest(link, "NuGet")
 	if f != nil {
 		_ = f.Close()
 	}
 	if err == nil {
-		t.Fatal("open flags allowed a leaf symlink")
+		t.Fatal("a leaf symlink was opened")
 	}
 }
 

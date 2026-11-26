@@ -45,8 +45,12 @@ func DefaultPath() string {
 	return filepath.Join(home, ".aguara", "state.json")
 }
 
+// MaxFileBytes bounds the state file read by Load.
+const MaxFileBytes = 256 << 20
+
 // Load reads the state file from disk. If the file doesn't exist,
-// the store starts empty (no error). Symlinks are rejected.
+// the store starts empty (no error). Symlinks, named pipes, devices and
+// files over MaxFileBytes are rejected.
 func (s *Store) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,7 +66,9 @@ func (s *Store) Load() error {
 		return fmt.Errorf("state file is a symlink (rejected for security): %s", s.path)
 	}
 
-	data, err := os.ReadFile(s.path)
+	// Not following a link and not blocking on a named pipe or device
+	// swapped in after the Lstat above.
+	data, err := safefile.ReadRegular(s.path, false, MaxFileBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

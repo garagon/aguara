@@ -10,12 +10,11 @@ import (
 	"github.com/pelletier/go-toml/v2/unstable"
 )
 
-// Python lockfile limits. maxPythonLockEntries bounds the refs one file
-// may produce (real lockfiles hold a few thousand packages);
+// Python lockfile limits. maxLockfileEntries bounds the refs one file
+// may produce, as for every dependency file;
 // maxTOMLExpressionNodes bounds the parser's per-expression node arena;
 // maxTOMLKeyParts bounds dotted keys and table headers.
 const (
-	maxPythonLockEntries   = 100_000
 	maxTOMLExpressionNodes = 200_000
 	maxTOMLKeyParts        = 16
 )
@@ -61,7 +60,7 @@ func walkTOML(data []byte, label string, visit func(tomlExpr) error) error {
 				offset = int(node.Raw.Offset)
 			}
 			if len(keys) == maxTOMLKeyParts {
-				return fmt.Errorf("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
+				return errBudget("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
 			}
 			keys = append(keys, string(node.Data))
 		}
@@ -146,7 +145,7 @@ func checkTOMLNodeBudget(data []byte, label string) error {
 			i++
 		}
 		if count > maxTOMLExpressionNodes {
-			return fmt.Errorf("parse %s: a TOML expression exceeds the %d-node limit", label, maxTOMLExpressionNodes)
+			return errBudget("parse %s: a TOML expression exceeds the %d-node limit", label, maxTOMLExpressionNodes)
 		}
 	}
 	return nil
@@ -280,8 +279,8 @@ func (c *pythonRefCollector) add(ref PackageRef) error {
 	if c.seen[key] {
 		return nil
 	}
-	if len(c.refs) >= maxPythonLockEntries {
-		return fmt.Errorf("parse %s: more than %d package entries", c.label, maxPythonLockEntries)
+	if len(c.refs) >= maxLockfileEntries {
+		return errBudget("parse %s: more than %d package entries", c.label, maxLockfileEntries)
 	}
 	c.seen[key] = true
 	c.refs = append(c.refs, ref)

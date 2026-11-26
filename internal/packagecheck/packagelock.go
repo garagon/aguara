@@ -120,6 +120,9 @@ func ParsePackageLock(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open package-lock.json: %w", err)
 	}
+	if err := checkJSONNodeBudget(data, "package-lock.json"); err != nil {
+		return nil, err
+	}
 	var lock packageLock
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("parse package-lock.json: %w", err)

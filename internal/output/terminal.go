@@ -67,8 +67,13 @@ func (f *TerminalFormatter) Format(w io.Writer, result *scanner.ScanResult) erro
 	}
 
 	f.printHeader(w, result)
+	f.printIncomplete(w, result)
 
 	switch {
+	case len(result.Findings) == 0 && result.Incomplete:
+		// Not clean: what failed was not evaluated.
+		st := NewStyle(f.NoColor)
+		fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("MEDIUM"), st.Yellow("No findings in what was evaluated; the scan is incomplete."))
 	case len(result.Findings) == 0 && result.FilesScanned == 0:
 		// Zero files is not a clean result: nothing was evaluated.
 		st := NewStyle(f.NoColor)
@@ -127,6 +132,20 @@ func (f *TerminalFormatter) printHeader(w io.Writer, result *scanner.ScanResult)
 	}
 	fmt.Fprintf(w, "  %s\n", strings.Join(parts, "  \u00b7  "))
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
+}
+
+// printIncomplete states, right under the header, that the scan is
+// incomplete and names what failed.
+func (f *TerminalFormatter) printIncomplete(w io.Writer, result *scanner.ScanResult) {
+	summary := IncompleteSummary(result)
+	if summary == "" {
+		return
+	}
+	st := NewStyle(f.NoColor)
+	fmt.Fprintf(w, "\n  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+	for _, line := range IncompleteDetails(result) {
+		fmt.Fprintf(w, "    %s\n", st.Dim(line))
+	}
 }
 
 func (f *TerminalFormatter) printDashboard(w io.Writer, counts map[scanner.Severity]int) {
@@ -302,6 +321,14 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 		}
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
+	if line := SkippedSummary(result.Skipped); line != "" {
+		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
+	}
+	if summary := IncompleteSummary(result); summary != "" {
+		// Repeated under the findings, where a long report ends.
+		st := NewStyle(f.NoColor)
+		fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 
 	if rule := topRuleID(result.Findings); rule != "" {
@@ -321,6 +348,62 @@ func NothingScannedMessage(result *scanner.ScanResult) string {
 		}
 	}
 	return "Nothing was scanned: no scannable files under the target. This is not a clean result."
+}
+
+// SkippedSummary is one line naming the entries a scan did not read
+// because they are not regular files, or "" when there are none. Up to
+// three paths are named; the full list is in the JSON report.
+func SkippedSummary(skipped []types.SkippedFile) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	const maxNamed = 3
+	names := make([]string, 0, maxNamed+1)
+	for i, s := range skipped {
+		if i == maxNamed {
+			names = append(names, fmt.Sprintf("+%d more", len(skipped)-maxNamed))
+			break
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", TerminalText(s.Path), skippedKindLabel(s.Kind)))
+	}
+	special := true
+	for _, s := range skipped {
+		switch s.Kind {
+		case types.SkippedInSkippedDir, types.SkippedIgnored, types.SkippedOutputFile:
+			special = false
+		}
+	}
+	what := "entries that were not scanned"
+	switch {
+	case special && len(skipped) == 1:
+		what = "entry that is not a regular file"
+	case special:
+		what = "entries that are not regular files"
+	case len(skipped) == 1:
+		what = "entry that was not scanned"
+	}
+	return fmt.Sprintf("Skipped %d %s: %s", len(skipped), what, strings.Join(names, ", "))
+}
+
+func skippedKindLabel(kind string) string {
+	switch kind {
+	case types.SkippedSymlink:
+		return "symbolic link"
+	case types.SkippedNamedPipe:
+		return "named pipe"
+	case types.SkippedSocket:
+		return "socket"
+	case types.SkippedDevice:
+		return "device"
+	case types.SkippedInSkippedDir:
+		return "inside .git, node_modules or .aguara"
+	case types.SkippedIgnored:
+		return "excluded by an ignore pattern"
+	case types.SkippedOutputFile:
+		return "written by this run"
+	default:
+		return "irregular file"
+	}
 }
 
 // filesScannedLabel states how many files were evaluated and, when the

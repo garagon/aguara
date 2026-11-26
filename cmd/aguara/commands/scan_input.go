@@ -152,28 +152,60 @@ func (in scanInput) execute(ctx context.Context, s *scanner.Scanner, cfg config.
 	case in.stdin:
 		return in.scanStdin(ctx, s, cfg)
 	case in.root != "":
+		// An incomplete scan returns its partial result inside the error;
+		// the notices describe it as well.
 		result, skipped, err := s.ScanPaths(ctx, in.root, in.args)
+		noteSkippedPaths(skipped)
+		if partial, _ := partialScan(result, err); partial != nil {
+			noteSkippedOutputs(partial)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-		noteSkippedPaths(skipped)
-		noteSkippedOutputs(result)
 		return result, nil
 	}
 	return executeScan(ctx, s, in.args[0])
 }
 
 // noteSkippedPaths names the paths of a path list that were not scanned,
-// up to a few, so a long list from a hook manager stays readable.
-func noteSkippedPaths(skipped []scanner.SkippedPath) {
+// up to a few, so a long list from a hook manager stays readable. Files
+// this run writes have their own notice (noteSkippedOutputs). Every
+// skipped entry is also in the report's skipped list.
+func noteSkippedPaths(skipped []types.SkippedFile) {
 	const maxListed = 3
+	listed := 0
 	for i, s := range skipped {
-		if i == maxListed {
-			fmt.Fprintf(os.Stderr, "notice: %d more paths were not scanned for the same reasons\n", len(skipped)-maxListed)
+		if s.Kind == types.SkippedOutputFile {
+			continue
+		}
+		if listed == maxListed {
+			fmt.Fprintf(os.Stderr, "notice: %d more paths were not scanned for the same reasons\n", len(skipped)-i)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "notice: %s was not scanned: %s\n", output.TerminalText(s.Path), s.Reason)
+		listed++
+		fmt.Fprintf(os.Stderr, "notice: %s was not scanned: %s\n", output.TerminalText(s.Path), namedSkipReason(s))
 	}
+}
+
+// namedSkipReason says why a path named on the command line was not
+// scanned.
+func namedSkipReason(s types.SkippedFile) string {
+	switch s.Kind {
+	case types.SkippedSymlink:
+		return "a symbolic link (directory walks skip links too)"
+	case types.SkippedInSkippedDir:
+		dir := ".git, node_modules or .aguara"
+		for _, part := range strings.Split(filepath.ToSlash(s.Path), "/") {
+			if part == ".git" || part == "node_modules" || part == ".aguara" {
+				dir = part
+				break
+			}
+		}
+		return "inside " + dir + "/, which directory walks always skip"
+	case types.SkippedIgnored:
+		return "an ignore pattern excludes it"
+	}
+	return strings.ReplaceAll(s.Kind, "_", " ")
 }
 
 // outputFilesOfThisRun lists the files this invocation writes: the -o

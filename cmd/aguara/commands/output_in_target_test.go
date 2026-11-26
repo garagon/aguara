@@ -61,7 +61,13 @@ func TestLocalScanDoesNotRescanItsOwnReport(t *testing.T) {
 			require.Contains(t, stderr, "report."+format+" is the report this run writes and was not scanned")
 			data, err := os.ReadFile(filepath.Join(dir, "report."+format))
 			require.NoError(t, err)
-			require.NotContains(t, string(data), `report.`+format+`"`, "no finding is located in the report itself")
+			// The report lists itself as skipped (kind output_file); no
+			// finding is located in it.
+			require.NotContains(t, string(data), `"file_path": "report.`+format+`"`, "no finding is located in the report itself")
+			require.NotContains(t, string(data), `"uri": "report.`+format+`"`, "no finding is located in the report itself")
+			if format == "json" {
+				require.Contains(t, string(data), `"kind": "output_file"`)
+			}
 		})
 	}
 }

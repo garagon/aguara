@@ -5,9 +5,54 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"sort"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
+
+// maxConfigBytes bounds a client configuration read during discovery. It is
+// above the scanner's largest --max-file-size, so the scan, not discovery,
+// decides whether a large configuration is too large to evaluate.
+const maxConfigBytes = 512 << 20
+
+// readConfig reads a client configuration file. A symbolic link is followed
+// (dotfile managers link these files), but the file must be a regular file:
+// a named pipe or device found at a configuration path is not read, because
+// reading it could block or never end.
+func readConfig(path string) ([]byte, error) {
+	data, err := safefile.ReadRegular(path, true, maxConfigBytes)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, &configReadError{err: err}
+	}
+	return data, err
+}
+
+// configReadError is a configuration that exists but could not be read, as
+// opposed to one that is absent or does not parse.
+type configReadError struct{ err error }
+
+func (e *configReadError) Error() string { return e.err.Error() }
+func (e *configReadError) Unwrap() error { return e.err }
+
+// unreadable describes a configuration that could not be read, or returns
+// false for any other error (absent, or not valid configuration).
+func unreadable(client, path string, err error) (UnreadableConfig, bool) {
+	var readErr *configReadError
+	if !errors.As(err, &readErr) {
+		return UnreadableConfig{}, false
+	}
+	u := UnreadableConfig{Client: client, Path: path, Reason: "could not be read", Err: readErr.err}
+	var notRegular *safefile.NotRegularError
+	switch {
+	case errors.As(err, &notRegular):
+		u.Mode = notRegular.Mode
+		u.Reason = "is a " + safefile.DescribeMode(notRegular.Mode) + ", not a regular file"
+	case errors.Is(err, safefile.ErrTooLarge):
+		u.Reason = fmt.Sprintf("exceeds the %d-byte limit", maxConfigBytes)
+	}
+	return u, true
+}
 
 // mcpConfigJSON represents the common structure of MCP client config files.
 type mcpConfigJSON struct {
@@ -275,7 +320,7 @@ func parseConfigWithKey(path, key string) ([]MCPServer, error) {
 // parseConfigWithKeyWarnings is parseConfigWithKey that also returns the
 // entries it could not read as expected.
 func parseConfigWithKeyWarnings(path, key string) ([]MCPServer, []string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -325,7 +370,7 @@ func parseOpenCodeConfig(path string) ([]MCPServer, error) {
 }
 
 func parseOpenCodeConfigWarnings(path string) ([]MCPServer, []string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -389,7 +434,7 @@ func parseClaudeCodeConfig(path string) ([]MCPServer, error) {
 }
 
 func parseClaudeCodeConfigWarnings(path string) ([]MCPServer, []string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -465,7 +510,7 @@ type ocAgent struct {
 // scanOpenClawConfig parses an OpenClaw config file and maps it to ClientResult
 // for compatibility with the existing discovery model.
 func scanOpenClawConfig(path string) (*ClientResult, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return nil, err
 	}

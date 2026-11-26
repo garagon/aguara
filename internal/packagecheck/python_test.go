@@ -399,7 +399,7 @@ func TestTOMLNodeBudgetRejectsHugeExpressions(t *testing.T) {
 
 func TestPythonLockfileEntryLimit(t *testing.T) {
 	c := newPythonRefCollector("uv.lock")
-	for i := 0; i < maxPythonLockEntries; i++ {
+	for i := 0; i < maxLockfileEntries; i++ {
 		require.NoError(t, c.add(PackageRef{Name: fmt.Sprintf("p%d", i), Version: "1"}))
 	}
 	require.NoError(t, c.add(PackageRef{Name: "P0", Version: "1"}), "a duplicate does not count")

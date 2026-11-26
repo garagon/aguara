@@ -116,9 +116,24 @@ problems. `ListRules` returns nil in that case. `ExplainRule` reports an unknown
 ID with an error matching `errors.Is(err, ErrRuleNotFound)` and reports rule
 loading problems as themselves.
 
+A scan that cannot evaluate every file with every analyzer (an unreadable or
+oversized file, an analyzer failure or budget, a canceled context) returns a
+nil result and an error matching `errors.Is(err, ErrIncompleteScan)`. Treat it
+as a failure, never as clean, and never fail open on it. When files were
+evaluated, the error is an `*IncompleteError` (`errors.As`): its `Result` holds
+the findings that were found, `Result.Incomplete` is true, `Result.Errors`
+lists what failed (path, stage, analyzer, reason) and `Result.Verdict` is never
+clean. Report or block on those findings; do not drop them. A canceled scan's
+error also matches the context's error: compare with `errors.Is`, not `==`. Only a failure to inspect the target,
+resolve it or read its `.aguaraignore` returns no partial result.
+
 Consumers must bound inline inputs and execution resources themselves. A context
 does not guarantee immediate interruption of every parser or regular expression.
-Do not advertise a hard real-time deadline from this API.
+Do not advertise a hard real-time deadline from this API. The pattern matcher
+checks the context between its passes over the content, during the keyword
+pass and before each pattern, but one regular expression over a large input
+runs to completion (over a second on 8 MiB), and so does any single analyzer
+pass that takes no context.
 
 ## Result Contracts
 
@@ -157,6 +172,37 @@ exported through public aliases, rather than copying a partial struct.
   `format_not_parsed` requirements file with `skipped_lines`: it was read
   and matched in full except for those lines. Library `ScanResult` values
   leave `coverage` unset.
+- Scan JSON carries `complete` (false for an incomplete scan), `errors` (the
+  failures, at most 100, sorted; always an array) and `failed_operations`. The
+  CLI writes the report of an incomplete scan, then exits 2; `audit` sets
+  top-level `complete`, `verdict.status` `incomplete` unless the gate failed,
+  and a `scan_incomplete` triage reason, so triage is never `proceed`.
+- Check JSON (and `audit`'s `check`) carries `complete`, `errors` and
+  `failed_operations` too: a dependency manifest over a parsing budget is an
+  `errors` entry (stage `read`, reason `budget`) and makes the check
+  incomplete (exit 2, report written, other results kept); `audit` adds the
+  `check_incomplete` triage reason. The manifest is still listed under
+  `coverage.unsupported_evidence`.
+- `skipped` (top level, and in the CLI's `coverage`) lists entries a scan did
+  not read because they are not regular files: symbolic links, named pipes,
+  sockets and devices. Always an array. A link carries `resolves`
+  (`inside`, `excluded`, `outside` or `dangling`); `inside` means the scan
+  reads what the link reaches, and `excluded` means it reaches a part of the
+  target the scan skips (binary extension, `.git`, `node_modules`,
+  `.aguara`, an ignore pattern, the size limit, a special file). `audit`
+  asks for review (`entries_not_evaluated`) for special files and for every
+  link that is not `inside`. A link an ignore pattern matches is not listed,
+  so with trusted project policy the target's own `.aguaraignore` can keep
+  it out of triage. A scan of several paths also lists the named paths a
+  scan of the root would not read (`in_skipped_dir`, `ignored`), and a
+  trusted local run the report or baseline it writes (`output_file`); of
+  those only `in_skipped_dir` asks `audit` for review. A named path that is
+  missing, special or over the size limit makes a several-paths scan
+  incomplete; the others are still scanned. `scan --changed` scans a changed
+  submodule whole; one that is not checked out at the commit the index
+  records (nothing checked out, or another commit, whose files are still
+  scanned) is a `not_scanned` failure. One at its recorded commit is just
+  scanned, local edits included, even when it holds no scannable files.
 - `ListRules` and `ExplainRule` include pattern and analyzer metadata.
   `RulesLoaded` counts compiled pattern rules, not the entire available catalog.
 - Availability does not imply activation: `RUGPULL_001` is explainable without a

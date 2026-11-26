@@ -4,6 +4,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -340,6 +341,22 @@ type ScanResult struct {
 	Baseline     *BaselineSummary `json:"baseline,omitempty"`
 	Duration     time.Duration    `json:"-"`
 	Target       string           `json:"-"`
+	// Skipped lists entries under the target that were not read because
+	// they are not regular files (symbolic links, named pipes, sockets,
+	// devices), sorted by path. They hold no file content to evaluate, so
+	// they do not make the scan incomplete. Serialized as [] when empty.
+	Skipped []SkippedFile `json:"skipped"`
+	// Incomplete is true when the scan could not evaluate every target
+	// with every analyzer. Such a result is only ever delivered inside an
+	// incomplete-scan error: its findings are real but partial, and its
+	// verdict is never clean. JSON carries the negation as "complete",
+	// always present.
+	Incomplete bool `json:"-"`
+	// Errors lists the operations an incomplete scan could not complete,
+	// sorted, at most MaxReportedFailures of them; FailedOperations
+	// counts all. Serialized as [] when empty.
+	Errors           []ScanFailure `json:"errors"`
+	FailedOperations int           `json:"failed_operations"`
 	// Coverage states what the scan evaluated. The CLI sets it so an
 	// empty result is distinguishable from a clean one; it is omitted
 	// when nil, which keeps existing library results unchanged.
@@ -402,7 +419,116 @@ const (
 type ScanCoverage struct {
 	FilesScanned int    `json:"files_scanned"`
 	Scope        string `json:"scope"`
+	// Skipped repeats ScanResult.Skipped: entries that were not read
+	// because they are not regular files.
+	Skipped []SkippedFile `json:"skipped"`
 }
+
+// MarshalJSON keeps Skipped as `[]` rather than `null` when empty.
+func (c ScanCoverage) MarshalJSON() ([]byte, error) {
+	if c.Skipped == nil {
+		c.Skipped = []SkippedFile{}
+	}
+	type alias ScanCoverage
+	return json.Marshal(alias(c))
+}
+
+// Kinds of entries a scan skips. The first five are entries that are not
+// regular files, found by a walk or named directly; the last three are
+// paths a path-list scan was given by name (or, for SkippedOutputFile,
+// found by a walk) that a scan of the root would not read either.
+const (
+	SkippedSymlink   = "symlink"    // symbolic link (discovery does not follow links)
+	SkippedNamedPipe = "named_pipe" // FIFO: reading one blocks or returns a writer's stream
+	SkippedSocket    = "socket"
+	SkippedDevice    = "device"    // character or block device
+	SkippedIrregular = "irregular" // any other non-regular file type
+
+	SkippedInSkippedDir = "in_skipped_dir" // named path inside .git, node_modules or .aguara, which walks never enter
+	SkippedIgnored      = "ignored"        // named path an ignore pattern excludes
+	SkippedOutputFile   = "output_file"    // a file this run writes (its report or baseline), skipped on a trusted local run
+)
+
+// Where a skipped symbolic link resolves, found without reading the
+// target's content.
+const (
+	LinkInside   = "inside"   // to a file or directory inside the scan target that the scan reads itself
+	LinkExcluded = "excluded" // to a part of the scan target the scan does not read (see SkippedFile.Resolves)
+	LinkOutside  = "outside"  // to something outside the scan target, which the scan did not read
+	LinkDangling = "dangling" // to nothing (or the link cannot be resolved)
+)
+
+// SkippedFile is an entry a scan did not read: one that is not a regular
+// file, or a path it was given by name that a scan of the root would not
+// read either (see the Skipped* kinds). Path is relative to the scan
+// target. Resolves is set for
+// symbolic links (Kind SkippedSymlink) to one of the Link* values. A link
+// is LinkInside only when the scan reads what it reaches: LinkExcluded
+// marks a link to a file the scan skips (a binary extension, a path under
+// .git, node_modules or .aguara, an ignore pattern, the size limit, or a
+// file that is not regular) or to a directory the scan does not enter or
+// whose content an ignore pattern excludes.
+type SkippedFile struct {
+	Path     string `json:"path"`
+	Kind     string `json:"kind"`
+	Resolves string `json:"resolves,omitempty"`
+}
+
+// HidesContent reports whether the entry may stand for content no scan
+// read: a named pipe, socket, device or irregular file, a symbolic link
+// that is dangling, resolves outside the scan target or resolves to a part
+// of it the scan does not read, or a path named directly inside .git,
+// node_modules or .aguara. A link that resolves inside the target points
+// at content the scan reads itself. A path an ignore pattern excludes and
+// a file the run itself writes do not hide content: the caller's (or the
+// trusted project's) policy asked for them to be left out.
+func (s SkippedFile) HidesContent() bool {
+	switch s.Kind {
+	case SkippedSymlink:
+		return s.Resolves != LinkInside
+	case SkippedIgnored, SkippedOutputFile:
+		return false
+	}
+	return true
+}
+
+// Stages of a scan at which an operation can fail.
+const (
+	FailureStageDiscover = "discover" // walking the target
+	FailureStageRead     = "read"     // reading a file
+	FailureStageAnalyze  = "analyze"  // running one analyzer on one file
+)
+
+// Reasons a scan operation failed.
+const (
+	FailureReasonBudget     = "budget"      // an analyzer's size or structure budget was exceeded
+	FailureReasonTooLarge   = "too_large"   // the file exceeds the read size limit
+	FailureReasonNotRegular = "not_regular" // the file changed into a non-regular file after discovery
+	FailureReasonIO         = "io"          // the file or directory could not be read
+	FailureReasonCanceled   = "canceled"    // the context was canceled or its deadline passed
+	FailureReasonNotScanned = "not_scanned" // a changed submodule whose recorded commit is not checked out (or nothing is)
+	FailureReasonError      = "error"       // any other analyzer error
+)
+
+// MaxReportedFailures bounds ScanResult.Errors; FailedOperations counts
+// every failure.
+const MaxReportedFailures = 100
+
+// ScanFailure is one operation an incomplete scan could not complete:
+// reading Path, or running Analyzer on it. Path is relative to the scan
+// target. Reason is one of the FailureReason constants. The underlying
+// error is not included: it can quote file content.
+type ScanFailure struct {
+	Path     string `json:"path"`
+	Stage    string `json:"stage"`
+	Analyzer string `json:"analyzer,omitempty"`
+	Reason   string `json:"reason"`
+}
+
+// ErrAnalysisBudget is wrapped by analyzer errors for input over the
+// analyzer's size or structure budget, so the failure is reported with
+// FailureReasonBudget.
+var ErrAnalysisBudget = errors.New("analysis budget exceeded")
 
 // MarshalJSON implements custom JSON marshaling so Duration serializes
 // as milliseconds, and normalizes the empty-results shape so consumers
@@ -415,12 +541,39 @@ func (r ScanResult) MarshalJSON() ([]byte, error) {
 	if r.Findings == nil {
 		r.Findings = []Finding{}
 	}
+	if r.Skipped == nil {
+		r.Skipped = []SkippedFile{}
+	}
+	if r.Errors == nil {
+		r.Errors = []ScanFailure{}
+	}
 	type Alias ScanResult
 	return json.Marshal(struct {
 		Alias
+		Complete   bool  `json:"complete"`
 		DurationMS int64 `json:"duration_ms"`
 	}{
 		Alias:      Alias(r),
+		Complete:   !r.Incomplete,
 		DurationMS: r.Duration.Milliseconds(),
 	})
+}
+
+// UnmarshalJSON reads what MarshalJSON writes, so a decoded report of an
+// incomplete scan stays incomplete ("complete": false sets Incomplete)
+// and duration_ms becomes Duration again. A report without "complete",
+// from an older version, decodes as complete.
+func (r *ScanResult) UnmarshalJSON(data []byte) error {
+	type Alias ScanResult
+	aux := struct {
+		*Alias
+		Complete   *bool `json:"complete"`
+		DurationMS int64 `json:"duration_ms"`
+	}{Alias: (*Alias)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	r.Incomplete = aux.Complete != nil && !*aux.Complete
+	r.Duration = time.Duration(aux.DurationMS) * time.Millisecond
+	return nil
 }

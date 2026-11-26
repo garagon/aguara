@@ -68,8 +68,13 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 	if !hasConfig && (!text || !request.Match(target.Content)) {
 		return nil, nil
 	}
-	if hasConfig && len(source) > maxConfigBytes {
-		return nil, fmt.Errorf("MCP capability analysis exceeds %d-byte input limit", maxConfigBytes)
+	// A JSON or YAML file is parsed whole, so the budget applies to the
+	// file. A Markdown or text file is parsed snippet by snippet (fenced
+	// blocks and the prose between them), so the budget applies to each
+	// snippet below: a long document with small configuration examples is
+	// analyzed instead of failing.
+	if hasConfig && !text && len(source) > maxConfigBytes {
+		return nil, fmt.Errorf("MCP capability analysis exceeds %d-byte input limit: %w", maxConfigBytes, types.ErrAnalysisBudget)
 	}
 	if ext == ".json" && !json.Valid(source) {
 		return nil, nil
@@ -109,6 +114,9 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 		if !configKey.Match(content) {
 			return nil
 		}
+		if len(content) > maxConfigBytes {
+			return fmt.Errorf("MCP capability analysis exceeds %d-byte input limit: %w", maxConfigBytes, types.ErrAnalysisBudget)
+		}
 		// Equals assignments are a text-snippet convention, not JSON/YAML.
 		if text {
 			content = assignment.ReplaceAll(content, []byte("${1}:"))
@@ -133,7 +141,7 @@ func (a *Analyzer) Analyze(ctx context.Context, target *scanner.Target) ([]scann
 				}
 				remaining--
 				if remaining < 0 {
-					return fmt.Errorf("MCP capability analysis exceeds node limit")
+					return fmt.Errorf("MCP capability analysis exceeds node limit: %w", types.ErrAnalysisBudget)
 				}
 				node := stack[len(stack)-1]
 				stack = stack[:len(stack)-1]

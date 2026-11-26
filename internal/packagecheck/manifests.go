@@ -80,6 +80,11 @@ type Manifest struct {
 	Workspace bool
 	// Unreadable is set when the file could not be read or parsed.
 	Unreadable bool
+	// Failure is why an Unreadable manifest was not read, when reading
+	// it failed (nil when the discovery read budget was spent first). It
+	// matches ErrBudget when the file exceeds a parsing budget, which
+	// makes a check incomplete.
+	Failure error
 	// Pins are the entries that pin one exact registry release, with
 	// Path and Source set to this manifest.
 	Pins []PackageRef
@@ -219,7 +224,7 @@ func readManifestAt(path, root string, want map[string]bool, budget *discoveryBu
 		}
 		if err != nil {
 			// Its dependencies are unknown, so it cannot be cleared.
-			m.Declares, m.Unreadable = true, true
+			m.Declares, m.Unreadable, m.Failure = true, true, err
 			return m, true
 		}
 		m.Declares, m.Workspace = info.declares(), info.workspace

@@ -463,4 +463,11 @@ The directory may be a symbolic link. Inside it, symlinked rule files are read
 from their target; symlinked subdirectories are not followed and are reported
 as a configuration problem.
 
+A rule file must be a regular file of at most 1 MB, whatever its reported
+size; a `.yaml` or `.yml` entry that is a named pipe, socket or device, or a
+link to one, is a configuration problem and is not read. In the development
+version, loading a directory stops with a configuration problem after 100,000
+files and directories, 10,000 rule files or 128 MiB of rule files, and rule
+files more than 32 directories below it are not loaded.
+
 See the [Contributing Guide](CONTRIBUTING.md) for more details on rule structure and testing.

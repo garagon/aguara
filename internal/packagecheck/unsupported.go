@@ -197,7 +197,7 @@ func namesRequirements(path string) ([]PackageRef, bool) {
 			continue
 		}
 		names = names || !item.salvaged
-		if item.ref.Version != "" && !item.ref.Unpinned && len(pins) < maxManifestEntries {
+		if item.ref.Version != "" && !item.ref.Unpinned && len(pins) < maxLockfileEntries {
 			pin := *item.ref
 			pin.Path, pin.Source = path, filepath.Base(path)
 			pins = append(pins, pin)

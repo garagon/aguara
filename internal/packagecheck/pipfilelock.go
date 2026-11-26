@@ -67,6 +67,9 @@ func ParsePipfileLock(target Target) ([]PackageRef, error) {
 }
 
 func parsePipfileLockBytes(data []byte, path string) ([]PackageRef, error) {
+	if err := checkJSONNodeBudget(data, "Pipfile.lock"); err != nil {
+		return nil, err
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil || top == nil {
 		return nil, fmt.Errorf("parse Pipfile.lock: expected a JSON object")

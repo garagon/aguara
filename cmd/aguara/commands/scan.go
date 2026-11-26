@@ -204,7 +204,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	result, err := in.execute(ctx, s, cfg)
 	stopSpinner(sp)
-	if err != nil {
+	result, scanErr := partialScan(result, err)
+	if result == nil {
 		return err
 	}
 	result.RulesLoaded = len(res.Compiled)
@@ -213,6 +214,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	in.coverageScope(result.Coverage)
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, result)
+	}
+
+	// An incomplete scan still writes the report it has, in the selected
+	// format, and then fails (exit 2). It neither saves rug-pull state nor
+	// writes a baseline: both would record files it did not evaluate.
+	if scanErr != nil {
+		return writeIncompleteScan(result, store, scanErr)
 	}
 
 	if store != nil {
@@ -263,6 +271,45 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return checkFailOnThresholdFindings(gateFindings)
+}
+
+// partialScan returns the partial result an incomplete scan's error
+// carries, so the command can still write its report; the error stays
+// the command's result. Any other error returns no result.
+func partialScan(result *scanner.ScanResult, err error) (*scanner.ScanResult, error) {
+	if err == nil {
+		return result, nil
+	}
+	var incomplete *scanner.IncompleteError
+	if errors.As(err, &incomplete) {
+		return incomplete.Result, err
+	}
+	return nil, err
+}
+
+// writeIncompleteScan writes the report of an incomplete scan and returns
+// scanErr. --baseline is still applied so the report shows the partition,
+// but no baseline is written and no state is saved.
+func writeIncompleteScan(result *scanner.ScanResult, store *state.Store, scanErr error) error {
+	if store != nil {
+		fmt.Fprintln(os.Stderr, "warning: rug-pull state not saved: the scan is incomplete")
+	}
+	if flagWriteBaseline != "" {
+		fmt.Fprintf(os.Stderr, "baseline: not written to %s: the scan is incomplete\n", flagWriteBaseline)
+	} else if flagBaseline != "" {
+		// A complete scan fails on a baseline it cannot read; here the
+		// command fails anyway, so say why the partition is missing.
+		if set, err := baseline.Load(flagBaseline); err == nil {
+			_, summary := baseline.Apply(result.Findings, set, flagBaseline)
+			result.Baseline = &summary
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: %v; the report is not partitioned by the baseline\n", err)
+		}
+	}
+	if err := writeOutput(result); err != nil {
+		return err
+	}
+	return scanErr
 }
 
 // validateBaselineFlags enforces the baseline flag contract before any
@@ -350,17 +397,53 @@ func runAutoScan(cmd *cobra.Command) error {
 	}
 
 	start := time.Now()
+	// The first incomplete configuration's error is the command's error;
+	// the other configurations are still scanned and reported.
+	var incompleteErr error
+	// A configuration that exists but could not be read is not silence:
+	// a named pipe or device is listed as skipped, any other read error
+	// makes the scan incomplete.
+	for _, u := range discovered.Unreadable {
+		fmt.Fprintf(os.Stderr, "warning: MCP client configuration %s %s; it was not scanned\n", output.TerminalText(u.Path), u.Reason)
+		if u.Mode != 0 {
+			aggregate.Skipped = append(aggregate.Skipped, types.SkippedFile{Path: u.Path, Kind: scanner.SkipKind(u.Mode)})
+			continue
+		}
+		err := scanner.IncompleteScanError("read target", u.Path, "", u.Err)
+		if incompleteErr == nil {
+			incompleteErr = err
+		}
+		if f, ok := scanner.FailureOf(err); ok {
+			aggregate.Errors = append(aggregate.Errors, f)
+		}
+		aggregate.Incomplete = true
+		aggregate.FailedOperations++
+	}
 	for i, path := range paths {
 		if sp != nil {
 			sp.Update(fmt.Sprintf("Scanning config %d/%d...", i+1, len(paths)))
 		}
-		result, scanErr := s.Scan(ctx, path)
-		if scanErr != nil {
+		result, scanErr := partialScan(s.Scan(ctx, path))
+		if result == nil {
 			stopSpinner(sp)
 			return scanErr
 		}
+		if scanErr != nil {
+			if incompleteErr == nil {
+				incompleteErr = scanErr
+			}
+			aggregate.Incomplete = true
+			aggregate.FailedOperations += max(result.FailedOperations, len(result.Errors))
+			for _, f := range result.Errors {
+				// Single-file scans name the file by its base name; keep the
+				// configuration's full path.
+				f.Path = path
+				aggregate.Errors = append(aggregate.Errors, f)
+			}
+		}
 		aggregate.Findings = append(aggregate.Findings, result.Findings...)
 		aggregate.FilesScanned += result.FilesScanned
+		aggregate.Skipped = append(aggregate.Skipped, result.Skipped...)
 		aggregate.Verdict = max(aggregate.Verdict, result.Verdict)
 		aggregate.RiskScore = max(aggregate.RiskScore, result.RiskScore)
 		if len(result.TargetPolicy.InlineSuppressed) > 0 {
@@ -371,9 +454,17 @@ func runAutoScan(cmd *cobra.Command) error {
 	aggregate.Duration = time.Since(start)
 	scanner.SortFindings(aggregate.Findings)
 	stopSpinner(sp)
-	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto}
+	aggregate.Coverage = &types.ScanCoverage{FilesScanned: aggregate.FilesScanned, Scope: types.ScanScopeAuto, Skipped: aggregate.Skipped}
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, aggregate)
+	}
+
+	scanner.SortSkipped(aggregate.Skipped)
+	if incompleteErr != nil {
+		if len(aggregate.Errors) > types.MaxReportedFailures {
+			aggregate.Errors = aggregate.Errors[:types.MaxReportedFailures]
+		}
+		return writeIncompleteScan(aggregate, store, incompleteErr)
 	}
 
 	if store != nil {
@@ -555,7 +646,7 @@ func scanCoverage(result *scanner.ScanResult) *types.ScanCoverage {
 	if flagChanged {
 		scope = types.ScanScopeChanged
 	}
-	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope}
+	return &types.ScanCoverage{FilesScanned: result.FilesScanned, Scope: scope, Skipped: result.Skipped}
 }
 
 func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*scanner.ScanResult, error) {
@@ -563,10 +654,12 @@ func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*s
 		return scanChangedFiles(ctx, s, targetPath)
 	}
 	result, err := s.Scan(ctx, targetPath)
+	if partial, _ := partialScan(result, err); partial != nil {
+		noteSkippedOutputs(partial)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
-	noteSkippedOutputs(result)
 	return result, nil
 }
 
@@ -580,30 +673,23 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 		}
 		return nil, fmt.Errorf("--changed: cannot list changed files: %w", err)
 	}
-	var targets []*scanner.Target
-	for _, relPath := range changedFiles {
-		absPath := filepath.Join(targetPath, relPath)
-		// Lstat instead of Stat so a symlink doesn't resolve to its target.
-		// The normal directory walk already skips symlinks (internal/scanner/target.go
-		// in the walk callback); --changed gets file paths from git and must do the
-		// same check, otherwise a malicious symlink committed to the repo would make
-		// aguara read files outside the tree and surface their contents in findings.
-		info, err := os.Lstat(absPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue // Tracked deletions have no content to scan.
-			}
-			return nil, scanner.IncompleteScanError("inspect changed target", relPath, "", err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		targets = append(targets, &scanner.Target{
-			Path:    absPath,
-			RelPath: relPath,
-		})
+	submodules, err := scanner.GitSubmodulePaths(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("--changed: %w", err)
 	}
-	result, err := s.ScanTargets(ctx, targets)
+	for _, path := range changedFiles {
+		if sm, ok := submodules[path]; ok {
+			sm.Head = scanner.GitSubmoduleHead(filepath.Join(targetPath, path))
+			submodules[path] = sm
+		}
+	}
+	// ScanChangedPaths skips symlinks exactly as the directory walk does, so a
+	// malicious symlink committed to the repository cannot make aguara read
+	// files outside the tree; named pipes and devices are skipped and
+	// listed as well. A changed submodule is scanned whole, and one that is
+	// not checked out at the commit its index entry records makes the scan
+	// incomplete.
+	result, err := s.ScanChangedPaths(ctx, targetPath, changedFiles, submodules)
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}

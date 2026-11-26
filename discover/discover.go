@@ -3,6 +3,7 @@ package discover
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/garagon/aguara/internal/output"
@@ -55,6 +56,22 @@ type ClientResult struct {
 // Result holds the full discovery output.
 type Result struct {
 	Clients []ClientResult `json:"clients"`
+	// Unreadable lists client configurations that exist but could not be
+	// read: a named pipe or device at a configuration path, a file over
+	// the size limit, or a permission error. Their servers are unknown.
+	// Absent configurations and files that do not parse are not listed.
+	Unreadable []UnreadableConfig `json:"unreadable,omitempty"`
+}
+
+// UnreadableConfig is a client configuration Scan could not read.
+type UnreadableConfig struct {
+	Client string `json:"client"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	// Mode is the file's type when it is not a regular file, else zero.
+	Mode os.FileMode `json:"-"`
+	// Err is the read error.
+	Err error `json:"-"`
 }
 
 // TotalServers returns the total number of MCP servers found.
@@ -98,6 +115,7 @@ func (r *Result) Redacted() *Result {
 		}
 		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers, Warnings: c.Warnings}
 	}
+	out.Unreadable = append([]UnreadableConfig(nil), r.Unreadable...)
 	return out
 }
 
@@ -145,6 +163,9 @@ func Scan() (*Result, error) {
 					result.Clients = append(result.Clients, ClientResult{Client: client.Name, Path: path, Warnings: []string{perr.warning()}})
 				}
 				if oerr != nil {
+					if u, ok := unreadable(client.Name, path, oerr); ok {
+						result.Unreadable = append(result.Unreadable, u)
+					}
 					continue
 				}
 				if len(cr.Servers) > 0 {
@@ -167,6 +188,9 @@ func Scan() (*Result, error) {
 				servers, warnings, err = nil, []string{perr.warning()}, nil
 			}
 			if err != nil {
+				if u, ok := unreadable(client.Name, path, err); ok {
+					result.Unreadable = append(result.Unreadable, u)
+				}
 				continue
 			}
 			if len(servers) > 0 || len(warnings) > 0 {
@@ -183,17 +207,23 @@ func Scan() (*Result, error) {
 	return result, nil
 }
 
-// FormatTree returns a human-readable tree of discovered MCP servers.
-// Secrets are redacted as Result.Redacted does, and a remote server shows
-// its transport and URL.
+// FormatTree returns a human-readable tree of discovered MCP servers,
+// followed by the configurations that could not be read. Secrets are
+// redacted as Result.Redacted does, and a remote server shows its
+// transport and URL.
 func FormatTree(result *Result) string {
-	if len(result.Clients) == 0 {
+	if len(result.Clients) == 0 && len(result.Unreadable) == 0 {
 		return "No MCP configurations found.\n\nChecked paths for: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, " +
 			"OpenCode, Zed, Amp, Gemini CLI, Copilot CLI, Amazon Q, Claude Code, Roo Code, Kilo Code, BoltAI, JetBrains"
 	}
 
 	var b strings.Builder
 	result = result.Redacted()
+	if len(result.Clients) == 0 {
+		b.WriteString("No readable MCP configuration lists a server.\n")
+		writeUnreadableTree(&b, result.Unreadable)
+		return b.String()
+	}
 
 	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", len(result.Clients))
 
@@ -222,16 +252,35 @@ func FormatTree(result *Result) string {
 	}
 
 	fmt.Fprintf(&b, "Total: %d MCP servers across %d clients\n", result.TotalServers(), result.TotalClients())
+	writeUnreadableTree(&b, result.Unreadable)
 	return b.String()
 }
 
-// FormatMarkdown returns a Markdown-formatted table of discovered MCP servers.
+// writeUnreadableTree lists the configurations that exist but could not
+// be read; their servers are unknown.
+func writeUnreadableTree(b *strings.Builder, unreadable []UnreadableConfig) {
+	if len(unreadable) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nCould not read %d MCP configuration(s); their servers are unknown:\n", len(unreadable))
+	for _, u := range unreadable {
+		fmt.Fprintf(b, "  %s  %s  %s\n", output.TerminalText(clientDisplayName(u.Client)), output.TerminalText(u.Path), output.TerminalText(u.Reason))
+	}
+}
+
+// FormatMarkdown returns a Markdown-formatted table of discovered MCP
+// servers, followed by the configurations that could not be read.
 func FormatMarkdown(result *Result) string {
-	if len(result.Clients) == 0 {
+	if len(result.Clients) == 0 && len(result.Unreadable) == 0 {
 		return "No MCP configurations found.\n"
 	}
 
 	var b strings.Builder
+	if len(result.Clients) == 0 {
+		b.WriteString("No readable MCP configuration lists a server.\n")
+		writeUnreadableMarkdown(&b, result.Unreadable)
+		return b.String()
+	}
 
 	fmt.Fprintf(&b, "## MCP Clients Discovered\n\n")
 	b.WriteString("| Client | Config Path | Servers |\n")
@@ -252,7 +301,23 @@ func FormatMarkdown(result *Result) string {
 		clientWord = "client"
 	}
 	fmt.Fprintf(&b, "**Total:** %d MCP %s across %d %s\n", result.TotalServers(), serverWord, result.TotalClients(), clientWord)
+	writeUnreadableMarkdown(&b, result.Unreadable)
 	return b.String()
+}
+
+// writeUnreadableMarkdown is writeUnreadableTree as a Markdown table.
+func writeUnreadableMarkdown(b *strings.Builder, unreadable []UnreadableConfig) {
+	if len(unreadable) == 0 {
+		return
+	}
+	b.WriteString("\n### Unreadable Configurations\n\n")
+	b.WriteString("Their servers are unknown.\n\n")
+	b.WriteString("| Client | Config Path | Reason |\n")
+	b.WriteString("|--------|------------|--------|\n")
+	for _, u := range unreadable {
+		escapedPath := strings.ReplaceAll(output.TerminalText(u.Path), "|", "\\|")
+		fmt.Fprintf(b, "| %s | `%s` | %s |\n", clientDisplayName(u.Client), escapedPath, u.Reason)
+	}
 }
 
 func clientDisplayName(name string) string {

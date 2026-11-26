@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 func relPaths(targets []*scanner.Target) []string {
@@ -55,12 +56,15 @@ func TestDiscoverPathsRejectsPathsOutsideRoot(t *testing.T) {
 	targets, err := td.DiscoverPaths(root, []string{filepath.Join(root, "in.md"), filepath.Join(root, "linked")})
 	require.NoError(t, err)
 	require.Equal(t, []string{"in.md"}, relPaths(targets))
-	require.Len(t, td.Skipped, 1)
-	require.Equal(t, filepath.Join(root, "linked"), td.Skipped[0].Path)
-	require.Contains(t, td.Skipped[0].Reason, "symbolic link")
+	require.Equal(t, []types.SkippedFile{{Path: "linked", Kind: types.SkippedSymlink, Resolves: types.LinkOutside}}, td.Skipped)
+	require.Equal(t, td.Skipped, td.NamedSkipped)
 
-	_, err = td.DiscoverPaths(root, []string{filepath.Join(root, "missing.md")})
-	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	// A missing path is a failure; the other paths are still returned.
+	targets, err = td.DiscoverPaths(root, []string{filepath.Join(root, "missing.md"), filepath.Join(root, "in.md")})
+	require.NoError(t, err)
+	require.Equal(t, []string{"in.md"}, relPaths(targets))
+	require.Len(t, td.Failures, 1)
+	require.ErrorIs(t, td.Failures[0], scanner.ErrIncompleteScan)
 }
 
 // Paths inside the directories a walk always skips are skipped when named
@@ -75,8 +79,8 @@ func TestDiscoverPathsSkipsAlwaysSkippedDirectories(t *testing.T) {
 	require.Equal(t, []string{"a.md"}, relPaths(targets))
 	var skipped []string
 	for _, s := range td.Skipped {
-		skipped = append(skipped, s.Path)
-		require.Contains(t, s.Reason, "directory walks always skip")
+		skipped = append(skipped, filepath.ToSlash(s.Path))
+		require.Equal(t, types.SkippedInSkippedDir, s.Kind)
 	}
 	require.Equal(t, []string{"node_modules/pkg/index.md", ".git/config", ".aguara", "src/node_modules", "node_modules"}, skipped)
 
@@ -105,9 +109,12 @@ func TestDiscoverPathsRejectsSpecialFiles(t *testing.T) {
 		t.Skip("no device file")
 	}
 	td := &scanner.TargetDiscovery{}
-	_, err := td.DiscoverPaths(filepath.Dir(os.DevNull), []string{os.DevNull})
-	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
-	require.ErrorContains(t, err, "not a regular file or directory")
+	targets, err := td.DiscoverPaths(filepath.Dir(os.DevNull), []string{os.DevNull})
+	require.NoError(t, err)
+	require.Empty(t, targets)
+	require.Len(t, td.Failures, 1, "a device named directly is a failure, never opened")
+	require.ErrorIs(t, td.Failures[0], scanner.ErrIncompleteScan)
+	require.ErrorContains(t, td.Failures[0], "not a regular file")
 }
 
 func TestDiscoverPathsSizeLimit(t *testing.T) {
@@ -115,9 +122,13 @@ func TestDiscoverPathsSizeLimit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.md"), make([]byte, 64), 0o644))
 	td := &scanner.TargetDiscovery{MaxFileSize: 32}
 	_, err := td.DiscoverPaths(dir, []string{filepath.Join(dir, "big.md")})
-	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	require.NoError(t, err)
+	require.Len(t, td.Failures, 1)
+	require.ErrorIs(t, td.Failures[0], scanner.ErrIncompleteScan)
 	td = &scanner.TargetDiscovery{MaxFileSize: 32, IgnorePatterns: []string{"big.md"}}
 	targets, err := td.DiscoverPaths(dir, []string{filepath.Join(dir, "big.md")})
 	require.NoError(t, err)
 	require.Empty(t, targets, "an exclusion takes precedence over the size limit, as in a walk")
+	require.Empty(t, td.Failures)
+	require.Equal(t, []types.SkippedFile{{Path: "big.md", Kind: types.SkippedIgnored}}, td.Skipped)
 }

@@ -779,3 +779,37 @@ func TestScanWithTempHome(t *testing.T) {
 		t.Error("AllServers missing the cursor/scanner entry")
 	}
 }
+
+// A configuration that exists but could not be read was dropped from
+// every discover format (Redacted, used for JSON, did not copy it), so
+// "No MCP configurations found" could stand for an unread one.
+func TestFormatsListUnreadableConfigs(t *testing.T) {
+	unread := []UnreadableConfig{{Client: "cursor", Path: "/home/user/.cursor/mcp.json", Reason: "is a named pipe, not a regular file", Mode: os.ModeNamedPipe}}
+	withServers := &Result{
+		Clients:    []ClientResult{{Client: "vscode", Path: "/home/user/.vscode/mcp.json", Servers: []MCPServer{{Name: "fs", Command: "npx"}}}},
+		Unreadable: unread,
+	}
+	onlyUnread := &Result{Unreadable: unread}
+	for name, r := range map[string]*Result{"with servers": withServers, "only unreadable": onlyUnread} {
+		t.Run(name, func(t *testing.T) {
+			for format, out := range map[string]string{"tree": FormatTree(r), "markdown": FormatMarkdown(r)} {
+				if !strings.Contains(out, "/home/user/.cursor/mcp.json") || !strings.Contains(out, "is a named pipe, not a regular file") {
+					t.Errorf("%s output does not list the unreadable configuration:\n%s", format, out)
+				}
+				if strings.Contains(out, "No MCP configurations found") {
+					t.Errorf("%s output says nothing was found:\n%s", format, out)
+				}
+			}
+			data, err := json.Marshal(r.Redacted())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"unreadable":[{"client":"cursor","path":"/home/user/.cursor/mcp.json","reason":"is a named pipe, not a regular file"}]`) {
+				t.Errorf("JSON does not list the unreadable configuration: %s", data)
+			}
+		})
+	}
+	if out := FormatTree(withServers); !strings.Contains(out, "fs") {
+		t.Errorf("tree lost the readable configuration:\n%s", out)
+	}
+}

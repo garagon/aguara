@@ -188,10 +188,33 @@ runs:
         echo "findings-count=${count}" >> "$GITHUB_OUTPUT"
         echo "exit-code=${scan_exit}" >> "$GITHUB_OUTPUT"
 
+        # Exit code 2 is a scan that could not complete (or a usage error).
+        # Its report is partial: uploading it would let Code Scanning close
+        # alerts for files that were not evaluated, so it is not uploaded.
+        if [ "$scan_exit" -eq 2 ]; then
+          incomplete=false
+          if [ -f "$INPUT_OUTPUT" ]; then
+            if [ "$INPUT_FORMAT" = "sarif" ]; then
+              jq -e '[.runs[].invocations[]?.executionSuccessful] | any(. == false)' "$INPUT_OUTPUT" >/dev/null 2>&1 && incomplete=true
+            elif [ "$INPUT_FORMAT" = "json" ]; then
+              jq -e '.complete == false' "$INPUT_OUTPUT" >/dev/null 2>&1 && incomplete=true
+            fi
+          fi
+          if [ "$incomplete" = "true" ]; then
+            not_uploaded=""
+            if [ "$INPUT_FORMAT" = "sarif" ]; then
+              not_uploaded=" and was not uploaded to Code Scanning"
+            fi
+            echo "::error::The Aguara scan is incomplete: some files or analyzers could not be evaluated. The partial report is in ${INPUT_OUTPUT}${not_uploaded}."
+          else
+            echo "::error::The Aguara scan failed (exit code 2); see the error above. No report was uploaded."
+          fi
+        fi
+
         exit "$scan_exit"
 
     - name: Upload SARIF to GitHub Code Scanning
-      if: always() && inputs.format == 'sarif' && inputs['upload-sarif'] == 'true'
+      if: always() && inputs.format == 'sarif' && inputs['upload-sarif'] == 'true' && steps.scan.outputs.exit-code != '2'
       uses: github/codeql-action/upload-sarif@v4
       continue-on-error: true
       with:

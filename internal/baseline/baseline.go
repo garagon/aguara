@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -108,11 +107,19 @@ type baselineFile struct {
 	Fingerprints []string `json:"fingerprints"`
 }
 
+// MaxFileBytes bounds a baseline file: about 800,000 fingerprints.
+const MaxFileBytes = 64 << 20
+
 // Load reads a baseline file. It fails closed: a missing, unreadable, or
 // malformed file is an error, never an empty baseline -- a typo'd
 // --baseline path must not silently pass every finding as "new".
+//
+// The file must be a regular file of at most MaxFileBytes; a symbolic link
+// to one is followed. A named pipe or device (for example a baseline path
+// pointing at /dev/zero) is an error instead of a read that blocks or never
+// ends.
 func Load(path string) (*Set, error) {
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadRegular(path, true, MaxFileBytes)
 	if err != nil {
 		return nil, fmt.Errorf("baseline: read %s: %w", path, err)
 	}

@@ -206,7 +206,7 @@ type requirementsWalk struct {
 
 func (w *requirementsWalk) visit(path string, constraint bool, depth int) error {
 	if depth > maxRequirementsIncludeDepth {
-		return fmt.Errorf("requirements includes nest deeper than %d levels", maxRequirementsIncludeDepth)
+		return errBudget("requirements includes nest deeper than %d levels", maxRequirementsIncludeDepth)
 	}
 	dirReal, err := realDir(filepath.Dir(path))
 	if err != nil {
@@ -217,7 +217,7 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 		return nil
 	}
 	if len(w.visited) >= maxRequirementsFiles {
-		return fmt.Errorf("requirements includes reference more than %d files", maxRequirementsFiles)
+		return errBudget("requirements includes reference more than %d files", maxRequirementsFiles)
 	}
 	w.visited[key] = true
 	file, ok := w.cache.files[key]
@@ -527,8 +527,8 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 				}
 			}
 		}
-		if len(out.items)+len(items) > maxPythonLockEntries {
-			return fmt.Errorf("more than %d entries", maxPythonLockEntries)
+		if len(out.items)+len(items) > maxLockfileEntries {
+			return errBudget("more than %d entries", maxLockfileEntries)
 		}
 		out.items = append(out.items, items...)
 		return nil

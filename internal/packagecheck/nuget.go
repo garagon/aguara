@@ -54,6 +54,9 @@ func parseNuGetLockfile(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open packages.lock.json: %w", err)
 	}
+	if err := checkJSONNodeBudget(data, "packages.lock.json"); err != nil {
+		return nil, err
+	}
 	var lock nugetLockfile
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("parse packages.lock.json: %w", err)
@@ -125,6 +128,9 @@ func parseNuGetProjectFile(target Target, cache *runCache) ([]PackageRef, error)
 	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", target.Source, err)
+	}
+	if err := checkXMLBudget(data, target.Source); err != nil {
+		return nil, err
 	}
 	var proj csProject
 	if err := xml.Unmarshal(data, &proj); err != nil {
@@ -324,6 +330,9 @@ func parseNuGetProps(path string) (centralVersions, error) {
 	if err != nil {
 		return out, fmt.Errorf("read Directory.Packages.props: %w", err)
 	}
+	if err := checkXMLBudget(data, "Directory.Packages.props"); err != nil {
+		return out, err
+	}
 	var p csProject
 	if err := xml.Unmarshal(data, &p); err != nil {
 		return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
@@ -349,8 +358,8 @@ func parseNuGetProps(path string) (centralVersions, error) {
 			if seen[name+"\x00"+v] {
 				continue
 			}
-			if len(seen) >= maxManifestEntries {
-				return out, fmt.Errorf("parse Directory.Packages.props: more than %d package versions", maxManifestEntries)
+			if len(seen) >= maxLockfileEntries {
+				return out, errBudget("parse Directory.Packages.props: more than %d package versions", maxLockfileEntries)
 			}
 			seen[name+"\x00"+v] = true
 			out.versions[name] = append(out.versions[name], v)

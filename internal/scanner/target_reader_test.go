@@ -19,7 +19,7 @@ func TestRecursiveSizeExclusionsUseNativePathSeparators(t *testing.T) {
 		}
 	}
 	td := &TargetDiscovery{IgnorePatterns: []string{"excluded/**"}}
-	if !td.isIgnoredSubtree(filepath.Join("excluded", "nested")) {
+	if !td.ignoredSubtree(filepath.Join("excluded", "nested"), true) {
 		t.Fatal("excluded subtree not recognized")
 	}
 	if filepath.Separator == '/' && matchGlob("excluded/**", `excluded\large.md`) {

@@ -118,6 +118,9 @@ func ParseRuby(target Target) ([]PackageRef, error) {
 		if seen[name+"\x00"+version] {
 			continue
 		}
+		if err := checkEntryLimit(len(refs), "Gemfile.lock"); err != nil {
+			return nil, err
+		}
 		seen[name+"\x00"+version] = true
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemRubyGems,

@@ -52,6 +52,9 @@ func parsePomXML(target Target) ([]PackageRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open pom.xml: %w", err)
 	}
+	if err := checkXMLBudget(data, "pom.xml"); err != nil {
+		return nil, err
+	}
 	var pom pomProject
 	if err := xml.Unmarshal(data, &pom); err != nil {
 		return nil, fmt.Errorf("parse pom.xml: %w", err)
@@ -217,6 +220,9 @@ func parseGradleLockfile(target Target) ([]PackageRef, error) {
 		key := group + ":" + name + ":" + version
 		if seen[key] {
 			continue
+		}
+		if err := checkEntryLimit(len(refs), "gradle.lockfile"); err != nil {
+			return nil, err
 		}
 		seen[key] = true
 		refs = append(refs, PackageRef{

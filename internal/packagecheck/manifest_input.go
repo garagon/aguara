@@ -1,41 +1,47 @@
 package packagecheck
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
 
-// Guard the leaf at open time on Unix and verify the opened identity everywhere.
-// Parent directories are not confined and the file contents are not a snapshot.
+// openManifest opens a dependency file with the regular-file reader every
+// untrusted input uses (safefile.OpenRegular): a symbolic link as the last
+// path component, a named pipe, socket or device is refused before it is
+// opened, the open never blocks on Unix, and a file replaced between the
+// check and the open is refused. Parent directories are not confined and
+// the file contents are not a snapshot.
 func openManifest(path, label string) (*os.File, error) {
-	info, err := os.Lstat(path)
+	f, info, err := safefile.OpenRegular(path, false)
 	if err != nil {
+		if errors.Is(err, safefile.ErrNotRegular) {
+			return nil, &manifestNotRegularError{label: label, err: err}
+		}
 		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s input must be a regular file, not a symlink or special file", label)
 	}
 	if info.Size() > maxManifestBytes {
-		return nil, fmt.Errorf("%s input exceeds %d-byte limit", label, maxManifestBytes)
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|manifestOpenFlags, 0)
-	if err != nil {
-		return nil, err
-	}
-	opened, err := f.Stat()
-	if err == nil && (!opened.Mode().IsRegular() || !os.SameFile(info, opened)) {
-		err = fmt.Errorf("%s input changed while opening", label)
-	}
-	if err == nil && opened.Size() > maxManifestBytes {
-		err = fmt.Errorf("%s input exceeds %d-byte limit", label, maxManifestBytes)
-	}
-	if err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, fmt.Errorf("%s input exceeds %d-byte limit", label, maxManifestBytes)
 	}
 	return f, nil
 }
+
+// manifestNotRegularError keeps the dependency-file wording and still
+// matches safefile.ErrNotRegular.
+type manifestNotRegularError struct {
+	label string
+	err   error
+}
+
+func (e *manifestNotRegularError) Error() string {
+	return e.label + " input must be a regular file, not a symlink or special file"
+}
+
+func (e *manifestNotRegularError) Unwrap() error { return e.err }
 
 func readManifest(path, label string) ([]byte, error) {
 	f, err := openManifest(path, label)

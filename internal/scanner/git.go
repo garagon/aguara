@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -91,6 +92,70 @@ func GitChangedFiles(root string) ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+// Submodule is a git submodule as the superproject's index records it and
+// as its work tree holds it.
+type Submodule struct {
+	Recorded string // the commit the index records for the submodule
+	Head     string // the commit checked out in its work tree; "" when none can be read
+}
+
+// AtRecordedCommit reports whether the submodule's work tree is checked
+// out at the commit the index records. Edits on top of that commit do not
+// change the answer.
+func (s Submodule) AtRecordedCommit() bool {
+	return s.Head != "" && s.Head == s.Recorded
+}
+
+// GitSubmodulePaths returns the git submodules (gitlink entries of the
+// index) under root, relative to root like GitChangedFiles, with the
+// commit the index records for each. A changed submodule is listed by
+// GitChangedFiles as its path; this set tells a submodule that is not
+// checked out apart from a deleted file. Head is left empty; see
+// GitSubmoduleHead.
+func GitSubmodulePaths(root string) (map[string]Submodule, error) {
+	out, err := runGit(root, "ls-files", "--stage", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("listing submodules: %w", err)
+	}
+	submodules := map[string]Submodule{}
+	for _, entry := range splitNUL(out) {
+		// "<mode> <object> <stage>\t<path>"; gitlinks have mode 160000.
+		meta, path, ok := strings.Cut(entry, "\t")
+		fields := strings.Fields(meta)
+		if ok && len(fields) == 3 && fields[0] == "160000" {
+			if _, seen := submodules[path]; !seen {
+				submodules[path] = Submodule{Recorded: fields[1]}
+			}
+		}
+	}
+	return submodules, nil
+}
+
+// GitSubmoduleHead returns the commit checked out in the submodule work
+// tree at dir, or "" when dir is not the top of a git work tree (a
+// submodule that is not checked out belongs to the superproject's work
+// tree) or its HEAD cannot be read.
+func GitSubmoduleHead(dir string) string {
+	out, err := runGit(dir, "rev-parse", "--show-toplevel", "HEAD")
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		return ""
+	}
+	// Compare file identity, not spelling: git prints the top with forward
+	// slashes and resolved links, and on Windows in its own letter case.
+	top, err := os.Stat(filepath.FromSlash(strings.TrimSpace(lines[0])))
+	if err != nil {
+		return ""
+	}
+	if self, err := os.Stat(dir); err != nil || !os.SameFile(self, top) {
+		return ""
+	}
+	return strings.TrimSpace(lines[1])
 }
 
 // runGit runs git in dir and returns stdout. A failure carries git's

@@ -79,9 +79,12 @@ func TestDiscoveryCustomMaxSize(t *testing.T) {
 	// An eligible oversized file must not disappear from the scan report.
 	td := &scanner.TargetDiscovery{MaxFileSize: 2048}
 	targets, err := td.Discover(dir)
-	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
-	require.Nil(t, targets)
-	require.Contains(t, err.Error(), "2048-byte limit")
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, "small.md", targets[0].RelPath)
+	require.Len(t, td.Failures, 1, "it is reported so the scan is incomplete")
+	require.ErrorIs(t, td.Failures[0], scanner.ErrIncompleteScan)
+	require.Contains(t, td.Failures[0].Error(), "2048-byte limit")
 
 	// With default (0), both should be discovered
 	td2 := &scanner.TargetDiscovery{}

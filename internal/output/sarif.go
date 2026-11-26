@@ -21,9 +21,25 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool       sarifTool      `json:"tool"`
-	Results    []sarifResult  `json:"results"`
-	Properties map[string]any `json:"properties,omitempty"`
+	Tool        sarifTool         `json:"tool"`
+	Invocations []sarifInvocation `json:"invocations"`
+	Results     []sarifResult     `json:"results"`
+	Properties  map[string]any    `json:"properties,omitempty"`
+}
+
+// sarifInvocation reports whether the run evaluated everything. An
+// incomplete scan sets executionSuccessful to false and lists each failure
+// as an error notification, so a SARIF consumer does not read the partial
+// results as a clean run.
+type sarifInvocation struct {
+	ExecutionSuccessful        bool                `json:"executionSuccessful"`
+	ToolExecutionNotifications []sarifNotification `json:"toolExecutionNotifications,omitempty"`
+}
+
+type sarifNotification struct {
+	Level     string          `json:"level"`
+	Message   sarifMessage    `json:"message"`
+	Locations []sarifLocation `json:"locations,omitempty"`
 }
 
 type sarifTool struct {
@@ -163,7 +179,8 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 						Rules:          rules,
 					},
 				},
-				Results: results,
+				Invocations: []sarifInvocation{sarifInvocationFor(result)},
+				Results:     results,
 				Properties: map[string]any{
 					"duration_ms": result.Duration.Milliseconds(),
 					"riskScore":   result.RiskScore,
@@ -175,6 +192,28 @@ func (f *SARIFFormatter) Format(w io.Writer, result *scanner.ScanResult) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(log)
+}
+
+func sarifInvocationFor(result *scanner.ScanResult) sarifInvocation {
+	inv := sarifInvocation{ExecutionSuccessful: !result.Incomplete}
+	if !result.Incomplete {
+		return inv
+	}
+	inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications, sarifNotification{
+		Level:   "error",
+		Message: sarifMessage{Text: IncompleteSummary(result)},
+	})
+	for _, f := range result.Errors {
+		n := sarifNotification{Level: "error", Message: sarifMessage{Text: DescribeFailure(f)}}
+		if f.Path != "" {
+			n.Locations = []sarifLocation{{PhysicalLocation: sarifPhysicalLocation{
+				ArtifactLocation: sarifArtifactLocation{URI: f.Path},
+				Region:           sarifRegion{StartLine: 1},
+			}}}
+		}
+		inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications, n)
+	}
+	return inv
 }
 
 func severityToLevel(sev scanner.Severity) string {

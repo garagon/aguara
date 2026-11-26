@@ -11,13 +11,17 @@ import (
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 )
 
 // AuditCoverage is audit's top-level statement of what it evaluated:
 // the content scan's file count plus the package check's evidence. The
 // nested check.coverage and scan.coverage blocks carry the same data.
 type AuditCoverage struct {
-	FilesScanned        int                                `json:"files_scanned"`
+	FilesScanned int `json:"files_scanned"`
+	// Skipped lists entries the content scan did not read because they
+	// are not regular files, as in scan.coverage.skipped.
+	Skipped             []types.SkippedFile                `json:"skipped"`
 	PackageEvidence     []packagecheck.EvidenceSummary     `json:"package_evidence"`
 	UnsupportedEvidence []packagecheck.UnsupportedEvidence `json:"unsupported_evidence"`
 	UnresolvedIncludes  []packagecheck.UnresolvedInclude   `json:"unresolved_includes"`
@@ -25,6 +29,9 @@ type AuditCoverage struct {
 
 // MarshalJSON keeps every array as `[]` rather than `null` when empty.
 func (c AuditCoverage) MarshalJSON() ([]byte, error) {
+	if c.Skipped == nil {
+		c.Skipped = []types.SkippedFile{}
+	}
 	if c.PackageEvidence == nil {
 		c.PackageEvidence = []packagecheck.EvidenceSummary{}
 	}
@@ -87,6 +94,7 @@ func auditCoverage(check *incident.CheckResult, scan *scanner.ScanResult) AuditC
 	c := AuditCoverage{}
 	if scan != nil {
 		c.FilesScanned = scan.FilesScanned
+		c.Skipped = scan.Skipped
 	}
 	if check != nil && check.Coverage != nil {
 		c.PackageEvidence = check.Coverage.PackageEvidence

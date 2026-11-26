@@ -26,9 +26,6 @@ const (
 	// manifests are a few kilobytes; a larger file is reported as not
 	// evaluated instead of being read.
 	maxDependencyManifestBytes int64 = 4 << 20
-	// maxManifestEntries bounds the dependencies and pins counted in one
-	// manifest.
-	maxManifestEntries = 100_000
 	// maxManifestLineBytes bounds one line of a line-oriented manifest.
 	maxManifestLineBytes = 1 << 20
 	// maxCondaYAMLNodes bounds the YAML nodes walked in one conda
@@ -68,8 +65,8 @@ func (m manifestInfo) declares() bool { return m.deps > 0 || m.unknown }
 // addDep counts one registry dependency; group is "" for a dependency a
 // plain install pulls.
 func (m *manifestInfo) addDep(name, group string) error {
-	if m.deps >= maxManifestEntries {
-		return fmt.Errorf("more than %d dependencies", maxManifestEntries)
+	if m.deps >= maxLockfileEntries {
+		return errBudget("more than %d dependencies", maxLockfileEntries)
 	}
 	m.deps++
 	if name = intel.PEP503Normalize(strings.TrimSpace(name)); name != "" {
@@ -83,7 +80,7 @@ func (m *manifestInfo) addDep(name, group string) error {
 }
 
 func (m *manifestInfo) addPin(ref PackageRef) {
-	if len(m.pins) < maxManifestEntries {
+	if len(m.pins) < maxLockfileEntries {
 		m.pins = append(m.pins, ref)
 	}
 }
@@ -171,6 +168,9 @@ func npmRegistryDependency(name, spec string) (pkg, rangeSpec string, ok bool) {
 
 func parsePackageJSONManifest(data []byte) (manifestInfo, error) {
 	var info manifestInfo
+	if err := checkJSONNodeBudget(data, "package.json"); err != nil {
+		return info, err
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte(utf8BOM)), &top); err != nil {
 		return info, fmt.Errorf("invalid JSON")
@@ -226,6 +226,9 @@ var composerExactConstraint = regexp.MustCompile(`(?i)^(?:==?\s*)?(v?[0-9]{1,5}(
 
 func parseComposerManifest(data []byte) (manifestInfo, error) {
 	var info manifestInfo
+	if err := checkJSONNodeBudget(data, "composer.json"); err != nil {
+		return info, err
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte(utf8BOM)), &top); err != nil {
 		return info, fmt.Errorf("invalid JSON")
@@ -342,8 +345,8 @@ func (c *tomlDepCollector) get(key, name string, line int, group string) (*tomlM
 	if d, ok := c.deps[key]; ok {
 		return d, nil
 	}
-	if len(c.order) >= maxManifestEntries {
-		return nil, fmt.Errorf("more than %d dependencies", maxManifestEntries)
+	if len(c.order) >= maxLockfileEntries {
+		return nil, errBudget("more than %d dependencies", maxLockfileEntries)
 	}
 	d := &tomlManifestDep{name: name, line: line, group: group}
 	c.deps[key] = d
@@ -418,7 +421,7 @@ func walkTOMLManifest(data []byte, label string, visit func(full []string, value
 			return visit(full, value, line, false)
 		}
 		if len(full) >= maxTOMLKeyParts {
-			return fmt.Errorf("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
+			return errBudget("parse %s: key has more than %d parts", label, maxTOMLKeyParts)
 		}
 		members, ok := tomlInlineTable(value)
 		if !ok {
@@ -1011,6 +1014,13 @@ func parseRequirementsInManifest(path, root string, budget *discoveryBudget) (ma
 // Conda packages come from conda channels, for which Aguara has no
 // intelligence; `==` pins in the pip list are PyPI pins.
 func parseCondaEnvironment(data []byte) (info manifestInfo, ok bool, err error) {
+	// Decoding builds the whole node tree first: a 4 MiB flow sequence of
+	// one-byte items reached about 535 MiB. The lexical count, which
+	// over-approximates the nodes, rejects such a file before decoding.
+	// Its dependencies are unknown, so it is reported, not dropped.
+	if err := checkYAMLNodeBudgetLimit(data, "environment.yml", maxCondaYAMLNodes); err != nil {
+		return info, true, err
+	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return info, false, nil
@@ -1019,7 +1029,7 @@ func parseCondaEnvironment(data []byte) (info manifestInfo, ok bool, err error) 
 		return info, false, nil
 	}
 	if countYAMLNodes(&doc, maxCondaYAMLNodes) > maxCondaYAMLNodes {
-		return info, false, fmt.Errorf("more than %d YAML nodes", maxCondaYAMLNodes)
+		return info, true, errBudget("more than %d YAML nodes", maxCondaYAMLNodes)
 	}
 	top := doc.Content[0]
 	var deps *yaml.Node

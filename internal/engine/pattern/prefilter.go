@@ -1,6 +1,7 @@
 package pattern
 
 import (
+	"context"
 	"strings"
 
 	ahocorasick "github.com/petar-dambovaliev/aho-corasick"
@@ -176,8 +177,20 @@ func (p *prefilter) candidateRules(lowerContent string) map[string]bool {
 // returns literals required by that pattern. Patterns without such evidence
 // are present in unconditional and therefore always run.
 func (p *prefilter) candidatePatternMasks(lowerContent string) map[string]uint64 {
+	masks, _ := p.candidatePatternMasksContext(context.Background(), lowerContent)
+	return masks
+}
+
+// prefilterCheckEvery is how many keyword hits the prefilter processes
+// between context checks: often enough to stop within milliseconds on a
+// large input, rare enough not to show in normal scans.
+const prefilterCheckEvery = 4096
+
+// candidatePatternMasksContext is candidatePatternMasks that stops with the
+// context's error when it is done.
+func (p *prefilter) candidatePatternMasksContext(ctx context.Context, lowerContent string) (map[string]uint64, error) {
 	if p == nil {
-		return nil
+		return nil, nil
 	}
 	candidates := make(map[string]uint64, len(p.unconditional)+16)
 	for id, mask := range p.unconditional {
@@ -192,13 +205,19 @@ func (p *prefilter) candidatePatternMasks(lowerContent string) map[string]uint64
 		// starting at the same offset) and drop rules keyed only by the longer
 		// literal, silently hiding true positives.
 		iter := p.ac.IterOverlapping(lowerContent)
+		hits := 0
 		for m := iter.Next(); m != nil; m = iter.Next() {
+			if hits++; hits%prefilterCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
 			for _, ref := range p.refs[m.Pattern()] {
 				candidates[ref.ruleID] |= ref.mask
 			}
 		}
 	}
-	return candidates
+	return candidates, nil
 }
 
 // extractKeywords returns lowercase literal substrings from a regex pattern

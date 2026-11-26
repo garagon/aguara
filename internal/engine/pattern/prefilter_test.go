@@ -406,10 +406,10 @@ func analyzeWithoutKeywordPrefilter(m *Matcher, target *scanner.Target) []scanne
 		switch rule.MatchMode {
 		case rules.MatchAny:
 			findings = append(findings,
-				m.matchAnySelected(rule, ^uint64(0), content, lowerContent, lines, target, cbMap, downgradeCode)...)
+				m.matchAnySelected(context.Background(), rule, ^uint64(0), content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		case rules.MatchAll:
 			findings = append(findings,
-				m.matchAll(rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
+				m.matchAll(context.Background(), rule, content, lowerContent, lines, target, cbMap, downgradeCode)...)
 		}
 	}
 	findings = append(findings, DecodeAndRescan(target, m.allFileRules, cbMap)...)

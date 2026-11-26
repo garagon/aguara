@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/garagon/aguara/internal/scanner"
+	"github.com/garagon/aguara/internal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,9 @@ func TestScanSizeLimitAcrossInputs(t *testing.T) {
 			require.ErrorIs(t, err, scanner.ErrIncompleteScan)
 			require.Contains(t, err.Error(), "8-byte limit")
 			require.Nil(t, result)
-			require.False(t, probe.finalized)
+			partial := requireIncomplete(t, err)
+			require.Equal(t, []types.ScanFailure{{Path: "input.md", Stage: types.FailureStageRead, Reason: types.FailureReasonTooLarge}}, partial.Errors)
+			require.Zero(t, partial.FilesScanned)
 			require.False(t, probe.saved)
 		})
 	}

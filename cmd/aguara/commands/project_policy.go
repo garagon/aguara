@@ -12,6 +12,7 @@ import (
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/rulecatalog"
+	"github.com/garagon/aguara/internal/safefile"
 	"github.com/garagon/aguara/internal/scanner"
 )
 
@@ -136,7 +137,7 @@ func projectIgnoreFile(dir string) (string, bool) {
 	if !info.Mode().IsRegular() {
 		return path, true
 	}
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadRegular(path, false, 1<<20)
 	if err != nil {
 		return path, true
 	}

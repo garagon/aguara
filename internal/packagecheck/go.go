@@ -86,6 +86,9 @@ func parseGoSum(target Target) ([]PackageRef, error) {
 		if _, ok := index[k]; ok {
 			continue
 		}
+		if err := checkEntryLimit(len(refs), "go.sum"); err != nil {
+			return nil, err
+		}
 		index[k] = len(refs)
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemGo,
@@ -197,23 +200,27 @@ func readGoMod(target Target) (goModFile, error) {
 	defer func() { _ = f.Close() }()
 
 	mod.excludes = map[[2]string]bool{}
-	directive := func(verb, body string) {
+	directive := func(verb, body string) error {
 		switch verb {
 		case "require":
 			if ref, ok := parseRequireLine(body, target.Path); ok {
+				if err := checkEntryLimit(len(mod.requires), "go.mod"); err != nil {
+					return err
+				}
 				mod.requires = append(mod.requires, ref)
 			}
 		case "replace":
-			if r, ok := parseReplaceLine(body); ok && len(mod.replaces) < maxManifestEntries {
+			if r, ok := parseReplaceLine(body); ok && len(mod.replaces) < maxLockfileEntries {
 				mod.replaces = append(mod.replaces, r)
 			}
 		case "exclude":
-			if fields := strings.Fields(body); len(fields) == 2 && len(mod.excludes) < maxManifestEntries {
+			if fields := strings.Fields(body); len(fields) == 2 && len(mod.excludes) < maxLockfileEntries {
 				mod.excludes[[2]string{unquoteGoModToken(fields[0]), unquoteGoModToken(fields[1])}] = true
 			}
 		}
 		// Everything else (module / go / retract / toolchain / use /
 		// godebug / tool / ignore) is skipped.
+		return nil
 	}
 	block := ""
 
@@ -241,7 +248,9 @@ func readGoMod(target Target) (goModFile, error) {
 				block = verb
 				continue
 			}
-			directive(verb, rest)
+			if err := directive(verb, rest); err != nil {
+				return goModFile{}, err
+			}
 			continue
 		}
 
@@ -249,7 +258,9 @@ func readGoMod(target Target) (goModFile, error) {
 			block = ""
 			continue
 		}
-		directive(block, line)
+		if err := directive(block, line); err != nil {
+			return goModFile{}, err
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return goModFile{}, fmt.Errorf("read go.mod: %w", err)
