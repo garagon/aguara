@@ -488,3 +488,22 @@ func (r ScanResult) MarshalJSON() ([]byte, error) {
 		DurationMS: r.Duration.Milliseconds(),
 	})
 }
+
+// UnmarshalJSON reads what MarshalJSON writes, so a decoded report of an
+// incomplete scan stays incomplete ("complete": false sets Incomplete)
+// and duration_ms becomes Duration again. A report without "complete",
+// from an older version, decodes as complete.
+func (r *ScanResult) UnmarshalJSON(data []byte) error {
+	type Alias ScanResult
+	aux := struct {
+		*Alias
+		Complete   *bool `json:"complete"`
+		DurationMS int64 `json:"duration_ms"`
+	}{Alias: (*Alias)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	r.Incomplete = aux.Complete != nil && !*aux.Complete
+	r.Duration = time.Duration(aux.DurationMS) * time.Millisecond
+	return nil
+}

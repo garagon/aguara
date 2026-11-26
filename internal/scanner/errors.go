@@ -49,6 +49,12 @@ func IncompleteScanError(stage, path, analyzer string, cause error) error {
 	if analyzer != "" {
 		message += fmt.Sprintf(" (analyzer %q)", boundedErrorLabel(analyzer))
 	}
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		message += " (canceled: deadline exceeded)"
+	case errors.Is(cause, context.Canceled):
+		message += " (canceled)"
+	}
 	return &scanFailure{
 		message: message,
 		cause:   cause,
@@ -160,17 +166,32 @@ func newIncompleteError(result *ScanResult, failures []*scanFailure, ctxErr erro
 	return &IncompleteError{Result: result, Failures: list, first: first, ctxErr: ctxErr}
 }
 
+// failureLess orders failures by stage (discover, read, analyze), then
+// path, analyzer and reason. Stage comes first so a directory that could
+// not be listed, which hides everything under it, is never cut from the
+// bounded list by file failures that sort before it.
 func failureLess(a, b types.ScanFailure) bool {
+	if ra, rb := stageRank(a.Stage), stageRank(b.Stage); ra != rb {
+		return ra < rb
+	}
 	if a.Path != b.Path {
 		return a.Path < b.Path
-	}
-	if a.Stage != b.Stage {
-		return a.Stage < b.Stage
 	}
 	if a.Analyzer != b.Analyzer {
 		return a.Analyzer < b.Analyzer
 	}
 	return a.Reason < b.Reason
+}
+
+func stageRank(stage string) int {
+	switch stage {
+	case types.FailureStageDiscover:
+		return 0
+	case types.FailureStageRead:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // asScanFailure returns err as recorded by IncompleteScanError, wrapping

@@ -53,6 +53,21 @@ func TestIncompleteScanWritesEveryFormat(t *testing.T) {
 	}
 }
 
+// A missing --baseline fails a complete scan; on an incomplete scan the
+// command fails anyway, and says why the report is not partitioned.
+func TestIncompleteScanReportsUnreadableBaseline(t *testing.T) {
+	dir := incompleteProject(t, injectionSkill)
+	out := filepath.Join(t.TempDir(), "report.json")
+	missing := filepath.Join(t.TempDir(), "missing-baseline.json")
+	var err error
+	stderr := captureStderrBytes(t, func() {
+		err = runCLI(t, "scan", dir, "--max-file-size", "1MB", "--baseline", missing, "--format", "json", "-o", out)
+	})
+	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
+	require.Contains(t, string(stderr), "missing-baseline.json")
+	require.Contains(t, string(stderr), "not partitioned by the baseline")
+}
+
 func TestIncompleteAuditTriageNeverProceeds(t *testing.T) {
 	for name, skill := range map[string]string{
 		"no findings": "# A plain skill\n\nIt formats dates.\n",

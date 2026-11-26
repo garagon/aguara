@@ -173,6 +173,7 @@ func TestIncompleteScanCanceled(t *testing.T) {
 	})
 	require.ErrorIs(t, err, scanner.ErrIncompleteScan)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Contains(t, err.Error(), "(canceled)", "the message says why")
 	partial := requireIncomplete(t, err)
 	require.Equal(t, 3, partial.FailedOperations, "every target not evaluated is accounted for")
 	for _, f := range partial.Errors {
@@ -186,6 +187,30 @@ func (cancelingAnalyzer) Name() string { return "canceling" }
 func (a cancelingAnalyzer) Analyze(ctx context.Context, _ *scanner.Target) ([]types.Finding, error) {
 	a.cancel()
 	return nil, ctx.Err()
+}
+
+// The bounded list keeps discovery failures (a path that could not be
+// listed hides everything under it) ahead of read and analyzer failures,
+// whatever their paths.
+func TestIncompleteResultListsDiscoveryFailuresFirst(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := range types.MaxReportedFailures + 50 {
+		name := fmt.Sprintf("f%03d.md", i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("xx"), 0o600))
+		paths = append(paths, name)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zz.md"), []byte("x"), 0o600))
+	// Inspecting a path below a regular file fails (not a directory).
+	paths = append(paths, filepath.Join("zz.md", "inner.md"))
+	s := scanner.New(4)
+	s.SetMaxFileSize(1)
+	_, err := s.ScanPaths(context.Background(), dir, paths)
+	partial := requireIncomplete(t, err)
+	require.Equal(t, types.MaxReportedFailures+51, partial.FailedOperations)
+	require.Len(t, partial.Errors, types.MaxReportedFailures)
+	require.Equal(t, types.ScanFailure{Path: filepath.Join("zz.md", "inner.md"), Stage: types.FailureStageDiscover, Reason: types.FailureReasonIO}, partial.Errors[0])
+	require.Equal(t, "f000.md", partial.Errors[1].Path)
 }
 
 func TestIncompleteResultIsBoundedAndSorted(t *testing.T) {

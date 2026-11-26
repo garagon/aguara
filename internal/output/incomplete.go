@@ -42,7 +42,11 @@ func IncompleteDetails(result *scanner.ScanResult) []string {
 		lines = append(lines, DescribeFailure(f))
 	}
 	total := max(result.FailedOperations, len(result.Errors))
-	if rest := total - len(lines); rest > 0 {
+	switch rest := total - len(lines); {
+	case rest <= 0:
+	case len(result.Errors) < total:
+		lines = append(lines, fmt.Sprintf("+%d more; the JSON report lists the first %d of %d failures", rest, len(result.Errors), total))
+	default:
 		lines = append(lines, fmt.Sprintf("+%d more (see errors in the JSON report)", rest))
 	}
 	return lines

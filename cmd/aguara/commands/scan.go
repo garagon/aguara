@@ -272,9 +272,13 @@ func writeIncompleteScan(result *scanner.ScanResult, store *state.Store, scanErr
 	if flagWriteBaseline != "" {
 		fmt.Fprintf(os.Stderr, "baseline: not written to %s: the scan is incomplete\n", flagWriteBaseline)
 	} else if flagBaseline != "" {
+		// A complete scan fails on a baseline it cannot read; here the
+		// command fails anyway, so say why the partition is missing.
 		if set, err := baseline.Load(flagBaseline); err == nil {
 			_, summary := baseline.Apply(result.Findings, set, flagBaseline)
 			result.Baseline = &summary
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: %v; the report is not partitioned by the baseline\n", err)
 		}
 	}
 	if err := writeOutput(result); err != nil {

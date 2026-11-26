@@ -324,6 +324,11 @@ func (f *TerminalFormatter) printFooter(w io.Writer, result *scanner.ScanResult)
 	if line := SkippedSummary(result.Skipped); line != "" {
 		fmt.Fprintf(w, "  %s\n", f.color(dim, line))
 	}
+	if summary := IncompleteSummary(result); summary != "" {
+		// Repeated under the findings, where a long report ends.
+		st := NewStyle(f.NoColor)
+		fmt.Fprintf(w, "  %s %s\n", st.SeverityIcon("CRITICAL"), st.RedBold(summary))
+	}
 	fmt.Fprintf(w, "%s\n", f.color(dim, sep))
 
 	if rule := topRuleID(result.Findings); rule != "" {
