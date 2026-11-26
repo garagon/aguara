@@ -387,17 +387,23 @@ done
 git checkout-index -f -z --stdin --prefix="$tmp/staged/" <"$tmp/list"
 
 set +e
-"$aguara" scan "$tmp/staged" --fail-on high --no-update-check 2>"$tmp/stderr"
+"$aguara" scan "$tmp/staged" --fail-on high --no-update-check >"$tmp/stdout" 2>"$tmp/stderr"
 status=$?
 set -e
-# Show notices and errors with repository paths instead of the temporary
-# copy, without the --project-policy suggestion the hook does not take.
-P="$tmp/staged/" awk '{
-	p = ENVIRON["P"]
-	while ((i = index($0, p)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(p))
-	sub(/ \(pass --project-policy ignore to scan without it\)/, "")
-	print
-}' "$tmp/stderr" >&2
+# Show the report, notices and errors with repository paths instead of the
+# temporary copy (the report's target reads "staged files"), without the
+# --project-policy suggestion the hook does not take.
+show() {
+	P="$tmp/staged" awk '{
+		p = ENVIRON["P"]
+		while ((i = index($0, p "/")) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(p) + 1)
+		while ((i = index($0, p)) > 0) $0 = substr($0, 1, i - 1) "staged files" substr($0, i + length(p))
+		sub(/ \(pass --project-policy ignore to scan without it\)/, "")
+		print
+	}' "$1"
+}
+show "$tmp/stdout"
+show "$tmp/stderr" >&2
 if [ "$status" -ne 0 ]; then
 	echo "aguara pre-commit hook: commit blocked (exit $status); paths are relative to the repository root" >&2
 fi

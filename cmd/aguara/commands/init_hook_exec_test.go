@@ -24,6 +24,8 @@ func stubScanner(t *testing.T) (bin, record string) {
 	script := `#!/bin/sh
 [ "$1" = scan ] || exit 3
 echo "notice: applied policy owned by the scanned project: $2/.aguaraignore (pass --project-policy ignore to scan without it)" >&2
+echo "  Target: $2  ·  3 files"
+echo "  ✖ RULE_001  $2/docs/x.md:1"
 printf '%s\n' "$*" >"` + record + `.args"
 (cd "$2" && find . -type f -print0) >"` + record + `"
 if grep -rq MALICIOUS "$2"; then
@@ -109,6 +111,8 @@ func TestPreCommitHookScansStagedContent(t *testing.T) {
 	// Notices name repository paths, not the temporary copy, and do not
 	// suggest a flag the hook does not take.
 	require.Contains(t, out, "notice: applied policy owned by the scanned project: .aguaraignore\n")
+	require.Contains(t, out, "  Target: staged files  ·  3 files\n", "the report names the staged files, not the temporary copy")
+	require.Contains(t, out, "  ✖ RULE_001  docs/x.md:1\n")
 	require.NotContains(t, out, "aguara-pre-commit.")
 	require.NotContains(t, out, "--project-policy")
 
