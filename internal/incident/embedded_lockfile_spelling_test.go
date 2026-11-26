@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -173,8 +174,8 @@ func TestEmbeddedNPMRecordsMatchLockfileSpelling(t *testing.T) {
 		runSpelling(t, intel.EcosystemNPM, "package-lock.json", string(lock)))
 
 	// pnpm-lock.yaml v9, yarn.lock classic and bun.lock spell the same
-	// semver; a sample keeps the suite fast.
-	sample := everyNth(tuples, 50)
+	// semver; a fifth of the entries keeps the suite fast.
+	sample := everyNth(tuples, 5)
 	var pnpm, yarn, bun strings.Builder
 	pnpm.WriteString("lockfileVersion: '9.0'\npackages:\n")
 	yarn.WriteString("# yarn lockfile v1\n\n")
@@ -204,12 +205,61 @@ func TestEmbeddedPyPIRecordsMatchRequirementsSpelling(t *testing.T) {
 		}
 	}
 	t.Logf("PyPI: %d of %d exact-version entries are valid PEP 440 versions", len(tuples), len(all))
-	var req strings.Builder
+	var req, uv, poetry strings.Builder
+	uv.WriteString("version = 1\nrequires-python = \">=3.8\"\n\n")
 	for _, tp := range tuples {
 		fmt.Fprintf(&req, "%s==%s\n", tp.name, tp.version)
+		fmt.Fprintf(&uv, "[[package]]\nname = %q\nversion = %q\nsource = { registry = \"https://pypi.org/simple\" }\n\n", tp.name, tp.version)
+		fmt.Fprintf(&poetry, "[[package]]\nname = %q\nversion = %q\ndescription = \"\"\noptional = false\npython-versions = \"*\"\nfiles = []\n\n", tp.name, tp.version)
 	}
+	poetry.WriteString("[metadata]\nlock-version = \"2.1\"\npython-versions = \"*\"\ncontent-hash = \"0\"\n")
 	requireAllReported(t, "PyPI requirements.txt", tuples, identitySpelling,
 		runSpelling(t, intel.EcosystemPyPI, "requirements.txt", req.String()))
+	requireAllReported(t, "PyPI uv.lock", tuples, identitySpelling, runSpelling(t, intel.EcosystemPyPI, "uv.lock", uv.String()))
+	requireAllReported(t, "PyPI poetry.lock", tuples, identitySpelling, runSpelling(t, intel.EcosystemPyPI, "poetry.lock", poetry.String()))
+}
+
+// Every live advisory version must be one the ecosystem's own lockfiles
+// can contain. An importer that emits a spelling the tool never writes
+// (a Go version with build metadata, an npm version with a "v", a PyPI
+// version that is not PEP 440) fails here instead of matching nothing.
+func TestEmbeddedAdvisoryVersionsAreValidLockfileVersions(t *testing.T) {
+	semver := regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	gem := regexp.MustCompile(`^[0-9]+(?:\.[0-9A-Za-z]+)*$`)
+	// Known exceptions already in the snapshot: a malicious upload whose
+	// version no current installer accepts. Add an entry only after
+	// checking the advisory.
+	known := map[string]bool{"PyPI\x00news-ascii-artss\x00v_05": true}
+	valid := func(eco, name, v string) bool {
+		if known[eco+"\x00"+name+"\x00"+v] {
+			return true
+		}
+		switch eco {
+		case intel.EcosystemNPM, intel.EcosystemCargo:
+			return semver.MatchString(v)
+		case intel.EcosystemRubyGems:
+			return gem.MatchString(v)
+		case intel.EcosystemMaven:
+			return v != "" && !strings.ContainsAny(v, " \t:/\\")
+		default:
+			_, ok := intel.CanonicalVersion(eco, v)
+			return ok
+		}
+	}
+	for _, eco := range intel.SupportedEcosystems() {
+		var bad []string
+		for _, tp := range liveExactTuples(t, eco) {
+			if !valid(eco, tp.name, tp.version) {
+				bad = append(bad, fmt.Sprintf("%s %q (%s)", tp.name, tp.version, tp.id))
+			}
+		}
+		if len(bad) > 0 {
+			if len(bad) > 10 {
+				bad = append(bad[:10], fmt.Sprintf("and %d more", len(bad)-10))
+			}
+			t.Errorf("%s: %d advisory versions are not valid lockfile versions: %s", eco, len(bad), strings.Join(bad, "; "))
+		}
+	}
 }
 
 func TestEmbeddedCratesRecordsMatchCargoLockSpelling(t *testing.T) {

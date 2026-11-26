@@ -452,6 +452,14 @@ func arbitraryVersionMatches(rec Record, spec string) bool {
 	return false
 }
 
+// CanonicalVersion returns the form a version compares in for ecosystems
+// with their own version equality (PyPI, Go, Packagist, NuGet); ok is
+// false when the ecosystem compares literally or v is not a valid version
+// in its grammar.
+func CanonicalVersion(ecosystem, v string) (string, bool) {
+	return canonicalVersion(normalizeEcosystem(ecosystem), v)
+}
+
 // VersionsEqual reports whether a lockfile version names the release an
 // advisory lists as advisory, under the same per-ecosystem equality
 // MatchPackage applies.
