@@ -476,29 +476,25 @@ func redactJSONNode(n any, depth int) (any, bool) {
 		}
 		return out, true
 	case []any:
-		strs := make([]string, len(t))
-		allStrings := true
-		for i, v := range t {
-			s, isString := v.(string)
-			if !isString {
-				allStrings = false
-				break
-			}
-			strs[i] = s
-		}
+		// The strings of a list are redacted as one argument list, in
+		// order, whatever else the list holds, so --api-key and its value
+		// stay together in ["--api-key", "...", 0].
 		out := make([]any, len(t))
-		if allStrings {
-			for i, s := range redactArgs(strs) {
-				out[i] = s
-			}
-			return out, true
-		}
+		var at []int
+		var strs []string
 		for i, v := range t {
+			if s, isString := v.(string); isString {
+				at, strs = append(at, i), append(strs, s)
+				continue
+			}
 			r, ok := redactJSONNode(v, depth+1)
 			if !ok {
 				return nil, false
 			}
 			out[i] = r
+		}
+		for k, s := range redactArgs(strs) {
+			out[at[k]] = s
 		}
 		return out, true
 	case string:

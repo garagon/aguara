@@ -55,6 +55,8 @@ func TestRedactValueRecursesIntoJSON(t *testing.T) {
 		"top-level array of objects": {in: `[{"name": "a", "token": "N9secret"}, {"args": ["--password", "N10secret"]}]`, secrets: []string{"N9secret", "N10secret"}, keep: []string{`"name":"a"`}},
 		"html is not escaped":        {in: `{"note": "<b>x</b> & y", "token": "N11secret"}`, secrets: []string{"N11secret"}, keep: []string{"<b>x</b> & y"}},
 		"url inside json":            {in: `{"endpoint": "https://h.example.com/s/abcDEF123ghiJKL456mnoPQR/mcp?sig=N12secret"}`, secrets: []string{"N12secret", "abcDEF123ghiJKL456mnoPQR"}, keep: []string{"h.example.com"}},
+		"mixed-type arg list":        {in: `["--api-key", "N15secret", 0, null]`, secrets: []string{"N15secret"}, keep: []string{`"--api-key"`, `0,null`}},
+		"mixed list in an object":    {in: `{"args": [true, "--token", "N16secret", {"k": 1}, "--port", 8080]}`, secrets: []string{"N16secret"}, keep: []string{`"--port",8080`, `{"k":1}`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := redactValue(tc.in)
