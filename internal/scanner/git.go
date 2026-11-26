@@ -146,11 +146,13 @@ func GitSubmoduleHead(dir string) string {
 	if len(lines) != 2 {
 		return ""
 	}
-	top, err := filepath.EvalSymlinks(filepath.FromSlash(strings.TrimSpace(lines[0])))
+	// Compare file identity, not spelling: git prints the top with forward
+	// slashes and resolved links, and on Windows in its own letter case.
+	top, err := os.Stat(filepath.FromSlash(strings.TrimSpace(lines[0])))
 	if err != nil {
 		return ""
 	}
-	if self, err := filepath.EvalSymlinks(dir); err != nil || self != top {
+	if self, err := os.Stat(dir); err != nil || !os.SameFile(self, top) {
 		return ""
 	}
 	return strings.TrimSpace(lines[1])
