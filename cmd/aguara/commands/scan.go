@@ -489,7 +489,13 @@ func buildScanner(res *rulecatalog.Resolution, cfg config.Config, minSev scanner
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
-	s.SetOutputFiles(outputFilesOfThisRun())
+	// A report or baseline this run writes is skipped only on a local run
+	// that trusts project policy. With --ci, audit, the Action,
+	// --project-policy ignore or a detected CI environment, a file already
+	// at that path is part of the checkout and is scanned.
+	if trustProjectPolicy {
+		s.SetOutputFiles(outputFilesOfThisRun())
+	}
 
 	if maxSize, err := parseMaxFileSize(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)

