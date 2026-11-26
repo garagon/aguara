@@ -104,13 +104,16 @@ func CheckNPM(opts CheckOptions) (*CheckResult, error) {
 		// advisory ID (e.g. SOCKET-*) over the OSV one (MAL-*) when
 		// both are present, keeping the finding's advisory token
 		// stable across `aguara check` and `aguara check --fresh`.
+		// The title names every matching advisory, as advisory_ids does.
 		hit := hits[0]
+		ids := matchIDs(hits)
 		result.Findings = append(result.Findings, Finding{
 			Severity:    SevCritical,
-			Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, hit.Record.ID),
+			Title:       fmt.Sprintf("%s %s is a known compromised npm package (%s)", pkg.Name, pkg.Version, strings.Join(ids, ", ")),
 			Detail:      hit.Record.Summary,
 			Path:        pkg.Dir,
 			Remediation: fmt.Sprintf("Remove %s@%s, audit recent runs of the surrounding pipeline, and rotate any tokens this environment has held.", pkg.Name, pkg.Version),
+			AdvisoryIDs: ids,
 		})
 		npmFindings++
 	}

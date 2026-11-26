@@ -11,6 +11,7 @@ import (
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/config"
 	"github.com/garagon/aguara/internal/incident"
+	"github.com/garagon/aguara/internal/intel"
 	"github.com/garagon/aguara/internal/output"
 	"github.com/garagon/aguara/internal/packagecheck"
 	"github.com/garagon/aguara/internal/rulemeta"
@@ -675,9 +676,21 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 			Severity: "warning",
 			Message:  counts,
 		})
+		hint := ""
+		pythonOnly := true
+		for _, e := range result.Check.Ecosystems {
+			if e.Unpinned > 0 && e.Ecosystem != intel.EcosystemPyPI {
+				pythonOnly = false
+			}
+		}
+		if pythonOnly {
+			hint = " (for example with pip-compile or uv pip compile)"
+		} else {
+			hint = " (or commit a lock file such as packages.lock.json)"
+		}
 		escalateForCoverage(t,
 			"Some dependency entries are not pinned to one version, so the audit cannot clear dependency installation.",
-			"Pin exact versions in "+files+" (for example with pip-compile or uv pip compile) and audit again, or review those dependencies before installing them.")
+			"Pin exact versions in "+files+hint+" and audit again, or review those dependencies before installing them.")
 	}
 
 	cov := result.Check.Coverage
@@ -685,17 +698,54 @@ func applyAuditCoverageTriage(t *AuditTriage, result *AuditResult) {
 		// No dependency files at all keeps the package side as before.
 		return
 	}
-	files := unsupportedEvidenceNames(cov.UnsupportedEvidence, result.Target)
+	_, _, manifests := splitUnsupported(cov.UnsupportedEvidence)
+	if len(manifests) > 0 {
+		// A manifest that declares dependencies without an evaluated
+		// lockfile: whatever an install resolves was never checked.
+		names := unsupportedEvidenceNames(manifests, result.Target)
+		t.Reasons = append(t.Reasons, AuditTriageReason{
+			Kind:     "manifest_without_lockfile",
+			Severity: "warning",
+			Message:  "These manifests declare dependencies, but no lockfile for their ecosystem was evaluated, so an install would resolve versions this audit did not check: " + names + ".",
+		})
+		escalateForCoverage(t,
+			"Dependency manifests have no evaluated lockfile, so the audit cannot clear dependency installation.",
+			"Generate or commit a lockfile for "+names+", then run the audit again.")
+	}
+	var others []packagecheck.UnsupportedEvidence
+	for _, u := range cov.UnsupportedEvidence {
+		if !u.IsManifest() {
+			others = append(others, u)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	files := unsupportedEvidenceNames(others, result.Target)
 	step := "Review the dependencies pinned in " + files + " before installing them; this audit did not check them."
 	summary := "Dependency files were found that Aguara cannot evaluate, so the audit cannot clear dependency installation."
+	partial, _ := partlyRead(others)
 	if cov.Evaluated() {
 		// Some evidence was checked, but action_plan grants or withholds
 		// installation for the whole repository: an install would also
 		// pull the packages in these files, which nothing checked.
+		message := "These dependency files could not be evaluated and their packages were not checked: " + files + "."
+		if len(partial) > 0 {
+			// A requirements file read except for some lines: what pip
+			// does with those lines was not checked.
+			message = "These dependency files could not be evaluated in full, and what Aguara could not read in them was not checked: " + files + "."
+		}
+		if len(partial) == len(others) {
+			names := make([]string, 0, len(partial))
+			for _, u := range partial {
+				names = append(names, displayPath(result.Target, u.Path))
+			}
+			step = "Fix or review the lines listed in coverage.unsupported_evidence for " + strings.Join(names, ", ") + " before installing; this audit did not check what pip does with them."
+		}
 		t.Reasons = append(t.Reasons, AuditTriageReason{
 			Kind:     "partial_dependency_coverage",
 			Severity: "warning",
-			Message:  "These dependency files could not be evaluated and their packages were not checked: " + files + ".",
+			Message:  message,
 		})
 		summary = "Some dependency files could not be evaluated, so the audit cannot clear dependency installation."
 	} else {
@@ -760,15 +810,17 @@ func unpinnedEntries(results []packagecheck.EcosystemResult, root string) (messa
 }
 
 // auditCoverageIncomplete reports whether triage raised a coverage reason:
-// nothing was scanned, some dependency files could not be evaluated, or
-// some entries are not pinned to one version.
+// nothing was scanned, some dependency files could not be evaluated, some
+// entries are not pinned to one version, or a manifest has no evaluated
+// lockfile.
 func auditCoverageIncomplete(t AuditTriage) bool {
 	return hasTriageReason(t.Reasons, "scan_incomplete") ||
 		hasTriageReason(t.Reasons, "entries_not_evaluated") ||
 		hasTriageReason(t.Reasons, "nothing_scanned") ||
 		hasTriageReason(t.Reasons, "dependency_evidence_not_evaluated") ||
 		hasTriageReason(t.Reasons, "partial_dependency_coverage") ||
-		hasTriageReason(t.Reasons, "unpinned_dependency_evidence")
+		hasTriageReason(t.Reasons, "unpinned_dependency_evidence") ||
+		hasTriageReason(t.Reasons, "manifest_without_lockfile")
 }
 
 func hasTriageReason(reasons []AuditTriageReason, kind string) bool {

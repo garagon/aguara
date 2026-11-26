@@ -23,8 +23,8 @@ func TestParseGoSum_DedupesGoModSuffix(t *testing.T) {
 		t.Fatalf("refs = %d, want %d (refs=%+v)", got, want, refs)
 	}
 	want := map[string]string{
-		"example.com/malicious-mod":       "v1.2.3",
-		"github.com/stretchr/testify":     "v1.10.0",
+		"example.com/malicious-mod":   "v1.2.3",
+		"github.com/stretchr/testify": "v1.10.0",
 	}
 	for _, r := range refs {
 		if r.Ecosystem != intel.EcosystemGo {
@@ -136,6 +136,183 @@ func TestParseGoMod_StripsInlineComments(t *testing.T) {
 	}
 	if len(refs) != 1 || refs[0].Name != "example.com/mod" || refs[0].Version != "v1.0.0" {
 		t.Errorf("refs = %+v, want one require example.com/mod v1.0.0", refs)
+	}
+}
+
+func TestParseGoMod_QuotedModulePathAndVersion(t *testing.T) {
+	// go.mod may write a module path or version as a Go string literal.
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\nrequire (\n\t\"example.com/quoted\" v1.0.0\n\texample.com/raw `v2.0.0+incompatible`\n)\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	if len(refs) != 2 || refs[0].Name != "example.com/quoted" || refs[0].Version != "v1.0.0" ||
+		refs[1].Name != "example.com/raw" || refs[1].Version != "v2.0.0+incompatible" {
+		t.Errorf("refs = %+v, want example.com/quoted v1.0.0 and example.com/raw v2.0.0+incompatible", refs)
+	}
+}
+
+func TestRunner_GoSumMatchesAdvisoryWithoutLeadingV(t *testing.T) {
+	// OSV Go records list "0.69.4"; go.sum writes "v0.69.4", including on
+	// the /go.mod hash line. The pair is one finding.
+	tmp := t.TempDir()
+	sumPath := filepath.Join(tmp, "go.sum")
+	writeFile(t, sumPath, "github.com/example/scanner v0.69.4 h1:AAAA=\ngithub.com/example/scanner v0.69.4/go.mod h1:BBBB=\n"+
+		"github.com/example/scanner v0.69.40 h1:CCCC=\n")
+	runner := &Runner{Matcher: intel.NewMatcher(intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID: "GHSA-GO-BARE", Ecosystem: intel.EcosystemGo, Name: "github.com/example/scanner",
+			Kind: intel.KindMalicious, Versions: []string{"0.69.4"},
+		}},
+	})}
+	res, err := runner.Run([]Target{{Ecosystem: intel.EcosystemGo, Path: sumPath, Source: "go.sum"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Ref.Version != "v0.69.4" {
+		t.Fatalf("hits = %+v, want one hit on v0.69.4", res.Hits)
+	}
+}
+
+// A go.sum version with only a `/go.mod` hash was read during version
+// selection and never downloaded or built; it matches only advisories
+// covering every version. A zip hash, or a go.mod require, makes it a
+// version the build uses.
+func TestRunner_GoSumGraphOnlyVersions(t *testing.T) {
+	const mod = "github.com/example/scanner"
+	matcher := intel.NewMatcher(intel.Snapshot{
+		SchemaVersion: intel.CurrentSchemaVersion,
+		Records: []intel.Record{{
+			ID: "GHSA-GO-EXACT", Ecosystem: intel.EcosystemGo, Name: mod,
+			Kind: intel.KindMalicious, Versions: []string{"0.69.4"},
+		}},
+		AllVersions: []intel.AllVersionsEntry{{ID: "MAL-GO-ALL", Ecosystem: intel.EcosystemGo, Name: "github.com/evil/everything"}},
+	})
+	graphOnly := mod + " v0.69.4/go.mod h1:AAAA=\n" + mod + " v0.69.5 h1:BBBB=\n" + mod + " v0.69.5/go.mod h1:CCCC=\n"
+	for _, tc := range []struct {
+		name, sum, gomod string
+		want             []string
+	}{
+		{"graph-only compromised version, clean selected", graphOnly,
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.5\n", nil},
+		{"graph-only without a go.mod", graphOnly, "", nil},
+		{"zip hash for the compromised version", mod + " v0.69.4 h1:AAAA=\n" + mod + " v0.69.4/go.mod h1:BBBB=\n", "", []string{"v0.69.4"}},
+		{"go.mod requires the compromised version", mod + " v0.69.4/go.mod h1:AAAA=\n",
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.4 // indirect\n", []string{"v0.69.4"}},
+		{"go.mod requires a version go.sum lacks", mod + " v0.69.5 h1:BBBB=\n",
+			"module example.com/app\n\ngo 1.22\n\nrequire " + mod + " v0.69.4\n", []string{"v0.69.4"}},
+		{"graph-only entry of a module malicious in every version", "github.com/evil/everything v1.0.0/go.mod h1:AAAA=\n", "", []string{"v1.0.0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "go.sum"), tc.sum)
+			if tc.gomod != "" {
+				writeFile(t, filepath.Join(dir, "go.mod"), tc.gomod)
+			}
+			targets, err := Discover(dir, []string{intel.EcosystemGo})
+			if err != nil || len(targets) != 1 || targets[0].Source != "go.sum" {
+				t.Fatalf("targets = %+v, err %v", targets, err)
+			}
+			res, err := (&Runner{Matcher: matcher}).Run(targets)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var got []string
+			for _, h := range res.Hits {
+				got = append(got, h.Ref.Version)
+			}
+			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+				t.Errorf("hits = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A replace directive does not hide the required module: it is still
+// matched, and the ref records what the build uses instead.
+func TestParseGoMod_RecordsReplacements(t *testing.T) {
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\nrequire (\n\texample.com/a v1.0.0\n\texample.com/b v2.0.0+incompatible\n\texample.com/c v1.1.0\n)\n\n"+
+		"replace example.com/a => ../local/a\n\nreplace (\n\texample.com/b v2.0.0+incompatible => example.com/fork/b v2.0.1+incompatible\n\texample.com/c v1.0.0 => example.com/c v1.0.1\n)\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	want := map[string]string{"example.com/a": "../local/a", "example.com/b": "example.com/fork/b v2.0.1+incompatible", "example.com/c": ""}
+	if len(refs) != 3 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	for _, r := range refs {
+		if r.Replacement != want[r.Name] {
+			t.Errorf("%s: replacement = %q, want %q", r.Name, r.Replacement, want[r.Name])
+		}
+	}
+
+	// go.sum targets pick the replacements up from the go.mod beside them.
+	writeFile(t, filepath.Join(tmp, "go.sum"), "example.com/b v2.0.0+incompatible h1:AAAA=\n")
+	refs, err = ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(tmp, "go.sum"), Source: "go.sum"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	for _, r := range refs {
+		if r.Replacement != want[r.Name] {
+			t.Errorf("go.sum %s: replacement = %q, want %q", r.Name, r.Replacement, want[r.Name])
+		}
+	}
+}
+
+// go.mod separates a directive from its arguments with any white space,
+// and a block's "(" may follow the verb directly. A version go.mod both
+// requires and excludes is still reported, marked as excluded.
+func TestParseGoMod_DirectiveSpellingAndExcludes(t *testing.T) {
+	tmp := t.TempDir()
+	modPath := filepath.Join(tmp, "go.mod")
+	writeFile(t, modPath, "module example.com/x\n\n"+
+		"require\texample.com/tab v1.0.0\n"+
+		"require(\n\texample.com/paren v2.0.0\n)\n"+
+		"require example.com/excluded v1.1.0\n"+
+		"require example.com/kept v1.2.0\n"+
+		"exclude\texample.com/excluded v1.1.0\n"+
+		"exclude(\n\texample.com/kept v1.0.0 // a lower version only\n\t\"example.com/tab\" \"v1.0.0\"\n)\n")
+	for _, target := range []Target{
+		{Ecosystem: intel.EcosystemGo, Path: modPath, Source: "go.mod"},
+	} {
+		refs, err := ParseGo(target)
+		if err != nil {
+			t.Fatalf("ParseGo: %v", err)
+		}
+		got := map[string]bool{}
+		for _, r := range refs {
+			got[r.Name+" "+r.Version] = r.Excluded
+		}
+		want := map[string]bool{
+			"example.com/tab v1.0.0": true, "example.com/paren v2.0.0": false,
+			"example.com/excluded v1.1.0": true, "example.com/kept v1.2.0": false,
+		}
+		if len(got) != len(want) {
+			t.Fatalf("refs = %v, want %v", got, want)
+		}
+		for k, v := range want {
+			if ex, ok := got[k]; !ok || ex != v {
+				t.Errorf("%s: present %v excluded %v, want excluded %v", k, ok, ex, v)
+			}
+		}
+	}
+
+	// go.sum targets mark the versions the go.mod beside them excludes.
+	writeFile(t, filepath.Join(tmp, "go.sum"), "example.com/excluded v1.1.0 h1:AAAA=\nexample.com/excluded v1.1.0/go.mod h1:BBBB=\n")
+	refs, err := ParseGo(Target{Ecosystem: intel.EcosystemGo, Path: filepath.Join(tmp, "go.sum"), Source: "go.sum"})
+	if err != nil {
+		t.Fatalf("ParseGo: %v", err)
+	}
+	for _, r := range refs {
+		if r.Name == "example.com/excluded" && (!r.Excluded || r.GraphOnly) {
+			t.Errorf("go.sum excluded ref = %+v", r)
+		}
 	}
 }
 

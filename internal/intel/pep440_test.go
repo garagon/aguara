@@ -99,6 +99,61 @@ func TestMatcherPEP440EqualityIsPyPIOnly(t *testing.T) {
 	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemNPM, Name: "pkg", Version: "1.0.0"}), 1)
 }
 
+// PEP440String must produce str(Version(v)) as the packaging library
+// does; these pairs were checked against packaging 25.0 (pip 25.2).
+func TestPEP440StringMatchesPackagingStr(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"1.0", "1.0"},
+		{"1.0.0", "1.0.0"},
+		{"01.0", "1.0"},
+		{"1.0-RC1", "1.0rc1"},
+		{"v1.0", "1.0"},
+		{"0!1.0", "1.0"},
+		{"1.0.post0", "1.0.post0"},
+		{"1.0-1", "1.0.post1"},
+		{"1.0+ABC.01", "1.0+abc.1"},
+		{"1.0.dev", "1.0.dev0"},
+		{"1.0a", "1.0a0"},
+		{"1.0c1", "1.0rc1"},
+		{"1.0_RC_1", "1.0rc1"},
+	} {
+		got, ok := intel.PEP440String(tc.in)
+		require.True(t, ok, tc.in)
+		require.Equal(t, tc.want, got, tc.in)
+	}
+	_, ok := intel.PEP440String("1.0-custom")
+	require.False(t, ok)
+}
+
+// `===` is arbitrary equality: pip compares the requirement, ignoring
+// case, with str(Version(candidate)). These outcomes were checked against
+// SpecifierSet(spec).contains(Version(candidate)) in packaging 25.0.
+func TestMatcherArbitraryEqualityFollowsPip(t *testing.T) {
+	for _, tc := range []struct {
+		recordVersion, spec string
+		want                bool
+	}{
+		{"1.0", "1.0", true},
+		{"1.0.0", "1.0", false},
+		{"1.0", "1.0.0", false},
+		{"1.0rc1", "1.0-RC1", false},
+		{"1.0-RC1", "1.0rc1", true},
+		{"1.0rc1", "1.0RC1", true},
+		{"1.0", "V1.0", false},
+		{"1.0", "01.0", false},
+		{"1.0-custom", "1.0-CUSTOM", true},
+	} {
+		m := intel.NewMatcher(intel.Snapshot{Records: []intel.Record{{
+			ID: "MAL-ARB", Ecosystem: intel.EcosystemPyPI, Name: "pkg", Kind: intel.KindMalicious, Versions: []string{tc.recordVersion},
+		}}})
+		got := len(m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemPyPI, Name: "pkg", Version: tc.spec, ArbitraryEquality: true})) > 0
+		require.Equal(t, tc.want, got, "record %q, ===%s", tc.recordVersion, tc.spec)
+	}
+	// An all-versions entry still matches: every release is malicious.
+	m := intel.NewMatcher(intel.Snapshot{AllVersions: []intel.AllVersionsEntry{{ID: "MAL-ALL", Ecosystem: intel.EcosystemPyPI, Name: "pkg"}}})
+	require.Len(t, m.MatchPackage(intel.MatchInput{Ecosystem: intel.EcosystemPyPI, Name: "pkg", Version: "9.9", ArbitraryEquality: true}), 1)
+}
+
 func TestMatcherEmptyVersionMatchesOnlyAllVersionsEntries(t *testing.T) {
 	m := intel.NewMatcher(intel.Snapshot{
 		Records:     []intel.Record{{ID: "MAL-EXACT", Ecosystem: intel.EcosystemPyPI, Name: "exact", Kind: intel.KindMalicious, Versions: []string{"1.0"}}},

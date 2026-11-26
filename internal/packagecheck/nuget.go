@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
@@ -31,7 +32,7 @@ func ParseNuGet(target Target) ([]PackageRef, error) {
 	case "packages.lock.json":
 		return parseNuGetLockfile(target)
 	case "csproj", "fsproj", "vbproj":
-		return parseNuGetProjectFile(target)
+		return parseNuGetProjectFile(target, newRunCache())
 	default:
 		return nil, fmt.Errorf("packagecheck: ParseNuGet: unsupported source %q (want packages.lock.json, csproj, fsproj, or vbproj)", target.Source)
 	}
@@ -104,11 +105,26 @@ type nugetLockDep struct {
 //
 // Property resolution covers same-file <PropertyGroup> entries:
 // `$(SerilogVersion)` looks up the SerilogVersion child of any
-// PropertyGroup. Unresolved properties skip the reference rather
-// than emit a literal `$(...)` the matcher would silently miss.
-// MSBuild built-ins (TargetFramework, Configuration) and external
-// imports are out of scope.
-func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
+// PropertyGroup. A property defined elsewhere (MSBuild built-ins,
+// Directory.Build.props, other imports, none of which are read) leaves
+// the `$(...)` placeholder, which pins nothing: the reference is
+// unpinned rather than dropped.
+//
+// Central package management: a reference without a version takes it
+// from a `VersionOverride`, or else from the `PackageVersion` items of
+// the nearest Directory.Packages.props in the project's directory or a
+// parent directory inside the checked root, the file MSBuild imports;
+// every version those items declare for the package is returned. That
+// file's `GlobalPackageReference` items apply to the project too. When
+// ManagePackageVersionsCentrally is false (in the project file, or else
+// in the props file), none of this applies.
+//
+// A version that does not select one release (a floating version such as
+// "1.*", a range such as "[1.0,2.0)" or "(1.0,)", an undefined property,
+// or no version found) is returned as unpinned, so the audit asks for
+// review as it does for an unpinned Python requirement, unless a
+// packages.lock.json beside the project records what restore resolved.
+func parseNuGetProjectFile(target Target, cache *runCache) ([]PackageRef, error) {
 	data, err := readNuGetManifest(target.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", target.Source, err)
@@ -121,15 +137,46 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 		return nil, fmt.Errorf("parse %s: %w", target.Source, err)
 	}
 
-	props := map[string]string{}
-	for _, pg := range proj.PropertyGroups {
-		for _, p := range pg.Properties {
-			props[p.XMLName.Local] = strings.TrimSpace(p.Value)
-		}
+	props := msbuildProperties(proj.PropertyGroups)
+	central, err := centralPackageVersions(target, cache)
+	if err != nil {
+		return nil, err
 	}
+	// MSBuild evaluates the project body after the props files it
+	// imports, so the project's ManagePackageVersionsCentrally wins over
+	// the one Directory.Packages.props sets. Unset in both, it may come
+	// from a file not read here (Directory.Build.props), so central
+	// versions still apply.
+	manage, set := msbuildBool(props, "ManagePackageVersionsCentrally")
+	if !set {
+		manage, set = central.manage, central.manageSet
+	}
+	centralOff := set && !manage
+	if centralOff {
+		central = centralVersions{}
+	}
+	locked := manifestCandidate(filepath.Join(filepath.Dir(target.Path), "packages.lock.json"))
 
 	var refs []PackageRef
 	seen := map[string]bool{}
+	add := func(name, version string) {
+		ref := PackageRef{Ecosystem: intel.EcosystemNuGet, Name: name, Path: target.Path, Source: target.Source}
+		if nugetPinsOneVersion(version) {
+			ref.Version = nugetExactRange(version)
+		} else {
+			if locked {
+				// packages.lock.json records the version restore chose.
+				return
+			}
+			ref.Unpinned, ref.Constraint = true, version
+		}
+		key := strings.ToLower(name) + "@" + ref.Version + "@" + ref.Constraint
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		refs = append(refs, ref)
+	}
 	for _, ig := range proj.ItemGroups {
 		for _, pr := range ig.PackageRefs {
 			name := strings.TrimSpace(pr.Include)
@@ -139,33 +186,197 @@ func parseNuGetProjectFile(target Target) ([]PackageRef, error) {
 			if name == "" {
 				continue
 			}
-			version := strings.TrimSpace(pr.VersionAttr)
-			if version == "" {
-				version = strings.TrimSpace(pr.VersionChild)
+			version := firstNonEmpty(pr.VersionAttr, pr.VersionChild)
+			if !centralOff {
+				// VersionOverride is a central-management feature.
+				version = firstNonEmpty(pr.VersionOverrideAttr, pr.VersionOverrideChild, version)
 			}
 			if version == "" {
+				// Every version the props file declares for the package
+				// (conditional items can declare several) is checked.
+				versions := central.versions[strings.ToLower(name)]
+				if len(versions) == 0 {
+					add(name, "")
+				}
+				for _, v := range versions {
+					add(name, v)
+				}
 				continue
 			}
 			if v, ok := resolveMSBuildProperty(version, props); ok {
 				version = v
-			} else if msbuildIsPropertyPlaceholder(version) {
-				continue
 			}
-			key := name + "@" + version
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			refs = append(refs, PackageRef{
-				Ecosystem: intel.EcosystemNuGet,
-				Name:      name,
-				Version:   version,
-				Path:      target.Path,
-				Source:    target.Source,
-			})
+			// A property the project does not define stays a placeholder,
+			// which pins nothing: the reference counts as unpinned.
+			add(name, version)
 		}
 	}
+	for _, g := range central.global {
+		add(g.name, g.version)
+	}
 	return refs, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func msbuildProperties(groups []csPropertyGroup) map[string]string {
+	props := map[string]string{}
+	for _, pg := range groups {
+		for _, p := range pg.Properties {
+			props[p.XMLName.Local] = strings.TrimSpace(p.Value)
+		}
+	}
+	return props
+}
+
+// nugetPinsOneVersion reports a version that selects one release: a plain
+// version, which restore resolves to that release when it exists, or the
+// exact-match range "[1.2.3]". Floating versions and other ranges select
+// whatever a feed offers at restore time.
+func nugetPinsOneVersion(v string) bool {
+	if v == "" || strings.Contains(v, "*") {
+		return false
+	}
+	if strings.ContainsAny(v, "[(") || strings.HasSuffix(v, ")") || strings.HasSuffix(v, "]") {
+		return nugetExactRange(v) != v
+	}
+	return true
+}
+
+// centralVersions is what a Directory.Packages.props declares: every
+// version given for each package (lower-cased ID), in file order without
+// repeats, the GlobalPackageReference items, and its
+// ManagePackageVersionsCentrally setting when it has one.
+type centralVersions struct {
+	versions          map[string][]string
+	global            []struct{ name, version string }
+	manage, manageSet bool
+}
+
+// msbuildBool reads a boolean property as MSBuild compares it
+// (case-insensitive "true" or "false"); set is false when the property is
+// absent or has another value.
+func msbuildBool(props map[string]string, name string) (value, set bool) {
+	switch v := strings.TrimSpace(props[name]); {
+	case strings.EqualFold(v, "true"):
+		return true, true
+	case strings.EqualFold(v, "false"):
+		return false, true
+	}
+	return false, false
+}
+
+// maxNuGetPropsBytes bounds one Directory.Packages.props read, the
+// dependency-manifest limit rather than the lockfile one: the file holds
+// one short PackageVersion item per package (about 100 bytes), so 4 MiB
+// is tens of thousands of entries, far more than a real repository
+// declares. A larger file is an error, not a partial read.
+const maxNuGetPropsBytes = maxDependencyManifestBytes
+
+// nugetPropsEntry is one Directory.Packages.props parsed in a run.
+type nugetPropsEntry struct {
+	central centralVersions
+	err     error
+}
+
+// centralPackageVersions reads the Directory.Packages.props that applies
+// to the project: the first found walking up from the project's directory,
+// staying inside the checked root. Its own <PropertyGroup> properties are
+// resolved; imports of other props files are not followed. Each file is
+// parsed once per run (cache), however many projects it applies to.
+func centralPackageVersions(target Target, cache *runCache) (centralVersions, error) {
+	root := target.Root
+	if root == "" {
+		root = filepath.Dir(target.Path)
+	}
+	root = filepath.Clean(root)
+	for dir := filepath.Clean(filepath.Dir(target.Path)); ; {
+		path := filepath.Join(dir, "Directory.Packages.props")
+		if manifestCandidate(path) {
+			key := ResolvedPath(path)
+			e, ok := cache.nugetProps[key]
+			if !ok {
+				e.central, e.err = parseNuGetProps(path)
+				cache.nugetProps[key] = e
+			}
+			return e.central, e.err
+		}
+		if dir == root {
+			return centralVersions{}, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || !withinDir(root, parent) {
+			return centralVersions{}, nil
+		}
+		dir = parent
+	}
+}
+
+func parseNuGetProps(path string) (centralVersions, error) {
+	out := centralVersions{versions: map[string][]string{}}
+	f, err := openManifest(path, "Directory.Packages.props")
+	if err != nil {
+		return out, fmt.Errorf("open Directory.Packages.props: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	data, err := readBoundedManifestBytes(f, maxNuGetPropsBytes, "Directory.Packages.props")
+	if err != nil {
+		return out, fmt.Errorf("read Directory.Packages.props: %w", err)
+	}
+	var p csProject
+	if err := xml.Unmarshal(data, &p); err != nil {
+		return out, fmt.Errorf("parse Directory.Packages.props: %w", err)
+	}
+	props := msbuildProperties(p.PropertyGroups)
+	out.manage, out.manageSet = msbuildBool(props, "ManagePackageVersionsCentrally")
+	resolve := func(v string) string {
+		v = strings.TrimSpace(v)
+		if r, ok := resolveMSBuildProperty(v, props); ok {
+			return r
+		}
+		// An undefined property pins nothing.
+		return v
+	}
+	seen := map[string]bool{}
+	for _, ig := range p.ItemGroups {
+		for _, pv := range ig.PackageVersions {
+			name := strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.Include, pv.Update)))
+			if name == "" {
+				continue
+			}
+			v := resolve(firstNonEmpty(pv.VersionAttr, pv.VersionChild))
+			if seen[name+"\x00"+v] {
+				continue
+			}
+			if len(seen) >= maxManifestEntries {
+				return out, fmt.Errorf("parse Directory.Packages.props: more than %d package versions", maxManifestEntries)
+			}
+			seen[name+"\x00"+v] = true
+			out.versions[name] = append(out.versions[name], v)
+		}
+		for _, g := range ig.GlobalRefs {
+			if name := strings.TrimSpace(g.Include); name != "" {
+				out.global = append(out.global, struct{ name, version string }{name, resolve(firstNonEmpty(g.VersionAttr, g.VersionChild))})
+			}
+		}
+	}
+	return out, nil
+}
+
+// isNuGetProjectSource reports a .NET project file source.
+func isNuGetProjectSource(source string) bool {
+	switch source {
+	case "csproj", "fsproj", "vbproj":
+		return true
+	}
+	return false
 }
 
 type csProject struct {
@@ -184,14 +395,34 @@ type csProperty struct {
 }
 
 type csItemGroup struct {
-	PackageRefs []csPackageRef `xml:"PackageReference"`
+	PackageRefs     []csPackageRef `xml:"PackageReference"`
+	PackageVersions []csPackageRef `xml:"PackageVersion"`
+	GlobalRefs      []csPackageRef `xml:"GlobalPackageReference"`
 }
 
 type csPackageRef struct {
-	Include      string `xml:"Include,attr"`
-	Update       string `xml:"Update,attr"`
-	VersionAttr  string `xml:"Version,attr"`
-	VersionChild string `xml:"Version"`
+	Include              string `xml:"Include,attr"`
+	Update               string `xml:"Update,attr"`
+	VersionAttr          string `xml:"Version,attr"`
+	VersionChild         string `xml:"Version"`
+	VersionOverrideAttr  string `xml:"VersionOverride,attr"`
+	VersionOverrideChild string `xml:"VersionOverride"`
+}
+
+// nugetExactRange returns the version inside NuGet's exact-match range
+// notation, "[1.0]" meaning x == 1.0 (NuGet "Package versioning",
+// version ranges), and any other version string unchanged. A plain
+// "1.0" is a minimum version that restore resolves to the lowest
+// applicable release, which the parser already reads as that version.
+func nugetExactRange(v string) string {
+	if len(v) < 3 || v[0] != '[' || v[len(v)-1] != ']' {
+		return v
+	}
+	inner := strings.TrimSpace(v[1 : len(v)-1])
+	if inner == "" || strings.ContainsAny(inner, ",[]()") {
+		return v
+	}
+	return inner
 }
 
 // msbuildIsPropertyPlaceholder reports whether the version string

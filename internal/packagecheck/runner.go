@@ -3,7 +3,6 @@ package packagecheck
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/garagon/aguara/internal/intel"
 )
@@ -37,6 +36,39 @@ type RunResult struct {
 	// only through a -r / -c include. A file in this list was
 	// evaluated even when discovery did not return it as a target.
 	ReadFiles []string
+	// Requirements summarises each requirements target (not constraints
+	// files) for the manifest coverage rule: whether it records the
+	// versions a Python manifest beside it would install.
+	Requirements []RequirementsEvidence
+	// Unparsed lists requirements targets with a line outside the pip
+	// grammar the parser reads (RequirementsSyntaxError). The line was
+	// skipped and the rest of the target checked; the entry belongs in
+	// coverage.unsupported_evidence.
+	Unparsed []UnsupportedEvidence
+}
+
+// RequirementsEvidence is what a read requirements file, with the files it
+// includes through -r and -c, pins.
+type RequirementsEvidence struct {
+	Path string
+	// Pinned holds the PEP 503 names pinned with == or ===.
+	Pinned map[string]bool
+	// ExactPins counts those pins; Unpinned counts the requirements
+	// without one exact version that no pin covers.
+	ExactPins, Unpinned int
+	// Local reports an editable or local-path entry, such as -e . or a
+	// bare ".": pip installs that project from its own metadata, which
+	// the file does not record. LocalProjects are the project directories
+	// inside the checked directory such entries install (resolved
+	// paths); an entry that installs anything else counts in Unpinned.
+	Local         bool
+	LocalProjects []string
+	// Files are the file and the files it includes, by resolved path.
+	Files []string
+	// Skipped names the first line skipped in a file that was only partly
+	// read ("line 3", "line 1 of base.txt"). Such a file never covers a
+	// manifest; the other fields are empty.
+	Skipped string
 }
 
 // ResolvedPath returns path with its directory's symlinks evaluated, the
@@ -77,11 +109,12 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		return nil, fmt.Errorf("packagecheck: Runner.Matcher is required")
 	}
 	// Requirements files can include each other, so one file may be
-	// reached from several discovered targets. The cache parses each
-	// file once per run, and the seen set reports a PyPI entry (file,
-	// line, package) once even when several targets include it. Other
-	// ecosystems never share an entry between targets.
-	cache := newRequirementsCache()
+	// reached from several discovered targets, and one
+	// Directory.Packages.props applies to many .NET projects. The cache
+	// parses each such file once per run, and the seen set reports a PyPI
+	// entry (file, line, package) once even when several targets include
+	// it. Other ecosystems never share an entry between targets.
+	cache := newRunCache()
 	seen := map[hitKey]bool{}
 	seenInclude := map[hitKey]bool{}
 	for _, t := range targets {
@@ -114,22 +147,14 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			}
 			// One Hit per (ecosystem, name, version, path) tuple,
 			// even when multiple advisories cover the same
-			// exposure. Two reasons:
-			//
-			//   1. Some ecosystems (Composer especially) ship
-			//      version strings with a leading `v` while OSV
-			//      records carry the bare form, so we have to
-			//      query every alias the per-ecosystem helper
-			//      returns. The first alias that hits wins; we
-			//      do not walk the rest.
-			//   2. Once manual intel and OSV both cover a tuple
-			//      (e.g. a hand-curated SOCKET-* advisory plus
-			//      the upstream MAL-* record after OSV catches
-			//      up), the matcher returns both records. The
-			//      user is exposed once, not twice; collapsing
-			//      to a single Hit keeps the user-facing count
-			//      stable across `aguara check` and `aguara
-			//      check --fresh`.
+			// exposure. Once manual intel and OSV both cover a
+			// tuple (e.g. a hand-curated SOCKET-* advisory plus
+			// the upstream MAL-* record after OSV catches up), the
+			// matcher returns both records. The user is exposed
+			// once, not twice; collapsing to a single Hit keeps the
+			// user-facing count stable across `aguara check` and
+			// `aguara check --fresh`. Version spellings (a Go "v",
+			// a Composer tag prefix) are reconciled by the matcher.
 			//
 			// The matcher itself keeps returning every record so
 			// correlation layers (intel.Matcher consumers,
@@ -144,18 +169,22 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// the matcher answers only from all-versions entries: every
 			// release of such a package is malicious, so no version has
 			// to be guessed.
-			var matches []intel.Match
-			for _, v := range versionAliases(ref.Ecosystem, ref.Version) {
-				matches = r.Matcher.MatchPackage(intel.MatchInput{
-					Ecosystem: ref.Ecosystem,
-					Name:      ref.Name,
-					Version:   v,
-					Path:      ref.Path,
-				})
-				if len(matches) > 0 {
-					break
-				}
+			//
+			// A graph-only ref (a go.sum version that was only read
+			// for version selection) is looked up the same way: its
+			// code was never fetched, so only an advisory covering
+			// every version of the module applies to it.
+			version := ref.Version
+			if ref.GraphOnly {
+				version = ""
 			}
+			matches := r.Matcher.MatchPackage(intel.MatchInput{
+				Ecosystem:         ref.Ecosystem,
+				Name:              ref.Name,
+				Version:           version,
+				Path:              ref.Path,
+				ArbitraryEquality: ref.ArbitraryEquality,
+			})
 			if len(matches) == 0 {
 				continue
 			}
@@ -169,6 +198,10 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			out.Hits = append(out.Hits, Hit{Ref: ref, Record: matches[0].Record, AdvisoryIDs: advisoryIDs(matches)})
 			findings++
 		}
+		// A local entry that is not a project directory inside the checked
+		// directory (an archive, a VCS checkout, a path outside it) installs
+		// something whose dependencies nothing here pins.
+		unpinned += parsed.localOther
 		out.Ecosystems = append(out.Ecosystems, EcosystemResult{
 			Ecosystem:          t.Ecosystem,
 			Path:               t.Path,
@@ -178,6 +211,38 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			Unpinned:           unpinned,
 			UnresolvedIncludes: len(parsed.unresolved),
 		})
+		if parsed.syntax != nil {
+			// Lines outside the pip grammar the parser reads were
+			// skipped: everything else was matched above, but what pip
+			// would do with those lines was not checked, so the file is
+			// also listed as not evaluated in full, and it never stands
+			// for a manifest.
+			out.Unparsed = append(out.Unparsed, unparsedRequirements(t, parsed.syntax, parsed.syntaxLines))
+			if !IsConstraintsFile(t.Path) {
+				// Recorded so a manifest beside it can say why the file
+				// does not stand for it.
+				out.Requirements = append(out.Requirements, RequirementsEvidence{Path: t.Path, Skipped: skippedLineName(t, parsed.syntax)})
+			}
+		} else if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
+			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local,
+				LocalProjects: parsed.localProjects, Files: append([]string{ResolvedPath(t.Path)}, parsed.files...)}
+			// A -c pin limits a name the file or its -r includes require;
+			// on its own it installs nothing, so it pins nothing here.
+			required := map[string]bool{}
+			for _, ref := range refs {
+				if ref.Group != constraintGroup {
+					required[intel.PEP503Normalize(ref.Name)] = true
+				}
+			}
+			for _, ref := range refs {
+				name := intel.PEP503Normalize(ref.Name)
+				if !ref.Unpinned && ref.Version != "" && required[name] {
+					ev.Pinned[name] = true
+					ev.ExactPins++
+				}
+			}
+			out.Requirements = append(out.Requirements, ev)
+		}
 		for _, u := range parsed.unresolved {
 			key := hitKey{name: u.Argument, path: u.Path, line: u.Line}
 			if seenInclude[key] {
@@ -188,6 +253,40 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// unparsedRequirements is the coverage entry for a requirements target
+// with lines the parser skipped.
+func unparsedRequirements(t Target, first *RequirementsSyntaxError, lines int) UnsupportedEvidence {
+	kind := "requirements.txt"
+	if IsConstraintsFile(t.Path) {
+		kind = "constraints.txt"
+	}
+	where := skippedLineName(t, first)
+	if ResolvedPath(first.Path) != ResolvedPath(t.Path) {
+		where += ", which it includes,"
+	}
+	what := " is not a pip requirement or option Aguara reads"
+	switch {
+	case lines == 2:
+		what = " and 1 more line are not pip requirements or options Aguara reads"
+	case lines > 2:
+		what = fmt.Sprintf(" and %d more lines are not pip requirements or options Aguara reads", lines-1)
+	}
+	return UnsupportedEvidence{
+		Path: t.Path, Kind: kind, Ecosystem: intel.EcosystemPyPI, Reason: ReasonFormatNotParsed,
+		Detail:       where + what + "; the other lines were checked",
+		SkippedLines: lines,
+	}
+}
+
+// skippedLineName names the first skipped line of a target: "line 3", or
+// "line 1 of base.txt" when it is in a file the target includes.
+func skippedLineName(t Target, first *RequirementsSyntaxError) string {
+	if ResolvedPath(first.Path) != ResolvedPath(t.Path) {
+		return fmt.Sprintf("line %d of %s", first.Line, filepath.Base(first.Path))
+	}
+	return fmt.Sprintf("line %d", first.Line)
 }
 
 // hitKey identifies one reported PyPI entry. Path and Line keep
@@ -219,13 +318,41 @@ type parsedTarget struct {
 	// files are the requirements files read, by resolved path,
 	// including files reached only through an include.
 	files []string
+	// local reports an editable or local-path requirement in the file or
+	// one it includes; localProjects are the project directories inside
+	// the root such entries install, and localOther counts the ones that
+	// install anything else.
+	local         bool
+	localProjects []string
+	localOther    int
+	// syntax is the first line of the file or its includes that was
+	// skipped as outside the pip grammar; syntaxLines counts them.
+	syntax      *RequirementsSyntaxError
+	syntaxLines int
+}
+
+// runCache holds what one Runner.Run parses once and shares between
+// targets: requirements files, which include each other, and
+// Directory.Packages.props files, each of which applies to every .NET
+// project below it. Entries are keyed by resolved path.
+type runCache struct {
+	requirements *requirementsCache
+	nugetProps   map[string]nugetPropsEntry
+}
+
+func newRunCache() *runCache {
+	return &runCache{requirements: newRequirementsCache(), nugetProps: map[string]nugetPropsEntry{}}
 }
 
 // parseTargetDetail dispatches like parseTarget but keeps the
-// requirements-include bookkeeping and shares the per-run include cache.
-func parseTargetDetail(t Target, cache *requirementsCache) (parsedTarget, error) {
-	if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) {
-		return parseRequirementsTarget(t, cache)
+// requirements-include bookkeeping and shares the per-run caches.
+func parseTargetDetail(t Target, cache *runCache) (parsedTarget, error) {
+	switch {
+	case t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source):
+		return parseRequirementsTarget(t, cache.requirements)
+	case t.Ecosystem == intel.EcosystemNuGet && isNuGetProjectSource(t.Source):
+		refs, err := parseNuGetProjectFile(t, cache)
+		return parsedTarget{refs: refs}, err
 	}
 	refs, err := parseTarget(t)
 	return parsedTarget{refs: refs}, err
@@ -306,29 +433,4 @@ func parseTargetRefs(t Target) ([]PackageRef, error) {
 	default:
 		return nil, fmt.Errorf("no parser for ecosystem %q", t.Ecosystem)
 	}
-}
-
-// versionAliases returns the version strings the runner should
-// query the matcher with for a given (ecosystem, raw version)
-// pair. The first entry is always the raw version; per-ecosystem
-// conventions add aliases.
-//
-// Composer is the only ecosystem that needs an alias today:
-// composer.lock often ships `v1.2.3` while OSV Packagist records
-// publish the bare form `1.2.3`. Stripping the `v` prefix as an
-// alias matches either side without requiring the parser to pick
-// one canonical form (which would lose information when the
-// lockfile literally uses the prefixed form).
-//
-// Adding a new ecosystem alias rule is one case-arm here; the
-// per-ecosystem normalisation in intel/ecosystem.go stays focused
-// on name canonicalisation.
-func versionAliases(ecosystem, version string) []string {
-	out := []string{version}
-	if ecosystem == intel.EcosystemPackagist {
-		if alias := strings.TrimPrefix(version, "v"); alias != version && alias != "" {
-			out = append(out, alias)
-		}
-	}
-	return out
 }

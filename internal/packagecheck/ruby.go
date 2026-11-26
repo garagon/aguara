@@ -10,12 +10,24 @@ import (
 )
 
 // gemSpecLine matches a Gemfile.lock GEM/specs entry shaped
-// `name (version)`. The capture groups are (name, version);
-// constraint lines like `rack (>= 1.0)` are filtered out by a
-// follow-up check on the version string. Platform-specific
-// versions (e.g. `1.16.2-arm64-darwin`) pass through unchanged
-// because they are valid exact-version identifiers in OSV.
+// `name (version)` or `name (version-platform)`. The capture groups
+// are (name, version and optional platform); constraint lines like
+// `rack (>= 1.0)` are filtered out by a follow-up check on the
+// version string.
 var gemSpecLine = regexp.MustCompile(`^(\S+)\s+\(([^)]+)\)$`)
+
+// splitGemPlatform separates a platform gem's version from its
+// platform. Bundler writes a spec as `name (version-platform)` when the
+// platform is not `ruby`, and its own lockfile parser reads the version
+// as the text before the first "-" (Bundler::LockfileParser
+// NAME_VERSION); Gem::Version never contains "-" because it rewrites
+// one as ".pre.". The platform build of a release is the same RubyGems
+// version, which is what advisories list, so `nokogiri
+// (1.16.2-arm64-darwin)` is version 1.16.2.
+func splitGemPlatform(spec string) (version, platform string) {
+	version, platform, _ = strings.Cut(spec, "-")
+	return version, platform
+}
 
 // ParseRuby reads a Gemfile.lock and returns the installed gems
 // declared in the GEM section's specs sub-block. Only top-level
@@ -38,6 +50,7 @@ func ParseRuby(target Target) ([]PackageRef, error) {
 	defer func() { _ = f.Close() }()
 
 	var refs []PackageRef
+	seen := map[string]bool{}
 	inGEM := false
 	inSpecs := false
 
@@ -94,18 +107,27 @@ func ParseRuby(target Target) ([]PackageRef, error) {
 		if strings.ContainsAny(version, "<>=~") {
 			continue
 		}
+		if version, _ = splitGemPlatform(version); version == "" {
+			continue
+		}
+		// RubyGems registry IDs are usually lowercase already;
+		// case-fold here for the same reason Composer does (matcher
+		// index consistency). Platform builds of one release fold
+		// into one ref.
+		name = strings.ToLower(name)
+		if seen[name+"\x00"+version] {
+			continue
+		}
 		if err := checkEntryLimit(len(refs), "Gemfile.lock"); err != nil {
 			return nil, err
 		}
+		seen[name+"\x00"+version] = true
 		refs = append(refs, PackageRef{
 			Ecosystem: intel.EcosystemRubyGems,
-			// RubyGems registry IDs are usually lowercase
-			// already; case-fold here for the same reason
-			// Composer does (matcher index consistency).
-			Name:    strings.ToLower(name),
-			Version: version,
-			Path:    target.Path,
-			Source:  "Gemfile.lock",
+			Name:      name,
+			Version:   version,
+			Path:      target.Path,
+			Source:    "Gemfile.lock",
 		})
 	}
 	if err := scanner.Err(); err != nil {

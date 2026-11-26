@@ -17,9 +17,9 @@ import (
 // composer.lock entries often carry a `v` prefix on the version
 // ("v3.5.0") while OSV Packagist records use the bare form
 // ("3.5.0"). The parser preserves the lockfile's literal version
-// in PackageRef.Version; the runner's version-alias step is what
-// queries both forms so the matcher hits regardless of which
-// convention OSV ships.
+// in PackageRef.Version; the matcher compares Composer's normalized
+// form of both sides, so it hits regardless of which convention OSV
+// ships.
 //
 // No external commands. No network. installed.json under
 // vendor/composer/ is intentionally NOT parsed in this first cut;

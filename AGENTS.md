@@ -153,10 +153,16 @@ exported through public aliases, rather than copying a partial struct.
 - Empty scan findings serialize as `[]`, not `null`.
 - CLI JSON from `scan`, `check` and `audit` carries a `coverage` block: files
   scanned, package evidence read (with `unpinned` counts),
-  `unsupported_evidence` (dependency files found but not evaluated) and
-  `unresolved_includes` (requirements includes not read). Zero files, zero
-  evaluated evidence, unsupported files or any unpinned requirement is not a
-  clean result. Library `ScanResult` values leave `coverage` unset.
+  `unsupported_evidence` (dependency files found but not evaluated, each with
+  a `reason`, including manifests such as `package.json` or `pyproject.toml`
+  that declare dependencies without a lockfile, `manifest_without_lockfile`)
+  and `unresolved_includes` (requirements includes not read). Zero files,
+  zero evaluated evidence, unsupported files, a manifest without a lockfile or
+  any unpinned requirement is not a clean result. Only the exact pins of
+  unsupported files are matched (`exact_pins_checked`), except a
+  `format_not_parsed` requirements file with `skipped_lines`: it was read
+  and matched in full except for those lines. Library `ScanResult` values
+  leave `coverage` unset.
 - Scan JSON carries `complete` (false for an incomplete scan), `errors` (the
   failures, at most 100, sorted; always an array) and `failed_operations`. The
   CLI writes the report of an incomplete scan, then exits 2; `audit` sets

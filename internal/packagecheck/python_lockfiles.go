@@ -16,7 +16,9 @@ import (
 // Only registry entries are emitted as PyPI packages. Entries from a
 // VCS checkout, a local directory or file, a direct URL, an editable
 // install or a workspace member have no PyPI identity: a local project
-// named like a malicious PyPI package is not that package.
+// named like a malicious PyPI package is not that package. A direct URL to
+// a wheel or sdist on files.pythonhosted.org is the exception in uv.lock
+// and poetry.lock: the file is a PyPI upload, identified by its file name.
 type tomlLockFormat struct {
 	label string
 	// arrayName is the array-of-tables key: "package" or "packages".
@@ -309,6 +311,11 @@ var uvLockFormat = tomlLockFormat{
 		if kind == "" {
 			return nil, fmt.Errorf("parse %s: package %q has an unsupported source", label, name)
 		}
+		if kind == "url" {
+			// A direct URL has a PyPI identity only when it is a file
+			// uploaded to PyPI.
+			return pythonHostedRef(name, p.source["url"]), nil
+		}
 		if kind != "registry" {
 			return nil, nil
 		}
@@ -324,7 +331,8 @@ var uvLockFormat = tomlLockFormat{
 }
 
 // ParseUVLock reads uv.lock (lockfile version 1) and returns the
-// registry packages it pins. Git, URL, path, directory, editable and
+// registry packages it pins, and URL entries that point at a PyPI file
+// on files.pythonhosted.org. Git, other URL, path, directory, editable and
 // virtual (workspace) entries are skipped. uv does not record dependency
 // groups per package, so refs carry no Group. No uv execution, no
 // network.
@@ -357,6 +365,7 @@ var poetryLockFormat = tomlLockFormat{
 		if err != nil {
 			return nil, err
 		}
+		var ref *PackageRef
 		if p.sourceSet {
 			if p.sourceOther["type"] {
 				return nil, fmt.Errorf("parse %s: package %q source type must be a string", label, name)
@@ -364,27 +373,38 @@ var poetryLockFormat = tomlLockFormat{
 			switch p.source["type"] {
 			case "legacy":
 				// An explicit or supplemental package index.
-			case "git", "directory", "file", "url":
+			case "url":
+				// A direct URL has a PyPI identity only when it is a
+				// file uploaded to PyPI.
+				if ref = pythonHostedRef(name, p.source["url"]); ref == nil {
+					return nil, nil
+				}
+			case "git", "directory", "file":
 				return nil, nil
 			default:
 				return nil, fmt.Errorf("parse %s: package %q has an unsupported source type", label, name)
 			}
 		}
-		version, err := requireRegistryVersion(label, name, p)
-		if err != nil {
-			return nil, err
+		if ref == nil {
+			version, err := requireRegistryVersion(label, name, p)
+			if err != nil {
+				return nil, err
+			}
+			ref = &PackageRef{Name: name, Version: version}
 		}
 		groups := p.arrays["groups"]
 		if len(groups) == 0 && p.str["category"] != "" {
 			groups = []string{p.str["category"]}
 		}
-		return &PackageRef{Name: name, Version: version, Group: groupLabel(groups, "main")}, nil
+		ref.Group = groupLabel(groups, "main")
+		return ref, nil
 	},
 }
 
 // ParsePoetryLock reads poetry.lock (lock-version 1.x and 2.x) and
 // returns the packages Poetry resolved from a package index: PyPI or an
-// explicit `legacy` source. Git, directory, file and URL sources are
+// explicit `legacy` source, and URL sources that point at a PyPI file on
+// files.pythonhosted.org. Git, directory, file and other URL sources are
 // skipped. Group comes from `groups` (lock-version 2.1) or `category`
 // (earlier versions); main dependencies carry no Group. No Poetry
 // execution, no network.

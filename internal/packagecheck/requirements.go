@@ -3,9 +3,11 @@ package packagecheck
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -25,6 +27,33 @@ const (
 // utf8BOM is the byte-order mark some editors write at the start of a
 // UTF-8 file; pip accepts it.
 const utf8BOM = "\xef\xbb\xbf"
+
+// RequirementsSyntaxError is a line of a requirements file that the
+// parser's pip grammar does not accept: an unknown or ambiguous option, a
+// malformed requirement, specifier, version, extras or marker, an
+// unterminated quote, or an option without its value. The line is
+// skipped and the rest of the file is read: its entries are matched and
+// its includes followed as usual, and the file is also reported as not
+// evaluated in full (format_not_parsed), so it never stands for a
+// manifest. A requirement whose trailing options are rejected is still
+// read, since the requirement itself parsed. Everything else a reader
+// refuses, such as an unsafe or oversized file, a declared encoding other
+// than UTF-8, content that is not UTF-8, an overlong line, too many
+// entries or includes nested too deeply, remains an error, because pip
+// could read such a file and install a pin Aguara never saw.
+type RequirementsSyntaxError struct {
+	// Path is the file that holds the line, which can be a file
+	// reached through an include.
+	Path string
+	Line int
+	err  error
+}
+
+func (e *RequirementsSyntaxError) Error() string {
+	return fmt.Sprintf("line %d: %v", e.Line, e.err)
+}
+
+func (e *RequirementsSyntaxError) Unwrap() error { return e.err }
 
 // isRequirementsSource reports whether a file name is one discovery
 // treats as a pip requirements or constraints file.
@@ -61,6 +90,10 @@ var (
 // files is not re-read for each of them.
 type requirementsCache struct {
 	files map[string]*requirementsFile
+	// charge, when set, is asked before an included file is read and
+	// refuses the read once a budget is spent (the discovery walk charges
+	// the includes of a requirements.in to its read budget).
+	charge func(path string) bool
 }
 
 func newRequirementsCache() *requirementsCache {
@@ -68,17 +101,30 @@ func newRequirementsCache() *requirementsCache {
 }
 
 // requirementsFile is one parsed file: requirement entries and include
-// directives in file order.
+// directives in file order, and the first line it skipped (with the
+// number of skipped lines).
 type requirementsFile struct {
-	items []requirementsItem
+	items       []requirementsItem
+	syntax      *RequirementsSyntaxError
+	syntaxLines int
 }
 
 type requirementsItem struct {
-	ref *PackageRef // nil for an include
+	ref *PackageRef // nil for an include or a local entry
 	// include is set for -r / -c directives.
 	include    string
 	constraint bool
-	line       int
+	// local marks an editable install (-e) or a requirement that is a
+	// local path or file: URL: pip builds that project and resolves its
+	// own dependency metadata, which the file does not record. localPath
+	// is the path or URL as written.
+	local     bool
+	localPath string
+	line      int
+	// salvaged marks a pin kept from a line that did not parse
+	// (salvageExactPin): it is matched, but it is no evidence that the
+	// file is a pip file.
+	salvaged bool
 }
 
 // ParseRequirements reads a pip requirements or constraints file and
@@ -88,18 +134,25 @@ type requirementsItem struct {
 // environment markers are accepted; markers are not evaluated, so a pin
 // counts whatever environment it targets. Editable installs, local
 // paths, archive files, VCS links and direct URL references have no
-// PyPI identity and are skipped. Index options and per-requirement
+// PyPI identity and are skipped, except a URL of a wheel or sdist on
+// files.pythonhosted.org, which is pinned to the PyPI release its file
+// name names. Index options and per-requirement
 // options such as --hash are read and ignored.
 //
 // -r and -c includes are followed relative to the including file, only
 // inside the project root (Target.Root), to a bounded depth. A URL,
 // a path outside the project or a missing file is not read; the runner
 // reports each one (RunResult.UnresolvedIncludes) and their count per
-// target (unresolved_includes). An unsupported
-// option, a malformed requirement or an unsafe file is an error.
+// target (unresolved_includes). An unsafe file is an error. A line
+// outside the grammar (an unsupported option, a malformed requirement)
+// is skipped: the entries that parsed are returned together with the
+// first such line as a *RequirementsSyntaxError.
 // No pip execution, no environment-variable expansion, no network.
 func ParseRequirements(target Target) ([]PackageRef, error) {
 	parsed, err := parseRequirementsTarget(target, newRequirementsCache())
+	if err == nil && parsed.syntax != nil {
+		return parsed.refs, parsed.syntax
+	}
 	return parsed.refs, err
 }
 
@@ -126,7 +179,9 @@ func parseRequirementsTarget(target Target, cache *requirementsCache) (parsedTar
 	for key := range w.visited {
 		files = append(files, key)
 	}
-	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files}, nil
+	return parsedTarget{refs: w.coll.refs, unresolved: w.unresolved, files: files, local: w.local,
+		localProjects: w.localProjects, localOther: w.localOther,
+		syntax: w.syntax, syntaxLines: w.syntaxLines}, nil
 }
 
 type requirementsWalk struct {
@@ -135,6 +190,18 @@ type requirementsWalk struct {
 	visited    map[string]bool
 	coll       *pythonRefCollector
 	unresolved []UnresolvedInclude
+	// local is set when the file or one it includes has an editable or
+	// local-path entry.
+	local bool
+	// localProjects are the project directories inside the root that
+	// those entries install; localOther counts the entries that install
+	// anything else (an archive, a VCS checkout, a path outside the root).
+	localProjects []string
+	localOther    int
+	// syntax is the first line skipped in the file or one it includes,
+	// in reading order; syntaxLines counts the skipped lines.
+	syntax      *RequirementsSyntaxError
+	syntaxLines int
 }
 
 func (w *requirementsWalk) visit(path string, constraint bool, depth int) error {
@@ -155,13 +222,35 @@ func (w *requirementsWalk) visit(path string, constraint bool, depth int) error 
 	w.visited[key] = true
 	file, ok := w.cache.files[key]
 	if !ok {
+		if depth > 0 && w.cache.charge != nil && !w.cache.charge(path) {
+			return fmt.Errorf("%s: the discovery read budget is spent", path)
+		}
 		file, err = parseRequirementsFile(path)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		w.cache.files[key] = file
 	}
+	if file.syntax != nil {
+		if w.syntax == nil {
+			w.syntax = file.syntax
+		}
+		w.syntaxLines += file.syntaxLines
+	}
 	for _, item := range file.items {
+		if item.local {
+			w.local = true
+			dirs := w.localProjectDirs(path, item.localPath)
+			if len(dirs) == 0 {
+				w.localOther++
+			}
+			for _, d := range dirs {
+				if !slices.Contains(w.localProjects, d) && len(w.localProjects) < maxRequirementsFiles {
+					w.localProjects = append(w.localProjects, d)
+				}
+			}
+			continue
+		}
 		if item.ref != nil {
 			ref := *item.ref
 			ref.Path = path
@@ -230,6 +319,75 @@ func (w *requirementsWalk) resolveInclude(from, arg string) (string, string) {
 		return "", UnresolvedIncludeMissing
 	}
 	return p, ""
+}
+
+// localProjectDirs returns the Python project directories inside the
+// root that a local entry may install: its path taken relative to the
+// file, and relative to the root, since pip reads a local path relative to
+// the directory it runs in, which is usually the project root. A
+// directory counts when it holds pyproject.toml, setup.py or setup.cfg.
+// An archive, a VCS or remote URL, a home-relative path or one outside the
+// root yields nothing.
+func (w *requirementsWalk) localProjectDirs(from, arg string) []string {
+	target := strings.TrimSpace(arg)
+	if name, ref, ok := strings.Cut(target, "@"); ok && pep508Name.MatchString(strings.TrimSpace(strings.SplitN(name, "[", 2)[0])) {
+		target = strings.TrimSpace(ref)
+	}
+	if i := strings.IndexAny(target, " \t;#"); i >= 0 {
+		target = target[:i]
+	}
+	if rest, ok := cutPrefixFold(target, "file:"); ok {
+		switch {
+		case strings.HasPrefix(rest, "///"):
+			target = rest[2:]
+		case strings.HasPrefix(rest, "//localhost/"):
+			target = rest[len("//localhost"):]
+		case strings.HasPrefix(rest, "//"):
+			return nil
+		default:
+			target = rest
+		}
+		if unescaped, err := url.PathUnescape(target); err == nil {
+			target = unescaped
+		}
+	} else if strings.Contains(target, "://") || hasURLScheme(target) {
+		return nil
+	}
+	if i := strings.IndexByte(target, '['); i >= 0 && strings.HasSuffix(target, "]") {
+		target = target[:i]
+	}
+	if target == "" || strings.HasPrefix(target, "~") {
+		return nil
+	}
+	p := filepath.FromSlash(target)
+	candidates := []string{p}
+	if !filepath.IsAbs(p) {
+		candidates = []string{filepath.Join(filepath.Dir(from), p), filepath.Join(w.rootReal, p)}
+	}
+	var out []string
+	for _, c := range candidates {
+		real, err := realDir(c)
+		if err != nil || !withinDir(w.rootReal, real) || slices.Contains(out, real) {
+			continue
+		}
+		if info, err := os.Stat(real); err != nil || !info.IsDir() {
+			continue
+		}
+		for _, name := range []string{"pyproject.toml", "setup.py", "setup.cfg"} {
+			if manifestCandidate(filepath.Join(real, name)) {
+				out = append(out, real)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
 }
 
 func realDir(dir string) (string, error) {
@@ -353,7 +511,21 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 		}
 		items, err := parseRequirementsLine(text, line)
 		if err != nil {
-			return fmt.Errorf("line %d: %w", line, err)
+			// Skip the line (keeping a requirement whose trailing
+			// options were rejected) and read on.
+			if out.syntax == nil {
+				out.syntax = &RequirementsSyntaxError{Path: path, Line: line, err: err}
+			}
+			out.syntaxLines++
+			if len(items) == 0 && !strings.HasPrefix(text, "-") {
+				// An exact pin the line still starts with is kept for
+				// matching: matching more than pip would install is
+				// harmless, missing a pin it installs is not.
+				if ref := salvageExactPin(text); ref != nil {
+					ref.Line = line
+					items = []requirementsItem{{ref: ref, line: line, salvaged: true}}
+				}
+			}
 		}
 		if len(out.items)+len(items) > maxPythonLockEntries {
 			return fmt.Errorf("more than %d entries", maxPythonLockEntries)
@@ -399,27 +571,177 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 	return out, nil
 }
 
-// Options pip accepts on their own line in a requirements file. The
-// value says whether the option takes an argument.
-var requirementsGlobalOptions = map[string]bool{
-	"-i": true, "--index-url": true, "--extra-index-url": true, "--no-index": false,
-	"-f": true, "--find-links": true, "--trusted-host": true,
-	"-r": true, "--requirement": true, "-c": true, "--constraint": true,
-	"-e": true, "--editable": true,
-	"--pre": false, "--prefer-binary": false, "--only-binary": true, "--no-binary": true,
-	"--require-hashes": false, "--no-require-hashes": false, "--use-feature": true,
-	"--all-releases": false, "--only-final": false,
+// pip releases whose requirements-file option parser the table below
+// follows (pip._internal.req.req_file.build_parser).
+const (
+	pipRelease252 uint8 = 1 << iota
+	pipRelease260
+	pipReleases = pipRelease252 | pipRelease260
+)
+
+// pipOption is one option of pip's requirements-file parser. pip uses
+// the same parser for an option line and for the options after a
+// requirement, then ignores the options that do not apply to the line.
+type pipOption struct {
+	long, short string
+	value       bool
+	releases    uint8
 }
 
-// Options pip accepts after a requirement on the same line.
-var requirementsPerReqOptions = map[string]bool{
-	"--hash": true, "--config-settings": true, "--global-option": true, "--install-option": true,
+// pipOptions are the options pip 25.2 and pip 26.0 accept in a
+// requirements file, with the releases that have each one: the global
+// options (-i, --extra-index-url, --no-index, -c, -r, -e, -f,
+// --no-binary, --only-binary, --prefer-binary, --require-hashes, --pre,
+// --trusted-host, --use-feature, and --all-releases and --only-final
+// from pip 26.0) and the per-requirement options (--hash,
+// --config-settings, and --global-option until pip 26.0).
+var pipOptions = []pipOption{
+	{long: "--index-url", short: "-i", value: true, releases: pipReleases},
+	{long: "--pypi-url", value: true, releases: pipReleases},
+	{long: "--extra-index-url", value: true, releases: pipReleases},
+	{long: "--no-index", releases: pipReleases},
+	{long: "--constraint", short: "-c", value: true, releases: pipReleases},
+	{long: "--requirement", short: "-r", value: true, releases: pipReleases},
+	{long: "--editable", short: "-e", value: true, releases: pipReleases},
+	{long: "--find-links", short: "-f", value: true, releases: pipReleases},
+	{long: "--no-binary", value: true, releases: pipReleases},
+	{long: "--only-binary", value: true, releases: pipReleases},
+	{long: "--prefer-binary", releases: pipReleases},
+	{long: "--require-hashes", releases: pipReleases},
+	{long: "--pre", releases: pipReleases},
+	{long: "--all-releases", value: true, releases: pipRelease260},
+	{long: "--only-final", value: true, releases: pipRelease260},
+	{long: "--trusted-host", value: true, releases: pipReleases},
+	{long: "--use-feature", value: true, releases: pipReleases},
+	{long: "--global-option", value: true, releases: pipRelease252},
+	{long: "--hash", value: true, releases: pipReleases},
+	{long: "--config-settings", short: "-C", value: true, releases: pipReleases},
 }
 
-// shortWithValue are the short options pip also accepts with the value
-// attached ("-rbase.txt", "-e.").
-var shortWithValue = []string{"-r", "-c", "-e", "-i", "-f"}
+// lookupPipLongOption resolves a long option name as pip's optparse
+// does: the exact name, or else a prefix of exactly one option. It is
+// resolved against each pip release in the table, and accepted when the
+// releases that resolve it agree on one option, so a file either release
+// reads is read; a prefix that no release resolves to a single option
+// is an error ("--req" could be --requirement or --require-hashes).
+func lookupPipLongOption(name string) (*pipOption, error) {
+	var found *pipOption
+	ambiguous := false
+	for rel := pipRelease252; rel&pipReleases != 0; rel <<= 1 {
+		var exact, only *pipOption
+		matches := 0
+		for i := range pipOptions {
+			o := &pipOptions[i]
+			if o.releases&rel == 0 {
+				continue
+			}
+			if o.long == name {
+				exact = o
+				break
+			}
+			if strings.HasPrefix(o.long, name) {
+				matches++
+				only = o
+			}
+		}
+		pick := exact
+		if pick == nil {
+			switch matches {
+			case 0:
+				continue
+			case 1:
+				pick = only
+			default:
+				ambiguous = true
+				continue
+			}
+		}
+		if found != nil && found != pick {
+			return nil, fmt.Errorf("ambiguous option %s", name)
+		}
+		found = pick
+	}
+	switch {
+	case found != nil:
+		return found, nil
+	case ambiguous:
+		return nil, fmt.Errorf("ambiguous option %s", name)
+	default:
+		return nil, fmt.Errorf("unsupported option %s", name)
+	}
+}
 
+func lookupPipShortOption(name string) *pipOption {
+	for i := range pipOptions {
+		if pipOptions[i].short == name {
+			return &pipOptions[i]
+		}
+	}
+	return nil
+}
+
+// pipOptionValue is one option read from a line, with its value.
+type pipOptionValue struct {
+	opt   *pipOption
+	value string
+}
+
+// parsePipOptions reads an option string the way pip's optparse does: a
+// long option as --name or --name=value, resolved by
+// lookupPipLongOption; a short option with its value attached ("-rbase.txt")
+// or in the next word; a value-taking option takes the next word even
+// when it starts with "-". "--" ends the options, and other words are
+// arguments, which pip ignores. A flag given a value, a missing value, or
+// an unknown or ambiguous option is an error.
+func parsePipOptions(text string) ([]pipOptionValue, error) {
+	words, err := shellWords(text)
+	if err != nil {
+		return nil, err
+	}
+	var out []pipOptionValue
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		var opt *pipOption
+		value, hasValue := "", false
+		switch {
+		case w == "--":
+			return out, nil
+		case strings.HasPrefix(w, "--"):
+			var name string
+			name, value, hasValue = strings.Cut(w, "=")
+			if opt, err = lookupPipLongOption(name); err != nil {
+				return nil, err
+			}
+			if !opt.value && hasValue {
+				return nil, fmt.Errorf("option %s does not take a value", opt.long)
+			}
+		case len(w) > 1 && w[0] == '-':
+			if opt = lookupPipShortOption(w[:2]); opt == nil {
+				return nil, fmt.Errorf("unsupported option %s", w[:2])
+			}
+			if len(w) > 2 {
+				// optparse takes the rest of the word as the value;
+				// "-r=base.txt" is read as "-r base.txt".
+				value, hasValue = strings.TrimPrefix(w[2:], "="), true
+			}
+		default:
+			continue
+		}
+		if opt.value && !hasValue {
+			if i+1 >= len(words) {
+				return nil, fmt.Errorf("option %s needs a value", opt.long)
+			}
+			i++
+			value = words[i]
+		}
+		out = append(out, pipOptionValue{opt: opt, value: value})
+	}
+	return out, nil
+}
+
+// parseRequirementsLine reads one logical line. It returns the line's
+// items and, for a line pip would reject, an error; a requirement whose
+// trailing options are rejected is returned with the error.
 func parseRequirementsLine(text string, line int) ([]requirementsItem, error) {
 	if strings.HasPrefix(text, "-") {
 		return parseRequirementsOptions(text, line)
@@ -435,99 +757,117 @@ func parseRequirementsLine(text string, line int) ([]requirementsItem, error) {
 		}
 		args = append(args, tokens[i])
 	}
+	var optErr error
 	if i < len(tokens) {
-		if err := checkPerRequirementOptions(strings.Join(tokens[i:], " ")); err != nil {
-			return nil, err
-		}
+		// pip parses them with the full option parser and keeps only
+		// --hash, --config-settings and --global-option; an include or
+		// an index option after a requirement does nothing.
+		_, optErr = parsePipOptions(strings.Join(tokens[i:], " "))
 	}
-	ref, err := parseNamedRequirement(strings.TrimSpace(strings.Join(args, " ")))
-	if err != nil || ref == nil {
+	spec := strings.TrimSpace(strings.Join(args, " "))
+	ref, err := parseNamedRequirement(spec)
+	if err != nil {
 		return nil, err
+	}
+	if ref == nil {
+		if isLocalRequirement(spec) {
+			return []requirementsItem{{local: true, localPath: spec, line: line}}, optErr
+		}
+		return nil, optErr
 	}
 	ref.Line = line
-	return []requirementsItem{{ref: ref, line: line}}, nil
+	return []requirementsItem{{ref: ref, line: line}}, optErr
 }
 
+// isLocalRequirement reports a requirement pip builds from the local file
+// system: a path (".", "./pkg", "../x", "/abs", "~/x", "pkg.tar.gz"), a
+// file: URL, or `name @` either of those. Remote URLs and VCS references
+// are not local.
+func isLocalRequirement(spec string) bool {
+	target := spec
+	if name, ref, ok := strings.Cut(spec, "@"); ok && pep508Name.MatchString(strings.TrimSpace(strings.SplitN(name, "[", 2)[0])) {
+		target = strings.TrimSpace(ref)
+	}
+	if i := strings.IndexAny(target, " \t;"); i >= 0 {
+		target = target[:i]
+	}
+	if target == "" {
+		return false
+	}
+	lower := strings.ToLower(target)
+	if strings.HasPrefix(lower, "file:") {
+		return true
+	}
+	if strings.Contains(target, "://") || hasURLScheme(target) {
+		return false
+	}
+	return looksLikeRequirementPath(target)
+}
+
+// parseRequirementsOptions reads a line of options. pip acts on one entry
+// per line: an editable install (-e) if there is one, else the first -r
+// include, else the first -c include; the other options configure the
+// install and are ignored here, and so are leftover arguments.
 func parseRequirementsOptions(text string, line int) ([]requirementsItem, error) {
-	words, err := shellWords(text)
+	opts, err := parsePipOptions(text)
 	if err != nil {
 		return nil, err
 	}
-	var items []requirementsItem
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if !strings.HasPrefix(w, "-") {
-			// pip ignores positional leftovers on an option line.
-			continue
-		}
-		name, value, hasValue := strings.Cut(w, "=")
-		if !strings.HasPrefix(w, "--") {
-			name, value, hasValue = w, "", false
-			for _, short := range shortWithValue {
-				if len(w) > len(short) && strings.HasPrefix(w, short) {
-					name, value, hasValue = short, strings.TrimPrefix(w[len(short):], "="), true
-				}
-			}
-		}
-		takesValue, known := requirementsGlobalOptions[name]
-		if !known {
-			return nil, fmt.Errorf("unsupported option %q", name)
-		}
-		if takesValue && !hasValue {
-			if i+1 >= len(words) {
-				return nil, fmt.Errorf("option %s needs a value", name)
-			}
-			i++
-			value = words[i]
-		}
-		switch name {
-		case "-r", "--requirement":
-			items = append(items, requirementsItem{include: value, line: line})
-		case "-c", "--constraint":
-			items = append(items, requirementsItem{include: value, constraint: true, line: line})
+	var editable, include, constraint *pipOptionValue
+	for i := range opts {
+		o := &opts[i]
+		switch {
+		case o.opt.long == "--editable" && editable == nil:
+			editable = o
+		case o.opt.long == "--requirement" && include == nil:
+			include = o
+		case o.opt.long == "--constraint" && constraint == nil:
+			constraint = o
 		}
 	}
-	return items, nil
-}
-
-func checkPerRequirementOptions(text string) error {
-	words, err := shellWords(text)
-	if err != nil {
-		return err
+	switch {
+	case editable != nil:
+		return []requirementsItem{{local: true, localPath: editable.value, line: line}}, nil
+	case include != nil:
+		return []requirementsItem{{include: include.value, line: line}}, nil
+	case constraint != nil:
+		return []requirementsItem{{include: constraint.value, constraint: true, line: line}}, nil
 	}
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if !strings.HasPrefix(w, "-") {
-			continue
-		}
-		name, _, hasValue := strings.Cut(w, "=")
-		takesValue, known := requirementsPerReqOptions[name]
-		if !known {
-			return fmt.Errorf("unsupported requirement option %q", name)
-		}
-		if takesValue && !hasValue {
-			if i+1 >= len(words) {
-				return fmt.Errorf("option %s needs a value", name)
-			}
-			i++
-		}
-	}
-	return nil
+	return nil, nil
 }
 
 // parseNamedRequirement parses one requirement specifier. It returns
 // nil without error for direct references (`name @ url`), local paths,
-// archives and URLs, which have no registry identity.
+// archives and URLs, which have no registry identity, except a URL of a
+// wheel or source distribution on files.pythonhosted.org: that file is a
+// PyPI release, named by its file name (see pythonHostedIdentity).
 func parseNamedRequirement(s string) (*PackageRef, error) {
 	if s == "" {
 		return nil, nil
 	}
-	if looksLikeRequirementPath(s) {
-		return nil, nil
+	// `name@url` and `name[x]@url` without white space are direct
+	// references, as `name @ url` is, not a bare URL.
+	first, tail := s, ""
+	if i := strings.IndexAny(s, " \t;"); i >= 0 {
+		first, tail = s[:i], s[i:]
 	}
-	spec, marker, hasMarker := strings.Cut(s, ";")
-	if hasMarker && strings.TrimSpace(marker) == "" {
-		return nil, fmt.Errorf("empty environment marker")
+	if m := directRefNoSpace.FindStringSubmatch(first); m != nil {
+		s = m[1] + m[2] + " @ " + m[3] + tail
+	}
+	if looksLikeRequirementPath(s) {
+		first := s
+		if i := strings.IndexAny(s, " \t;"); i >= 0 {
+			first = s[:i]
+		}
+		return pythonHostedRef("", first), nil
+	}
+	// pip splits the marker off at the first ";" and reads an empty one
+	// as no marker ("name==1.0;"); a marker that is there must parse.
+	spec, marker, _ := strings.Cut(s, ";")
+	if marker = strings.TrimSpace(marker); marker != "" {
+		if err := checkPEP508Marker(marker); err != nil {
+			return nil, err
+		}
 	}
 	spec = strings.TrimSpace(spec)
 	end := 0
@@ -544,15 +884,21 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		if closeIdx < 0 {
 			return nil, fmt.Errorf("unterminated extras for %s", name)
 		}
-		for _, extra := range strings.Split(rest[1:closeIdx], ",") {
-			if extra = strings.TrimSpace(extra); extra != "" && !pep508Name.MatchString(extra) {
-				return nil, fmt.Errorf("invalid extra for %s", name)
+		// An empty list is allowed; otherwise every comma separates two
+		// names ("[a,]" and "[,a]" are rejected, as pip rejects them).
+		if inner := strings.TrimSpace(rest[1:closeIdx]); inner != "" {
+			for _, extra := range strings.Split(inner, ",") {
+				if !pep508Name.MatchString(strings.TrimSpace(extra)) {
+					return nil, fmt.Errorf("invalid extra for %s", name)
+				}
 			}
 		}
 		rest = strings.TrimSpace(rest[closeIdx+1:])
 	}
 	if strings.HasPrefix(rest, "@") {
-		return nil, nil // direct URL reference
+		// Direct URL reference: no registry identity unless it names a
+		// file uploaded to PyPI.
+		return pythonHostedRef(name, strings.TrimSpace(rest[1:])), nil
 	}
 	ref := &PackageRef{Ecosystem: intel.EcosystemPyPI, Name: name}
 	if strings.Contains(rest, "${") {
@@ -567,16 +913,56 @@ func parseNamedRequirement(s string) (*PackageRef, error) {
 		}
 		rest = strings.TrimSpace(rest[1 : len(rest)-1])
 	}
-	version, pinned, err := parseVersionSpecifier(rest)
+	version, pinned, arbitrary, err := parseVersionSpecifier(rest)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if pinned {
 		ref.Version = version
+		ref.ArbitraryEquality = arbitrary
 	} else {
 		ref.Unpinned, ref.Constraint = true, rest
 	}
 	return ref, nil
+}
+
+// directRefNoSpace is a first token `name@url` or `name[extras]@url`.
+var directRefNoSpace = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(\[[^\]]*\])?@(.+)$`)
+
+// salvagedPin is how a requirement starts when it pins one release: a
+// PEP 508 name, optional extras, an optional "(" and an == or === pin.
+var (
+	salvagedPin       = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)[ \t]*(?:\[[^\]]*\][ \t]*)?\(?[ \t]*(===|==)[ \t]*([^\s,;()]+)`)
+	salvagedDirectRef = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)[ \t]*(?:\[[^\]]*\][ \t]*)?@[ \t]*(\S+)`)
+)
+
+// salvageExactPin reads the exact pin at the start of a requirement line
+// that does not parse as a whole (a malformed marker, extras or trailing
+// clause): `name==1.0`, `name[x] (===1.0`, or a direct reference to a
+// files.pythonhosted.org artifact, bare or after `name @`. It returns nil
+// when the start pins nothing.
+func salvageExactPin(text string) *PackageRef {
+	text = strings.TrimSpace(text)
+	if m := salvagedDirectRef.FindStringSubmatch(text); m != nil {
+		return pythonHostedRef(m[1], strings.TrimRight(m[2], ";"))
+	}
+	if first, _, _ := strings.Cut(text, " "); looksLikeRequirementPath(first) {
+		return pythonHostedRef("", strings.TrimRight(first, ";"))
+	}
+	m := salvagedPin.FindStringSubmatch(text)
+	if m == nil {
+		return nil
+	}
+	version := m[3]
+	if m[2] == "==" {
+		if strings.HasSuffix(version, ".*") {
+			return nil
+		}
+		if _, ok := intel.PEP440Canonical(version); !ok {
+			return nil
+		}
+	}
+	return &PackageRef{Ecosystem: intel.EcosystemPyPI, Name: m[1], Version: version, ArbitraryEquality: m[2] == "==="}
 }
 
 var specifierOperators = []string{"===", "==", "!=", "~=", "<=", ">=", "<", ">"}
@@ -585,8 +971,23 @@ var specifierVersion = regexp.MustCompile(`^[A-Za-z0-9._*+!-]+$`)
 
 // parseVersionSpecifier validates a PEP 440 specifier set and reports
 // the version when the set pins exactly one release: `==` clauses
-// without a wildcard, or `===` clauses, that all agree.
-func parseVersionSpecifier(spec string) (string, bool, error) {
+// without a wildcard, or `===` clauses, that all agree. arbitrary is true
+// when a `===` clause takes part: pip then selects only a release whose
+// normalized version string equals the pin, which the matcher must
+// compare the same way (intel.MatchInput.ArbitraryEquality).
+func parseVersionSpecifier(spec string) (version string, pinned, arbitrary bool, err error) {
+	version, pinned, err = parsePinnedSpecifier(spec)
+	if pinned {
+		for _, clause := range strings.Split(spec, ",") {
+			if strings.HasPrefix(strings.TrimSpace(clause), "===") {
+				arbitrary = true
+			}
+		}
+	}
+	return version, pinned, arbitrary, err
+}
+
+func parsePinnedSpecifier(spec string) (string, bool, error) {
 	if spec == "" {
 		return "", false, nil
 	}
@@ -611,7 +1012,13 @@ func parseVersionSpecifier(spec string) (string, bool, error) {
 			agree = false
 		}
 	}
-	for _, clause := range strings.Split(spec, ",") {
+	clauses := strings.Split(spec, ",")
+	if n := len(clauses); n > 1 && strings.TrimSpace(clauses[n-1]) == "" {
+		// One trailing comma is allowed ("==1.0,"), as pip allows it;
+		// ",," and a leading comma stay errors.
+		clauses = clauses[:n-1]
+	}
+	for _, clause := range clauses {
 		clause = strings.TrimSpace(clause)
 		op := ""
 		for _, candidate := range specifierOperators {

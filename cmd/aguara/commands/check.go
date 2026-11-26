@@ -260,6 +260,13 @@ type checkPlan struct {
 	// in the coverage block so an unread lockfile cannot pass as a
 	// clean check. Scoped to the requested ecosystems when explicit.
 	unsupported []packagecheck.UnsupportedEvidence
+	// manifests are the dependency manifests found under the root
+	// (package.json, pyproject.toml, Cargo.toml, ...). Those that declare
+	// dependencies no lockfile covers are added to the coverage block.
+	manifests []packagecheck.Manifest
+	// discoveryRoot is the directory the unsupported and manifest walk
+	// started from; lockfile coverage stops there.
+	discoveryRoot string
 }
 
 // intelEcosystems returns the OSV bucket IDs the plan needs intel
@@ -655,16 +662,19 @@ func buildCheckPlanFor(ecoFlags []string, path string, implicit bool) (checkPlan
 }
 
 // discoverUnsupported records dependency files under root that no parser
-// reads. Explicit --ecosystem plans only report those ecosystems.
+// reads, and the dependency manifests there. Explicit --ecosystem plans
+// only report those ecosystems.
 func (p *checkPlan) discoverUnsupported(root string, ecosystems []string) error {
 	if !statDir(root) {
 		return nil
 	}
-	found, err := packagecheck.DiscoverUnsupported(root, ecosystems)
+	found, err := packagecheck.DiscoverUnevaluated(root, ecosystems)
 	if err != nil {
 		return fmt.Errorf("check: discover %s: %w", root, err)
 	}
-	p.unsupported = found
+	p.unsupported = found.Unsupported
+	p.manifests = found.Manifests
+	p.discoveryRoot = root
 	return nil
 }
 
@@ -886,7 +896,46 @@ func runCheckPlan(plan checkPlan, override *incident.IntelOverride) (*incident.C
 		result = mergeCheckResults(parts, plan.rootPath)
 	}
 	result.Coverage = checkCoverage(plan, result, run)
+	// Files listed as not evaluated can still pin exact versions: a
+	// package.json without a lockfile that pins a compromised release
+	// installs it. Those pins are matched; the rest of the file stays
+	// unevaluated.
+	pins := 0
+	for _, u := range result.Coverage.UnsupportedEvidence {
+		pins += u.PinCount()
+	}
+	if pins > 0 {
+		for _, hit := range packagecheck.MatchPins(incident.MatcherForOverride(override), result.Coverage.UnsupportedEvidence) {
+			result.Findings = append(result.Findings, pinFinding(hit))
+		}
+	}
 	return result, nil
+}
+
+// pinFinding reports an exact pin in a file that was not otherwise
+// evaluated (a manifest without a lockfile, a requirements file under a
+// name discovery does not read) that matches malicious-package
+// intelligence.
+func pinFinding(hit packagecheck.Hit) incident.Finding {
+	ecoToken := osvIDToEcoToken[hit.Ref.Ecosystem]
+	switch hit.Ref.Ecosystem {
+	case intel.EcosystemNPM:
+		ecoToken = ecoNPM
+	case intel.EcosystemPyPI:
+		ecoToken = ecoPythonLock
+	}
+	title, _ := ecosystemFindingText(ecoToken, hit)
+	remediation := fmt.Sprintf("Remove or change the %s pin in %s so no affected release is selected, without installing the compromised version, then generate a lockfile and check again. Rotate credentials reachable from environments and CI runs that installed it.",
+		hit.Ref.Name, filepath.Base(hit.Ref.Path))
+	return incident.Finding{
+		Severity:    incident.SevCritical,
+		Title:       title,
+		Detail:      hit.Record.Summary,
+		Path:        hit.Ref.Path,
+		Line:        hit.Ref.Line,
+		Remediation: remediation,
+		AdvisoryIDs: hit.AdvisoryIDs,
+	}
 }
 
 // runPackagecheckPlan runs the packagecheck Runner against every
@@ -998,14 +1047,26 @@ func mergeCheckResults(parts []*incident.CheckResult, rootPath string) *incident
 // remediation) pair for a Hit. The wording stays close to the
 // ecosystem's native tooling so the user can copy-paste the
 // remediation into their package manager without translation.
+//
+// The title names every advisory that matched, the same IDs the finding's
+// advisory_ids array lists.
 func ecosystemFindingText(ecoToken string, hit packagecheck.Hit) (title, remediation string) {
 	name, version, id := hit.Ref.Name, hit.Ref.Version, hit.Record.ID
+	if len(hit.AdvisoryIDs) > 0 {
+		id = strings.Join(hit.AdvisoryIDs, ", ")
+	}
 	switch ecoToken {
 	case ecoPythonLock:
 		return pythonLockFindingText(hit)
 	case ecoGo:
-		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id),
-			fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
+		remediation := fmt.Sprintf("Remove %s %s from your go.mod and re-run `go mod tidy`. Rotate any tokens reachable from CI runs that included the compromised version.", name, version)
+		if hit.Ref.Replacement != "" {
+			remediation += fmt.Sprintf(" go.mod replaces %s with %s, so builds use the replacement; check that the replacement does not ship the compromised code, and remove the requirement once nothing needs it.", name, hit.Ref.Replacement)
+		}
+		if hit.Ref.Excluded {
+			remediation += fmt.Sprintf(" go.mod also excludes %s %s, so the go command (1.16 and later) ignores this requirement and selects another version; remove the require line, and check which version of %s go.sum and the build use.", name, version, name)
+		}
+		return fmt.Sprintf("%s %s is a known compromised Go module (%s)", name, version, id), remediation
 	case ecoCargo:
 		return fmt.Sprintf("%s %s is a known compromised Rust crate (%s)", name, version, id),
 			fmt.Sprintf("Run `cargo update -p %s` or pin a fixed version in Cargo.toml. Rotate secrets reachable from builds that used the compromised crate.", name)
@@ -1138,30 +1199,6 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 		fmt.Fprintln(w)
 	}
 
-	// Action guidance is ecosystem-specific because `aguara clean`
-	// only knows how to remove the Python compromise artifacts.
-	// Maven / NuGet / Go / Rust / PHP / Ruby / npm get
-	// generic "update / remove / rebuild lockfile / rotate
-	// credentials" guidance; the Python path keeps the
-	// `aguara clean` recommendation since it owns the
-	// persistence-artifact cleanup.
-	fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
-	switch ecosystem {
-	case ecoPython:
-		fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
-		fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
-		fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
-	default:
-		// Single packagecheck ecosystem, or single npm, or
-		// multi-ecosystem: same guidance shape (the
-		// per-ecosystem package-manager commands live in each
-		// Finding.Remediation, not in this summary).
-		fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
-		fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
-		fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
-	}
-
-	// Build summary line
 	critCount := 0
 	warnCount := 0
 	for _, f := range result.Findings {
@@ -1172,6 +1209,49 @@ func renderCheckTerminal(w io.Writer, result *incident.CheckResult, plan checkPl
 			warnCount++
 		}
 	}
+
+	if critCount > 0 {
+		// A compromised package or artifact was found. Action
+		// guidance is ecosystem-specific because `aguara clean`
+		// only knows how to remove the Python compromise artifacts.
+		// Maven / NuGet / Go / Rust / PHP / Ruby / npm get
+		// generic "update / remove / rebuild lockfile / rotate
+		// credentials" guidance; the Python path keeps the
+		// `aguara clean` recommendation since it owns the
+		// persistence-artifact cleanup.
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("ACTION REQUIRED", width))
+		switch ecosystem {
+		case ecoPython:
+			fmt.Fprintln(w, "  1. Run 'aguara clean' to remove malicious files and persistence artifacts")
+			fmt.Fprintln(w, "  2. Rotate ALL credentials listed above")
+			fmt.Fprintln(w, "  3. If running K8s: kubectl get pods -n kube-system | grep node-setup")
+		default:
+			// Single packagecheck ecosystem, or single npm, or
+			// multi-ecosystem: same guidance shape (the
+			// per-ecosystem package-manager commands live in each
+			// Finding.Remediation, not in this summary).
+			fmt.Fprintln(w, "  1. Update or remove the affected packages in the relevant manifest and rebuild the lockfile")
+			fmt.Fprintln(w, "  2. Rotate ALL credentials reachable from builds / CI runs that used the compromised versions")
+			fmt.Fprintln(w, "  3. Audit recent CI runs, especially trusted-publishing / OIDC steps")
+		}
+	} else if warnCount > 0 {
+		// Warnings only: something needs a look (an include that was
+		// not read, an artifact to inspect), but no critical finding
+		// calls for the compromise response and credential rotation.
+		// Each warning's own remediation says what to do.
+		fmt.Fprintf(w, "%s\n\n", st.SectionHeader("REVIEW", width))
+		fmt.Fprintln(w, "  Review the files listed above:")
+		seen := map[string]bool{}
+		for _, f := range result.Findings {
+			if f.Severity != incident.SevWarning || f.Remediation == "" || seen[f.Remediation] {
+				continue
+			}
+			seen[f.Remediation] = true
+			fmt.Fprintf(w, "  - %s\n", output.TerminalText(f.Remediation))
+		}
+	}
+
+	// Build summary line
 	var parts []string
 	if critCount > 0 {
 		parts = append(parts, st.RedBold(fmt.Sprintf("%d critical", critCount)))
