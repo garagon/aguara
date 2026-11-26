@@ -655,14 +655,16 @@ func textLine(text string, c candidate, origin *blobOrigin, x int) int {
 // file, as it does for the file's own text.
 func (r *decodeRun) rescan(text string, c candidate, decoded string, origin *blobOrigin, label string) {
 	r.rescanned += len(decoded)
-	r.rescanWith(r.lineRules, false, text, c, decoded, origin, label, 0, 0)
-	r.rescanWith(r.fileRules, true, text, c, decoded, origin, label, 0, 0)
-	r.rescanWith(r.contextRules, false, text, c, decoded, origin, label, rules.ExcludeContextLines, 0)
-	r.rescanWith(r.windowRules, false, text, c, decoded, origin, label, max(r.windowLines, rules.ExcludeContextLines), r.windowLines)
+	r.rescanWith(r.lineRules, r.fileRules, text, c, decoded, origin, label, 0, 0)
+	r.rescanWith(r.contextRules, nil, text, c, decoded, origin, label, rules.ExcludeContextLines, 0)
+	r.rescanWith(r.windowRules, nil, text, c, decoded, origin, label, max(r.windowLines, rules.ExcludeContextLines), r.windowLines)
 }
 
-func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, fileWide bool, text string, c candidate, decoded string, origin *blobOrigin, label string, above, below int) {
-	if len(applicable) == 0 || r.err != nil {
+// rescanWith matches the applicable rules, and the fileWide rules with
+// matchFileWide, against the decoded text spliced into above lines before
+// and below lines after it.
+func (r *decodeRun) rescanWith(applicable, fileWide []*rules.CompiledRule, text string, c candidate, decoded string, origin *blobOrigin, label string, above, below int) {
+	if len(applicable)+len(fileWide) == 0 || r.err != nil {
 		return
 	}
 	before, after := surroundings(text, c, above, below)
@@ -672,21 +674,35 @@ func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, fileWide bool, 
 	lines := strings.Split(spliced, "\n")
 	lower := newLowercaseContent(spliced)
 	var matches []ruleMatch
-	if fileWide {
-		for _, rule := range applicable {
-			if err := r.ctx.Err(); err != nil {
-				r.err = err
-				return
-			}
-			if rm, ok := r.matchFileWide(rule, spliced, lower, lines, touchesDecoded); ok {
-				matches = append(matches, rm)
-			}
-		}
-	} else {
+	if len(applicable) > 0 {
 		var err error
 		matches, err = r.m.matchText(r.ctx, applicable, r.keys, spliced, lower, lines, r.target, touchesDecoded, r.prefilter)
 		if err != nil {
 			r.err = err
+		}
+	}
+	if len(fileWide) > 0 && r.err == nil {
+		// The keyword prefilter tells which patterns can hit the spliced
+		// text; the others need a hit in the file.
+		var masks map[string]uint64
+		if r.prefilter {
+			masks = r.m.pf.candidatePatternMasks(lower.text)
+		}
+		for _, rule := range fileWide {
+			if err := r.ctx.Err(); err != nil {
+				r.err = err
+				return
+			}
+			mask := ^uint64(0)
+			if masks != nil && !r.m.pf.unfiltered[rule.ID] {
+				mask = masks[rule.ID]
+			}
+			if mask == 0 {
+				continue // no pattern can hit the decoded text
+			}
+			if rm, ok := r.matchFileWide(rule, mask, spliced, lower, lines, touchesDecoded); ok {
+				matches = append(matches, rm)
+			}
 		}
 	}
 	// sourceLineAt maps an offset of the spliced text to a source line: the
@@ -754,12 +770,19 @@ func (r *decodeRun) rescanWith(applicable []*rules.CompiledRule, fileWide bool, 
 // window against decoded text as part of the file: every pattern needs a hit
 // that no exclude suppresses, in the spliced text or anywhere in the file,
 // and at least one hit in the spliced text must touch the decoded text. The
-// match reports the spliced hits.
-func (r *decodeRun) matchFileWide(rule *rules.CompiledRule, spliced string, lower *lowercaseContent, lines []string, touches func(matchHit) bool) (ruleMatch, bool) {
+// match reports the spliced hits. Patterns whose bit is clear in mask, the
+// prefilter's answer for the spliced text, cannot hit it and are not run
+// on it.
+func (r *decodeRun) matchFileWide(rule *rules.CompiledRule, mask uint64, spliced string, lower *lowercaseContent, lines []string, touches func(matchHit) bool) (ruleMatch, bool) {
 	var chosen []matchHit
 	var missing []int
 	touched := false
 	for i, pat := range rule.Patterns {
+		if i < 64 && mask&(uint64(1)<<i) == 0 {
+			// A literal the pattern requires is not in the spliced text.
+			missing = append(missing, i)
+			continue
+		}
 		hits := excludeHits(rule.ExcludePatterns, lines, matchPattern(pat, spliced, lower, lines))
 		if len(hits) == 0 {
 			missing = append(missing, i)
