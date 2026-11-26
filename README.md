@@ -208,7 +208,7 @@ The Action runs a content scan, not the combined package audit. Pin both the Act
     version: v0.29.0
 ```
 
-The default SARIF upload needs `security-events: write`. See [`action.yml`](action.yml) for inputs; use the CLI audit in a separate CI step when you also need package-intelligence checks.
+The default SARIF upload needs `security-events: write`. See [`action.yml`](action.yml) for inputs; use the CLI audit in a separate CI step when you also need package-intelligence checks. In the development version, a scan that exits with code 2 (for example an incomplete scan) fails the step with an error annotation, and its partial SARIF is not uploaded, so Code Scanning does not close alerts for files that were not evaluated.
 
 ## Outputs and Integrations
 
