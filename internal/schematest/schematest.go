@@ -5,8 +5,10 @@ package schematest
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +16,51 @@ import (
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/validate"
 )
+
+// formats is the validator's format registry: the go-openapi defaults
+// plus "uri-reference" (RFC 3986), which the SARIF schema uses for
+// artifact URIs and the defaults do not check.
+var formats = func() strfmt.Registry {
+	r := strfmt.NewFormats()
+	var u uriReference
+	r.Add("uri-reference", &u, IsURIReference)
+	return r
+}()
+
+type uriReference string
+
+func (u uriReference) String() string               { return string(u) }
+func (u uriReference) MarshalText() ([]byte, error) { return []byte(u), nil }
+func (u *uriReference) UnmarshalText(b []byte) error {
+	*u = uriReference(b)
+	return nil
+}
+
+// IsURIReference reports whether s is an RFC 3986 URI reference: only
+// unreserved, reserved and percent-encoded characters, every "%" followed
+// by two hex digits, and parseable as a URL.
+func IsURIReference(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("-._~:/?#[]@!$&'()*+,;=", c) >= 0:
+		case c == '%':
+			if i+2 >= len(s) || !isHex(s[i+1]) || !isHex(s[i+2]) {
+				return false
+			}
+			i += 2
+		default:
+			return false
+		}
+	}
+	_, err := url.Parse(s)
+	return err == nil
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
 
 type cacheKey struct {
 	path     string
@@ -84,7 +131,7 @@ func Validate(t testing.TB, schema *spec.Schema, doc []byte) {
 	if err := json.Unmarshal(doc, &v); err != nil {
 		t.Fatalf("output is not JSON: %v", err)
 	}
-	if err := validate.AgainstSchema(schema, v, strfmt.Default); err != nil {
+	if err := validate.AgainstSchema(schema, v, formats); err != nil {
 		t.Fatalf("output does not match the schema:\n%v", err)
 	}
 }

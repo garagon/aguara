@@ -3,12 +3,17 @@ package output_test
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/garagon/aguara/internal/baseline"
 	"github.com/garagon/aguara/internal/output"
+	"github.com/garagon/aguara/internal/rulecatalog"
 	"github.com/garagon/aguara/internal/rulemeta"
 	"github.com/garagon/aguara/internal/schematest"
 	"github.com/garagon/aguara/internal/types"
@@ -100,7 +105,7 @@ func TestSARIFRulesCarrySecuritySeverityHelpAndCWE(t *testing.T) {
 	// The category tag stays first, as before.
 	require.Equal(t, "credential-leak", byID["CRED_002"]["properties"].(map[string]any)["tags"].([]any)[0])
 	require.Contains(t, byID["CRED_002"]["properties"].(map[string]any)["tags"], "external/cwe/cwe-798")
-	require.Equal(t, output.RuleCatalogURI, byID["CRED_002"]["helpUri"])
+	require.Equal(t, output.RuleCatalogURI+"#cred_002", byID["CRED_002"]["helpUri"], "each built-in rule links to its own RULES.md row")
 	require.NotContains(t, byID["TEAM_001"], "helpUri", "custom rules are not in the public catalog")
 
 	rel := byID["EXTDL_013"]["relationships"].([]any)[0].(map[string]any)
@@ -207,4 +212,129 @@ func TestSecuritySeverityBands(t *testing.T) {
 	require.Equal(t, "5.5", output.SecuritySeverity(types.SeverityMedium))
 	require.Equal(t, "2.0", output.SecuritySeverity(types.SeverityLow))
 	require.Equal(t, "0.0", output.SecuritySeverity(types.SeverityInfo))
+}
+
+func TestEncodeURIPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"skills/demo/SKILL.md": "skills/demo/SKILL.md",
+		"my skill/SKILL.md":    "my%20skill/SKILL.md",
+		"100%.md":              "100%25.md",
+		"a#b?c.md":             "a%23b%3Fc.md",
+		"caf\u00e9/\u65e5.md":  "caf%C3%A9/%E6%97%A5.md",
+		"-leading-dash.md":     "-leading-dash.md",
+		"c:not-a-scheme.md":    "c%3Anot-a-scheme.md",
+		"./a/./b.md":           "a/b.md",
+		"../outside.md":        "outside.md",
+		"a/../../escape.md":    "escape.md",
+		"/abs/path.md":         "abs/path.md",
+		"back\\slash.md":       "back%5Cslash.md",
+	} {
+		got := output.EncodeURIPath(in)
+		require.Equal(t, want, got, in)
+		require.True(t, schematest.IsURIReference(got), got)
+		u, err := url.Parse(got)
+		require.NoError(t, err)
+		require.Empty(t, u.Scheme, "a relative reference, never a scheme: %s", got)
+		require.False(t, strings.HasPrefix(got, "/"), "never absolute: %s", got)
+		require.NotContains(t, "/"+got+"/", "/../", "never climbs: %s", got)
+	}
+}
+
+// Unusual file names produce valid URI references, while fingerprints
+// still come from the finding's own path.
+func TestSARIFEncodesArtifactURIsButNotFingerprints(t *testing.T) {
+	names := []string{"my skill/SKILL.md", "100%.md", "a#b?.md", "caf\u00e9.md", "-dash.md"}
+	result := &types.ScanResult{}
+	for _, name := range names {
+		result.Findings = append(result.Findings, types.Finding{
+			RuleID: "PROMPT_INJECTION_001", RuleName: "Instruction override attempt", Severity: types.SeverityCritical,
+			Category: "prompt-injection", FilePath: name, Line: 1, MatchedText: "Ignore all previous instructions", Analyzer: "pattern",
+		})
+	}
+	run, _ := formatSARIF(t, result, nil, output.SARIFOptions{URIPrefix: "skills", InWorkTree: true})
+	for i, r := range run["results"].([]any) {
+		res := r.(map[string]any)
+		uri := res["locations"].([]any)[0].(map[string]any)["physicalLocation"].(map[string]any)["artifactLocation"].(map[string]any)["uri"].(string)
+		decoded, err := url.PathUnescape(uri)
+		require.NoError(t, err)
+		require.Equal(t, "skills/"+names[i], decoded)
+		require.Equal(t, string(baseline.ComputeFingerprint(result.Findings[i])), res["partialFingerprints"].(map[string]any)["aguara/v1"])
+	}
+}
+
+func TestSARIFNotificationsReferenceOnlyRunRules(t *testing.T) {
+	ext := []output.SARIFExternalResult{{
+		RuleID: "CHECK_COMPROMISED_PACKAGE", RuleName: "Known malicious package", Category: "supply-chain",
+		Severity: types.SeverityCritical, Message: "m", URI: "package-lock.json",
+	}}
+	run, _ := formatSARIF(t, nil, ext, output.SARIFOptions{Invocation: &output.SARIFInvocation{
+		ExecutionSuccessful: true,
+		Notifications: []output.SARIFNotification{
+			{Level: "warning", RuleID: "CHECK_COMPROMISED_PACKAGE", Message: "in the run"},
+			{Level: "warning", RuleID: "CHECK_PERSISTENCE_ARTIFACT", Message: "outside the repository"},
+		},
+	}})
+	notes := run["invocations"].([]any)[0].(map[string]any)["toolExecutionNotifications"].([]any)
+	first := notes[0].(map[string]any)
+	require.Equal(t, map[string]any{"id": "CHECK_COMPROMISED_PACKAGE", "index": float64(0)}, first["associatedRule"])
+	second := notes[1].(map[string]any)
+	require.NotContains(t, second, "associatedRule", "a rule that is not in driver.rules is not referenced")
+	require.Equal(t, "CHECK_PERSISTENCE_ARTIFACT: outside the repository", second["message"].(map[string]any)["text"])
+}
+
+func TestSARIFRunPropertiesHoldNoLocalAbsolutePaths(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "home", "runner", "work", "repo")
+	other := filepath.Join(string(filepath.Separator), "tmp", "elsewhere")
+	result := &types.ScanResult{Baseline: &types.BaselineSummary{Applied: true, Path: filepath.Join(other, "baseline.json")}}
+	_, raw := formatSARIF(t, result, nil, output.SARIFOptions{
+		LocalRoots: []string{root},
+		Properties: map[string]any{
+			"coverage": map[string]any{
+				"unsupported_evidence": []any{
+					map[string]any{"path": filepath.Join(root, "deno.lock"), "kind": "lockfile"},
+					map[string]any{"path": filepath.Join(other, "gems.locked"), "kind": "lockfile"},
+				},
+			},
+			"note": "could not read " + filepath.Join(root, "sub", "x.txt"),
+		},
+		Invocation: &output.SARIFInvocation{ExitCode: 2, ExitCodeDescription: "scan failed: " + filepath.Join(root, "big.bin"),
+			Notifications: []output.SARIFNotification{{Level: "error", Message: "read " + filepath.Join(root, "big.bin")}}},
+	})
+	text := string(raw)
+	require.NotContains(t, text, root)
+	require.NotContains(t, text, other)
+	require.Contains(t, text, `"path": "deno.lock"`)
+	require.Contains(t, text, "could not read sub/x.txt")
+	require.Contains(t, text, "scan failed: big.bin")
+	require.Contains(t, text, `"applied": true`, "the baseline summary stays, only its outside path goes")
+}
+
+func TestSARIFCWETagsArePadded(t *testing.T) {
+	result := &types.ScanResult{Findings: []types.Finding{
+		{RuleID: "THIRDPARTY_006", RuleName: "Unescaped user input in HTML output", Severity: types.SeverityHigh, Category: "third-party-content", FilePath: "a.js", Line: 1},
+		{RuleID: "MCP_012", RuleName: "Prototype pollution vector", Severity: types.SeverityHigh, Category: "mcp-attack", FilePath: "b.js", Line: 1},
+	}}
+	catalog := rulemeta.Index([]rulemeta.Rule{
+		{ID: "THIRDPARTY_006", CWE: []string{"CWE-79"}},
+		{ID: "MCP_012", CWE: []string{"CWE-1321"}},
+	})
+	run, _ := formatSARIF(t, result, nil, output.SARIFOptions{Catalog: catalog})
+	rules := run["tool"].(map[string]any)["driver"].(map[string]any)["rules"].([]any)
+	require.Contains(t, rules[0].(map[string]any)["properties"].(map[string]any)["tags"], "external/cwe/cwe-079")
+	require.Contains(t, rules[1].(map[string]any)["properties"].(map[string]any)["tags"], "external/cwe/cwe-1321")
+	taxa := run["taxonomies"].([]any)[0].(map[string]any)["taxa"].([]any)
+	require.Equal(t, "79", taxa[0].(map[string]any)["id"], "taxon IDs are the CWE number")
+}
+
+// Every built-in rule's helpUri anchor exists in RULES.md.
+func TestRuleHelpAnchorsExistInRulesMarkdown(t *testing.T) {
+	data, err := os.ReadFile("../../RULES.md")
+	require.NoError(t, err)
+	doc := string(data)
+	ids := rulecatalog.BuiltinIDs()
+	require.NotEmpty(t, ids)
+	for id := range ids {
+		require.Contains(t, doc, `<a id="`+output.RuleAnchor(id)+`"></a>`+id+" |", "RULES.md has no anchor for %s", id)
+		require.Equal(t, output.RuleCatalogURI+"#"+output.RuleAnchor(id), output.RuleHelpURI(id))
+	}
 }

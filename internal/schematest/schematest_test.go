@@ -1,6 +1,7 @@
 package schematest
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,8 @@ func TestValidateResolvesNestedSARIFReferences(t *testing.T) {
 			"results":[{"message":{"text":"m"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.md"},"region":` + region + `}}]}]}]}`)
 	}
 	Validate(t, sarif, run(`{"startLine":3}`, `[]`))
-	for _, bad := range [][]byte{run(`{"startLine":0}`, `[]`), run(`{"startLine":3}`, `null`), run(`{"startLine":3,"bogus":1}`, `[]`)} {
+	spaced := []byte(strings.Replace(string(run(`{"startLine":3}`, `[]`)), `"a.md"`, `"my skill.md"`, 1))
+	for _, bad := range [][]byte{run(`{"startLine":0}`, `[]`), run(`{"startLine":3}`, `null`), run(`{"startLine":3,"bogus":1}`, `[]`), spaced} {
 		f := &fakeT{TB: t}
 		Validate(f, sarif, bad)
 		if !f.failed {
@@ -49,7 +51,7 @@ func TestValidateResolvesNestedSARIFReferences(t *testing.T) {
 	}
 }
 
-const zeros64 ="0000000000000000000000000000000000000000000000000000000000000000"
+const zeros64 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // fakeT records a failure instead of stopping the test, so the test can
 // assert that validation fails.
@@ -60,3 +62,16 @@ type fakeT struct {
 
 func (f *fakeT) Helper()               {}
 func (f *fakeT) Fatalf(string, ...any) { f.failed = true }
+
+func TestIsURIReference(t *testing.T) {
+	for _, ok := range []string{"a.md", "skills/my%20skill/SKILL.md", "caf%C3%A9.md", "-dash.md", "100%25.md", "", "https://x.example/a?b#c"} {
+		if !IsURIReference(ok) {
+			t.Errorf("%q should be a URI reference", ok)
+		}
+	}
+	for _, bad := range []string{"my skill.md", "100%.md", "caf\u00e9.md", "a\\b.md", "x%2", "a\"b"} {
+		if IsURIReference(bad) {
+			t.Errorf("%q should not be a URI reference", bad)
+		}
+	}
+}

@@ -71,6 +71,7 @@ func sarifOptions(rep scanReport) output.SARIFOptions {
 	}
 	if rep.target != "" {
 		opts.URIPrefix, opts.InWorkTree = sarifURIBase(rep.target)
+		opts.LocalRoots = localRoots(rep.target)
 	}
 	opts.Invocation = sarifInvocation(rep.runErr, rep.threshold, rep.notes)
 	return opts
@@ -176,6 +177,45 @@ func sourceRelativeURI(base, p string) string {
 		return ""
 	}
 	return filepath.ToSlash(rel)
+}
+
+// localRoots lists the absolute local directories SARIF output for target
+// is relative to: the git work tree root when target is inside one, else
+// the target directory, each in its resolved and in its written form (they
+// differ when the path goes through a symbolic link, such as /tmp on
+// macOS). SARIF rewrites paths under them as relative and drops any other
+// absolute path from run properties.
+func localRoots(target string) []string {
+	if target == "" {
+		target = "."
+	}
+	dir, ok := resolvedDir(target)
+	if !ok {
+		return nil
+	}
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return []string{dir}
+	}
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	base := dir
+	if root, ok := workTreeRoot(dir); ok {
+		base = root
+	}
+	roots := []string{base}
+	// The written form of base: abs with the same suffix below base.
+	if rel, err := filepath.Rel(base, dir); err == nil {
+		written := abs
+		if rel != "." {
+			written = strings.TrimSuffix(abs, string(filepath.Separator)+rel)
+		}
+		if written != base {
+			roots = append(roots, written)
+		}
+	}
+	return roots
 }
 
 // sarifSourceRoot is the directory package finding URIs are relative to

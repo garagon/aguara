@@ -1079,6 +1079,7 @@ func writeCheckSARIF(result *incident.CheckResult, plan checkPlan, runErr error)
 	external, notes := packageSARIFResults(result.Findings, base)
 	opts := sarifOptions(scanReport{runErr: runErr, threshold: flagCheckFailOn, notes: notes})
 	opts.InWorkTree = inTree
+	opts.LocalRoots = localRoots(plan.rootPath)
 	opts.Properties = map[string]any{
 		"packages_read": result.PackagesRead,
 		"intel":         result.Intel,

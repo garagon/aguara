@@ -79,7 +79,8 @@ func packageRuleID(f incident.Finding) string {
 // the package identity and the file it was found in for package findings,
 // or the class, file and title for the others. Lines and advisory lists are
 // left out so an edit above the entry or a new advisory for the same
-// release does not reopen the alert.
+// release does not change it. It is for tools that match results on
+// fingerprints; GitHub code scanning tracks alerts by its own line hash.
 func packageFingerprint(f incident.Finding, uri string) string {
 	h := sha256.New()
 	if f.Package != "" {
@@ -146,15 +147,33 @@ func packageSARIFResults(findings []incident.Finding, base string) ([]output.SAR
 			Category:        "supply-chain",
 			HelpURI:         packageDocsURI,
 			Severity:        sev,
-			Message:         f.Title,
-			URI:             uri,
-			Line:            f.Line,
-			FingerprintKey:  packageFingerprintKey,
-			Fingerprint:     packageFingerprint(f, uri),
-			Properties:      props,
+			// An unread include is a gap in what was checked, not a
+			// compromise: it gates like any WARNING package finding
+			// (high), but code scanning ranks it in the medium band.
+			SecuritySeverity: packageSecuritySeverity(f),
+			Message:          f.Title,
+			URI:              uri,
+			Line:             f.Line,
+			FingerprintKey:   packageFingerprintKey,
+			Fingerprint:      packageFingerprint(f, uri),
+			Properties:       props,
 		})
 	}
 	return results, notes
+}
+
+// unreadIncludeSecuritySeverity is the SARIF security-severity of
+// CHECK_UNRESOLVED_INCLUDE: the MEDIUM score, inside GitHub's 4.0 to 6.9
+// medium band.
+const unreadIncludeSecuritySeverity = "5.5"
+
+// packageSecuritySeverity overrides the score of finding classes whose
+// risk is lower than their gate level; "" keeps the level's score.
+func packageSecuritySeverity(f incident.Finding) string {
+	if f.Kind == incident.KindUnresolvedInclude {
+		return unreadIncludeSecuritySeverity
+	}
+	return ""
 }
 
 // displayLocation renders a package finding's path relative to root when

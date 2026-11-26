@@ -217,7 +217,6 @@ name: "Path traversal attempt"
 description: "Detects path traversal patterns targeting sensitive files, including URL-encoded variants"
 severity: HIGH
 category: supply-chain
-cwe: [CWE-22]
 targets: []
 match_mode: any
 patterns:
@@ -242,7 +241,6 @@ name: "Symlink attack"
 description: "Detects symbolic link creation targeting sensitive files"
 severity: MEDIUM
 category: supply-chain
-cwe: [CWE-61]
 targets: []
 match_mode: any
 patterns:

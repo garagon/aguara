@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/garagon/aguara/internal/baseline"
@@ -21,8 +24,8 @@ const (
 	// sarifSchemaURI is the OASIS SARIF 2.1.0 schema (errata 01), the
 	// location that resolves.
 	sarifSchemaURI = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"
-	// RuleCatalogURI is the public rule catalog that every built-in rule's
-	// helpUri points at.
+	// RuleCatalogURI is the public rule catalog. Every built-in rule's
+	// helpUri points at its own anchor in it (see RuleHelpURI).
 	RuleCatalogURI = "https://github.com/garagon/aguara/blob/main/RULES.md"
 	// SourceRootBaseID is the uriBaseId of artifact URIs that are relative
 	// to the root of the git work tree containing the scan target.
@@ -30,6 +33,13 @@ const (
 	// cweTaxonomyName names the CWE taxonomy in runs[].taxonomies.
 	cweTaxonomyName = "CWE"
 )
+
+// RuleAnchor is the HTML anchor RULES.md defines for a rule ID: the ID in
+// lower case. Every built-in rule's table row carries <a id="..."></a>.
+func RuleAnchor(id string) string { return strings.ToLower(id) }
+
+// RuleHelpURI is the helpUri of a built-in rule: its row in RULES.md.
+func RuleHelpURI(id string) string { return RuleCatalogURI + "#" + RuleAnchor(id) }
 
 // SecuritySeverity returns the GitHub code scanning `security-severity`
 // score for a severity. GitHub ranks a score over 9.0 as critical, 7.0 to
@@ -86,6 +96,12 @@ type SARIFOptions struct {
 	Invocation *SARIFInvocation
 	// Properties are merged into runs[0].properties.
 	Properties map[string]any
+	// LocalRoots are the absolute local directories URIs are relative to
+	// (the work tree root or the scan target, in their written and
+	// resolved forms). Absolute paths in run properties and notification
+	// text are made relative to the first root that contains them, and
+	// dropped when none does, so no local absolute path reaches SARIF.
+	LocalRoots []string
 }
 
 // SARIFInvocation is runs[0].invocations[0]. Notifications are tool
@@ -129,7 +145,10 @@ type SARIFExternalResult struct {
 	// HelpURI documents the rule; empty omits helpUri.
 	HelpURI  string
 	Severity types.Severity
-	Message  string
+	// SecuritySeverity overrides the score SecuritySeverity(Severity)
+	// gives the rule, for findings whose risk is not their gate level.
+	SecuritySeverity string
+	Message          string
 	// URI is relative to the source root (see SARIFOptions.InWorkTree),
 	// slash-separated. Line is 1-based; zero means the whole file.
 	URI            string
@@ -253,7 +272,8 @@ type sarifNotification struct {
 }
 
 type sarifNotificationRule struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
+	Index int    `json:"index"`
 }
 
 type sarifResult struct {
@@ -323,6 +343,7 @@ func WriteSARIF(w io.Writer, scan *scanner.ScanResult, external []SARIFExternalR
 	for k, v := range opts.Properties {
 		props[k] = v
 	}
+	props = b.scrubProperties(props)
 
 	run := sarifRun{
 		Tool: sarifTool{Driver: sarifDriver{
@@ -371,6 +392,11 @@ type sarifBuilder struct {
 }
 
 func newSARIFBuilder(opts SARIFOptions) *sarifBuilder {
+	// Longest root first, so a root that is a suffix of another (/tmp/r
+	// inside /private/tmp/r) never rewrites part of the longer one.
+	roots := append([]string(nil), opts.LocalRoots...)
+	sort.SliceStable(roots, func(i, j int) bool { return len(roots[i]) > len(roots[j]) })
+	opts.LocalRoots = roots
 	return &sarifBuilder{
 		opts:      opts,
 		ruleIndex: map[string]int{},
@@ -388,6 +414,8 @@ type ruleDoc struct {
 	// explainable is true for catalog rules, which `aguara explain`
 	// documents.
 	explainable bool
+	// securitySeverity overrides SecuritySeverity(severity) when set.
+	securitySeverity string
 }
 
 func (b *sarifBuilder) ensureRule(doc ruleDoc) int {
@@ -401,7 +429,7 @@ func (b *sarifBuilder) ensureRule(doc ruleDoc) int {
 	var relationships []sarifRelationship
 	for _, cwe := range doc.cwe {
 		number := strings.TrimPrefix(cwe, "CWE-")
-		tags = append(tags, "external/cwe/cwe-"+number)
+		tags = append(tags, cweTag(number))
 		relationships = append(relationships, sarifRelationship{
 			Target: sarifDescriptorRef{
 				ID:            number,
@@ -421,7 +449,7 @@ func (b *sarifBuilder) ensureRule(doc ruleDoc) int {
 		Relationships:    relationships,
 		Properties: sarifRuleProperties{
 			Tags:             tags,
-			SecuritySeverity: SecuritySeverity(doc.severity),
+			SecuritySeverity: securitySeverityOf(doc),
 		},
 	}
 	full := doc.description
@@ -432,6 +460,96 @@ func (b *sarifBuilder) ensureRule(doc ruleDoc) int {
 	rule.Help = &sarifHelp{Text: helpText(doc), Markdown: helpMarkdown(doc)}
 	b.rules = append(b.rules, rule)
 	return idx
+}
+
+// scrubProperties returns props with every absolute local path made
+// relative to a local root, or removed when it lies outside all of them.
+// It works on the JSON form, so fields added to the reported structures
+// later are covered too.
+func (b *sarifBuilder) scrubProperties(props map[string]any) map[string]any {
+	data, err := json.Marshal(props)
+	if err != nil {
+		return props
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(data, &generic); err != nil {
+		return props
+	}
+	out, _ := b.scrubValue(generic).(map[string]any)
+	return out
+}
+
+func (b *sarifBuilder) scrubValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		for k, child := range val {
+			if s, ok := child.(string); ok && isAbsPath(s) {
+				if rel, ok := b.relativeToRoot(s); ok {
+					val[k] = rel
+				} else {
+					delete(val, k)
+				}
+				continue
+			}
+			val[k] = b.scrubValue(child)
+		}
+		return val
+	case []any:
+		out := val[:0]
+		for _, child := range val {
+			if s, ok := child.(string); ok && isAbsPath(s) {
+				if rel, ok := b.relativeToRoot(s); ok {
+					out = append(out, rel)
+				}
+				continue
+			}
+			out = append(out, b.scrubValue(child))
+		}
+		return out
+	case string:
+		return b.scrub(val)
+	default:
+		return v
+	}
+}
+
+// relativeToRoot maps an absolute local path into a slash path relative
+// to the first local root that contains it.
+func (b *sarifBuilder) relativeToRoot(p string) (string, bool) {
+	for _, root := range b.opts.LocalRoots {
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return filepath.ToSlash(rel), true
+	}
+	return "", false
+}
+
+// scrub rewrites the local roots inside free text (error messages, triage
+// summaries) to relative form.
+func (b *sarifBuilder) scrub(s string) string {
+	for _, root := range b.opts.LocalRoots {
+		if root == "" || root == string(filepath.Separator) {
+			continue
+		}
+		s = strings.ReplaceAll(s, root+string(filepath.Separator), "")
+		s = strings.ReplaceAll(s, root, ".")
+	}
+	return s
+}
+
+func isAbsPath(s string) bool {
+	return filepath.IsAbs(s) || (len(s) > 2 && s[1] == ':' && (s[2] == '\\' || s[2] == '/'))
+}
+
+// cweTag is the code scanning tag for a CWE number, zero-padded to three
+// digits the way CodeQL writes it (external/cwe/cwe-079).
+func cweTag(number string) string {
+	if n, err := strconv.Atoi(number); err == nil {
+		return fmt.Sprintf("external/cwe/cwe-%03d", n)
+	}
+	return "external/cwe/cwe-" + strings.ToLower(number)
 }
 
 // cweTaxon returns the index of the CWE taxon, adding it on first use.
@@ -464,12 +582,12 @@ func (b *sarifBuilder) taxonomies() []sarifToolComponent {
 func (b *sarifBuilder) helpURIFor(id string) string {
 	if b.opts.BuiltinRules != nil {
 		if b.opts.BuiltinRules[id] {
-			return RuleCatalogURI
+			return RuleHelpURI(id)
 		}
 		return ""
 	}
 	if _, ok := b.opts.Catalog[id]; ok {
-		return RuleCatalogURI
+		return RuleHelpURI(id)
 	}
 	return ""
 }
@@ -508,9 +626,10 @@ func (b *sarifBuilder) addFinding(finding scanner.Finding) {
 		Message:   sarifMessage{Text: finding.RuleName + ": " + finding.MatchedText},
 		Locations: []sarifLocation{b.location(b.contentURI(finding.FilePath), finding.Line, finding.Column)},
 	}
-	// Emit a stable fingerprint for baselineable findings so
-	// GitHub code-scanning (and external baseline tooling) can
-	// de-dupe across runs. Sensitive / credential-leak findings are
+	// Emit the baseline fingerprint for baselineable findings, for
+	// baseline files and external tools that match results on it (GitHub
+	// code scanning tracks alerts by its own primaryLocationLineHash, not
+	// this key). Sensitive / credential-leak findings are
 	// non-baselineable and intentionally carry no fingerprint. The
 	// fingerprint uses the finding's own path, not the artifact URI, so
 	// it matches baseline files whatever the URI base.
@@ -535,7 +654,7 @@ func (b *sarifBuilder) addFinding(finding scanner.Finding) {
 		props["rank"] = types.RoundScore(finding.Confidence * 100)
 	}
 	if len(finding.AlsoMatched) > 0 {
-		props["also_matched"] = finding.AlsoMatched
+		props["also_matched"] = types.MergedFindingReports(finding.AlsoMatched)
 	}
 	if finding.BaselineState != "" {
 		props["baseline_state"] = finding.BaselineState
@@ -546,14 +665,15 @@ func (b *sarifBuilder) addFinding(finding scanner.Finding) {
 
 func (b *sarifBuilder) addExternal(ext SARIFExternalResult) {
 	idx := b.ensureRule(ruleDoc{
-		id:          ext.RuleID,
-		name:        ext.RuleName,
-		category:    ext.Category,
-		description: ext.RuleDescription,
-		remediation: ext.Remediation,
-		helpURI:     ext.HelpURI,
-		cwe:         ext.CWE,
-		severity:    ext.Severity,
+		id:               ext.RuleID,
+		name:             ext.RuleName,
+		category:         ext.Category,
+		description:      ext.RuleDescription,
+		remediation:      ext.Remediation,
+		helpURI:          ext.HelpURI,
+		cwe:              ext.CWE,
+		severity:         ext.Severity,
+		securitySeverity: ext.SecuritySeverity,
 	})
 	r := sarifResult{
 		RuleID:    ext.RuleID,
@@ -588,7 +708,7 @@ func (b *sarifBuilder) contentURI(p string) string {
 
 func (b *sarifBuilder) location(uri string, line, column int) sarifLocation {
 	loc := sarifLocation{PhysicalLocation: sarifPhysicalLocation{
-		ArtifactLocation: sarifArtifactLocation{URI: uri},
+		ArtifactLocation: sarifArtifactLocation{URI: EncodeURIPath(uri)},
 	}}
 	if b.opts.InWorkTree {
 		loc.PhysicalLocation.ArtifactLocation.URIBaseID = SourceRootBaseID
@@ -632,22 +752,57 @@ func (b *sarifBuilder) invocation() sarifInvocation {
 		code := in.ExitCode
 		inv.ExitCode = &code
 	}
-	inv.ExitCodeDescription = in.ExitCodeDescription
+	inv.ExitCodeDescription = b.scrub(in.ExitCodeDescription)
 	for _, n := range in.Notifications {
 		level := n.Level
 		if level == "" {
 			level = "warning"
 		}
-		sn := sarifNotification{Level: level, Message: sarifMessage{Text: n.Message}}
-		if n.RuleID != "" {
-			sn.Descriptor = &sarifNotificationRule{ID: n.RuleID}
+		text := b.scrub(n.Message)
+		sn := sarifNotification{Level: level}
+		// associatedRule must name a rule of this run; a notification
+		// about a rule no result uses names it in the text instead.
+		if idx, ok := b.ruleIndex[n.RuleID]; ok && n.RuleID != "" {
+			sn.Descriptor = &sarifNotificationRule{ID: n.RuleID, Index: idx}
+		} else if n.RuleID != "" {
+			text = n.RuleID + ": " + text
 		}
+		sn.Message = sarifMessage{Text: text}
 		if n.URI != "" {
 			sn.Locations = []sarifLocation{b.location(n.URI, n.Line, 0)}
 		}
 		inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications, sn)
 	}
 	return inv
+}
+
+func securitySeverityOf(doc ruleDoc) string {
+	if doc.securitySeverity != "" {
+		return doc.securitySeverity
+	}
+	return SecuritySeverity(doc.severity)
+}
+
+// EncodeURIPath turns a slash-separated relative file path into a relative
+// URI reference (RFC 3986): each segment is percent-encoded as a path
+// segment, so spaces, "%", "#", "?", ":" and non-ASCII characters cannot
+// change how the reference parses, while "/" separators stay. The result
+// is never absolute and never climbs with "..": a path that would leave
+// its base keeps only its last segment. Fingerprints are computed from the
+// finding's path, never from this form.
+func EncodeURIPath(p string) string {
+	clean := path.Clean("/" + p)[1:] // rooted Clean drops leading ".." segments
+	if clean == "" {
+		return ""
+	}
+	if strings.HasPrefix(path.Clean(p), "../") || path.Clean(p) == ".." {
+		clean = path.Base(clean)
+	}
+	segments := strings.Split(clean, "/")
+	for i, s := range segments {
+		segments[i] = strings.ReplaceAll(url.PathEscape(s), ":", "%3A")
+	}
+	return strings.Join(segments, "/")
 }
 
 // helpText is help.text: the rule's description and remediation as plain
@@ -686,7 +841,7 @@ func helpMarkdown(doc ruleDoc) string {
 	}
 	switch {
 	case doc.explainable && doc.helpURI != "":
-		fmt.Fprintf(&sb, "Run `aguara explain %s` for the rule's details, or see the [rule catalog](%s).", doc.id, doc.helpURI)
+		fmt.Fprintf(&sb, "Run `aguara explain %s` for the rule's details, or see [its entry in the rule catalog](%s).", doc.id, doc.helpURI)
 	case doc.explainable:
 		fmt.Fprintf(&sb, "Run `aguara explain %s` for the rule's details.", doc.id)
 	case doc.helpURI != "":
