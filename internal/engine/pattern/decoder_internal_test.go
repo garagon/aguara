@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/garagon/aguara/internal/rules"
 	"github.com/garagon/aguara/internal/rules/builtin"
@@ -190,7 +191,7 @@ func TestDecoderBudgetCountsNormalizedText(t *testing.T) {
 	})
 	require.NoError(t, err)
 	m := NewMatcher([]*rules.CompiledRule{rule})
-	ligatures := strings.Repeat("ﷺ", 30)
+	ligatures := strings.Repeat("\ufdfa", 30)
 	var b strings.Builder
 	for i := range 300 {
 		fmt.Fprintf(&b, "x%d: %s\n", i, base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s %d", ligatures, i))))
@@ -204,6 +205,40 @@ func TestDecoderBudgetCountsNormalizedText(t *testing.T) {
 	require.Positive(t, run.rescanned)
 	require.LessOrEqual(t, run.rescanned, decodedBytesFactor*len(content))
 	require.Equal(t, decodedBytesFactor*len(content)-run.bytesLeft, run.rescanned, "the budget is charged with what is rescanned")
+}
+
+// The text matched around a blob, and the inline source map check, come
+// from a bounded window around it: the work per blob does not grow with the
+// length of the lines around it. Reading back to the start of an 8 MiB line
+// for each of 2000 blobs takes over ten seconds.
+func TestDecoderContextReadIsBounded(t *testing.T) {
+	long := strings.Repeat("x", 8<<20)
+	blob := "base64,QUJDREVGR0g="
+	inLongLine := long + "\n" + long + blob + long + "\n" + long
+	ownLine := long + "\nkey: " + blob + "\n" + long
+	cases := []struct {
+		text string
+		c    candidate
+	}{
+		{inLongLine, candidate{start: 2*len(long) + 1 + len("base64,"), end: 2*len(long) + 1 + len(blob)}},
+		{ownLine, candidate{start: len(long) + len("\nkey: base64,"), end: len(long) + len("\nkey: ") + len(blob)}},
+	}
+	start := time.Now()
+	for range 2000 {
+		for _, tc := range cases {
+			before, after := surroundings(tc.text, tc.c, maxDecodedContextLines, maxDecodedContextLines)
+			if len(before) > decodedContextBytes+decodedContextLinesBytes || len(after) > decodedContextBytes+decodedContextLinesBytes {
+				t.Fatalf("surroundings of %d and %d bytes", len(before), len(after))
+			}
+			if inlineSourceMap(tc.text, tc.c.start) {
+				t.Fatal("not a source map")
+			}
+		}
+	}
+	require.Less(t, time.Since(start), 2*time.Second, "the work per blob grows with the length of the lines around it")
+	before, after := surroundings(ownLine, cases[1].c, 3, 3)
+	require.Equal(t, "key: base64,", before, "a line beyond the cap is not taken")
+	require.Empty(t, after)
 }
 
 // A cancelled context stops the decoder and is reported.

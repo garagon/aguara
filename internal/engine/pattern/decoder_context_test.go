@@ -23,6 +23,9 @@ func TestDecoderSkipsEscapedCharacterLists(t *testing.T) {
 		`const bidi = "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";` + "\n",
 		`const seps = "\u00a0\u2028\u2029\u3000";` + "\n",
 		"Strip &#8203;&#8204;&#8205;&#8288;&#65279; before display.\n",
+		// A generated data table (an HTML entity decoder's) written as a
+		// string: combining marks next to a letter outside ASCII.
+		`const table = "\u0180;DE\u0348\u0349\u034d\u40a8ot;\u60dcqual;";` + "\n",
 	} {
 		for _, path := range []string{"sanitize.js", "README.md", "SKILL.md"} {
 			require.Empty(t, decodedFindings(t, path, content), "%s: %q", path, content)

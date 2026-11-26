@@ -50,19 +50,25 @@ import (
 // prefix. Decoded text is searched once more for blobs (base64 of base64,
 // URL-encoded or hex base64), up to maxDecodeDepth levels in all. Inline
 // source maps are not decoded: they hold the file's own sources. Escape runs
-// that decode to no letter or digit (a sanitizer's list of zero-width,
-// bidirectional or separator characters) are not matched either.
+// that spell no ASCII letter or digit (a sanitizer's list of zero-width,
+// bidirectional or separator characters, or text and data outside ASCII as
+// code generators escape it) are not matched either. A decode that fails
+// the text test is dropped whole: the text runs inside images, fonts and
+// certificates (metadata URLs, names) are not hidden text, so the text runs
+// of a mostly binary decode are not matched.
 //
 // Work is bounded per file. Each encoding rescans at most decoderBlobBudget
 // blobs, nested ones included, and the decoded text rescanned for the
 // whole file, measured after NFKC normalization, is at most
-// decodedBytesFactor times the file size. Each rescan adds at most
-// 2*decodedContextBytes of line context and twice 2*decodedContextLinesBytes
-// of surrounding lines. Only blobs that decode to text count: hashes,
-// integrity values and other binary encodings are decoded, fail the text
-// test and cost nothing from either budget, so a lockfile full of them
-// cannot exhaust it. Finding candidates and decoding them is linear in the
-// file size for each encoding.
+// decodedBytesFactor times the file size. The text around a blob comes from
+// a window of at most decodedContextBytes+decodedContextLinesBytes on each
+// side, read without walking the rest of a long line; a blob is matched
+// once with the lines above it, and once more with the lines on both sides
+// when a rule has a within_lines window. Only blobs that decode to text
+// count: hashes, integrity values and other binary encodings are decoded,
+// fail the text test and cost nothing from either budget, so a lockfile
+// full of them cannot exhaust it. Finding candidates and decoding them is
+// linear in the file size for each encoding.
 
 const (
 	// maxEncodedBlobSize is the maximum size of an encoded blob to attempt decoding.
@@ -308,10 +314,12 @@ func (r *decodeRun) scanText(text string, enc encoding, parent *blobOrigin, dept
 		if !ok || len(decoded) < minDecodedSize || !isLikelyText(decoded) {
 			return true
 		}
-		if isEscapeEncoding(enc) && !hasLetterOrDigit(decoded) {
-			// An escaped list of invisible or separator characters, such as
-			// a sanitizer's set: the escapes are its readable form and there
-			// is no hidden text to match.
+		if isEscapeEncoding(enc) && !hasASCIILetterOrDigit(decoded) {
+			// Escapes that spell no ASCII letter or digit: a list of
+			// invisible or separator characters such as a sanitizer's set,
+			// or text and data outside ASCII, which code generators and
+			// minifiers write as escapes. Text hidden behind escapes spells
+			// ASCII letters or digits, which those tools leave as they are.
 			return true
 		}
 		// The budget is charged with the normalized text that is matched:
@@ -545,34 +553,49 @@ func isBase64Char(c byte) bool {
 // side, whole lines follow on that side: up to above lines before it and
 // below lines after it, at most decodedContextLinesBytes on each side.
 // before ends at c.start and after starts at c.end, so both are contiguous
-// with the blob in text.
+// with the blob in text. Only the bytes it may return are read, so the
+// work per blob does not grow with the length of the lines around it.
 func surroundings(text string, c candidate, above, below int) (before, after string) {
-	lineStart := strings.LastIndexByte(text[:c.start], '\n') + 1
-	bs := max(lineStart, c.start-decodedContextBytes)
-	if bs == lineStart {
-		for n := 0; n < above && bs > 0; n++ {
-			prev := strings.LastIndexByte(text[:bs-1], '\n') + 1
-			if lineStart-prev > decodedContextLinesBytes {
-				break
+	bs := max(0, c.start-decodedContextBytes)
+	lineStart := -1 // the start of the blob's line, if within reach
+	if nl := strings.LastIndexByte(text[bs:c.start], '\n'); nl >= 0 {
+		lineStart = bs + nl + 1
+	} else if bs == 0 || text[bs-1] == '\n' {
+		lineStart = bs
+	}
+	if lineStart >= 0 {
+		bs = lineStart
+		lo := max(0, lineStart-decodedContextLinesBytes)
+		for n := 0; n < above && bs > lo; n++ {
+			// The line before bs ends at bs-1.
+			nl := strings.LastIndexByte(text[lo:bs-1], '\n')
+			if nl < 0 && lo > 0 {
+				break // it starts beyond the cap
 			}
-			bs = prev
+			bs = lo + nl + 1
 		}
 	}
-	lineEnd := len(text)
-	if nl := strings.IndexByte(text[c.end:], '\n'); nl >= 0 {
+	ae := min(len(text), c.end+decodedContextBytes)
+	lineEnd := -1 // the end of the blob's line, if within reach
+	if nl := strings.IndexByte(text[c.end:ae], '\n'); nl >= 0 {
 		lineEnd = c.end + nl
+	} else if ae == len(text) || text[ae] == '\n' {
+		lineEnd = ae
 	}
-	ae := min(lineEnd, c.end+decodedContextBytes)
-	if ae == lineEnd {
-		for n := 0; n < below && ae < len(text); n++ {
-			next := len(text)
-			if nl := strings.IndexByte(text[ae+1:], '\n'); nl >= 0 {
-				next = ae + 1 + nl
-			}
-			if next-lineEnd > decodedContextLinesBytes {
+	if lineEnd >= 0 {
+		ae = lineEnd
+		hi := min(len(text), lineEnd+1+decodedContextLinesBytes)
+		for n := 0; n < below && ae < hi; n++ {
+			// The next line starts at ae+1.
+			nl := strings.IndexByte(text[ae+1:hi], '\n')
+			if nl < 0 {
+				if hi < len(text) {
+					break // it ends beyond the cap
+				}
+				ae = len(text)
 				break
 			}
-			ae = next
+			ae += 1 + nl
 		}
 	}
 	return text[bs:c.start], text[c.end:ae]
@@ -918,10 +941,10 @@ func isEscapeEncoding(enc encoding) bool {
 	return false
 }
 
-// hasLetterOrDigit reports whether data holds a letter or a digit.
-func hasLetterOrDigit(data []byte) bool {
-	for _, r := range string(data) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+// hasASCIILetterOrDigit reports whether data holds an ASCII letter or digit.
+func hasASCIILetterOrDigit(data []byte) bool {
+	for _, b := range data {
+		if 'a' <= b|0x20 && b|0x20 <= 'z' || '0' <= b && b <= '9' {
 			return true
 		}
 	}
@@ -930,10 +953,17 @@ func hasLetterOrDigit(data []byte) bool {
 
 // inlineSourceMap reports whether the blob at start is the data of an
 // inline source map (`//# sourceMappingURL=data:...;base64,`), which holds
-// the file's own sources.
+// the file's own sources. It reads at most decodedContextBytes before the
+// blob, and only for a blob right after "base64,".
 func inlineSourceMap(text string, start int) bool {
-	lineStart := strings.LastIndexByte(text[:start], '\n') + 1
-	return strings.Contains(text[max(lineStart, start-decodedContextBytes):start], "sourceMappingURL=data:")
+	if !strings.HasSuffix(text[:start], "base64,") {
+		return false
+	}
+	before := text[max(0, start-decodedContextBytes):start]
+	if nl := strings.LastIndexByte(before, '\n'); nl >= 0 {
+		before = before[nl+1:]
+	}
+	return strings.Contains(before, "sourceMappingURL=data:")
 }
 
 // isDigestLength reports whether n is the size in bytes of a common digest:
