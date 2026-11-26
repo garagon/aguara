@@ -15,6 +15,8 @@ The installed binary's catalog is authoritative for that binary.
 | Task | Command |
 |---|---|
 | Inspect skills, code or agent configuration | `aguara scan ./skills/ --project-policy ignore` |
+| Scan several files and directories as one report | `aguara scan SKILL.md scripts/ --root .` |
+| Scan piped content (a tool description, a file about to be written) | `aguara scan - --stdin-filename SKILL.md` |
 | Check dependencies against malicious-package intelligence | `aguara check .` |
 | Combine content and dependency checks | `aguara audit .` |
 | Produce machine-readable audit results | `aguara audit . --format json` |
@@ -37,7 +39,11 @@ From v0.28.0, `audit` and `scan --ci` ignore target-owned policy (`.aguara.yml`,
 `.aguara.yml` when `--fail-on` is not passed (a threshold can only add a gate),
 and says so on stderr. It prints a stderr notice naming the files whenever
 applying the policy changed the result. A local `scan` can still trust
-it. Use `--project-policy ignore` when inspecting unfamiliar content. The public Go scanning APIs ignore target-owned `.aguaraignore` and
+it. Use `--project-policy ignore` when inspecting unfamiliar content. Content piped to
+`scan -` never applies project policy, and `--project-policy trust` is rejected there.
+Commit hooks (`aguara init --hook`, `.pre-commit-hooks.yaml`) apply the committer's own
+policy; enforce in CI with `--project-policy ignore`.
+The public Go scanning APIs ignore target-owned `.aguaraignore` and
 inline suppression directives by default. `WithTrustedTargetPolicy()` opts in
 when the caller owns that policy.
 
@@ -91,7 +97,10 @@ Important options:
   catalog (case-insensitive).
 - `WithMinSeverity(...)`: reported-finding threshold.
 - `WithMaxFileSize(bytes)`: disk-read limit, default 50 MiB; does not cap inline content.
-- `WithIgnorePatterns([]string{...})`: caller-owned directory exclusions.
+- `WithIgnorePatterns([]string{...})`: caller-owned exclusions in the `.aguaraignore`
+  syntax (`dist/` excludes every `dist` directory, `/build` only the root one; a
+  pattern without a slash matches file names only; `!` negation is unsupported and
+  never matches). Repeated use accumulates; earlier versions kept only the last call.
 - `WithCustomRules(dirs...)`: additional YAML rules. Repeated use accumulates
   directories; it does not replace earlier ones.
 - `WithStateDir(dir)`: enables stateful rug-pull tracking.
@@ -184,7 +193,12 @@ exported through public aliases, rather than copying a partial struct.
   asks for review (`entries_not_evaluated`) for special files and for every
   link that is not `inside`. A link an ignore pattern matches is not listed,
   so with trusted project policy the target's own `.aguaraignore` can keep
-  it out of triage. `scan --changed` scans a changed
+  it out of triage. A scan of several paths also lists the named paths a
+  scan of the root would not read (`in_skipped_dir`, `ignored`), and a
+  trusted local run the report or baseline it writes (`output_file`); of
+  those only `in_skipped_dir` asks `audit` for review. A named path that is
+  missing, special or over the size limit makes a several-paths scan
+  incomplete; the others are still scanned. `scan --changed` scans a changed
   submodule whole; one that is not checked out at the commit the index
   records (nothing checked out, or another commit, whose files are still
   scanned) is a `not_scanned` failure. One at its recorded commit is just

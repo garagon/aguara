@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,30 +9,19 @@ import (
 	"github.com/garagon/aguara/internal/output"
 )
 
-// sensitiveEnvKeys matches env variable names that likely contain secrets.
-var sensitiveEnvKeys = []string{
-	"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL",
-	"AUTH", "PRIVATE", "API_KEY", "APIKEY",
-}
-
-// redactEnv returns a copy of the env map with sensitive values masked.
+// redactEnv returns a copy of the env map with the values of sensitive
+// names (sensitiveEnvName, never weaker than v0.29.0) masked and
+// secret-shaped parts of the other values redacted.
 func redactEnv(env map[string]string) map[string]string {
 	if len(env) == 0 {
 		return env
 	}
 	redacted := make(map[string]string, len(env))
 	for k, v := range env {
-		upper := strings.ToUpper(k)
-		masked := false
-		for _, sensitive := range sensitiveEnvKeys {
-			if strings.Contains(upper, sensitive) {
-				redacted[k] = "***REDACTED***"
-				masked = true
-				break
-			}
-		}
-		if !masked {
-			redacted[k] = v
+		if sensitiveEnvName(k) {
+			redacted[k] = "***REDACTED***"
+		} else {
+			redacted[k] = redactValue(v)
 		}
 	}
 	return redacted
@@ -43,6 +33,13 @@ type MCPServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env,omitempty"`
+	// Transport and URL describe a remote server: the transport the
+	// config names ("sse", "http", "streamable-http", ...), or "remote"
+	// when it gives only a URL. Both are empty for a local (stdio)
+	// server, and Command is usually empty for a remote one.
+	Transport string            `json:"transport,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
 }
 
 // ClientResult holds the discovered MCP servers for a single client.
@@ -50,6 +47,10 @@ type ClientResult struct {
 	Client  string      `json:"client"`
 	Path    string      `json:"path"`
 	Servers []MCPServer `json:"servers"`
+	// Warnings lists entries of the file that were not in the expected
+	// shape: a value of another type is read as text, an entry that is
+	// not an object is skipped. They never repeat the values.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Result holds the full discovery output.
@@ -93,16 +94,26 @@ func (r *Result) TotalClients() int {
 	return n
 }
 
-// Redacted returns a copy of the result with sensitive env values masked.
+// Redacted returns a copy of the result without secrets: environment
+// values whose names suggest a secret are masked as before, and secret
+// values anywhere else (a --token=... argument, the value after
+// --api-key, an Authorization header, URL credentials or a sensitive
+// query parameter, and token formats such as ghp_... or sk-...) are
+// replaced with [REDACTED]. FormatTree and the CLI's JSON output always
+// print the redacted copy.
 func (r *Result) Redacted() *Result {
 	out := &Result{Clients: make([]ClientResult, len(r.Clients))}
 	for i, c := range r.Clients {
 		servers := make([]MCPServer, len(c.Servers))
 		for j, s := range c.Servers {
 			servers[j] = s
+			servers[j].Command = redactCommand(s.Command)
+			servers[j].Args = redactArgs(s.Args)
 			servers[j].Env = redactEnv(s.Env)
+			servers[j].URL = redactValue(s.URL)
+			servers[j].Headers = redactHeaders(s.Headers)
 		}
-		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers}
+		out.Clients[i] = ClientResult{Client: c.Client, Path: c.Path, Servers: servers, Warnings: c.Warnings}
 	}
 	out.Unreadable = append([]UnreadableConfig(nil), r.Unreadable...)
 	return out
@@ -128,18 +139,29 @@ func (r *Result) AllServers() []struct {
 	return all
 }
 
-// Scan checks all known MCP client config paths and extracts server definitions.
+// Scan checks all known MCP client config paths and extracts server
+// definitions. Entries of an unexpected shape are read leniently and
+// reported in ClientResult.Warnings, and a file with warnings is listed
+// even when no server could be read, so scan --auto still scans it. A file
+// the JSON reader rejects (JSONC comments, trailing commas, extreme
+// nesting, a top level that is not an object) is listed the same way, with
+// one warning.
 func Scan() (*Result, error) {
 	result := &Result{}
 
 	for _, client := range KnownClients() {
 		for _, path := range client.Paths {
 			var servers []MCPServer
+			var warnings []string
 			var err error
 
 			switch {
 			case client.Name == "openclaw":
 				cr, oerr := scanOpenClawConfig(path)
+				var perr *parseError
+				if errors.As(oerr, &perr) {
+					result.Clients = append(result.Clients, ClientResult{Client: client.Name, Path: path, Warnings: []string{perr.warning()}})
+				}
 				if oerr != nil {
 					if u, ok := unreadable(client.Name, path, oerr); ok {
 						result.Unreadable = append(result.Unreadable, u)
@@ -151,24 +173,32 @@ func Scan() (*Result, error) {
 				}
 				continue
 			case client.ConfigKey == "opencode":
-				servers, err = parseOpenCodeConfig(path)
+				servers, warnings, err = parseOpenCodeConfigWarnings(path)
 			case client.ConfigKey == "claude-code":
-				servers, err = parseClaudeCodeConfig(path)
+				servers, warnings, err = parseClaudeCodeConfigWarnings(path)
 			default:
-				servers, err = parseConfigWithKey(path, client.ConfigKey)
+				servers, warnings, err = parseConfigWithKeyWarnings(path, client.ConfigKey)
 			}
 
+			// A file that exists but is not JSON the reader accepts is
+			// listed with a warning, so it stays visible and scan --auto
+			// still scans it; a missing or unreadable file is skipped.
+			var perr *parseError
+			if errors.As(err, &perr) {
+				servers, warnings, err = nil, []string{perr.warning()}, nil
+			}
 			if err != nil {
 				if u, ok := unreadable(client.Name, path, err); ok {
 					result.Unreadable = append(result.Unreadable, u)
 				}
 				continue
 			}
-			if len(servers) > 0 {
+			if len(servers) > 0 || len(warnings) > 0 {
 				result.Clients = append(result.Clients, ClientResult{
-					Client:  client.Name,
-					Path:    path,
-					Servers: servers,
+					Client:   client.Name,
+					Path:     path,
+					Servers:  servers,
+					Warnings: warnings,
 				})
 			}
 		}
@@ -178,7 +208,9 @@ func Scan() (*Result, error) {
 }
 
 // FormatTree returns a human-readable tree of discovered MCP servers,
-// followed by the configurations that could not be read.
+// followed by the configurations that could not be read. Secrets are
+// redacted as Result.Redacted does, and a remote server shows its
+// transport and URL.
 func FormatTree(result *Result) string {
 	if len(result.Clients) == 0 && len(result.Unreadable) == 0 {
 		return "No MCP configurations found.\n\nChecked paths for: Claude Desktop, Cursor, VS Code, Cline, Windsurf, OpenClaw, " +
@@ -186,13 +218,14 @@ func FormatTree(result *Result) string {
 	}
 
 	var b strings.Builder
+	result = result.Redacted()
 	if len(result.Clients) == 0 {
 		b.WriteString("No readable MCP configuration lists a server.\n")
 		writeUnreadableTree(&b, result.Unreadable)
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", result.TotalClients())
+	fmt.Fprintf(&b, "Found %d MCP configuration(s):\n\n", len(result.Clients))
 
 	for _, cr := range result.Clients {
 		fmt.Fprintf(&b, "  %s  %s\n", output.TerminalText(clientDisplayName(cr.Client)), output.TerminalText(cr.Path))
@@ -204,6 +237,14 @@ func FormatTree(result *Result) string {
 			cmdStr := srv.Command
 			if len(srv.Args) > 0 {
 				cmdStr += " " + strings.Join(srv.Args, " ")
+			}
+			if srv.URL != "" {
+				remote := strings.TrimSpace(srv.Transport + " " + srv.URL)
+				if cmdStr == "" {
+					cmdStr = remote
+				} else {
+					cmdStr += " (" + remote + ")"
+				}
 			}
 			fmt.Fprintf(&b, "    %s %-20s %s\n", prefix, output.TerminalText(srv.Name), output.TerminalText(cmdStr))
 		}

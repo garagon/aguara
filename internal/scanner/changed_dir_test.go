@@ -29,7 +29,7 @@ func TestScanPathsWalksChangedDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "top.md"), []byte("x"), 0o600))
 	s := scanner.New(2)
 	s.RegisterAnalyzer(pathAnalyzer{})
-	r, err := s.ScanPaths(context.Background(), root, []string{"mod", "top.md"}, map[string]scanner.Submodule{"mod": {Recorded: "c1", Head: "c1"}})
+	r, err := s.ScanChangedPaths(context.Background(), root, []string{"mod", "top.md"}, map[string]scanner.Submodule{"mod": {Recorded: "c1", Head: "c1"}})
 	require.NoError(t, err)
 	require.Equal(t, 3, r.FilesScanned)
 	var files []string
@@ -49,7 +49,7 @@ func TestScanPathsNotCheckedOutSubmoduleIsIncomplete(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("x"), 0o600))
 	s := scanner.New(1)
 	s.RegisterAnalyzer(pathAnalyzer{})
-	_, err := s.ScanPaths(context.Background(), root, []string{"a.md", "empty", "absent", "deleted.md"}, map[string]scanner.Submodule{"empty": {Recorded: "c1"}, "absent": {Recorded: "c1"}})
+	_, err := s.ScanChangedPaths(context.Background(), root, []string{"a.md", "empty", "absent", "deleted.md"}, map[string]scanner.Submodule{"empty": {Recorded: "c1"}, "absent": {Recorded: "c1"}})
 	partial := requireIncomplete(t, err)
 	require.Equal(t, 1, partial.FilesScanned)
 	require.Equal(t, []types.ScanFailure{
@@ -73,7 +73,7 @@ func TestScanPathsSubmoduleAtAnotherCommitIsIncomplete(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "mod", "SKILL.md"), []byte("x"), 0o600))
 			s := scanner.New(1)
 			s.RegisterAnalyzer(pathAnalyzer{})
-			_, err := s.ScanPaths(context.Background(), root, []string{"mod"}, map[string]scanner.Submodule{"mod": sm})
+			_, err := s.ScanChangedPaths(context.Background(), root, []string{"mod"}, map[string]scanner.Submodule{"mod": sm})
 			partial := requireIncomplete(t, err)
 			require.Equal(t, 1, partial.FilesScanned, "the work tree is still scanned")
 			require.Len(t, partial.Findings, 1)
@@ -95,7 +95,7 @@ func TestScanPathsCheckedOutSubmoduleWithoutScannableFilesIsComplete(t *testing.
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("x"), 0o600))
 	s := scanner.New(1)
-	r, err := s.ScanPaths(context.Background(), root, []string{"a.md", "mod", "plain"}, map[string]scanner.Submodule{"mod": {Recorded: "c1", Head: "c1"}})
+	r, err := s.ScanChangedPaths(context.Background(), root, []string{"a.md", "mod", "plain"}, map[string]scanner.Submodule{"mod": {Recorded: "c1", Head: "c1"}})
 	require.NoError(t, err)
 	require.False(t, r.Incomplete)
 	require.Equal(t, 1, r.FilesScanned)

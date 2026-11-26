@@ -652,6 +652,8 @@ func hiddenSkippedNames(skipped []types.SkippedFile) string {
 			why = "dangling symbolic link"
 		case s.Kind == types.SkippedSymlink && s.Resolves == types.LinkExcluded:
 			why = "symbolic link to content the scan skips"
+		case s.Kind == types.SkippedInSkippedDir:
+			why = "path inside .git, node_modules or .aguara"
 		case s.Kind == types.SkippedSymlink:
 			why = "symbolic link resolving outside the target"
 		}

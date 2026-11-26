@@ -12,6 +12,9 @@ import (
 	"github.com/garagon/aguara/internal/types"
 )
 
+// probeName names the probe links linkFixture puts in each directory.
+const probeName = "zz-probe"
+
 // linkFixture builds a tree with content the walk reads and content it
 // skips for each reason, plus a links/ directory holding one link to every
 // entry. It returns the root and the link targets by link name.
@@ -52,6 +55,9 @@ func linkFixture(t *testing.T) (string, map[string]string) {
 	}
 	for _, dir := range []string{".", "docs", "notes", "vendor", "vendor/deep", "node_modules", "node_modules/x", ".git", ".aguara", "docs/.git"} {
 		add(dir)
+		// A probe link in every directory: a walk lists it exactly when it
+		// enters the directory and no pattern covers everything there.
+		require.NoError(t, os.Symlink(filepath.Join(root, "README.md"), filepath.Join(root, filepath.FromSlash(dir), probeName)))
 	}
 	// A link to a link resolves to the final target.
 	require.NoError(t, os.Symlink(filepath.Join(root, "links", "lREADME_md.md"), filepath.Join(root, "links", "chain.md")))
@@ -62,12 +68,26 @@ func linkFixture(t *testing.T) (string, map[string]string) {
 // A link is inside exactly when the walk reads what it reaches: a file
 // the walk returns as a target, or a directory the walk enters and reads
 // files under. Everything else in the target is excluded.
+//
+// It holds for the ignore forms every release accepts ("vendor/**", a path)
+// and for the gitignore forms: a directory pattern prunes the walk, an
+// anchored pattern matches from the root, "**" spans directories.
 func TestLinkResolutionMatchesWhatTheWalkReads(t *testing.T) {
-	root, linkTargets := linkFixture(t)
-	td := &scanner.TargetDiscovery{
-		IgnorePatterns: []string{"vendor/**", "notes/skip.md"},
-		MaxFileSize:    64,
+	for name, tc := range map[string]struct {
+		patterns []string
+		excluded int // what the walk counts; resolving links counts none
+	}{
+		"recursive glob and path": {[]string{"vendor/**", "notes/skip.md"}, 3},            // vendor/lib.md, vendor/deep/more.md, notes/skip.md
+		"directory and anchored":  {[]string{"vendor/", "/notes/skip.md"}, 2},             // vendor/ pruned whole, notes/skip.md
+		"double star":             {[]string{"**/deep/", "vendor/*.md", "**/skip.md"}, 3}, // vendor/deep/ pruned, vendor/lib.md, notes/skip.md
+	} {
+		t.Run(name, func(t *testing.T) { checkLinksMatchWalk(t, tc.patterns, tc.excluded) })
 	}
+}
+
+func checkLinksMatchWalk(t *testing.T, patterns []string, excluded int) {
+	root, linkTargets := linkFixture(t)
+	td := &scanner.TargetDiscovery{IgnorePatterns: patterns, MaxFileSize: 64}
 	found, err := td.Discover(root)
 	require.NoError(t, err)
 	read := map[string]bool{}
@@ -75,25 +95,27 @@ func TestLinkResolutionMatchesWhatTheWalkReads(t *testing.T) {
 		read[filepath.ToSlash(target.RelPath)] = true
 	}
 	require.Equal(t, map[string]bool{"README.md": true, "docs/guide.md": true, "notes/keep.md": true}, read)
-	require.Equal(t, 3, td.ExcludedByCallerPatterns, "vendor/lib.md, vendor/deep/more.md and notes/skip.md; resolving links counts none")
+	require.Equal(t, excluded, td.ExcludedByCallerPatterns)
 
 	resolves := map[string]string{}
+	entered := map[string]bool{}
 	for _, s := range td.Skipped {
 		require.Equal(t, types.SkippedSymlink, s.Kind, s.Path)
+		if filepath.Base(s.Path) == probeName {
+			entered[filepath.ToSlash(filepath.Dir(s.Path))] = true
+			continue
+		}
 		resolves[filepath.Base(s.Path)] = s.Resolves
 	}
 	require.Len(t, resolves, len(linkTargets))
 	for name, rel := range linkTargets {
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
 		require.NoError(t, err)
+		// A file is reached when the walk reads it; a directory when the
+		// walk enters it (its probe is listed).
 		walked := read[rel]
 		if info.IsDir() {
-			walked = false
-			for path := range read {
-				if rel == "." || strings.HasPrefix(path, rel+"/") {
-					walked = true
-				}
-			}
+			walked = entered[rel]
 		}
 		want := types.LinkExcluded
 		if walked {
@@ -107,7 +129,7 @@ func TestLinkResolutionMatchesWhatTheWalkReads(t *testing.T) {
 func TestScanPathsResolvesChangedLinksLikeTheWalk(t *testing.T) {
 	root, _ := linkFixture(t)
 	s := scanner.New(1)
-	r, err := s.ScanPaths(t.Context(), root, []string{"links/lnode_modules_x_payload_md.md", "links/ldocs_guide_md.md", "links/ldocs_image_png.md"}, nil)
+	r, err := s.ScanChangedPaths(t.Context(), root, []string{"links/lnode_modules_x_payload_md.md", "links/ldocs_guide_md.md", "links/ldocs_image_png.md"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []types.SkippedFile{
 		{Path: "links/ldocs_guide_md.md", Kind: types.SkippedSymlink, Resolves: types.LinkInside},

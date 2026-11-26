@@ -205,7 +205,7 @@ func TestIncompleteResultListsDiscoveryFailuresFirst(t *testing.T) {
 	paths = append(paths, filepath.Join("zz.md", "inner.md"))
 	s := scanner.New(4)
 	s.SetMaxFileSize(1)
-	_, err := s.ScanPaths(context.Background(), dir, paths, nil)
+	_, err := s.ScanChangedPaths(context.Background(), dir, paths, nil)
 	partial := requireIncomplete(t, err)
 	require.Equal(t, types.MaxReportedFailures+51, partial.FailedOperations)
 	require.Len(t, partial.Errors, types.MaxReportedFailures)

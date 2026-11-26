@@ -165,10 +165,21 @@ func WithWorkers(n int) Option {
 	}
 }
 
-// WithIgnorePatterns sets file patterns to ignore during directory scanning.
+// WithIgnorePatterns adds patterns for files and directories to skip during
+// directory scanning, in the .aguaraignore syntax: "dist/" skips every
+// directory named dist and everything in it, "/build" only the one at the
+// scan root, "docs/*.md" matches from the scan root, "*.log" matches file
+// names at any depth, "generated/**" everything under generated. A pattern
+// without a slash matches file names only. Negation ("!pattern") is not
+// supported: such a pattern never matches, and the scan result lists it
+// in TargetPolicy.IgnorePatterns with the reason.
+//
+// Repeated use accumulates: WithIgnorePatterns(a), WithIgnorePatterns(b)
+// skips what either lists. The slice is copied. Patterns do not apply to
+// a single file passed to Scan or to ScanContent.
 func WithIgnorePatterns(patterns []string) Option {
 	return func(c *scanConfig) {
-		c.ignorePatterns = patterns
+		c.ignorePatterns = append(c.ignorePatterns, patterns...)
 	}
 }
 

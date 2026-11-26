@@ -368,7 +368,8 @@ type ScanResult struct {
 
 // TargetPolicyUse records which exclusion and suppression policy changed
 // this result, so a caller can tell the user that a project's own files
-// changed what was reported. A source that changed nothing is not listed.
+// changed what was reported. A source that changed nothing is not listed,
+// except in IgnorePatterns, which lists every evaluated pattern.
 type TargetPolicyUse struct {
 	// IgnoreFile is the target's .aguaraignore when it excluded at least
 	// one entry.
@@ -379,6 +380,31 @@ type TargetPolicyUse struct {
 	// InlineSuppressed lists files whose aguara-ignore directives
 	// removed at least one finding, sorted.
 	InlineSuppressed []string
+	// IgnorePatterns lists every ignore pattern a directory walk
+	// evaluated, caller patterns first and then the .aguaraignore lines,
+	// including patterns that matched nothing, so a caller can point out
+	// an exclusion that did not take effect.
+	IgnorePatterns []IgnorePatternUse
+	// SkippedOutputFiles lists files the scan itself writes (its report
+	// or baseline) that a walk found in the target and did not scan.
+	SkippedOutputFiles []string
+}
+
+// IgnorePatternUse describes one ignore pattern evaluated by a directory
+// walk.
+type IgnorePatternUse struct {
+	Pattern string // as written
+	File    string // the .aguaraignore it came from; "" for caller patterns
+	Line    int    // line in File; 0 for caller patterns
+	// Matched counts the files and directories the pattern matched. A
+	// directory excluded whole counts once.
+	Matched int
+	// Unsupported says why the pattern can never match (for example a
+	// "!" negation); it is "" for supported patterns.
+	Unsupported string
+	// Hint suggests a fix for a pattern that matched nothing, for example
+	// a bare name that names a scanned directory.
+	Hint string
 }
 
 // Scan coverage scopes: which files a scan was asked to evaluate.
@@ -386,6 +412,7 @@ const (
 	ScanScopePath    = "path"    // every eligible file under the target
 	ScanScopeChanged = "changed" // only git-changed files under the target
 	ScanScopeAuto    = "auto"    // auto-discovered MCP client configurations
+	ScanScopeStdin   = "stdin"   // content read from standard input
 )
 
 // ScanCoverage states what a content scan evaluated.
@@ -406,13 +433,20 @@ func (c ScanCoverage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(c))
 }
 
-// Kinds of entries a scan skips because they are not regular files.
+// Kinds of entries a scan skips. The first five are entries that are not
+// regular files, found by a walk or named directly; the last three are
+// paths a path-list scan was given by name (or, for SkippedOutputFile,
+// found by a walk) that a scan of the root would not read either.
 const (
 	SkippedSymlink   = "symlink"    // symbolic link (discovery does not follow links)
 	SkippedNamedPipe = "named_pipe" // FIFO: reading one blocks or returns a writer's stream
 	SkippedSocket    = "socket"
 	SkippedDevice    = "device"    // character or block device
 	SkippedIrregular = "irregular" // any other non-regular file type
+
+	SkippedInSkippedDir = "in_skipped_dir" // named path inside .git, node_modules or .aguara, which walks never enter
+	SkippedIgnored      = "ignored"        // named path an ignore pattern excludes
+	SkippedOutputFile   = "output_file"    // a file this run writes (its report or baseline), skipped on a trusted local run
 )
 
 // Where a skipped symbolic link resolves, found without reading the
@@ -424,8 +458,10 @@ const (
 	LinkDangling = "dangling" // to nothing (or the link cannot be resolved)
 )
 
-// SkippedFile is an entry a scan did not read because it is not a
-// regular file. Path is relative to the scan target. Resolves is set for
+// SkippedFile is an entry a scan did not read: one that is not a regular
+// file, or a path it was given by name that a scan of the root would not
+// read either (see the Skipped* kinds). Path is relative to the scan
+// target. Resolves is set for
 // symbolic links (Kind SkippedSymlink) to one of the Link* values. A link
 // is LinkInside only when the scan reads what it reaches: LinkExcluded
 // marks a link to a file the scan skips (a binary extension, a path under
@@ -439,13 +475,19 @@ type SkippedFile struct {
 }
 
 // HidesContent reports whether the entry may stand for content no scan
-// read: a named pipe, socket, device or irregular file, or a symbolic
-// link that is dangling, resolves outside the scan target or resolves to
-// a part of it the scan does not read. A link that resolves inside the
-// target points at content the scan reads itself.
+// read: a named pipe, socket, device or irregular file, a symbolic link
+// that is dangling, resolves outside the scan target or resolves to a part
+// of it the scan does not read, or a path named directly inside .git,
+// node_modules or .aguara. A link that resolves inside the target points
+// at content the scan reads itself. A path an ignore pattern excludes and
+// a file the run itself writes do not hide content: the caller's (or the
+// trusted project's) policy asked for them to be left out.
 func (s SkippedFile) HidesContent() bool {
-	if s.Kind == SkippedSymlink {
+	switch s.Kind {
+	case SkippedSymlink:
 		return s.Resolves != LinkInside
+	case SkippedIgnored, SkippedOutputFile:
+		return false
 	}
 	return true
 }

@@ -50,7 +50,7 @@ var (
 var errNothingScanned = errors.New("no files were scanned and --fail-on-empty is set; check that the path points at the files you meant to scan")
 
 var scanCmd = &cobra.Command{
-	Use:     "scan [path]",
+	Use:     "scan [path...]",
 	GroupID: groupScan,
 	Short:   "Scan a directory for security issues",
 	Long: `Scan files for prompt injection, credential leaks, risky agent and MCP
@@ -71,11 +71,28 @@ default --project-policy auto:
     CI variable and what was and was not applied.
 
 Pass --project-policy trust to apply all of it in CI, or --project-policy
-ignore to apply none of it (fail_on included) for unfamiliar content.`,
+ignore to apply none of it (fail_on included) for unfamiliar content.
+
+Several paths (files or directories) are scanned as one scan with one
+report, rooted at the current directory or at --root: policy files are read
+from the root, ignore patterns apply to every path, named files included,
+and findings report paths relative to the root. Every path must be inside
+the root; symbolic links named on the command line are not followed.
+Cross-file checks see only the files of this scan, grouped by directory.
+
+"-" reads the content to scan from standard input, up to --max-file-size.
+The name given with --stdin-filename (default skill.md) decides how it is
+analyzed, as a file of that name would be: SKILL.md for a skill,
+mcp.json for an MCP configuration, .github/workflows/ci.yml for a
+workflow. Piped content is untrusted: no project policy is read and its
+inline aguara-ignore directives are not honored, so --project-policy trust
+is rejected.`,
 	Example: `  aguara scan ./skill                Scan a skill or MCP server directory
   aguara scan . --severity high      Report only HIGH and CRITICAL findings
   aguara scan . --fail-on high       Exit 1 when HIGH+ findings exist (CI gate)
-  aguara scan . --format sarif -o scan.sarif   For GitHub code scanning`,
+  aguara scan . --format sarif -o scan.sarif   For GitHub code scanning
+  aguara scan SKILL.md scripts/ mcp.json      Several paths, one report
+  cat tool.md | aguara scan - --stdin-filename SKILL.md --fail-on high`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if flagAuto {
 			if len(args) > 0 {
@@ -83,7 +100,7 @@ ignore to apply none of it (fail_on included) for unfamiliar content.`,
 			}
 			return nil
 		}
-		return cobra.ExactArgs(1)(cmd, args)
+		return cobra.MinimumNArgs(1)(cmd, args)
 	},
 	RunE: runScan,
 }
@@ -98,7 +115,9 @@ func init() {
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "Exit with code 1 if findings at or above this severity (critical, high, medium, low)")
 	scanCmd.Flags().BoolVar(&flagFailOnEmpty, "fail-on-empty", false, "Exit with code 2 when no files were scanned (a mistyped path, an empty change set); the report is still written")
 	scanCmd.Flags().BoolVar(&flagCI, "ci", false, "CI mode: --fail-on high unless --fail-on is set, no color, and project-owned policy ignored unless --project-policy trust")
-	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings")
+	scanCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Show rule descriptions for critical and high findings, and list ignore patterns that matched nothing")
+	scanCmd.Flags().StringVar(&flagStdinFilename, "stdin-filename", defaultStdinFilename, "With - as the path: the file name the piped content is analyzed as (SKILL.md, mcp.json, .github/workflows/ci.yml, ...)")
+	scanCmd.Flags().StringVar(&flagScanRoot, "root", "", "Scan root for path arguments: policy files are read from it and paths are reported relative to it (default for several paths: the current directory)")
 	scanCmd.Flags().BoolVar(&flagChanged, "changed", false, "Only scan git-changed files under the path (staged, unstaged, untracked); the path must be inside a git work tree")
 	scanCmd.Flags().BoolVar(&flagMonitor, "monitor", false, "Enable rug-pull detection: track file hashes across runs")
 	scanCmd.Flags().StringVar(&flagStatePath, "state-path", "", "Path to state file for --monitor (default: ~/.aguara/state.json)")
@@ -129,17 +148,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return runAutoScan(cmd)
 	}
 
-	targetPath := args[0]
+	in, err := parseScanInput(cmd, args)
+	if err != nil {
+		return err
+	}
+	targetPath := in.policyPath()
 
 	applyCIDefaults()
 	// auto applies the project's own policy only to local runs. In CI the
 	// scanned repository is usually the change under review, so it must
 	// not decide what its own gate sees; --project-policy trust opts in.
 	ciVar := ""
-	if !flagCI {
+	if !flagCI && !in.stdin {
 		ciVar = detectedCIVar()
 	}
-	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "")
+	trustProjectPolicy, err := resolveProjectPolicy(flagProjectPolicy, !flagCI && ciVar == "" && !in.stdin)
 	if err != nil {
 		return err
 	}
@@ -179,15 +202,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 	ctx, cancel := contextWithInterrupt()
 	defer cancel()
 
-	result, err := executeScan(ctx, s, targetPath)
+	result, err := in.execute(ctx, s, cfg)
 	stopSpinner(sp)
 	result, scanErr := partialScan(result, err)
 	if result == nil {
 		return err
 	}
 	result.RulesLoaded = len(res.Compiled)
-	result.Target = targetPath
+	result.Target = in.target()
 	result.Coverage = scanCoverage(result)
+	in.coverageScope(result.Coverage)
 	if trustProjectPolicy {
 		noteProjectPolicy(cmd, cfg, res, result)
 	}
@@ -332,6 +356,7 @@ func runAutoScan(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
+	printDiscoverWarnings(discovered)
 
 	// Collect unique config file paths
 	var paths []string
@@ -352,7 +377,7 @@ func runAutoScan(cmd *cobra.Command) error {
 		fmt.Fprintln(os.Stderr, "No MCP configurations found; nothing to scan.")
 	} else {
 		fmt.Fprintf(os.Stderr, "Discovered %d MCP configs across %d clients, scanning...\n\n",
-			len(paths), discovered.TotalClients())
+			len(paths), len(discovered.Clients))
 	}
 
 	s, store := buildScanner(res, cfg, minSev, trustProjectPolicy)
@@ -474,6 +499,9 @@ func loadScanConfig(cmd *cobra.Command, targetPath string) (config.Config, error
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
+	for _, n := range cfg.Notices {
+		fmt.Fprintf(os.Stderr, "notice: %s\n", n)
+	}
 	if !cmd.Flags().Changed("severity") && cfg.Severity != "" {
 		flagSeverity = cfg.Severity
 	}
@@ -553,6 +581,13 @@ func buildScanner(res *rulecatalog.Resolution, cfg config.Config, minSev scanner
 	if len(cfg.Ignore) > 0 {
 		s.SetIgnorePatterns(cfg.Ignore)
 	}
+	// A report or baseline this run writes is skipped only on a local run
+	// that trusts project policy. With --ci, audit, the Action,
+	// --project-policy ignore or a detected CI environment, a file already
+	// at that path is part of the checkout and is scanned.
+	if trustProjectPolicy {
+		s.SetOutputFiles(outputFilesOfThisRun())
+	}
 
 	if maxSize, err := parseMaxFileSize(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -619,6 +654,9 @@ func executeScan(ctx context.Context, s *scanner.Scanner, targetPath string) (*s
 		return scanChangedFiles(ctx, s, targetPath)
 	}
 	result, err := s.Scan(ctx, targetPath)
+	if partial, _ := partialScan(result, err); partial != nil {
+		noteSkippedOutputs(partial)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
@@ -645,13 +683,13 @@ func scanChangedFiles(ctx context.Context, s *scanner.Scanner, targetPath string
 			submodules[path] = sm
 		}
 	}
-	// ScanPaths skips symlinks exactly as the directory walk does, so a
+	// ScanChangedPaths skips symlinks exactly as the directory walk does, so a
 	// malicious symlink committed to the repository cannot make aguara read
 	// files outside the tree; named pipes and devices are skipped and
 	// listed as well. A changed submodule is scanned whole, and one that is
 	// not checked out at the commit its index entry records makes the scan
 	// incomplete.
-	result, err := s.ScanPaths(ctx, targetPath, changedFiles, submodules)
+	result, err := s.ScanChangedPaths(ctx, targetPath, changedFiles, submodules)
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}

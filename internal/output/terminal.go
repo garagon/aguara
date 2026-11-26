@@ -366,9 +366,21 @@ func SkippedSummary(skipped []types.SkippedFile) string {
 		}
 		names = append(names, fmt.Sprintf("%s (%s)", TerminalText(s.Path), skippedKindLabel(s.Kind)))
 	}
-	what := "entries that are not regular files"
-	if len(skipped) == 1 {
+	special := true
+	for _, s := range skipped {
+		switch s.Kind {
+		case types.SkippedInSkippedDir, types.SkippedIgnored, types.SkippedOutputFile:
+			special = false
+		}
+	}
+	what := "entries that were not scanned"
+	switch {
+	case special && len(skipped) == 1:
 		what = "entry that is not a regular file"
+	case special:
+		what = "entries that are not regular files"
+	case len(skipped) == 1:
+		what = "entry that was not scanned"
 	}
 	return fmt.Sprintf("Skipped %d %s: %s", len(skipped), what, strings.Join(names, ", "))
 }
@@ -383,6 +395,12 @@ func skippedKindLabel(kind string) string {
 		return "socket"
 	case types.SkippedDevice:
 		return "device"
+	case types.SkippedInSkippedDir:
+		return "inside .git, node_modules or .aguara"
+	case types.SkippedIgnored:
+		return "excluded by an ignore pattern"
+	case types.SkippedOutputFile:
+		return "written by this run"
 	default:
 		return "irregular file"
 	}

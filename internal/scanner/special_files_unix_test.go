@@ -178,7 +178,7 @@ func TestScanPathsSkipsSpecialEntries(t *testing.T) {
 	require.NoError(t, os.Symlink("/dev/zero", filepath.Join(dir, "zero.md")))
 	s := scanner.New(1)
 	r, err := scanWithin(t, func(ctx context.Context) (*scanner.ScanResult, error) {
-		return s.ScanPaths(ctx, dir, []string{"zero.md", "SKILL.md", "deleted.md", "module", "a.md"}, nil)
+		return s.ScanChangedPaths(ctx, dir, []string{"zero.md", "SKILL.md", "deleted.md", "module", "a.md"}, nil)
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, r.FilesScanned, "a.md and the changed directory's b.md")

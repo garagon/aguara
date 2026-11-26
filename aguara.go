@@ -111,6 +111,10 @@ const (
 	SkippedSocket    = types.SkippedSocket
 	SkippedDevice    = types.SkippedDevice
 	SkippedIrregular = types.SkippedIrregular
+
+	SkippedInSkippedDir = types.SkippedInSkippedDir
+	SkippedIgnored      = types.SkippedIgnored
+	SkippedOutputFile   = types.SkippedOutputFile
 )
 
 // Where a skipped symbolic link resolves (SkippedFile.Resolves).

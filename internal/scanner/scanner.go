@@ -64,6 +64,7 @@ type Scanner struct {
 	crossFileAccumulator CrossFileAccumulator
 	stateStore           StateSaver
 	projectPolicyEnabled bool
+	outputFiles          []string
 	redact               bool
 }
 
@@ -96,9 +97,10 @@ func (s *Scanner) SetRedaction(enabled bool) {
 	s.redact = enabled
 }
 
-// SetIgnorePatterns sets additional file ignore patterns from config.
+// SetIgnorePatterns sets additional file ignore patterns from config. The
+// slice is copied, so later changes by the caller have no effect.
 func (s *Scanner) SetIgnorePatterns(patterns []string) {
-	s.ignorePatterns = patterns
+	s.ignorePatterns = append([]string(nil), patterns...)
 }
 
 // SetProjectPolicyEnabled controls whether files being scanned may suppress
@@ -107,6 +109,14 @@ func (s *Scanner) SetIgnorePatterns(patterns []string) {
 // inspect untrusted repositories or content should disable it.
 func (s *Scanner) SetProjectPolicyEnabled(enabled bool) {
 	s.projectPolicyEnabled = enabled
+}
+
+// SetOutputFiles names files this scan writes, such as its report or
+// baseline. A directory walk or path list never scans them, so a report an
+// earlier run of the same command left in the target cannot change the
+// result. Files named directly to Scan are scanned as before.
+func (s *Scanner) SetOutputFiles(paths []string) {
+	s.outputFiles = append([]string(nil), paths...)
 }
 
 // SetMaxFileSize sets the maximum file size for scanning.
@@ -269,11 +279,7 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	if err != nil {
 		return nil, IncompleteScanError("resolve root", root, "", err)
 	}
-	discovery := &TargetDiscovery{
-		IgnorePatterns:    s.ignorePatterns,
-		MaxFileSize:       s.maxFileSize,
-		IgnoreProjectFile: !s.projectPolicyEnabled,
-	}
+	discovery := s.newDiscovery()
 	targets, err := discovery.Discover(resolvedRoot)
 	if err != nil {
 		return nil, err
@@ -283,24 +289,48 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 	for _, target := range targets {
 		target.Path = filepath.Join(root, target.RelPath)
 	}
+	return s.scanTargets(ctx, targets, discoveryFailures(discovery), discovery.Skipped, recordPolicy(discovery, root))
+}
 
+// newDiscovery is the discovery a directory walk or path list of this
+// scanner uses.
+func (s *Scanner) newDiscovery() *TargetDiscovery {
+	return &TargetDiscovery{
+		IgnorePatterns:    s.ignorePatterns,
+		MaxFileSize:       s.maxFileSize,
+		IgnoreProjectFile: !s.projectPolicyEnabled,
+		OutputFiles:       s.outputFiles,
+	}
+}
+
+// discoveryFailures converts what discovery could not inspect or read.
+func discoveryFailures(discovery *TargetDiscovery) []*scanFailure {
 	failures := make([]*scanFailure, 0, len(discovery.Failures))
 	for _, f := range discovery.Failures {
 		failures = append(failures, asScanFailure(f, "discover target", ""))
 	}
-	return s.scanTargets(ctx, targets, failures, discovery.Skipped, func(result *ScanResult) {
+	return failures
+}
+
+// recordPolicy completes a result (complete or partial) with what the
+// ignore patterns and output files of discovery changed.
+func recordPolicy(discovery *TargetDiscovery, root string) func(*ScanResult) {
+	return func(result *ScanResult) {
 		if discovery.ExcludedByIgnoreFile > 0 {
 			result.TargetPolicy.IgnoreFile = filepath.Join(root, ".aguaraignore")
 		}
 		result.TargetPolicy.IgnorePatternExclusions = discovery.ExcludedByCallerPatterns
-	})
+		result.TargetPolicy.IgnorePatterns = discovery.PatternUses(root)
+		result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
+	}
 }
 
-// ScanPaths scans the files at relPaths under root, such as the changed
-// files of a git work tree. Each path is inspected without following a
-// symbolic link: a path that no longer exists is left out (a deletion has
-// no content), and a symbolic link, named pipe, socket or device is listed
-// in ScanResult.Skipped instead of being read.
+// ScanChangedPaths scans the files at relPaths under root, such as the
+// changed files of a git work tree. Each path is inspected without
+// following a symbolic link: a path that no longer exists is left out (a
+// deletion has no content), and a symbolic link, named pipe, socket or
+// device is listed in ScanResult.Skipped instead of being read. A file
+// this scan writes (SetOutputFiles) is skipped as in a walk.
 //
 // A path that is a directory (git lists a changed submodule as its path)
 // is walked like a scanned directory, and its files, skipped entries and
@@ -315,14 +345,16 @@ func (s *Scanner) Scan(ctx context.Context, root string) (*ScanResult, error) {
 // no scannable files. Any path that cannot be inspected makes the scan
 // incomplete too (an *IncompleteError with the partial result), as in
 // Scan.
-func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string, submodules map[string]Submodule) (*ScanResult, error) {
+func (s *Scanner) ScanChangedPaths(ctx context.Context, root string, relPaths []string, submodules map[string]Submodule) (*ScanResult, error) {
 	var targets []*Target
-	var skipped []types.SkippedFile
 	var failures []*scanFailure
-	linkRoot := resolvedRoot(root)
-	// Changed files are read without ignore patterns; links among them are
-	// resolved by the same rules.
-	links := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true}
+	// Changed files are read without ignore patterns; links among them
+	// are resolved by the same rules as a walk's.
+	discovery := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true, OutputFiles: s.outputFiles}
+	if err := discovery.prepare(root); err != nil {
+		return nil, err
+	}
+	discovery.linkRoot = resolvedRoot(root)
 	for _, relPath := range relPaths {
 		absPath := filepath.Join(root, relPath)
 		// Lstat so a symlink committed to the repository is not resolved:
@@ -340,9 +372,9 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 			continue
 		}
 		if info.IsDir() {
-			discovery := &TargetDiscovery{MaxFileSize: s.maxFileSize, IgnoreProjectFile: true, relPrefix: relPath, linkRoot: linkRoot}
-			found, err := discovery.Discover(absPath)
-			if err != nil {
+			var found []*Target
+			before := len(discovery.Failures)
+			if err := filepath.Walk(absPath, discovery.walkFunc(root, absPath, &found)); err != nil {
 				failures = append(failures, asScanFailure(err, "discover target", relPath))
 				continue
 			}
@@ -353,12 +385,8 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 			if sm, isSubmodule := submodules[relPath]; isSubmodule && !sm.AtRecordedCommit() {
 				failures = append(failures, asScanFailure(IncompleteScanError("scan changed submodule", relPath, "", errNotAtRecordedCommit), "", ""))
 			}
-			for _, target := range found {
-				target.Path = filepath.Join(root, target.RelPath)
-			}
 			targets = append(targets, found...)
-			skipped = append(skipped, discovery.Skipped...)
-			for _, f := range discovery.Failures {
+			for _, f := range discovery.Failures[before:] {
 				failures = append(failures, asScanFailure(f, "discover target", relPath))
 			}
 			continue
@@ -366,14 +394,20 @@ func (s *Scanner) ScanPaths(ctx context.Context, root string, relPaths []string,
 		if kind := SkipKind(info.Mode()); kind != "" {
 			entry := types.SkippedFile{Path: relPath, Kind: kind}
 			if kind == types.SkippedSymlink {
-				entry.Resolves = links.linkResolution(linkRoot, absPath)
+				entry.Resolves = discovery.linkResolution(discovery.linkRoot, absPath)
 			}
-			skipped = append(skipped, entry)
+			discovery.Skipped = append(discovery.Skipped, entry)
+			continue
+		}
+		if discovery.isOutputPath(absPath) {
+			discovery.skipOutput(absPath, relPath)
 			continue
 		}
 		targets = append(targets, &Target{Path: absPath, RelPath: relPath, NoFollow: true})
 	}
-	return s.scanTargets(ctx, targets, failures, skipped, nil)
+	return s.scanTargets(ctx, targets, failures, discovery.Skipped, func(result *ScanResult) {
+		result.TargetPolicy.SkippedOutputFiles = discovery.SkippedOutputs
+	})
 }
 
 // errNotCheckedOut marks a changed submodule whose content is not in the
@@ -387,6 +421,35 @@ var (
 
 func notCheckedOut(relPath string) *scanFailure {
 	return asScanFailure(IncompleteScanError("scan changed submodule", relPath, "", errNotCheckedOut), "", "")
+}
+
+// ScanPaths scans several files and directories as one scan rooted at
+// root, a directory that contains all of them. Paths are relative to the
+// working directory, as typed; findings report paths relative to root.
+// Ignore patterns, including root's .aguaraignore when project policy is
+// enabled, apply to every path, files named directly included. Cross-file
+// correlation sees only the files of this scan, grouped by their directory
+// relative to root.
+//
+// The paths it was given and did not scan (symbolic links, paths inside
+// .git, node_modules or .aguara, paths an ignore pattern excludes, files
+// this scan writes) are listed in ScanResult.Skipped with the special
+// files the walks found, and also returned on their own so a caller can
+// name them. A path that does not exist, is not a regular file or a
+// directory, or is over the size limit makes the scan incomplete: the
+// error is an *IncompleteError holding the partial result, as in Scan. A
+// path outside root is an error without a result.
+func (s *Scanner) ScanPaths(ctx context.Context, root string, paths []string) (*ScanResult, []types.SkippedFile, error) {
+	discovery := s.newDiscovery()
+	targets, err := discovery.DiscoverPaths(root, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, target := range targets {
+		target.Path = filepath.Join(root, target.RelPath)
+	}
+	result, err := s.scanTargets(ctx, targets, discoveryFailures(discovery), discovery.Skipped, recordPolicy(discovery, root))
+	return result, discovery.NamedSkipped, err
 }
 
 // ScanTargets runs the scanner pipeline on a pre-built list of targets.
