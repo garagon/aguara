@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
 
 // CleanOptions configures a clean run.
@@ -166,16 +168,30 @@ func quarantineFile(src, quarantineDir string) (bool, string) {
 	dst := filepath.Join(quarantineDir, filepath.Base(src))
 	if err := os.Rename(src, dst); err != nil {
 		// Cross-device? Copy then delete.
-		data, readErr := os.ReadFile(src)
-		if readErr != nil {
-			return false, readErr.Error()
+		if copyErr := copyThenRemove(src, dst); copyErr != nil {
+			return false, copyErr.Error()
 		}
-		if writeErr := os.WriteFile(dst, data, 0600); writeErr != nil {
-			return false, writeErr.Error()
-		}
-		_ = os.Remove(src)
 	}
 	return true, ""
+}
+
+// maxQuarantineCopyBytes bounds a file copied into quarantine when it
+// cannot be moved there.
+const maxQuarantineCopyBytes = 256 << 20
+
+// copyThenRemove copies src to dst and removes src. src must be a regular
+// file (a link to one is followed): a named pipe or device is an error
+// instead of a read that blocks or never ends, and src stays in place.
+func copyThenRemove(src, dst string) error {
+	data, err := safefile.ReadRegular(src, true, maxQuarantineCopyBytes)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(dst, data, 0600); err != nil {
+		return err
+	}
+	_ = os.Remove(src)
+	return nil
 }
 
 func quarantineDir(src, quarantineDir string) (bool, string) {

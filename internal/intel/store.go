@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/garagon/aguara/internal/safefile"
 )
 
 // Store reads and writes a Snapshot to a directory on disk. It is
@@ -81,6 +82,26 @@ func DefaultStore() (*Store, error) {
 	return &Store{Dir: filepath.Join(home, ".aguara", "intel")}, nil
 }
 
+// maxMarkerBytes bounds the provenance marker, a small JSON document.
+const maxMarkerBytes = 1 << 20
+
+// readSnapshot reads the snapshot file, at most maxBytes of it. The file
+// must be a regular file: a named pipe or device in the cache is an error
+// instead of a read that blocks or never ends. A missing file returns an
+// error matching os.ErrNotExist.
+func (s *Store) readSnapshot(maxBytes int64) ([]byte, error) {
+	data, err := safefile.ReadRegular(s.snapshotPath(), true, maxBytes)
+	switch {
+	case errors.Is(err, safefile.ErrTooLarge):
+		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", maxBytes)
+	case errors.Is(err, os.ErrNotExist):
+		return nil, err
+	case err != nil:
+		return nil, fmt.Errorf("intel store: read %s: %w", s.snapshotPath(), err)
+	}
+	return data, nil
+}
+
 // snapshotPath returns the path to the on-disk snapshot file.
 func (s *Store) snapshotPath() string { return filepath.Join(s.Dir, snapshotFileName) }
 
@@ -100,9 +121,9 @@ func (s *Store) ensureDir() error {
 // caller should fall back to the embedded snapshot rather than
 // erroring out.
 //
-// Load enforces the MaxSnapshotBytes cap by using io.LimitReader,
-// so a malicious or corrupted file cannot cause unbounded
-// allocation. The schema version is checked; unknown versions
+// Load enforces the MaxSnapshotBytes cap with a bounded read of a
+// regular file, so a malicious or corrupted file (or a named pipe or
+// device in its place) cannot cause unbounded allocation or block. The schema version is checked; unknown versions
 // produce an error so a newer Aguara binary writing a v2 snapshot
 // does not get silently misread by an older binary.
 func (s *Store) Load() (*Snapshot, error) {
@@ -110,21 +131,9 @@ func (s *Store) Load() (*Snapshot, error) {
 }
 
 func (s *Store) load(maxBytes int64) (*Snapshot, error) {
-	f, err := os.Open(s.snapshotPath())
+	data, err := s.readSnapshot(maxBytes)
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-
-	// LimitReader caps how much we will accept. +1 byte so we can
-	// distinguish "exactly the cap" from "exceeded the cap".
-	limited := io.LimitReader(f, maxBytes+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, fmt.Errorf("intel store: read %s: %w", s.snapshotPath(), err)
-	}
-	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", maxBytes)
 	}
 
 	var snap Snapshot
@@ -277,14 +286,11 @@ func (s *Store) atomicWriteBeforeRename(dst string, data []byte, beforeRename fu
 // as "no intel"), and a distinct error when a marker exists but does not
 // match the snapshot (tamper / partial write).
 func (s *Store) LoadVerified() (*Snapshot, error) {
-	data, err := os.ReadFile(s.snapshotPath())
+	data, err := s.readSnapshot(MaxSnapshotBytes)
 	if err != nil {
 		return nil, err // includes os.ErrNotExist
 	}
-	if int64(len(data)) > MaxSnapshotBytes {
-		return nil, fmt.Errorf("intel store: snapshot exceeds %d bytes (cap)", MaxSnapshotBytes)
-	}
-	markerData, err := os.ReadFile(s.verifiedMarkerPath())
+	markerData, err := safefile.ReadRegular(s.verifiedMarkerPath(), true, maxMarkerBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Snapshot present but no provenance marker: treat as
