@@ -56,17 +56,81 @@ func TestCargoLockEntryLimit(t *testing.T) {
 	require.ErrorContains(t, err, "more than 50 package entries")
 }
 
+// wideJSON nests arrays of members values each, so the document has many
+// values without any one container passing the member limit.
+func wideJSON(arrays, members int) string {
+	one := "[" + strings.Repeat("0,", members-1) + "0]"
+	return "[" + strings.TrimSuffix(strings.Repeat(one+",", arrays), ",") + "]"
+}
+
 func TestJSONNodeBudget(t *testing.T) {
 	// Structure inside strings, including escaped quotes, does not count.
 	require.NoError(t, checkJSONNodeBudget([]byte(`{"a":"[,,,{\",,,"}`), "x"))
-	over := "[" + strings.Repeat("0,", maxStructuredNodes) + "0]"
+	members := maxContainerMembers - 1
+	over := wideJSON(maxStructuredNodes/members+1, members)
 	require.ErrorContains(t, checkJSONNodeBudget([]byte(over), "x"), "node limit")
-	under := "[" + strings.Repeat("0,", maxStructuredNodes-10) + "0]"
+	under := wideJSON(maxStructuredNodes/members-1, members)
 	require.NoError(t, checkJSONNodeBudget([]byte(under), "x"))
 }
 
+// One container wider than the member limit is rejected before decoding,
+// so a lockfile with more entries than the entry limit is never
+// materialised: a package-lock.json of 650,000 entries used to peak near
+// 1 GiB before the entry limit applied.
+func TestJSONMemberLimit(t *testing.T) {
+	keys := func(n int) string {
+		var b strings.Builder
+		b.WriteString(`{"lockfileVersion":3,"packages":{`)
+		for i := range n {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `"node_modules/p%d":{"version":"1.0.0"}`, i)
+		}
+		b.WriteString("}}")
+		return b.String()
+	}
+	require.ErrorContains(t, checkJSONNodeBudget([]byte(keys(maxContainerMembers+1)), "x"), "more than 100000 members")
+	require.NoError(t, checkJSONNodeBudget([]byte(keys(maxContainerMembers)), "x"))
+	// Commas inside strings are not members.
+	require.NoError(t, checkJSONNodeBudget([]byte(`["`+strings.Repeat(",", maxContainerMembers+1)+`"]`), "x"))
+}
+
+// A lockfileVersion 1 tree repeats packages at many paths, so its nested
+// entries are counted while it is decoded, up to four times the entry
+// limit, instead of after the whole tree is materialised.
+func TestPackageLockV1TreeStopsWhileDecoding(t *testing.T) {
+	lowerEntryLimit(t, 10)
+	tree := func(parents, children int) string {
+		var b strings.Builder
+		b.WriteString(`{"lockfileVersion":1,"dependencies":{`)
+		for p := range parents {
+			if p > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `"p%d":{"version":"1.0.0","dependencies":{`, p)
+			for c := range children {
+				if c > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString(`"shared":{"version":"1.0.0"}`)
+				_ = c
+			}
+			b.WriteString("}}")
+		}
+		b.WriteString("}}")
+		return b.String()
+	}
+	// 3 parents with one repeated child each: 6 nested entries, 4 refs.
+	_, err := parseFile(t, intel.EcosystemNPM, "package-lock.json", tree(3, 1))
+	require.NoError(t, err)
+	// 41 parents with one child each: 82 nested entries, over 4 x 10.
+	_, err = parseFile(t, intel.EcosystemNPM, "package-lock.json", tree(41, 1))
+	require.ErrorContains(t, err, "decoding budget")
+}
+
 func TestJSONLockfilesRejectOverBudgetDocuments(t *testing.T) {
-	array := "[" + strings.Repeat("0,", maxStructuredNodes) + "0]"
+	array := wideJSON(maxStructuredNodes/(maxContainerMembers-1)+1, maxContainerMembers-1)
 	for _, c := range []struct{ ecosystem, source, content string }{
 		{intel.EcosystemNPM, "package-lock.json", `{"lockfileVersion":3,"packages":{"":{"x":` + array + `}}}`},
 		{intel.EcosystemNPM, "bun.lock", `{"lockfileVersion":1,"packages":{"a":` + array + `}}`},
@@ -83,13 +147,41 @@ func TestYAMLNodeBudget(t *testing.T) {
 	// Quoted scalars and comments do not count.
 	quoted := "a: '" + strings.Repeat(",", maxStructuredNodes) + "'\nb: \"" + strings.Repeat("-", maxStructuredNodes) + "\"\n# " + strings.Repeat(":", maxStructuredNodes) + "\n"
 	require.NoError(t, checkYAMLNodeBudget([]byte(quoted), "x"))
-	require.ErrorContains(t, checkYAMLNodeBudget([]byte("a: ["+strings.Repeat("0,", maxStructuredNodes)+"0]\n"), "x"), "node limit")
+	flowSeqs := func(seqs, members int, open, close string) string {
+		var b strings.Builder
+		for i := range seqs {
+			fmt.Fprintf(&b, "k%d: %s%s%s\n", i, open, strings.TrimSuffix(strings.Repeat("k,", members), ","), close)
+		}
+		return b.String()
+	}
+	members := maxContainerMembers - 1
+	require.ErrorContains(t, checkYAMLNodeBudget([]byte(flowSeqs(maxStructuredNodes/members+1, members, "[", "]")), "x"), "node limit")
+	require.NoError(t, checkYAMLNodeBudget([]byte(flowSeqs(maxStructuredNodes/members/2-1, members, "[", "]")), "x"))
 	// An entry of a flow mapping counts twice: a key without ':' is a key
 	// and an implicit null value.
-	flowMap := "a: {" + strings.Repeat("k,", maxStructuredNodes/2+1) + "k}\n"
-	require.ErrorContains(t, checkYAMLNodeBudget([]byte(flowMap), "x"), "node limit")
-	flowSeq := "a: [" + strings.Repeat("k,", maxStructuredNodes/2+1) + "k]\n"
-	require.NoError(t, checkYAMLNodeBudget([]byte(flowSeq), "x"))
+	require.ErrorContains(t, checkYAMLNodeBudget([]byte(flowSeqs(maxStructuredNodes/members/2+1, members, "{", "}")), "x"), "node limit")
+}
+
+// The member limit applies to flow collections by their ','s and to block
+// collections by the lines that start at their indentation.
+func TestYAMLMemberLimit(t *testing.T) {
+	block := func(n int, indent string) string {
+		var b strings.Builder
+		b.WriteString("lockfileVersion: '9.0'\npackages:\n")
+		for i := range n {
+			fmt.Fprintf(&b, "%sp%d@1.0.0:\n%s  resolution: {integrity: sha512-x}\n", indent, i, indent)
+		}
+		return b.String()
+	}
+	require.ErrorContains(t, checkYAMLNodeBudget([]byte(block(maxContainerMembers+1, "  ")), "x"), "more than 100000 members")
+	require.NoError(t, checkYAMLNodeBudget([]byte(block(maxContainerMembers-10, "  ")), "x"))
+	seq := "a:\n" + strings.Repeat("  - x\n", maxContainerMembers+1)
+	require.ErrorContains(t, checkYAMLNodeBudget([]byte(seq), "x"), "more than 100000 members")
+	flow := "a: [" + strings.Repeat("x,", maxContainerMembers) + "x]\n"
+	require.ErrorContains(t, checkYAMLNodeBudget([]byte(flow), "x"), "more than 100000 members")
+	// Blank lines, comments and the lines of a quoted scalar are not entries.
+	quiet := "a:\n" + strings.Repeat("\n  # note\n", maxContainerMembers+1) + "  b: \"" + strings.Repeat("x\n", maxContainerMembers+1) + "\"\n"
+	require.NoError(t, checkYAMLNodeBudget([]byte(quiet), "x"))
 }
 
 func pnpmKeysOf(t *testing.T, lock string) ([]string, error) {
@@ -151,12 +243,13 @@ func TestPNPMLockRejectsMalformedDocuments(t *testing.T) {
 }
 
 // Decoding into Go maps compared every key of the packages mapping with
-// every other key, so 200,000 keys took minutes; the node walk is linear.
+// every other key, so 99,000 keys took tens of seconds (200,000 did not
+// finish in a minute); the node walk is linear.
 func TestPNPMLockManyKeysIsLinear(t *testing.T) {
 	lowerEntryLimit(t, 1_000_000)
 	var b strings.Builder
 	b.WriteString("lockfileVersion: '9.0'\npackages:\n")
-	const n = 200_000
+	const n = 99_000
 	for i := range n {
 		fmt.Fprintf(&b, "  p%d@1.0.0: {}\n", i)
 	}
@@ -173,7 +266,7 @@ func TestPNPMLockManyKeysIsLinear(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 		require.Len(t, refs, n)
-	case <-time.After(60 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("parsing a pnpm-lock.yaml with many package keys did not finish")
 	}
 }

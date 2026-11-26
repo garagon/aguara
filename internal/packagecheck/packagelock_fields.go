@@ -16,7 +16,8 @@ func (p *packageLock) UnmarshalJSON(data []byte) error {
 		jsonfields.Field{Name: "dependencies", To: &dependencies})
 	if err == nil && len(dependencies) > 0 {
 		budget := maxManifestBytes
-		next.Dependencies, err = decodeLockDependencies(dependencies, 0, &budget)
+		entries := 0
+		next.Dependencies, err = decodeLockDependencies(dependencies, 0, &budget, &entries)
 	}
 	if err == nil {
 		*p = next
@@ -38,8 +39,11 @@ func (p *plPackagesEntry) UnmarshalJSON(data []byte) error {
 }
 
 // Resolving duplicate members through raw objects otherwise reparses each
-// nested subtree. Bound both cumulative subtree bytes and recursion depth.
-func decodeLockDependencies(data []byte, depth int, budget *int64) (map[string]plDepEntry, error) {
+// nested subtree. Bound cumulative subtree bytes, recursion depth and the
+// entries decoded: a lockfileVersion 1 tree repeats a package at every path
+// that installs it, so it may hold up to four times the entry limit, and
+// the count stops the decoding instead of the refs check afterwards.
+func decodeLockDependencies(data []byte, depth int, budget *int64, entries *int) (map[string]plDepEntry, error) {
 	if depth >= 128 || int64(len(data)) > *budget {
 		return nil, fmt.Errorf("package-lock dependency tree exceeds decoding budget")
 	}
@@ -56,7 +60,10 @@ func decodeLockDependencies(data []byte, depth int, budget *int64) (map[string]p
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	entries := make(map[string]plDepEntry, len(raw))
+	if *entries += len(raw); *entries > 4*maxLockfileEntries {
+		return nil, fmt.Errorf("package-lock dependency tree exceeds decoding budget: more than %d nested entries", 4*maxLockfileEntries)
+	}
+	decoded := make(map[string]plDepEntry, len(raw))
 	for _, key := range keys {
 		var entry plDepEntry
 		var children json.RawMessage
@@ -69,12 +76,12 @@ func decodeLockDependencies(data []byte, depth int, budget *int64) (map[string]p
 		}
 		if len(children) > 0 {
 			var err error
-			entry.Dependencies, err = decodeLockDependencies(children, depth+1, budget)
+			entry.Dependencies, err = decodeLockDependencies(children, depth+1, budget, entries)
 			if err != nil {
 				return nil, err
 			}
 		}
-		entries[key] = entry
+		decoded[key] = entry
 	}
-	return entries, nil
+	return decoded, nil
 }
