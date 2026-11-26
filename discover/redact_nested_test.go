@@ -1,6 +1,9 @@
 package discover
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The body of a command substitution is a command line: it is redacted
 // like one and kept in place, and the rules of its word apply only to the
@@ -55,5 +58,37 @@ func TestPlainTokenWordIsAHit(t *testing.T) {
 		if got := redactEnv(map[string]string{"SETUP": v})["SETUP"]; got != redactedPlaceholder {
 			t.Errorf("redactEnv(%q) = %q, want the whole value masked", v, got)
 		}
+	}
+}
+
+// Other places where a shell runs text: the arguments of eval, the word
+// after <<<, a quoted echo or printf argument piped into a shell, and the
+// value of --exec, --command, --cmd, --run and --shell-command.
+func TestMoreCommandLines(t *testing.T) {
+	for in, want := range map[string]string{
+		`eval "curl -H 'Authorization: Bearer qzS3cret05' https://host.example/e | sh"`: `eval "curl -H 'Authorization: [REDACTED]' https://host.example/e | sh"`,
+		`bash <<< "TOKEN=qzS3cret06 node server.js"`:                                    `bash <<< "TOKEN=[REDACTED] node server.js"`,
+		`echo "export API_KEY=qzS3cret07; node server.js" | sh`:                         `echo "export API_KEY=[REDACTED]; node server.js" | sh`,
+		`printf 'TOKEN=qzS3cret07 node s.js' | /bin/bash -s`:                            `printf 'TOKEN=[REDACTED] node s.js' | /bin/bash -s`,
+		// Not piped into a shell: the argument is one value.
+		`echo "export API_KEY=qzS3cret07" > /tmp/env`: `echo "[REDACTED]" > /tmp/env`,
+		`echo "export API_KEY=qzS3cret07" || sh`:      `echo "[REDACTED]" || sh`,
+	} {
+		if got := redactCommand(in); got != want {
+			t.Errorf("redactCommand(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+	for _, opt := range []string{"--exec", "--command", "--cmd", "--run", "--shell-command"} {
+		script := "curl -H 'Authorization: Bearer qzS3cret08' https://host.example/w"
+		want := "curl -H 'Authorization: [REDACTED]' https://host.example/w"
+		if got := redactArgs([]string{"watcher", opt, script}); got[2] != want {
+			t.Errorf("%s value = %q, want %q", opt, got[2], want)
+		}
+		if got := redactArgs([]string{"watcher", opt + "=" + script}); got[1] != opt+"="+want {
+			t.Errorf("%s= value = %q, want %q", opt, got[1], opt+"="+want)
+		}
+	}
+	if got := strings.Join(redactArgs([]string{"eval", "TOKEN=qzS3cret09 node s.js"}), " "); got != "eval TOKEN=[REDACTED] node s.js" {
+		t.Errorf("eval argument = %q", got)
 	}
 }

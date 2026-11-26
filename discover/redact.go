@@ -632,8 +632,9 @@ func redactArgValue(a string) string {
 // never takes the next command as its value. Only the bytes of a word that
 // change are rewritten, in place, so quoting, operators and all other text
 // are kept as written. A command substitution, $(...) or `...`, stays
-// inside its word, and its body is redacted as a command line. An
-// unterminated quote (or a trailing backslash or an
+// inside its word, and its body is redacted as a command line. The word
+// after <<<, and the arguments of echo or printf piped into a shell, are
+// command lines too. An unterminated quote (or a trailing backslash or an
 // unterminated substitution) masks everything from it to the end. The
 // rebuilt line is not read again: the words cover all of it, and only a
 // known token format that is still present is masked, as a last check.
@@ -671,6 +672,17 @@ func redactCommandAt(cmd string, depth int) string {
 			hi++
 		}
 		copy(red[lo:hi], redactArgsAt(values[lo:hi], depth))
+		if lo < len(words) && strings.HasSuffix(words[lo].op, "<<<") {
+			// A here-string is read by the command before it, a shell.
+			red[lo] = redactScript(values[lo], depth)
+		}
+		if hi < len(words) && pipedIntoShell(values[lo], words[hi]) {
+			for k := lo + 1; k < hi; k++ {
+				if !strings.HasPrefix(values[k], "-") {
+					red[k] = redactScript(values[k], depth)
+				}
+			}
+		}
 		lo = hi
 	}
 	var b strings.Builder
@@ -692,6 +704,18 @@ func redactCommandAt(cmd string, depth int) string {
 	return secretShapes.ReplaceAllString(b.String(), redactedPlaceholder)
 }
 
+// shells are the programs that run a command line given on their input.
+var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "pwsh": true}
+
+// pipedIntoShell reports whether a command starting with program is echo
+// or printf and its output goes through a pipe into a shell, the word next.
+func pipedIntoShell(program string, next shellWord) bool {
+	if program != "echo" && program != "printf" || next.op != "|" {
+		return false
+	}
+	return shells[next.value[strings.LastIndexByte(next.value, '/')+1:]]
+}
+
 // shellOperatorChars end a word outside quotes, like a blank: the shell
 // reads them as command separators, pipes, redirections and subshells.
 const shellOperatorChars = ";&|<>()"
@@ -710,14 +734,16 @@ type quoteRegion struct {
 
 // shellWord is one word of a command line: its byte span in the original
 // text, its value after quote removal, the offset in the text of each
-// byte of the value, its quoted and escaped spans, and whether a shell
-// operator or a newline separates it from the previous word.
+// byte of the value, its quoted and escaped spans, whether a shell
+// operator or a newline separates it from the previous word, and that
+// operator text (blanks left out).
 type shellWord struct {
 	start, end int
 	value      string
 	raw        []int
 	regions    []quoteRegion
 	afterOp    bool
+	op         string
 }
 
 // shellWords splits s into words at unquoted blanks and shell operators,
@@ -735,9 +761,11 @@ func shellWords(s string) (words []shellWord, open *shellWord) {
 	var quote byte
 	afterOp := false
 	prefix := ""
+	pendingOp, wordOp := "", ""
 	begin := func(i int) {
 		if start < 0 {
 			start = i
+			wordOp, pendingOp = pendingOp, ""
 		}
 	}
 	keep := func(from, to int) {
@@ -748,7 +776,7 @@ func shellWords(s string) (words []shellWord, open *shellWord) {
 	}
 	flush := func(end int) {
 		if start >= 0 {
-			words = append(words, shellWord{start: start, end: end, value: string(cur), raw: raw, regions: regions, afterOp: afterOp})
+			words = append(words, shellWord{start: start, end: end, value: string(cur), raw: raw, regions: regions, afterOp: afterOp, op: wordOp})
 			cur, raw, regions, start, afterOp = nil, nil, nil, -1, false
 		}
 	}
@@ -798,6 +826,7 @@ func shellWords(s string) (words []shellWord, open *shellWord) {
 		case c == '\n' || strings.IndexByte(shellOperatorChars, c) >= 0:
 			flush(i)
 			afterOp = true
+			pendingOp += string(c)
 		default:
 			begin(i)
 			keep(i, i+size)
@@ -999,6 +1028,9 @@ func redactScript(a string, depth int) string {
 // word for a shell.
 const shellSyntax = " \t\n'\"\\`$" + shellOperatorChars
 
+// scriptOptions are long options whose value is a command line.
+var scriptOptions = map[string]bool{"--exec": true, "--command": true, "--cmd": true, "--run": true, "--shell-command": true}
+
 // maxSubstitutionDepth bounds how deep command substitutions are read as
 // command lines; a deeper one is masked whole.
 const maxSubstitutionDepth = 4
@@ -1065,7 +1097,7 @@ const (
 	nextAny      argNext = iota
 	nextSecret           // the value of a sensitive flag, or the credential after Bearer
 	nextHeader           // the value of --header or -H
-	nextScript           // a command line, after -c, /c, /k or -Command
+	nextScript           // a command line, after -c, /c, /k, -Command or --exec
 	nextPSEquals         // after $env:NAME with a sensitive NAME: "=" or "=value"
 )
 
@@ -1077,8 +1109,10 @@ const (
 // unless its value is never a secret; a sensitive NAME=value or
 // $env:NAME = value keeps its name; the word after Bearer or Basic (or
 // Token after a word ending in ":") is a credential. The argument after
-// -c (and -lc, /c, /k, -Command) is a command line and is redacted as one,
-// as is the body of a command substitution in any argument. Any other word is redacted as one value (redactArgValue).
+// -c (and -lc, /c, /k, -Command), the value of --exec, --command, --cmd,
+// --run and --shell-command, and the arguments of eval are command lines
+// and are redacted as one, as is the body of a command substitution in
+// any argument. Any other word is redacted as one value (redactArgValue).
 // Commands, package names and other arguments stay visible.
 func redactArgs(args []string) []string {
 	return redactArgsAt(args, 0)
@@ -1092,6 +1126,7 @@ func redactArgsAt(args []string, depth int) []string {
 	}
 	out := make([]string, len(args))
 	next := nextAny
+	evalArgs := false
 	for i, a := range args {
 		state := next
 		next = nextAny
@@ -1102,7 +1137,7 @@ func redactArgsAt(args []string, depth int) []string {
 		case state == nextHeader && !strings.HasPrefix(a, "--"):
 			out[i] = redactHeaderArg(a)
 			continue
-		case state == nextScript && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
+		case (state == nextScript || evalArgs) && (!strings.HasPrefix(a, "-") || strings.ContainsAny(a, " \t\n"+shellOperatorChars)):
 			out[i] = redactScript(a, depth)
 			continue
 		case state == nextPSEquals && a == "=":
@@ -1116,6 +1151,7 @@ func redactArgsAt(args []string, depth int) []string {
 		var red string
 		red, next = redactArg(lit, i > 0 && strings.HasSuffix(args[i-1], ":"), depth)
 		out[i] = restore(red)
+		evalArgs = evalArgs || a == "eval"
 	}
 	return out
 }
@@ -1138,6 +1174,8 @@ func redactArg(a string, afterColon bool, depth int) (string, argNext) {
 		return name + "=" + redactHeaderArg(value), nextAny
 	case hasValue && sensitiveName(flag):
 		return name + "=" + redactedPlaceholder, nextAny
+	case hasValue && scriptOptions[name]:
+		return name + "=" + redactScript(value, depth), nextAny
 	case hasValue:
 		return name + "=" + redactArgValue(value), nextAny
 	case headerFlags[a]:
@@ -1146,7 +1184,7 @@ func redactArg(a string, afterColon bool, depth int) (string, argNext) {
 		// A one-letter flag cannot be known to be secret; its value is
 		// still redacted when it holds a secret.
 		return redactValue(a), nextSecret
-	case takesScript(a):
+	case takesScript(a) || scriptOptions[a]:
 		return redactValue(a), nextScript
 	}
 	return redactValue(a), nextAny
