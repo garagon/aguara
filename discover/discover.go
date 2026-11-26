@@ -7,12 +7,6 @@ import (
 	"github.com/garagon/aguara/internal/output"
 )
 
-// sensitiveEnvKeys matches env variable names that likely contain secrets.
-var sensitiveEnvKeys = []string{
-	"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL",
-	"AUTH", "PRIVATE", "API_KEY", "APIKEY",
-}
-
 // redactEnv returns a copy of the env map with the values of sensitive
 // names (sensitiveName) masked and secret-shaped parts of the other values
 // redacted.
@@ -91,7 +85,7 @@ func (r *Result) Redacted() *Result {
 		servers := make([]MCPServer, len(c.Servers))
 		for j, s := range c.Servers {
 			servers[j] = s
-			servers[j].Command = redactValue(s.Command)
+			servers[j].Command = redactCommand(s.Command)
 			servers[j].Args = redactArgs(s.Args)
 			servers[j].Env = redactEnv(s.Env)
 			servers[j].URL = redactValue(s.URL)

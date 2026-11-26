@@ -47,6 +47,50 @@ var secretPositions = []struct {
 	{"header map short name", MCPServer{Transport: "http", URL: "https://mcp.example.com", Headers: map[string]string{"X-Pw": "S31secret"}}, "S31secret"},
 	{"header argument unknown name", MCPServer{Command: "npx", Args: []string{"mcp-remote", "https://mcp.example.com/mcp", "--header", "X-Access: S32secret"}}, "S32secret"},
 	{"header argument joined unknown name", MCPServer{Command: "npx", Args: []string{"mcp-remote", "--header=X-Pw: S33secret"}}, "S33secret"},
+	{"command string env prefix", MCPServer{Command: "env API_TOKEN=S34secret node server.js"}, "S34secret"},
+	{"command string container -e", MCPServer{Command: `docker run --rm -e "DB_PASS=S35secret" ghcr.io/acme/mcp:1.2`}, "S35secret"},
+	{"windows token option", MCPServer{Command: "tool.exe", Args: []string{"/token:S36secret"}}, "S36secret"},
+	{"windows p option", MCPServer{Command: "tool.exe", Args: []string{"/user:alice", "/p:S37secret"}}, "S37secret"},
+	{"env name without case boundary", MCPServer{Command: "x", Env: map[string]string{"DBPass": "S38secret"}}, "S38secret"},
+	{"env name sensitive suffix", MCPServer{Command: "x", Env: map[string]string{"REDISPASS": "S39secret"}}, "S39secret"},
+	{"requirepass", MCPServer{Command: "redis-server", Args: []string{"--requirepass", "S40secret"}}, "S40secret"},
+	{"short flag with a token value", MCPServer{Command: "x", Args: []string{"-a", "ghp_S41abcdefghijklmnopqrstuvwxyz0123"}}, "S41abcdefghijklmnopqrstuvwxyz0123"},
+	{"env json array of arguments", MCPServer{Command: "x", Env: map[string]string{"EXTRA": `["--api-key", "S42secret", "--verbose"]`}}, "S42secret"},
+	{"env json array of objects", MCPServer{Command: "x", Env: map[string]string{"SERVERS": `[{"name": "a", "token": "S43secret"}]`}}, "S43secret"},
+}
+
+// Names that only contain the letters of a sensitive word, and short
+// flags whose meaning cannot be known, keep their values visible unless a
+// value itself looks like a token.
+func TestDiscoverHarmlessNamesStayVisible(t *testing.T) {
+	srv := MCPServer{
+		Name:    "visible",
+		Command: "env NODE_ENV=production node server.js",
+		Args:    []string{"--keyboard", "us", "-a", "plainvalue", "/user:alice", "--authority", "example.org"},
+		Env: map[string]string{
+			"Compass": "north", "Keyboard": "dvorak", "Monkey": "george", "Signal": "sigterm",
+			"Bypass": "proxy-off", "Passport": "booking", "PASSTHROUGH": "on", "DESIGN": "flat",
+			"Monkey_Token_Look": "x", "Hotkey": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		},
+	}
+	red := (&Result{Clients: []ClientResult{{Client: "cursor", Servers: []MCPServer{srv}}}}).Redacted().Clients[0].Servers[0]
+	if red.Command != srv.Command {
+		t.Errorf("command = %q", red.Command)
+	}
+	if got := strings.Join(red.Args, " "); got != "--keyboard us -a plainvalue /user:alice --authority example.org" {
+		t.Errorf("args = %q", got)
+	}
+	for _, name := range []string{"Compass", "Keyboard", "Monkey", "Signal", "Bypass", "Passport", "PASSTHROUGH", "DESIGN"} {
+		if red.Env[name] != srv.Env[name] {
+			t.Errorf("env %s = %q, want it visible", name, red.Env[name])
+		}
+	}
+	if red.Env["Monkey_Token_Look"] != "***REDACTED***" {
+		t.Errorf("a TOKEN word still counts: %q", red.Env["Monkey_Token_Look"])
+	}
+	if red.Env["Hotkey"] != "[REDACTED]" {
+		t.Errorf("a token-shaped value is redacted under a harmless name: %q", red.Env["Hotkey"])
+	}
 }
 
 // Path segments that look like credentials are redacted; ordinary path
@@ -139,6 +183,9 @@ func TestSensitiveNameWordBoundaries(t *testing.T) {
 		"API_KEY": true, "Cookie": true, "Password": true,
 		"PASSTHROUGH": false, "BYPASS": false, "DESIGN": false, "SIGNAL": false,
 		"SESSIONS_DIR": false, "region": false, "port": false, "MODE": false,
+		"DBPass": true, "REDISPASS": true, "requirepass": true, "SSHKEY": true, "apiKey": true, "BASICAUTH": true,
+		"Compass": false, "Keyboard": false, "keyboard": false, "Monkey": false, "Signal": false,
+		"Bypass": false, "Passport": false, "AUTHOR": false, "authority": false, "KEYBOARD_LAYOUT": false,
 	} {
 		if got := sensitiveName(name); got != want {
 			t.Errorf("sensitiveName(%q) = %v, want %v", name, got, want)
