@@ -780,7 +780,7 @@ func rewriteWord(s string, w shellWord, red string) string {
 	case '\'':
 		fits = !strings.Contains(insert, "'")
 	case '"':
-		fits = !strings.ContainsAny(insert, "\"\\`") && !(escaped && strings.Contains(insert, "$"))
+		fits = !strings.ContainsAny(insert, "\"\\`") && (!escaped || !strings.Contains(insert, "$"))
 	default:
 		fits = !strings.ContainsAny(strings.ReplaceAll(insert, redactedPlaceholder, ""), unquotedSpecials)
 	}

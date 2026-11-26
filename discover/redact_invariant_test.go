@@ -105,7 +105,9 @@ func TestRedactionKeepsEveryNonSecretToken(t *testing.T) {
 						// In text, a single "&" right after a URL is a query
 						// separator, and a value without blanks that starts
 						// with a URL is one URL (see above).
-						if !(f.url && (strings.HasPrefix(op2, "&") && !strings.HasPrefix(op2, "&&") || !strings.ContainsAny(line, " \t\n"))) {
+						singleAmp := strings.HasPrefix(op2, "&") && !strings.HasPrefix(op2, "&&")
+						oneURL := !strings.ContainsAny(line, " \t\n")
+						if !f.url || !singleAmp && !oneURL {
 							env := redactEnv(map[string]string{"SETUP": line})["SETUP"]
 							check(t, f.name+" in an environment value", line, env, before, after)
 						}
