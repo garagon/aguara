@@ -65,6 +65,10 @@ type RequirementsEvidence struct {
 	LocalProjects []string
 	// Files are the file and the files it includes, by resolved path.
 	Files []string
+	// Skipped names the first line skipped in a file that was only partly
+	// read ("line 3", "line 1 of base.txt"). Such a file never covers a
+	// manifest; the other fields are empty.
+	Skipped string
 }
 
 // ResolvedPath returns path with its directory's symlinks evaluated, the
@@ -214,6 +218,11 @@ func (r *Runner) Run(targets []Target) (*RunResult, error) {
 			// also listed as not evaluated in full, and it never stands
 			// for a manifest.
 			out.Unparsed = append(out.Unparsed, unparsedRequirements(t, parsed.syntax, parsed.syntaxLines))
+			if !IsConstraintsFile(t.Path) {
+				// Recorded so a manifest beside it can say why the file
+				// does not stand for it.
+				out.Requirements = append(out.Requirements, RequirementsEvidence{Path: t.Path, Skipped: skippedLineName(t, parsed.syntax)})
+			}
 		} else if t.Ecosystem == intel.EcosystemPyPI && isRequirementsSource(t.Source) && !IsConstraintsFile(t.Path) {
 			ev := RequirementsEvidence{Path: t.Path, Pinned: map[string]bool{}, Unpinned: unpinned, Local: parsed.local,
 				LocalProjects: parsed.localProjects, Files: append([]string{ResolvedPath(t.Path)}, parsed.files...)}
@@ -253,9 +262,9 @@ func unparsedRequirements(t Target, first *RequirementsSyntaxError, lines int) U
 	if IsConstraintsFile(t.Path) {
 		kind = "constraints.txt"
 	}
-	where := fmt.Sprintf("line %d", first.Line)
+	where := skippedLineName(t, first)
 	if ResolvedPath(first.Path) != ResolvedPath(t.Path) {
-		where = fmt.Sprintf("line %d of %s, which it includes,", first.Line, filepath.Base(first.Path))
+		where += ", which it includes,"
 	}
 	what := " is not a pip requirement or option Aguara reads"
 	switch {
@@ -269,6 +278,15 @@ func unparsedRequirements(t Target, first *RequirementsSyntaxError, lines int) U
 		Detail:       where + what + "; the other lines were checked",
 		SkippedLines: lines,
 	}
+}
+
+// skippedLineName names the first skipped line of a target: "line 3", or
+// "line 1 of base.txt" when it is in a file the target includes.
+func skippedLineName(t Target, first *RequirementsSyntaxError) string {
+	if ResolvedPath(first.Path) != ResolvedPath(t.Path) {
+		return fmt.Sprintf("line %d of %s", first.Line, filepath.Base(first.Path))
+	}
+	return fmt.Sprintf("line %d", first.Line)
 }
 
 // hitKey identifies one reported PyPI entry. Path and Line keep

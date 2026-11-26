@@ -583,7 +583,10 @@ func TestRunnerListsRequirementsSyntaxItCannotRead(t *testing.T) {
 			require.Contains(t, res.Unparsed[0].Detail, tc.detail)
 			require.Contains(t, res.Unparsed[0].Detail, "the other lines were checked")
 			require.True(t, res.Unparsed[0].PartlyRead())
-			require.Empty(t, res.Requirements, "a file with a skipped line never stands for a manifest")
+			for _, ev := range res.Requirements {
+				require.NotEmpty(t, ev.Skipped, "a file with a skipped line never stands for a manifest")
+				require.Empty(t, ev.Pinned)
+			}
 		})
 	}
 

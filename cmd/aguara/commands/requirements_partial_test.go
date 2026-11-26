@@ -246,6 +246,13 @@ func TestPartlyReadRequirementsDoNotCoverAManifest(t *testing.T) {
 	reasons := map[string]string{}
 	for _, u := range check.Coverage.UnsupportedEvidence {
 		reasons[filepath.Base(u.Path)] = u.Reason
+		if u.IsManifest() {
+			// The manifest's entry says why the file beside it does not
+			// stand for it.
+			require.Equal(t, filepath.Join(dir, "requirements.txt"), u.RequirementsFile)
+			require.Contains(t, u.Detail, "requirements.txt was only partly read")
+			require.Contains(t, u.Detail, "line 2")
+		}
 	}
 	require.Equal(t, map[string]string{"pyproject.toml": "manifest_without_lockfile", "requirements.txt": "format_not_parsed"}, reasons)
 }

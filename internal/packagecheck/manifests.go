@@ -521,6 +521,9 @@ type requirementsGap struct {
 	// and does not pin what that install resolves (the other fields say
 	// what it lacks).
 	installs bool
+	// skipped names the first skipped line of a file that was only partly
+	// read.
+	skipped string
 }
 
 // maxNotPinned bounds the names an entry lists.
@@ -552,6 +555,12 @@ const maxNotPinned = 20
 //     nothing about what the manifest installs.
 func requirementsCover(r RequirementsEvidence, m *Manifest) requirementsGap {
 	gap := requirementsGap{file: r.Path}
+	if r.Skipped != "" {
+		// Only partly read: what pip does with the skipped lines was
+		// not checked.
+		gap.skipped = r.Skipped
+		return gap
+	}
 	if r.Local {
 		gap.local = true
 		return gap
@@ -602,6 +611,8 @@ func (g requirementsGap) describe(root string) string {
 		name = filepath.ToSlash(rel)
 	}
 	switch {
+	case g.skipped != "":
+		return name + " was only partly read (" + g.skipped + " is not a pip requirement or option Aguara reads), so it does not stand for the manifest"
 	case g.installs:
 		why := "does not pin what that install resolves"
 		switch {
