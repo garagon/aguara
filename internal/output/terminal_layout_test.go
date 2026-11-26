@@ -48,7 +48,8 @@ func render(t *testing.T, f output.TerminalFormatter) string {
 }
 
 func TestTerminalNeverCutsRuleIDsOrNames(t *testing.T) {
-	for _, width := range []int{0, 60, 100} {
+	// 40 is the narrowest width DetectWidth reports.
+	for _, width := range []int{0, 40, 45, 50, 60, 100} {
 		out := render(t, output.TerminalFormatter{Width: width, Verbose: true})
 		require.Contains(t, out, "AGENTCFG_HELPER_REPO_SCRIPT_001", width)
 		require.Contains(t, out, "SHELL_UNSAFE_NPM_SOURCE_001", width)
@@ -58,8 +59,8 @@ func TestTerminalNeverCutsRuleIDsOrNames(t *testing.T) {
 		require.Contains(t, flat, "DONE")
 		require.NotContains(t, out, "...", "nothing is truncated at width %d", width)
 		if width > 0 {
-			for _, line := range strings.Split(out, "\n") {
-				require.LessOrEqual(t, utf8.RuneCountInString(line), width, "line wider than the terminal: %q", line)
+			for _, line := range findingLines(out) {
+				require.LessOrEqual(t, utf8.RuneCountInString(line), width, "line wider than the terminal at %d: %q", width, line)
 			}
 		}
 	}
@@ -95,4 +96,22 @@ func TestMarkdownNamesMergedFindings(t *testing.T) {
 	require.Contains(t, out, "259 detections (191 pattern rules)")
 	require.Contains(t, out, "(+2 more on this line: `AGENTCFG_ENV_EXEC_001`, `CRED_011`)")
 	require.Contains(t, out, "not listed separately")
+}
+
+// findingLines returns the lines of the severity sections, where findings
+// are listed (the dashboard bar and footer have fixed layouts).
+func findingLines(out string) []string {
+	var lines []string
+	in := false
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "\u2500\u2500 TOP AFFECTED FILES"):
+			in = false
+		case strings.HasPrefix(line, "\u2500\u2500 "):
+			in = true
+		case in:
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }

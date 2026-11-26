@@ -269,10 +269,24 @@ func (f *TerminalFormatter) writeFindingHead(w io.Writer, finding scanner.Findin
 		fmt.Fprintf(w, "%s%s %s %s %s\n", indent, icon, f.color(bold, idCell), name, locStyled)
 		return
 	}
+	// A line the rule ID already fills (a long ID, a narrow terminal)
+	// moves the name and the location below it, under the rule ID.
+	locPad := strings.Repeat(" ", len(indent)+2)
+	under := max(f.Width-len(locPad), minWrapWidth)
+	if f.Width-nameCol < minWrapWidth {
+		fmt.Fprintf(w, "%s%s %s\n", indent, icon, f.color(bold, ruleID))
+		for _, l := range wrapText(name, under) {
+			fmt.Fprintf(w, "%s%s\n", locPad, l)
+		}
+		for _, l := range wrapText(loc, under) {
+			fmt.Fprintf(w, "%s%s\n", locPad, f.color(cyan, l))
+		}
+		return
+	}
 	// Terminal output that does not fit: wrap the name under its column
 	// and put the location on the next line, aligned with the name.
 	pad := strings.Repeat(" ", nameCol)
-	nameLines := wrapText(name, max(f.Width-nameCol, 20))
+	nameLines := wrapText(name, f.Width-nameCol)
 	fmt.Fprintf(w, "%s%s %s %s\n", indent, icon, f.color(bold, idCell), nameLines[0])
 	for _, l := range nameLines[1:] {
 		fmt.Fprintf(w, "%s%s\n", pad, l)
@@ -281,14 +295,16 @@ func (f *TerminalFormatter) writeFindingHead(w io.Writer, finding scanner.Findin
 		fmt.Fprintf(w, "%s%s\n", pad, locStyled)
 		return
 	}
-	// A long rule ID pushes the name column far right; the location then
-	// starts under the rule ID instead, and a path longer than the line
-	// is split rather than cut.
-	locPad := strings.Repeat(" ", len(indent)+2)
-	for _, l := range wrapText(loc, max(f.Width-len(locPad), 20)) {
+	// A path longer than the rest of the line starts under the rule ID
+	// and is split rather than cut.
+	for _, l := range wrapText(loc, under) {
 		fmt.Fprintf(w, "%s%s\n", locPad, f.color(cyan, l))
 	}
 }
+
+// minWrapWidth is the narrowest column wrapped text is fitted into; text
+// in a narrower space moves to its own line instead of overflowing.
+const minWrapWidth = 20
 
 // printDetail prints one "│ " detail line (evidence, description, fix),
 // wrapped at the terminal width when output goes to a terminal.
