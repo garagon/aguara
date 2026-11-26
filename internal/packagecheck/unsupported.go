@@ -187,7 +187,7 @@ func namesRequirements(path string) ([]PackageRef, bool) {
 	if err != nil {
 		return nil, false
 	}
-	names := false
+	names, parsedPin := false, false
 	var pins []PackageRef
 	for _, item := range file.items {
 		if item.include != "" {
@@ -196,18 +196,21 @@ func namesRequirements(path string) ([]PackageRef, bool) {
 		if item.ref == nil {
 			continue
 		}
-		names = true
+		names = names || !item.salvaged
 		if item.ref.Version != "" && !item.ref.Unpinned && len(pins) < maxManifestEntries {
 			pin := *item.ref
 			pin.Path, pin.Source = path, filepath.Base(path)
 			pins = append(pins, pin)
+			parsedPin = parsedPin || !item.salvaged
 		}
 	}
 	if file.syntax != nil {
 		// A line outside the pip grammar: a text file such as prose
 		// reads as words here and there, so the file counts as a pip
-		// file only when it also pins an exact version.
-		names = len(pins) > 0
+		// file only when a line that parsed pins an exact version. A pin
+		// kept from a line that did not parse ("Python==3.11 or newer")
+		// is no such evidence.
+		names = parsedPin
 	}
 	return pins, names
 }

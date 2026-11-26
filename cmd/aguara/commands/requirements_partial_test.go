@@ -75,6 +75,23 @@ func TestDirectReferenceWithoutSpacesDoesNotHideAPin(t *testing.T) {
 	}
 }
 
+// A prose file under a pip-style name is not a pip file because a sentence
+// in it starts like a pin; only lines that parse decide that.
+func TestProseUnderAPipNameStaysUnlisted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGUARA_NO_UPDATE_CHECK", "1")
+	dir := projectWith(t, map[string]string{
+		"requirements.txt":        "six==1.16.0\n",
+		"system-requirements.txt": "Python==3.11 or newer is required.\nA C compiler, for the native parts.\n",
+	})
+	check, err := gateCheck(t, dir)
+	require.NoError(t, err)
+	require.Empty(t, check.Coverage.UnsupportedEvidence)
+	audit, err := gateAudit(t, dir)
+	require.NoError(t, err)
+	require.Equal(t, "proceed", audit.Triage.Decision)
+}
+
 // pip accepts an unambiguous prefix of a long option. A compromised pin
 // beside such an option is still read and fails both gates.
 func TestAbbreviatedPipOptionsDoNotHideAPin(t *testing.T) {

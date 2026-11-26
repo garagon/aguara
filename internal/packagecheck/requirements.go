@@ -117,6 +117,10 @@ type requirementsItem struct {
 	local     bool
 	localPath string
 	line      int
+	// salvaged marks a pin kept from a line that did not parse
+	// (salvageExactPin): it is matched, but it is no evidence that the
+	// file is a pip file.
+	salvaged bool
 }
 
 // ParseRequirements reads a pip requirements or constraints file and
@@ -512,7 +516,7 @@ func parseRequirementsFile(path string) (*requirementsFile, error) {
 				// harmless, missing a pin it installs is not.
 				if ref := salvageExactPin(text); ref != nil {
 					ref.Line = line
-					items = []requirementsItem{{ref: ref, line: line}}
+					items = []requirementsItem{{ref: ref, line: line, salvaged: true}}
 				}
 			}
 		}
